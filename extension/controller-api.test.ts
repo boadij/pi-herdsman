@@ -5736,7 +5736,9 @@ async function runManagerStartupScenario(
                   entry?.customType?.startsWith?.("pi-herdsman-") &&
                   entry?.details?.id === id,
               ),
-            sendMessage: (message) => delivered.push(message),
+            sendMessage: (message) => {
+              delivered.push(message);
+            },
           });
         assert.equal(await drain(), 0);
         assert.deepEqual(delivered, []);

@@ -697,9 +697,12 @@ test("missing or corrupt Chief overflow bodies are retained without Pi submissio
       sessionId: record.toSessionId,
       isAuthorized: () => true,
       isDelivered: () => false,
-      sendMessage: (_message, _options, delivered) =>
-        submitted.push(delivered.id),
-      cleanupError: (error) => reported.push(error),
+      sendMessage: (_message, _options, delivered) => {
+        submitted.push(delivered.id);
+      },
+      cleanupError: (error) => {
+        reported.push(error);
+      },
     });
     assert.deepEqual(submitted, [unrelated.id], failure);
     assert.equal(reported.length, 1, failure);
@@ -749,7 +752,9 @@ test("unreadable overflow messages do not consume the bounded delivery window", 
     sessionId: valid.toSessionId,
     isAuthorized: () => true,
     isDelivered: (id) => sent.includes(id),
-    sendMessage: (_message, _options, record) => sent.push(record.id),
+    sendMessage: (_message, _options, record) => {
+      sent.push(record.id);
+    },
   });
   assert.deepEqual(sent, [valid.id]);
   assert.equal(
@@ -774,7 +779,9 @@ test("overflow body reads reject FIFOs without blocking", async (t) => {
     isAuthorized: () => true,
     isDelivered: () => false,
     sendMessage: () => assert.fail("FIFO body must not be delivered"),
-    cleanupError: (error) => reported.push(error),
+    cleanupError: (error) => {
+      reported.push(error);
+    },
   });
   assert.equal(reported.length, 1);
   assert.equal(existsSync(path), true);
@@ -1388,7 +1395,9 @@ test("peer receiver authorization rejects a self-addressed record", async () => 
         candidate.fromSessionId !== candidate.toSessionId &&
         candidate.leadSessionId === candidate.fromSessionId,
       isDelivered: () => false,
-      sendMessage: (value) => sent.push(value),
+      sendMessage: (value) => {
+        sent.push(value);
+      },
     }),
     0,
   );
@@ -2612,7 +2621,9 @@ test("inbox orders valid records by createdAt and retains transient failures", a
     transaction: {
       begin: (record) => record.id,
       revalidate: () => {},
-      clear: (token) => cleared.push(token as string),
+      clear: (token) => {
+        cleared.push(token as string);
+      },
     },
   });
   assert.equal(listChiefMessagePaths(runtime, "chief").length, 3);
