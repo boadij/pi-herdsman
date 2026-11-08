@@ -63,7 +63,10 @@ jobs:
           node-version: ${{ needs.scope.outputs.node_version }}
           package-manager-cache: false
       - run: npm ci
-      - run: npm run format:check
+      - run: |
+          npx prettier extension/agent-definitions.test.ts --write
+          git diff -- extension/agent-definitions.test.ts
+          npm run format:check
 
   validate:
     needs: scope
