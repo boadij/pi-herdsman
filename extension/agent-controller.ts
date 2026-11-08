@@ -5508,7 +5508,12 @@ export function createAgentController(
       };
     }
     const operation = params.action;
-    if (operation === "steer" && agent.steerable !== true) {
+    const fallbackToSteer =
+      operation === "interrupt" &&
+      controlState === "blocked" &&
+      agent.steerable === true;
+    const kind = fallbackToSteer ? "steer" : operation;
+    if (kind === "steer" && agent.steerable !== true) {
       const current = readAgentState(runtime.mailboxPath);
       const pendingRequest = current
         ? readUnacknowledgedRequest(runtime.mailboxPath, current)
@@ -5527,9 +5532,13 @@ export function createAgentController(
         { nextAction },
       );
     }
-    if (operation === "steer" && !runtime.activeRequestId)
-      fail("agent_busy", "Agent has no active assignment", "steer");
-    if (operation === "interrupt" && controlState !== "working")
+    if (kind === "steer" && !runtime.activeRequestId)
+      fail("agent_busy", "Agent has no active assignment", operation);
+    if (
+      operation === "interrupt" &&
+      controlState !== "working" &&
+      !fallbackToSteer
+    )
       fail(
         "agent_busy",
         `Agent has no interruptible active operation: ${controlState}`,
@@ -5539,10 +5548,7 @@ export function createAgentController(
             "Use interrupt_agent only when available_tools includes it. Use steer_agent for non-preemptive assignment changes.",
         },
       );
-    if (
-      (operation === "steer" || operation === "interrupt") &&
-      !runtime.activeRequestId
-    )
+    if (operation === "interrupt" && !runtime.activeRequestId)
       fail("agent_busy", "Agent has no active assignment", operation);
     let askId: string | undefined;
     let createdAt = Date.now();
@@ -5600,7 +5606,6 @@ export function createAgentController(
           "reply",
         );
     }
-    const kind = operation;
     const limits = readConfig();
     const manager = await options.managerEvidence?.(
       context,
@@ -5664,6 +5669,12 @@ export function createAgentController(
     return {
       ok: true,
       action: operation,
+      ...(fallbackToSteer
+        ? {
+            delivered_as: "steer",
+            note: "Agent was waiting for child work. Message delivered via steering; nothing was interrupted.",
+          }
+        : {}),
       agent: runtime.label,
       presentation_agent_definition: runtime.agentDefinition,
       request_id: sentRequestId,
@@ -9760,7 +9771,7 @@ export function createAgentController(
       name: "interrupt_agent",
       label: "interrupt agent",
       description:
-        "Cancel a live Agent's current Pi operation and continue the same assignment with replacement direction.",
+        "Cancel a live Agent's current Pi operation and continue the same assignment with replacement direction. If the Agent is blocked waiting for verified direct-child work, the message is delivered via steering instead; no operation is interrupted.",
       parameters: agentMessageParameters,
       promptSnippet: undefined,
       promptGuidelines: [FILE_HANDOFF_GUIDANCE],

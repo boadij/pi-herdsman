@@ -12913,6 +12913,7 @@ test("lead steers a parent waiting for direct-child work without interrupting it
   const observedParent = { ...parent, activeRequestId: undefined };
   let parentStatus: "idle" | "working" = "idle";
   const base = agentControllerExecutor(observedParent, [child]);
+  let interruptFallbackRequest: RequestRecord | undefined;
   const pi = fakePi({
     exec: (command, args, options) => {
       if (command === "herdr" && (isAgentList(args) || isApiSnapshot(args))) {
@@ -12983,6 +12984,8 @@ test("lead steers a parent waiting for direct-child work without interrupting it
   let cancelledRequestId: string | undefined;
   registerExtensionForTest!(pi.pi as never, {
     afterRequestPublished: (_mailbox, request) => {
+      if (request.text === "Stop waiting and incorporate this requirement.")
+        interruptFallbackRequest = request;
       if (cancelPublishedSteer && request.kind === "steer") {
         cancelledRequestId = request.requestId;
         cancellation.abort();
@@ -13152,6 +13155,15 @@ test("lead steers a parent waiting for direct-child work without interrupting it
       competingSteer.details.error.nextAction,
       /current control or completion transition/i,
     );
+    const interruptDuringHandoff = await agentTool(pi, "interrupt").execute(
+      "interrupt",
+      { agent: parent.agentLabel, message: "must not overlap handoff" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(interruptDuringHandoff.details.ok, false);
+    assert.equal(interruptDuringHandoff.details.error.category, "agent_busy");
     removeRequest(parentMailbox, handoffRequestId);
 
     cancelPublishedSteer = true;
@@ -13197,6 +13209,42 @@ test("lead steers a parent waiting for direct-child work without interrupting it
     assert.equal(readAgentState(parentMailbox)?.lastAck?.accepted, true);
     assert.equal(readAgentState(parentMailbox)?.activeRequestId, REQUEST_ID);
     assert.deepEqual(readAgentState(childMailbox), childBefore);
+
+    const interruptedWhileWaiting = await agentTool(pi, "interrupt").execute(
+      "interrupt",
+      {
+        agent: parent.agentLabel,
+        message: "Stop waiting and incorporate this requirement.",
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(interruptedWhileWaiting.details.ok, true);
+    assert.equal(interruptedWhileWaiting.details.action, "interrupt");
+    assert.equal(interruptedWhileWaiting.details.delivered_as, "steer");
+    assert.match(
+      interruptedWhileWaiting.details.note,
+      /delivered via steering; nothing was interrupted/,
+    );
+    assert.ok(interruptFallbackRequest);
+    assert.equal(interruptFallbackRequest?.kind, "steer");
+    assert.equal(
+      interruptFallbackRequest?.text,
+      "Stop waiting and incorporate this requirement.",
+    );
+    assert.equal(
+      readAgentState(parentMailbox)?.lastAck?.requestId,
+      interruptFallbackRequest?.requestId,
+    );
+    assert.equal(readAgentState(parentMailbox)?.lastAck?.accepted, true);
+    assert.equal(readAgentState(parentMailbox)?.activeRequestId, REQUEST_ID);
+    assert.deepEqual(readAgentState(childMailbox), childBefore);
+    assert.match(
+      (interruptedWhileWaiting.content[0] as { text: string }).text,
+      /delivered via steering; nothing was interrupted/,
+    );
+
     parentStatus = "working";
     const steered = await agentTool(pi, "steer").execute(
       "steer",
@@ -13276,6 +13324,15 @@ test("lead steers a parent waiting for direct-child work without interrupting it
       "inspect_agent",
       "reply_agent",
     ]);
+    const interruptWhileAsked = await agentTool(pi, "interrupt").execute(
+      "interrupt",
+      { agent: parent.agentLabel, message: "must not replace the owner reply" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(interruptWhileAsked.details.ok, false);
+    assert.equal(interruptWhileAsked.details.error.category, "agent_busy");
     removeAsk(parentMailbox, ownerAskId);
     writeAgentState(parentMailbox, parent);
 
@@ -13308,6 +13365,18 @@ test("lead steers a parent waiting for direct-child work without interrupting it
       !completionWithChild.details.agents[0].available_tools.includes(
         "steer_agent",
       ),
+    );
+    const interruptDuringCompletion = await agentTool(pi, "interrupt").execute(
+      "interrupt",
+      { agent: parent.agentLabel, message: "must not override completion" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(interruptDuringCompletion.details.ok, false);
+    assert.equal(
+      interruptDuringCompletion.details.error.category,
+      "agent_busy",
     );
     writeAgentState(parentMailbox, parent);
 
