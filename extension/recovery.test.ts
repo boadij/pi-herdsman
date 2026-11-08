@@ -3622,6 +3622,11 @@ test("result is removed after agent state reaches completed", async (t) => {
       entry.details?.requestId === REQUEST_ID,
   );
   assert.equal(durableResults.length, 1);
+  assert.ok(
+    typeof durableResults[0] === "object" &&
+      durableResults[0] !== null &&
+      "details" in durableResults[0],
+  );
   assert.deepEqual(
     durableResults[0].details,
     resultEntryDetails(activeState, REQUEST_ID),
