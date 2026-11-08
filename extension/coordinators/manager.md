@@ -1,7 +1,7 @@
 ---
 name: manager
 description: Project coordination and supervision
-tools: []
+tools: [codemode]
 ---
 
 ## Manager role
