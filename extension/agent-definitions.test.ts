@@ -19,6 +19,7 @@ import {
   agentDefinitionMetadata,
   agentDefinitionEnabled,
   agentLaunchArgs,
+  configuredModel,
   AGENT_COORDINATION_TOOLS,
   discoverAgent,
   discoverAgentDefinitions,
@@ -2900,6 +2901,62 @@ test("a configured model outranks the inherited one and keeps the definition's p
       extensionDiscovery: false,
     },
   );
+});
+
+test("configured extension models enable discovery without changing model precedence", () => {
+  const cases = [
+    ["mistral-native/zai-glm-5-3-flash", ["mistral-native"], true],
+    ["MISTRAL-NATIVE/zai-glm-5-3-flash", ["mistral-native"], true],
+    ["org/native/model-x", ["org/native"], true],
+    ["anthropic/claude-model", ["mistral-native"], false],
+    ["unknown/model-x", ["mistral-native"], false],
+    ["zai-glm-5-3-flash", ["mistral-native"], false],
+  ] as const;
+
+  for (const [configured, providers, extensionDiscovery] of cases) {
+    assert.deepEqual(
+      resolveChildModel({
+        configured,
+        inherited: inheritedModel("mistral-native", "mistral-native/inherited"),
+        isForeignProvider: (provider) => providers.includes(provider),
+      }),
+      { kind: "use", model: configured, extensionDiscovery },
+      configured,
+    );
+  }
+
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-pinned-model-"));
+  try {
+    const projectAgents = join(root, ".pi", "agents");
+    mkdirSync(projectAgents, { recursive: true });
+    writeFileSync(
+      join(projectAgents, "scout.md"),
+      "---\nname: scout\nmodel: mistral-native/zai-glm-5-3-flash\n---\n",
+    );
+    const effective = discoverAgent("scout", { projectRoot: root });
+    assert.equal(effective.frontmatter.noExtensions, true);
+    assert.equal(
+      effective.frontmatter.model,
+      "mistral-native/zai-glm-5-3-flash",
+    );
+
+    const decision = resolveChildModel({
+      configured: configuredModel(effective.frontmatter),
+      inherited: inheritedModel("anthropic", "anthropic/claude-model"),
+      isForeignProvider: (provider) => provider === "mistral-native",
+    });
+    const args = agentLaunchArgs(effective, {
+      bodyPromptPath: "/tmp/scout-prompt",
+      modelDecision: decision,
+    });
+    assert.deepEqual(
+      args.slice(args.indexOf("--model"), args.indexOf("--model") + 2),
+      ["--model", "mistral-native/zai-glm-5-3-flash"],
+    );
+    assert.equal(args.includes("--no-extensions"), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("the inherited provider is Pi's resolved provider, not the token's first segment", () => {

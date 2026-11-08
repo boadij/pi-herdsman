@@ -8564,7 +8564,9 @@ export function createAgentController(
           // case nothing counts as extension-provided and the model is inherited
           // exactly as before this change.
           const registeredProviderIds = new Set(
-            ctx.modelRegistry?.getRegisteredProviderIds?.() ?? [],
+            (ctx.modelRegistry?.getRegisteredProviderIds?.() ?? []).map((id) =>
+              id.toLowerCase(),
+            ),
           );
           const childModel = resolveChildModel({
             configured: configuredModel(effectiveDefinition.frontmatter),
@@ -8575,7 +8577,7 @@ export function createAgentController(
             saved: resumed?.savedModel,
             savedUnresolved: resumed?.savedModelUnresolved,
             isForeignProvider: (providerId) =>
-              registeredProviderIds.has(providerId),
+              registeredProviderIds.has(providerId.toLowerCase()),
             isKnownModel: (provider, id) =>
               ctx.modelRegistry.find(provider, id) !== undefined,
           });
