@@ -1570,7 +1570,7 @@ export function registerManagedAgentAttachHandoffTool(
   pi.registerTool({
     name: ATTACH_HANDOFF_TOOL,
     label: "Attach handoff evidence",
-    exposure: "model-only",
+    exposure: "direct",
     promptSnippet:
       "Select reusable results for this assignment's final handoff",
     description:

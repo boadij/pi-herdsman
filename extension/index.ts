@@ -1841,7 +1841,7 @@ function registerExtensionImpl(
       supervisorTool = {
         name: "message_supervisor",
         label: "message supervisor",
-        exposure: "model-only",
+        exposure: "direct",
         promptSnippet:
           "Send nonblocking material coordination to your direct supervisor",
         description:
@@ -1870,7 +1870,7 @@ function registerExtensionImpl(
       peerTool = {
         name: "message_peer",
         label: "message peer",
-        exposure: "model-only",
+        exposure: "direct",
         promptSnippet:
           "Discover same-role peers, including remote ordinary Leads, and reply through existing correspondences",
         description:
@@ -1894,7 +1894,7 @@ function registerExtensionImpl(
         name: "message_staff",
         label: "message staff",
         defaultActive: false,
-        exposure: "model-only" as const,
+        exposure: "direct" as const,
         promptSnippet:
           "Supervise direct reports; Managers may delegate new linked-worktree Leads",
         executionMode: "sequential" as const,
@@ -2496,7 +2496,7 @@ function registerExtensionImpl(
   pi.registerTool({
     name: "read_evidence",
     label: "Read accepted evidence",
-    exposure: "model-only",
+    exposure: "direct",
     description:
       "Read a bounded page from evidence accepted by this managed Agent.",
     parameters: Type.Object(
