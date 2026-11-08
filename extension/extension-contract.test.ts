@@ -492,6 +492,8 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     pi.tools.find((tool) => tool.name === "read_evidence")?.exposure,
     "direct",
   );
+  assert.equal(agentDelegate.exposure, "model-only");
+  assert.equal(tools.get("continue_agent")?.exposure, "model-only");
   assert.equal(rootDelegate.parameters.properties.retain, undefined);
   for (const retain of [true, false])
     assert.equal(
@@ -506,7 +508,12 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     const tool = tools.get(name);
     assert.ok(tool, `missing ${name}`);
     assert.equal(tool.label, labels[name], name);
-    assertPortableToolSchema(tool);
+    assertPortableToolSchema(
+      tool,
+      name === "delegate_agent" || name === "continue_agent"
+        ? "model-only"
+        : "direct",
+    );
     assert.deepEqual(
       [...(tool.parameters.required ?? [])].sort(),
       [...required].sort(),
@@ -901,7 +908,12 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     false,
   );
   for (const tool of lead.tools) {
-    assertPortableToolSchema(tool);
+    assertPortableToolSchema(
+      tool,
+      tool.name === "delegate_agent" || tool.name === "continue_agent"
+        ? "model-only"
+        : "direct",
+    );
     if (tool.name === "read_evidence") continue;
     assert.equal(tool.executionMode, "sequential");
     assert.equal(typeof tool.renderCall, "function");

@@ -9585,6 +9585,7 @@ export function createAgentController(
       ...agentTool,
       name: "delegate_agent",
       label: "delegate agent",
+      exposure: "model-only",
       description:
         "Start one fresh bounded assignment. Choose the most focused eligible Agent definition capable of completing the full task. Use a general-purpose definition when broader capabilities are needed or no focused definition fits.",
       parameters: agentDelegateParameters,
@@ -9613,6 +9614,7 @@ export function createAgentController(
       ...agentTool,
       name: "continue_agent",
       label: "continue agent",
+      exposure: "model-only",
       description:
         "Start one bounded assignment from an eligible historical managed-Agent Pi session selected by a directly owned result ref, exact path, or UUID. Retired sessions cannot be continued while context retirement is enabled.",
       parameters: agentContinueParameters,
