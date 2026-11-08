@@ -71,7 +71,10 @@ type LeadCommandHost = {
     enabled: boolean,
     ctx: ExtensionContext,
   ): Promise<boolean>;
-  contextAgentDefinitions(ctx: ExtensionContext): Promise<{
+  contextAgentDefinitions(
+    ctx: ExtensionContext,
+    onWarning?: (message: string) => void,
+  ): Promise<{
     definitions: AgentDefinition[];
     roleDefinitions: AgentDefinition[];
     projectTrusted: boolean;
@@ -305,13 +308,17 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
     async openDefinitionsMenu(ctx: ExtensionCommandContext): Promise<void> {
       let selectedSection = "agents";
       const selectedDefinitions: Record<string, string | undefined> = {};
-      const loadDefinitions = async (section: string, includeProject = true) =>
+      const loadDefinitions = async (
+        section: string,
+        includeProject = true,
+        onWarning?: (message: string) => void,
+      ) =>
         section === "agents"
-          ? (await host.contextAgentDefinitions(ctx)).definitions
+          ? (await host.contextAgentDefinitions(ctx, onWarning)).definitions
           : discoverRoleDefinitions(
               includeProject && ctx.isProjectTrusted()
-                ? { projectRoot: ctx.cwd }
-                : {},
+                ? { projectRoot: ctx.cwd, onWarning }
+                : { onWarning },
             );
       const resolveDefinition = async (name: string) => {
         const loaded = await loadDefinitions(
@@ -342,8 +349,13 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         if (section !== "agents" && section !== "roles") return;
         selectedSection = section;
         definitionList: while (true) {
-          const availableDefinitions = await loadDefinitions(section);
-          if (!availableDefinitions.length) {
+          const warnings: string[] = [];
+          const availableDefinitions = await loadDefinitions(
+            section,
+            true,
+            (message) => warnings.push(message),
+          );
+          if (!availableDefinitions.length && !warnings.length) {
             ctx.ui.notify(
               `No ${section === "agents" ? "Agent definitions" : "Coordinator profiles"} are available.`,
             );
@@ -379,6 +391,16 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 : {}),
             };
           });
+          let warningValue = "__definition_warnings__";
+          while (availableDefinitions.some(({ name }) => name === warningValue))
+            warningValue += "_";
+          if (warnings.length)
+            options.unshift({
+              value: warningValue,
+              label: `⚠ ${warnings.length} misplaced definition(s)`,
+              description: "Select to inspect paths",
+              help: warnings[0],
+            });
           const selected = await host.selectMenu(
             ctx,
             section === "agents" ? "Agents" : "Coordinators",
@@ -387,6 +409,10 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           );
           if (selected === undefined) break definitionList;
           if (!selected) continue;
+          if (selected === warningValue) {
+            for (const warning of warnings) ctx.ui.notify(warning, "warning");
+            continue;
+          }
           const selectedEntry = availableDefinitions.find(
             (definition) => definition.name === selected,
           );

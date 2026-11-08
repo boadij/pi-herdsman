@@ -112,6 +112,7 @@ import {
   AGENT_COORDINATION_TOOLS,
   configuredModel,
   configuredToolPolicy,
+  notifyDefinitionWarning,
   discoverRoleDefinitions,
   discoverAgentDefinitions,
   validateRoleAgentDefinitionReferences,
@@ -3935,9 +3936,10 @@ export function registerLeadRuntime(
     discoverSessionDefinitions: async (ctx: ExtensionContext) => {
       let roleDefinitions: AgentDefinition[] = [];
       try {
-        roleDefinitions = discoverRoleDefinitions(
-          ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
-        );
+        roleDefinitions = discoverRoleDefinitions({
+          ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
+          onWarning: (message) => notifyDefinitionWarning(ctx, message),
+        });
       } catch (error) {
         options.sessionStartOptions.appendDefinitionError(ctx, error);
       }

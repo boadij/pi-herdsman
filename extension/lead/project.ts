@@ -55,6 +55,7 @@ import {
   discoverRoleDefinition,
   expandAgentBodyFiles,
   MANAGED_LEAD_DEFINITION_NAME,
+  notifyDefinitionWarning,
   resolveChildModel,
   writePrivatePromptSnapshots,
 } from "../agent-definitions.ts";
@@ -3799,7 +3800,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           }
           const definition = discoverRoleDefinition(
             MANAGED_LEAD_DEFINITION_NAME,
-            projectTrusted ? { projectRoot: cwd! } : {},
+            {
+              ...(projectTrusted ? { projectRoot: cwd! } : {}),
+              onWarning: (message) => notifyDefinitionWarning(ctx, message),
+            },
           );
           const body = expandAgentBodyFiles(definition.body, [], operationName);
           const effectiveDefinition =

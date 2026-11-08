@@ -85,6 +85,17 @@ Use [Conventional Commits](https://www.conventionalcommits.org/) for commit mess
 
 Individual commits should follow the same convention, although the pull request title is particularly important because it becomes the squash-merge commit.
 
+## Changelog ownership
+
+`CHANGELOG.md` is maintained by **Release Please**, which generates release entries from Conventional Commit messages in the merged Git history.
+
+- **Do not manually edit `CHANGELOG.md`** in ordinary feature, bug-fix, refactoring, or documentation PRs.
+- Use accurate Conventional Commit titles (for example, `feat(agent): ...` or `fix(config): ...`) so Release Please can categorize changes correctly.
+- Release Please release PRs are responsible for generating and updating changelog entries.
+- Manual corrections to existing changelog content are permitted only as explicitly scoped maintenance, not as part of routine feature or fix documentation.
+
+**In short:** Describe changes through Conventional Commits, not manual changelog entries.
+
 ## AI-assisted contributions
 
 AI-assisted contributions are welcome, but contributors remain responsible for understanding, reviewing, and testing the code they submit.

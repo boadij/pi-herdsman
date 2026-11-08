@@ -23,8 +23,10 @@ import {
   AGENT_COORDINATION_TOOLS,
   discoverAgent,
   discoverAgentDefinitions,
+  contextAgentDefinitions,
   discoverRoleDefinition,
   discoverRoleDefinitions,
+  notifyDefinitionWarning,
   definitionEditTargets,
   readDefinitionEditSnapshot,
   FLEXIBLE_LEAD_DEFINITION_NAME,
@@ -3137,7 +3139,7 @@ test("wildcard exclusions reject mandatory overlap and escape regex syntax", () 
   );
 });
 
-test("Agent and role namespaces are independent and reject misplaced names", () => {
+test("Agent and Coordinator namespaces isolate misplaced user definitions", () => {
   const root = mkdtempSync(join(tmpdir(), "herdsman-namespaces-"));
   const agents = join(root, "agents");
   const roles = join(root, "coordinators");
@@ -3145,19 +3147,85 @@ test("Agent and role namespaces are independent and reject misplaced names", () 
   mkdirSync(roles, { recursive: true });
   withPiAgentDir(root, () => {
     writeFileSync(join(roles, "bad.md"), "---\nname: custom\n---\n");
+    const roleWarnings: string[] = [];
     assert.ok(discoverAgentDefinitions().length);
-    assert.throws(
-      () => discoverRoleDefinitions(),
-      /non-coordinator name in coordinators directory/,
+    assert.ok(
+      discoverRoleDefinitions({
+        onWarning: (warning) => roleWarnings.push(warning),
+      }).length,
+    );
+    assert.match(
+      roleWarnings[0]!,
+      /bad\.md: definition belongs in .*agents.*bad\.md; file excluded/u,
     );
     unlinkSync(join(roles, "bad.md"));
     writeFileSync(join(agents, "bad.md"), "---\nname: manager\n---\n");
+    mkdirSync(join(agents, "nested"));
+    writeFileSync(
+      join(agents, "nested", "duplicate.md"),
+      "---\nname: manager\n---\n",
+    );
+    writeFileSync(join(agents, "valid.md"), "---\nname: valid\n---\n");
     assert.ok(discoverRoleDefinitions().length);
+    const agentWarnings: string[] = [];
+    assert.ok(
+      discoverAgentDefinitions({
+        onWarning: (warning) => agentWarnings.push(warning),
+      }).some(({ name }) => name === "valid"),
+    );
+    assert.equal(agentWarnings.length, 2);
+    assert.match(
+      agentWarnings[0]!,
+      /bad\.md: definition belongs in .*coordinators.*bad\.md; file excluded/u,
+    );
+    assert.match(
+      agentWarnings[1]!,
+      /nested.*duplicate\.md: definition belongs in .*coordinators.*nested.*duplicate\.md; file excluded/u,
+    );
+    writeFileSync(join(agents, "malformed.md"), "---\nname: [manager\n---\n");
     assert.throws(
-      () => discoverAgentDefinitions(),
-      /reserved coordinator name in agents directory; use coordinators/,
+      () => discoverAgentDefinitions({ onWarning: () => undefined }),
+      /malformed\.md/u,
     );
   });
+});
+
+test("contextual definition warnings are reported once per session", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdsman-definition-warning-"));
+  mkdirSync(join(root, "agents"));
+  mkdirSync(join(root, "coordinators"));
+  writeFileSync(
+    join(root, "agents", "manager.md"),
+    "---\nname: manager\n---\n",
+  );
+  writeFileSync(
+    join(root, "coordinators", "misplaced.md"),
+    "---\nname: misplaced\n---\n",
+  );
+  const notices: string[] = [];
+  let sessionId = "session-one";
+  const manager = { getSessionId: () => sessionId };
+  const ctx = {
+    cwd: root,
+    hasUI: true,
+    sessionManager: manager,
+    isProjectTrusted: () => false,
+    ui: { notify: (message: string) => notices.push(message) },
+  } as any;
+  const pending = withPiAgentDir(root, () => {
+    const first = contextAgentDefinitions(ctx);
+    discoverRoleDefinitions({
+      onWarning: (message) => notifyDefinitionWarning(ctx, message),
+    });
+    const second = contextAgentDefinitions(ctx);
+    assert.equal(notices.length, 2);
+    assert.match(notices[1]!, /coordinators.*misplaced\.md.*agents/u);
+    sessionId = "session-two";
+    const third = contextAgentDefinitions(ctx);
+    assert.equal(notices.length, 3);
+    return Promise.all([first, second, third]);
+  });
+  await pending;
 });
 
 test("legacy coordinator profiles diagnose only applicable trusted scopes", () => {
