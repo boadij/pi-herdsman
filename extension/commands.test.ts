@@ -3297,7 +3297,7 @@ function fakeRepositoryChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
           return { ...response, stdout: JSON.stringify(parsed) };
         }
       }
-      return response;
+      return response ?? { stdout: "", stderr: "", code: 1 };
     },
   });
 }
@@ -4845,7 +4845,7 @@ test("Manager auto-start does not bootstrap a non-Git workspace", async () => {
     activeTools: ["read"],
     exec: (command, args) => {
       if (command === "git") gitCalls.push(args);
-      return undefined;
+      return { stdout: "", stderr: "", code: 1 };
     },
   });
   registerExtension!(pi.pi as never);
@@ -5032,7 +5032,7 @@ function managerBootstrapHarness(
           code: result.status ?? 1,
         };
       }
-      if (command !== "herdr") return undefined;
+      if (command !== "herdr") return { stdout: "", stderr: "", code: 1 };
       if (args[0] === "workspace" && args[1] === "get")
         return respond({
           workspace: {
@@ -6309,7 +6309,7 @@ test("malformed Lead coordination blocks Manager auto-start", async () => {
           code: 0,
         };
       }
-      return undefined;
+      return { stdout: "", stderr: "", code: 1 };
     },
   });
   registerExtension!(pi.pi as never);
@@ -6375,7 +6375,7 @@ test("malformed Lead coordination skips fallback topology restoration when auto-
           code: 0,
         };
       }
-      return undefined;
+      return { stdout: "", stderr: "", code: 1 };
     },
   });
   registerExtension!(pi.pi as never);
@@ -8730,7 +8730,7 @@ async function managerDelegateAssignmentTest(
   const exec = (
     command: string,
     args: string[],
-    options?: { cwd?: string },
+    options?: { cwd?: string; timeout?: number; signal?: AbortSignal },
   ) => {
     if (command === "herdr" && args[0] === "tab" && args[1] === "list") {
       tabCommands.push(args);
@@ -9097,7 +9097,7 @@ async function managerDelegateAssignmentTest(
   const managerExec = async (
     command: string,
     args: string[],
-    options?: { cwd?: string },
+    options?: { cwd?: string; timeout?: number; signal?: AbortSignal },
   ) => {
     mutateRetainedSource?.();
     if (
@@ -13579,7 +13579,7 @@ test("Chief accepts a recorded Manager sender independently of source workspace"
           },
           worktrees: [{ open_workspace_id: sender.workspace_id }],
         });
-      return undefined;
+      return { stdout: "", stderr: "", code: 1 };
     },
   });
   const context = fakeContext(pi.entries) as any;
@@ -13916,7 +13916,7 @@ test("Chief tool activation failure restores ordinary Lead tools", async () => {
             stderr: "",
             code: 0,
           }
-        : undefined,
+        : { stdout: "", stderr: "", code: 1 },
   });
   const context = fakeContext() as any;
   const notices: string[] = [];
@@ -14665,9 +14665,26 @@ test("root assignment rejects a role generation changed during preflight", async
         held = true;
         enteredPreflight();
         await preflightRelease;
-        return undefined;
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { snapshot: { agents: [], panes: [], workspaces: [] } },
+          }),
+          stderr: "",
+          code: 0,
+        };
       }
-      return undefined;
+      return {
+        stdout:
+          command === "herdr" && isApiSnapshot(_args)
+            ? JSON.stringify({
+                id: AGENT_ID,
+                result: { snapshot: { agents: [], panes: [], workspaces: [] } },
+              })
+            : "{}",
+        stderr: "",
+        code: 0,
+      };
     },
   });
   const context = fakeContext() as any;
