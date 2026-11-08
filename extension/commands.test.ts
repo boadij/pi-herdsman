@@ -650,6 +650,7 @@ import {
   writeResult,
   writeAgentState,
   writeAgentStartupOutcome,
+  type ExecHandler,
   type ExecResult,
   type FixtureIdentity,
 } from "./support.ts";
@@ -657,6 +658,10 @@ import {
   createLeadToolState,
   sessionLeadExecutionState as readLeadExecutionState,
 } from "./lead-runtime.ts";
+
+type CommandTestExecOptions = NonNullable<Parameters<ExecHandler>[2]> & {
+  cwd?: string;
+};
 
 const leadTools = [
   "list_agents",
@@ -3275,10 +3280,12 @@ function nonGitWorkspaceResponse() {
 function fakeRepositoryChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
   return fakeChiefPi({
     ...options,
-    exec: async (command, args, extra) => {
+    exec: async (command, args, extra: CommandTestExecOptions | undefined) => {
       if (command === "git" && args[0] === "rev-parse")
         return {
-          stdout: args.includes("--show-toplevel") ? extra.cwd : "/tmp",
+          stdout: args.includes("--show-toplevel")
+            ? (extra?.cwd ?? "/tmp")
+            : "/tmp",
           stderr: "",
           code: 0,
         };
@@ -4971,7 +4978,7 @@ function managerBootstrapHarness(
   });
   const pi = fakeChiefPi({
     activeTools: ["read"],
-    exec: (command, args, execOptions) => {
+    exec: (command, args, execOptions: CommandTestExecOptions | undefined) => {
       invocations.push({ command, args, cwd: execOptions?.cwd });
       if (command === "git") {
         if (
@@ -11349,7 +11356,7 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     (manager.pi as any).exec = async (
       command: string,
       args: string[],
-      options: { cwd?: string } | undefined,
+      options: CommandTestExecOptions | undefined,
     ) =>
       command === "git" &&
       args[0] === "rev-parse" &&
