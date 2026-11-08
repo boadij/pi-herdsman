@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -40,6 +41,7 @@ import {
   resetAgentMailbox,
   unacknowledgedRequestExists,
   observeMailbox,
+  observeNewAgentStates,
   writeResult,
   waitForState,
   waitForStartupOutcome,
@@ -185,6 +187,81 @@ test("mailbox observer reconciles an atomically published relevant file", async 
     clearTimeout(keepAlive);
     rmSync(directory, { recursive: true, force: true });
   }
+});
+const fakeClock = (t: { mock: { timers: any } }) =>
+  t.mock.timers.enable({ apis: ["setInterval", "setImmediate"] });
+test("new-agent observer reports a state.json published later, once, and ignores earlier ones", (t) => {
+  fakeClock(t);
+  const early = agentMailboxPath("w-observe", `early-${randomUUID()}`);
+  const late = agentMailboxPath("w-observe", `late-${randomUUID()}`);
+  const after = agentMailboxPath("w-observe", `after-${randomUUID()}`);
+  t.after(() => {
+    for (const path of [early, late, after])
+      rmSync(path, { recursive: true, force: true });
+  });
+  writeAgentState(early, { ...state, workspaceId: "w-observe" });
+  let reports = 0;
+  const errors: unknown[] = [];
+  const stop = observeNewAgentStates(
+    () => reports++,
+    (error) => errors.push(error),
+  );
+  t.after(stop);
+  t.mock.timers.tick(1_000);
+  assert.equal(reports, 0, "a pre-existing state.json must not be reported");
+  writeAgentState(late, { ...state, workspaceId: "w-observe" });
+  t.mock.timers.tick(1_000);
+  assert.equal(reports, 1, "a new state.json is reported");
+  t.mock.timers.tick(3_000);
+  assert.equal(reports, 1, "the same state.json is reported once");
+  stop();
+  writeAgentState(after, { ...state, workspaceId: "w-observe" });
+  t.mock.timers.tick(3_000);
+  assert.equal(reports, 1, "a stopped observer must not report");
+  assert.deepEqual(errors, []);
+});
+test("new-agent observer reports the first mailbox ever created when the root is absent", (t) => {
+  fakeClock(t);
+  const first = agentMailboxPath("w-observe-first", `first-${randomUUID()}`);
+  rmSync(dirname(first), { recursive: true, force: true });
+  t.after(() => rmSync(first, { recursive: true, force: true }));
+  let reports = 0;
+  const errors: unknown[] = [];
+  const stop = observeNewAgentStates(
+    () => reports++,
+    (error) => errors.push(error),
+  );
+  t.after(stop);
+  t.mock.timers.tick(1_000);
+  assert.equal(reports, 0);
+  writeAgentState(first, { ...state, workspaceId: "w-observe-first" });
+  t.mock.timers.tick(1_000);
+  assert.equal(reports, 1);
+  assert.deepEqual(errors, [], "an absent root is not an error");
+});
+test("new-agent observer reports an unreadable mailbox root instead of throwing", (t) => {
+  if (process.platform === "win32" || process.getuid?.() === 0)
+    return t.skip("POSIX permission bits are not enforced here");
+  fakeClock(t);
+  const probe = agentMailboxPath("w-observe-denied", `d-${randomUUID()}`);
+  writeAgentState(probe, { ...state, workspaceId: "w-observe-denied" });
+  const rootDirectory = dirname(probe);
+  let reports = 0;
+  const errors: NodeJS.ErrnoException[] = [];
+  const stop = observeNewAgentStates(
+    () => reports++,
+    (error) => errors.push(error as NodeJS.ErrnoException),
+  );
+  t.after(() => {
+    chmodSync(rootDirectory, 0o700);
+    stop();
+    rmSync(probe, { recursive: true, force: true });
+  });
+  chmodSync(rootDirectory, 0o000);
+  assert.doesNotThrow(() => t.mock.timers.tick(1_000));
+  assert.ok(errors.length >= 1);
+  assert.match(String(errors[0]!.code), /EACCES|EPERM/);
+  assert.equal(reports, 0);
 });
 test("runtime build identity includes exact executable bytes", (t) => {
   const path = join(tmpdir(), `herdsman-build-${randomUUID()}.js`);

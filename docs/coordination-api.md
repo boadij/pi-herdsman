@@ -5,6 +5,46 @@
 Pi Herdsman exposes small, role-specific model-facing interfaces. This page is
 the router to their exact contracts, not a second copy of them.
 
+## Code-mode tool access
+
+Pi tools declared with `direct` exposure can be called by the model and through
+Pi's supported native nested-tool execution when active. The coordination tools
+supporting native programmatic invocation are `list_agents`, `steer_agent`,
+`interrupt_agent`, `reply_agent`, `stop_agent`, `inspect_agent`,
+`read_agent_transcript`, `read_evidence`, `list_staff`, `inspect_staff`,
+`read_staff_transcript`, `message_staff`, `delegate_work`, `resume_work`,
+`stop_lead`, `remove_worktree`, `integrate_branch`, `message_supervisor`,
+`list_peers`, `message_peer`, and `attach_handoff`. `delegate_agent` and
+`continue_agent` remain `model-only` and do not support native programmatic
+invocation. `ask_owner` also remains `model-only` because it must be a direct,
+exclusive tool call in its turn. See
+[`ask_owner`](reference/ask-owner.md) for its contract.
+
+Tool access still depends on the active role, ownership, extension loading, and
+runtime authorization. This documents Pi's native contract; behavior through
+third-party code-mode integrations and their approval or foreground settings
+depends on that integration and is not guaranteed here. In environments where
+`ask_owner` and Fabric are both registered, Fabric may configure it as a
+foreground tool, for example:
+
+```json
+{
+  "foreground": {
+    "tools": [
+      {
+        "name": "ask_owner",
+        "owner": "pi-herdsman",
+        "reason": "turn-steering"
+      }
+    ]
+  }
+}
+```
+
+Users preferring model-facing tools may choose Fabric's `fullCodeMode: false`
+setting where supported; verify its behavior against the installed Fabric
+version.
+
 ## Owned Agent work
 
 A Lead or delegation-enabled Agent controls only its owned Agent boundary.

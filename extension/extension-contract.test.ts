@@ -71,6 +71,7 @@ import support, {
   realFs,
   recoveryIdentity,
   registerExtension,
+  registerExtensionForTest,
   resetAgentMailbox,
   setLeadEnvironment,
   setAgentEnvironment,
@@ -134,8 +135,11 @@ function assertProtectedHandoff(charter: string): void {
   );
 }
 
-function assertPortableToolSchema(tool: any): void {
-  assert.equal(tool.exposure, "model-only");
+function assertPortableToolSchema(
+  tool: any,
+  exposure: "direct" | "model-only" = "direct",
+): void {
+  assert.equal(tool.exposure, exposure);
   assert.equal(tool.parameters?.type, "object");
   assert.ok(tool.parameters?.properties);
   assert.equal(tool.parameters?.additionalProperties, false);
@@ -484,6 +488,12 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     assert.equal(tools.has(removed), false, `removed tool remains: ${removed}`);
 
   const rootDelegate = pi.tools.find((tool) => tool.name === "delegate_agent")!;
+  assert.equal(
+    pi.tools.find((tool) => tool.name === "read_evidence")?.exposure,
+    "direct",
+  );
+  assert.equal(agentDelegate.exposure, "model-only");
+  assert.equal(tools.get("continue_agent")?.exposure, "model-only");
   assert.equal(rootDelegate.parameters.properties.retain, undefined);
   for (const retain of [true, false])
     assert.equal(
@@ -498,7 +508,12 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     const tool = tools.get(name);
     assert.ok(tool, `missing ${name}`);
     assert.equal(tool.label, labels[name], name);
-    assertPortableToolSchema(tool);
+    assertPortableToolSchema(
+      tool,
+      name === "delegate_agent" || name === "continue_agent"
+        ? "model-only"
+        : "direct",
+    );
     assert.deepEqual(
       [...(tool.parameters.required ?? [])].sort(),
       [...required].sort(),
@@ -596,7 +611,13 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     ["ask_owner", "attach_handoff", "read_evidence"].sort(),
   );
   const askOwner = leaf.tools.find((tool) => tool.name === "ask_owner")!;
-  assertPortableToolSchema(askOwner);
+  assertPortableToolSchema(askOwner, "model-only");
+  for (const name of ["read_evidence", "attach_handoff"])
+    assert.equal(
+      leaf.tools.find((tool) => tool.name === name)?.exposure,
+      "direct",
+      name,
+    );
   assert.deepEqual(askOwner.parameters.required, ["question"]);
   assert.equal(
     Value.Check(askOwner.parameters, { question: "decision?" }),
@@ -697,7 +718,7 @@ test("Chief activation exposes only semantic staff tools", async () => {
       );
     }
     for (const name of ["delegate_work", "stop_lead"])
-      assert.equal(tools.get(name)?.exposure, "model-only", name);
+      assert.equal(tools.get(name)?.exposure, "direct", name);
     assert.equal(chief.pi.getActiveTools().includes("integrate_branch"), false);
   } finally {
     await chief.events.get("session_shutdown")?.[0]();
@@ -887,7 +908,12 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     false,
   );
   for (const tool of lead.tools) {
-    assertPortableToolSchema(tool);
+    assertPortableToolSchema(
+      tool,
+      tool.name === "delegate_agent" || tool.name === "continue_agent"
+        ? "model-only"
+        : "direct",
+    );
     if (tool.name === "read_evidence") continue;
     assert.equal(tool.executionMode, "sequential");
     assert.equal(typeof tool.renderCall, "function");
@@ -1051,7 +1077,7 @@ test("managed agents receive no peer tool and Chiefs expose only staff actively"
   );
   const askOwnerTool = managed.tools.find((tool) => tool.name === "ask_owner");
   assert.ok(askOwnerTool);
-  assertPortableToolSchema(askOwnerTool);
+  assertPortableToolSchema(askOwnerTool, "model-only");
   managed.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
 
@@ -1482,16 +1508,15 @@ test("registered failed-turn reporting uses exact Managed session identity befor
       },
     },
   ];
-  const definitionsReached = testGate<void>();
+  const identityInitialized = testGate<void>();
   const pi = fakePi({ entries });
-  registerExtension!(pi.pi as never);
+  registerExtensionForTest!(pi.pi as never, {
+    afterManagedSessionIdentityInitialized: () => identityInitialized.resolve(),
+  });
   const context = fakeContext(entries) as any;
   context.sessionManager = {
     ...context.sessionManager,
     getSessionId: () => sessionId,
-  };
-  support.fileReadHook = (path) => {
-    if (path === join(PI_AGENTS_DIR, "agent.md")) definitionsReached.resolve();
   };
   let sessionStartFinished = false;
   const starting = pi.events
@@ -1502,7 +1527,7 @@ test("registered failed-turn reporting uses exact Managed session identity befor
   try {
     // Session identity has been initialized, but prepareLeadExecution has not
     // run yet, so the mutable execution profile is still absent.
-    await definitionsReached.promise;
+    await identityInitialized.promise;
     assert.equal(sessionStartFinished, false);
     assert.ok(
       entries.some(
@@ -1557,7 +1582,6 @@ test("registered failed-turn reporting uses exact Managed session identity befor
     assert.equal(mismatchedReport?.data?.target, "chief");
   } finally {
     await starting;
-    support.fileReadHook = undefined;
     pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_PANE_ID;
     setLeadEnvironment();
@@ -5626,7 +5650,7 @@ test("delegating agents receive only their allowed definition roster", async () 
   );
   assert.match(
     role,
-    /Agent-started agents are leaves\. Delegate bounded execution work when an Agent can reasonably\s+own it and delegation is useful\./,
+    /Agent-started agents delegate further only within the configured maximum nesting depth and\s+are leaves beyond it\. Delegate bounded execution work when an Agent can reasonably\s+own it and delegation is useful\./,
   );
   assert.doesNotMatch(
     description,

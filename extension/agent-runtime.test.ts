@@ -9,6 +9,7 @@ import {
   fauxAssistantMessage,
   fauxProvider,
   fauxToolCall,
+  getCurrentTools,
 } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
@@ -67,6 +68,7 @@ import support, {
   emitMailboxChange,
   emitMailboxWatchError,
   agentMailboxPath,
+  listAgentStates,
   DEFAULT_PI_SESSION_ID,
   startupExecutor,
   writeAsk,
@@ -76,7 +78,7 @@ import support, {
   writeAgentState,
   testTmpRoot,
 } from "./support.ts";
-const { updateConfig } = await import("./config.ts");
+const { readConfig, updateConfig } = await import("./config.ts");
 const {
   AGENT_REQUIRED_EVIDENCE_ENTRY,
   createManagedAgentEvidenceUpdater,
@@ -1986,7 +1988,7 @@ test("agent ask_owner rejects oversized semantic results without persisting an a
         undefined,
         context,
       ),
-      /could not be fully embedded/i,
+      /per-file inline limit/i,
     );
     assert.equal(readAgentState(mailbox)?.pendingAskId, undefined);
     assert.equal(realFs.existsSync(join(mailbox, "ask.json")), false);
@@ -1994,6 +1996,128 @@ test("agent ask_owner rejects oversized semantic results without persisting an a
     agent?.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
     realFs.rmSync(artifact, { force: true });
+  }
+});
+
+test("agent ask_owner capacity rejection is reported when execution completes empty", async () => {
+  const mailbox = setAgentEnvironment();
+  const previousInlineLimit = readConfig().inlineAttachmentLimitBytes;
+  const previousMailboxLimit = readConfig().mailboxPayloadLimitBytes;
+  updateConfig("inlineAttachmentLimitBytes", 4096);
+  updateConfig("mailboxPayloadLimitBytes", 4096);
+  const agent = fakePi();
+  registerExtension!(agent.pi as never);
+  const branch: unknown[] = [
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "ask_owner" }],
+      },
+    },
+  ];
+  const context = fakeAgentContext([], branch);
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    const initial = readAgentState(mailbox)!;
+    const assignment: RequestRecord = {
+      version: 5,
+      runId: initial.runId,
+      requestId: randomUUID(),
+      ownerSessionId: initial.ownerSessionId,
+      workspaceId: initial.workspaceId,
+      agentLabel: initial.agentLabel,
+      paneId: initial.paneId,
+      kind: "task",
+      text: "Ask the owner for a decision.",
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, assignment);
+    assert.deepEqual(
+      agent.events.get("input")![0](
+        { text: controlMarker(assignment.requestId) },
+        context,
+      ),
+      { action: "transform", text: assignment.text },
+    );
+    removeRequest(mailbox, assignment.requestId);
+    agent.events.get("agent_start")![0]();
+
+    const first = join(testTmpRoot, "ask-capacity-first.md");
+    const second = join(testTmpRoot, "ask-capacity-second.md");
+    realFs.writeFileSync(first, "a".repeat(3000));
+    realFs.writeFileSync(second, "b".repeat(3000));
+    const current = readAgentState(mailbox)!;
+    const expectedPayloadBytes = Buffer.byteLength(
+      JSON.stringify({
+        version: 5,
+        askId: "00000000-0000-4000-8000-000000000000",
+        requestId: assignment.requestId,
+        runId: current.runId,
+        ownerSessionId: current.ownerSessionId,
+        workspaceId: current.workspaceId,
+        agentLabel: current.agentLabel,
+        paneId: current.paneId,
+        piSessionId: current.piSessionId,
+        question: `<file name="${realFs.realpathSync(first)}" bytes="3000">\n${"a".repeat(3000)}\n</file>\n\n<file name="${realFs.realpathSync(second)}" bytes="3000">\n${"b".repeat(3000)}\n</file>\n\nQuestion:\nWhich option?`,
+        createdAt: 1_000_000_000_000,
+      }),
+      "utf8",
+    );
+    let reportedPayloadBytes: number | undefined;
+    await assert.rejects(
+      agent.tools
+        .find((tool) => tool.name === "ask_owner")!
+        .execute(
+          "capacity-rejected",
+          { question: "Which option?", files: [first, second] },
+          undefined,
+          undefined,
+          context,
+        ),
+      (error: unknown) => {
+        const match =
+          error instanceof Error &&
+          error.message.match(
+            /Mailbox payload is (\d+) bytes; configured limit is 4096 bytes/i,
+          );
+        if (!match) return false;
+        reportedPayloadBytes = Number(match[1]);
+        return true;
+      },
+    );
+    assert.equal(reportedPayloadBytes, expectedPayloadBytes);
+    assert.equal(readAgentState(mailbox)?.pendingAskId, undefined);
+    assert.equal(realFs.existsSync(join(mailbox, "ask.json")), false);
+
+    emitAgentTurn(agent, context, { role: "assistant", content: "" });
+    agent.events.get("agent_before_settle")![0](
+      { outcome: "completed" },
+      context,
+    );
+    await agent.events.get("agent_settled")![0]({ aborted: false }, context);
+    const result = readResult(mailbox, assignment.requestId);
+    assert.equal(result?.status, "failed");
+    assert.equal(result?.error?.code, "empty_result");
+    assert.match(
+      result?.error?.message ?? "",
+      /Agent produced no assistant text/i,
+    );
+    assert.match(
+      result?.error?.message ?? "",
+      new RegExp(
+        `Mailbox payload is ${expectedPayloadBytes} bytes; configured limit is 4096 bytes`,
+        "i",
+      ),
+    );
+    assert.match(result?.error?.message ?? "", /The question was not sent/i);
+  } finally {
+    updateConfig("inlineAttachmentLimitBytes", previousInlineLimit);
+    updateConfig("mailboxPayloadLimitBytes", previousMailboxLimit);
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+    realFs.rmSync(join(testTmpRoot, "ask-capacity-first.md"), { force: true });
+    realFs.rmSync(join(testTmpRoot, "ask-capacity-second.md"), { force: true });
   }
 });
 
@@ -6855,6 +6979,47 @@ test("failed startup outcome publication preserves the original initialization f
   }
 });
 
+test("saved-model restoration failure is published before request pumping", async () => {
+  const mailbox = setAgentEnvironment("restore-model-agent");
+  const agent = fakePi();
+  registerExtension!(agent.pi as never);
+  const context = fakeAgentContext(agent.entries) as any;
+  context.sessionManager.getBranch = () => [
+    {
+      type: "model_change",
+      provider: "saved-provider",
+      modelId: "saved-model",
+    },
+  ];
+  context.sessionManager.buildSessionContext = () => ({
+    messages: [],
+    model: { provider: "saved-provider", modelId: "saved-model" },
+  });
+  context.modelRegistry = { find: () => undefined };
+  context.model = { provider: "fallback-provider", id: "fallback-model" };
+  const previous = process.env.PI_HERDSMAN_RESTORE_MODEL;
+  process.env.PI_HERDSMAN_RESTORE_MODEL = "saved-session";
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    const outcome = readAgentStartupOutcome(mailbox);
+    assert.equal(outcome?.status, "failed");
+    if (outcome?.status === "failed") {
+      assert.equal(outcome.stage, "model_restore");
+      assert.match(outcome.error, /saved-provider\/saved-model/u);
+      assert.match(outcome.error, /fallback-provider\/fallback-model/u);
+    }
+    assert.equal(
+      agent.calls.some((args) => args[0] === "send_user_message"),
+      false,
+    );
+  } finally {
+    if (previous === undefined) delete process.env.PI_HERDSMAN_RESTORE_MODEL;
+    else process.env.PI_HERDSMAN_RESTORE_MODEL = previous;
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
 test("conflicting state preserves the other generation's startup outcome", async () => {
   const mailbox = setAgentEnvironment();
   const state = { ...managedState("registered-agent"), runId: randomUUID() };
@@ -7139,6 +7304,361 @@ test("owner ask waits while busy and delivers once after settlement", async () =
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
+  }
+});
+
+test("Pi native nested dispatch executes direct tools and actual staff handler denies Chief project mutation", async () => {
+  const { createLeadProjectRuntime } = await import("./lead/project.ts");
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "nested-list-lead-pane";
+  const nestedOwnedState = managedState("nested-visible-agent");
+  const nestedMailbox = agentMailboxPath(
+    WORKSPACE,
+    nestedOwnedState.agentLabel,
+  );
+  resetAgentMailbox(nestedMailbox);
+  writeAgentState(nestedMailbox, nestedOwnedState);
+  const listController = fakePi({
+    exec: agentControllerExecutor(nestedOwnedState),
+  });
+  registerExtension!(listController.pi as never);
+  const listAgentsTool = listController.tools.find(
+    (tool) => tool.name === "list_agents",
+  )!;
+  assert.equal(listAgentsTool.exposure, "direct");
+  let staffExecutions = 0;
+  let projectLaunches = 0;
+  const projectRuntime = createLeadProjectRuntime({
+    activeRole: () => "chief",
+    leadRuntime: { roleSuspended: false },
+    currentChiefAuthority: async () => ({}) as any,
+    runHerdr: async () => {
+      projectLaunches++;
+      throw new Error("project launch must not happen");
+    },
+  } as any);
+  const faux = fauxProvider({
+    provider: `nested-tools-${randomUUID()}`,
+    models: [{ id: "test", reasoning: false, input: ["text"] }],
+  });
+  const modelRuntime = await ModelRuntime.create({
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  modelRuntime.registerNativeProvider(faux.provider);
+  const settingsManager = SettingsManager.inMemory({
+    compaction: { enabled: false },
+  });
+  let nestedAgentList: unknown;
+  const requests: any[][] = [];
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    settingsManager,
+    noExtensions: true,
+    noContextFiles: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    extensionFactories: [
+      (api) => {
+        // Force the normally inactive Manager tool callable, as a captured
+        // registration fallback might, to exercise the execution-time guard.
+        api.on("session_start", () =>
+          api.setActiveTools([
+            "nested_parent",
+            "list_agents",
+            "integrate_branch",
+          ]),
+        );
+        api.registerTool({
+          name: listAgentsTool.name,
+          label: listAgentsTool.label,
+          description: listAgentsTool.description,
+          exposure: listAgentsTool.exposure,
+          executionMode: listAgentsTool.executionMode,
+          parameters: listAgentsTool.parameters,
+          execute: (...args: any[]) => listAgentsTool.execute(...args),
+        });
+        api.registerTool({
+          name: "integrate_branch",
+          label: "integrate branch",
+          description:
+            "Manager project operation, callable for this guard test.",
+          exposure: "direct",
+          parameters: Type.Object({
+            action: Type.String(),
+            branch: Type.String(),
+            expected_head: Type.String(),
+          }),
+          execute: async (...args: any[]) => {
+            staffExecutions++;
+            return projectRuntime.executeStaff(
+              ...args.slice(0, 3),
+              args[3],
+              args[4],
+            );
+          },
+        });
+        api.registerTool({
+          name: "nested_parent",
+          label: "nested parent",
+          description: "Run a direct child and attempt Chief project dispatch.",
+          parameters: Type.Object({}),
+          execute: async (_id, _params, signal, _onUpdate, ctx) => {
+            nestedAgentList = await ctx.executeTool(
+              "list_agents",
+              {},
+              { signal },
+            );
+            const denied = await ctx.executeTool(
+              "integrate_branch",
+              {
+                action: "merge",
+                branch: "probe-branch",
+                expected_head: "deadbeef",
+              },
+              { signal },
+            );
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `list_agents ${JSON.stringify(nestedAgentList)};${denied.isError ? `project denied: ${JSON.stringify(denied)}` : "project invoked"}`,
+                },
+              ],
+            };
+          },
+        });
+      },
+    ],
+  });
+  await resourceLoader.reload();
+  faux.setResponses([
+    (context) => {
+      requests.push(context.messages as any[]);
+      return fauxAssistantMessage([fauxToolCall("nested_parent", {})], {
+        stopReason: "toolUse",
+      });
+    },
+    (context) => {
+      requests.push(context.messages as any[]);
+      return fauxAssistantMessage("Finished.");
+    },
+  ]);
+  const { session } = await createAgentSession({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    modelRuntime,
+    model: faux.getModel()!,
+    settingsManager,
+    resourceLoader,
+    sessionManager: SessionManager.inMemory(WORKSPACE),
+  });
+  const agentStateInventory = () =>
+    listAgentStates()
+      .filter(({ state }) => state.workspaceId === WORKSPACE)
+      .map(({ path, state }) => ({ path, state }));
+  try {
+    const statesBefore = agentStateInventory();
+    await session.prompt("Invoke the nested parent.");
+    assert.equal((nestedAgentList as any)?.isError, false);
+    assert.deepEqual((nestedAgentList as any).result.details.agents, []);
+    assert.deepEqual(agentStateInventory(), statesBefore);
+    assert.equal(staffExecutions, 1);
+    assert.equal(projectLaunches, 0);
+    const toolResults = requests[1]!.filter(
+      (message: any) => message.role === "toolResult",
+    );
+    assert.equal(toolResults.length, 1);
+    assert.equal(toolResults[0].toolName, "nested_parent");
+    assert.deepEqual(
+      toolResults[0].nestedCalls.calls.map((call: any) => call.name),
+      ["list_agents", "integrate_branch"],
+    );
+    assert.match(
+      JSON.stringify(toolResults[0]),
+      /list_agents [\s\S]*Agents: 0[\s\S]*project denied:[\s\S]*Only Managers can integrate project branches/,
+    );
+  } finally {
+    await session.dispose();
+    listController.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(nestedMailbox);
+  }
+});
+
+test("Manager event boundaries enforce actual faux-provider declarations on first and continuation requests", async () => {
+  const { createLeadAgentEventRuntime, createLeadToolState } =
+    await import("./lead-runtime.ts");
+  const allowedLateTool = "mcp__forgejo__get_issue_by_index";
+
+  for (const explicit of [false, true]) {
+    const faux = fauxProvider({
+      provider: `manager-policy-${randomUUID()}`,
+      models: [{ id: "test", reasoning: false, input: ["text"] }],
+    });
+    const modelRuntime = await ModelRuntime.create({
+      modelsPath: null,
+      refreshOnCreate: false,
+    });
+    modelRuntime.registerNativeProvider(faux.provider);
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: false },
+    });
+    const requestDeclarations: string[][] = [];
+    let continuationToolsRegistered = false;
+    let firstLateToolAutoActivated = false;
+    let continuationLateToolAutoActivated = false;
+    const definition = {
+      name: "manager",
+      path: "",
+      frontmatter: { tools: explicit ? [allowedLateTool] : [] },
+      body: "",
+    } as any;
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: WORKSPACE,
+      agentDir: testTmpRoot,
+      settingsManager,
+      noExtensions: true,
+      noContextFiles: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      extensionFactories: [
+        (api) => {
+          api.registerTool({
+            name: "manager_probe",
+            label: "manager probe",
+            description: "Complete one deterministic tool batch.",
+            parameters: Type.Object({}),
+            execute: async () => ({
+              content: [{ type: "text", text: "probe completed" }],
+            }),
+          });
+          const toolState = createLeadToolState(
+            () => api.getAllTools(),
+            [],
+            [],
+          );
+          const permittedTools = () =>
+            toolState.projectRoleTools([], definition, ["manager_probe"]);
+          const events = createLeadAgentEventRuntime({
+            isCurrentChief: () => false,
+            isActiveManager: () => true,
+            isRoleSuspended: () => false,
+            setActiveTools: (tools: readonly string[]) =>
+              api.setActiveTools([...tools]),
+            managerTools: ["manager_probe"],
+            currentManagerAllowedTools: permittedTools,
+            reconcileRoleTools: () => api.setActiveTools(permittedTools()),
+            roleCharter: () => "Manager profile active.",
+            prepareSupervisionMessage: async () => undefined,
+            drainRetirementNotices: async () => 0,
+            sendMessage: () => {},
+          } as any);
+          api.on("session_start", () => api.setActiveTools(["manager_probe"]));
+          api.on("before_agent_start", () => {
+            if (explicit) {
+              api.registerTool({
+                name: allowedLateTool,
+                label: "allowed late tool",
+                description: "Explicitly permitted late registration.",
+                parameters: Type.Object({}),
+                execute: async () => ({
+                  content: [{ type: "text", text: "unused" }],
+                }),
+              });
+            }
+            api.registerTool({
+              name: "late_unallowed_first_request",
+              label: "late unallowed tool",
+              description: "Automatically activated after Manager activation.",
+              parameters: Type.Object({}),
+              execute: async () => ({
+                content: [{ type: "text", text: "unused" }],
+              }),
+            });
+            firstLateToolAutoActivated = api
+              .getActiveTools()
+              .includes("late_unallowed_first_request");
+          });
+          api.on("turn_end", () => {
+            if (continuationToolsRegistered) return;
+            continuationToolsRegistered = true;
+            api.registerTool({
+              name: "late_continuation_unallowed",
+              label: "late continuation tool",
+              description: "Registered during the Manager run.",
+              parameters: Type.Object({}),
+              execute: async () => ({
+                content: [{ type: "text", text: "unused" }],
+              }),
+            });
+            continuationLateToolAutoActivated = api
+              .getActiveTools()
+              .includes("late_continuation_unallowed");
+          });
+          api.on("before_agent_start", (event, ctx) =>
+            events.beforeAgentStart(event, ctx as any),
+          );
+          api.on("turn_end", () => events.turnEnd());
+        },
+      ],
+    });
+    await resourceLoader.reload();
+    faux.setResponses([
+      (context) => {
+        requestDeclarations.push(
+          getCurrentTools(context.messages).map((tool) => tool.name),
+        );
+        return fauxAssistantMessage([fauxToolCall("manager_probe", {})], {
+          stopReason: "toolUse",
+        });
+      },
+      (context) => {
+        requestDeclarations.push(
+          getCurrentTools(context.messages).map((tool) => tool.name),
+        );
+        return fauxAssistantMessage("Finished.");
+      },
+    ]);
+    const { session } = await createAgentSession({
+      cwd: WORKSPACE,
+      agentDir: testTmpRoot,
+      modelRuntime,
+      model: faux.getModel()!,
+      settingsManager,
+      resourceLoader,
+      sessionManager: SessionManager.inMemory(WORKSPACE),
+    });
+    try {
+      await session.prompt("Run the deterministic Manager probe.");
+      assert.equal(requestDeclarations.length, 2);
+      assert.equal(firstLateToolAutoActivated, true);
+      assert.equal(continuationLateToolAutoActivated, true);
+      for (const [index, declarations] of requestDeclarations.entries()) {
+        assert.ok(
+          declarations.includes("manager_probe"),
+          `manager mandatory tool absent from request ${index + 1}: ${declarations}`,
+        );
+        assert.ok(
+          !declarations.includes("late_unallowed_first_request"),
+          `first-run late tool absent from faux-provider request ${index + 1}: ${declarations}`,
+        );
+        assert.ok(
+          !declarations.includes("late_continuation_unallowed"),
+          `continuation late tool absent from faux-provider request ${index + 1}: ${declarations}`,
+        );
+        if (explicit)
+          assert.ok(
+            declarations.includes(allowedLateTool),
+            `explicitly permitted late tool present in faux-provider request ${index + 1}`,
+          );
+        else assert.ok(!declarations.includes(allowedLateTool));
+      }
+    } finally {
+      await session.dispose();
+    }
   }
 });
 

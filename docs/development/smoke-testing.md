@@ -58,7 +58,7 @@ managed descendants do not load the probe.
 
 ### Deterministic simulated acceptance
 
-The harness also supports an opt-in Pi-native faux provider for nine bounded
+The harness also supports an opt-in Pi-native faux provider for ten bounded
 scenarios:
 
 ```sh
@@ -71,6 +71,7 @@ npm run smoke -- agent-terminal-failure --simulated
 npm run smoke -- manager-handoff --simulated
 npm run smoke -- manager-merge --simulated
 npm run smoke -- agent-crash-recovery --simulated
+npm run smoke -- deep-chain --simulated
 ```
 
 Simulation supplies model decisions only. Pi still runs its real agent loop and
@@ -89,6 +90,22 @@ controller tools are real. The scenario never uses the default Herdr server.
 Simulated runs do not require model credentials or inference, but retain runtime
 compatibility checks, build, isolation, Herdr setup, and cleanup. They are
 integration checks, not replacements for real-model acceptance.
+
+`deep-chain` is a simulated-only scenario for nested delegation beyond the
+default depth. Its isolated user-wide config raises `maxAgentDepth` to 4, and the
+root delegates a chain `smoke-deep-1` through `smoke-deep-4`. It verifies, with
+real Pi, Herdsman, and Herdr, that each of levels 1 through 3 holds the
+delegation tool while the level-4 Agent at the limit does not, that each
+Agent's completed result reaches its direct owner, and that the leaf's marker
+bubbles up through every level to the root's final message. The level-4 Agent
+also escalates one `ask_owner` to its level-3 owner, which answers with
+`reply_agent`, and the scenario asserts both calls. It asserts
+completion and result delivery. It also samples the root's rendered status
+tree and requires every level to be shown there at some sample before the chain
+finishes. That catches a root that learns of Agents it did not launch only on its
+10-second refresh: the level-4 leaf is visible for about 4 seconds, so it is
+missed unless a refresh happens to fall inside that window. It does not assert
+timing, and a level that lives longer than 10 seconds would be shown either way.
 
 `manager-merge` is an independently invoked simulated Manager integration
 acceptance scenario; it is deliberately not part of the GitHub validation

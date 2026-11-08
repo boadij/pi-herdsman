@@ -13,7 +13,7 @@ import {
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CONFIG_DIR_NAME,
@@ -171,11 +171,15 @@ function markdownFiles(root: string): string[] {
   });
 }
 
-function readAgentDefinitions(root: string): AgentDefinition[] {
+function readAgentDefinitions(
+  root: string,
+  category?: "agent" | "role",
+  onWarning?: (message: string) => void,
+): AgentDefinition[] {
   const definitions = markdownFiles(root)
     .filter((path) => !path.endsWith(".example.md"))
     .sort()
-    .map((path) => {
+    .flatMap((path) => {
       const content = readFileSync(path, "utf8").replace(/^\uFEFF/u, "");
       let parsed: ReturnType<typeof parsePiFrontmatter>;
       try {
@@ -186,6 +190,23 @@ function readAgentDefinitions(root: string): AgentDefinition[] {
       }
       if (!isPlainObject(parsed.frontmatter))
         throw new Error(`${path}: frontmatter must be a YAML mapping`);
+      const name = parsed.frontmatter.name;
+      if (
+        category &&
+        typeof name === "string" &&
+        name.length > 0 &&
+        isReservedRoleDefinition(name) !== (category === "role")
+      ) {
+        const destination = join(
+          dirname(root),
+          category === "agent" ? "coordinators" : "agents",
+          relative(root, path),
+        );
+        onWarning?.(
+          `${path}: definition belongs in ${destination}; file excluded from discovery`,
+        );
+        return [];
+      }
       const frontmatter = parsed.frontmatter as Frontmatter;
       const definition: AgentDefinition = {
         name: typeof frontmatter.name === "string" ? frontmatter.name : "",
@@ -194,7 +215,7 @@ function readAgentDefinitions(root: string): AgentDefinition[] {
         body: resolveBodyFileReferences(parsed.body, path),
       };
       validateDefinition(definition, { allowBodyMode: true });
-      return definition;
+      return [definition];
     });
   const pathsByName = new Map<string, string[]>();
   for (const definition of definitions)
@@ -376,12 +397,16 @@ export function configuredToolPolicy(
   };
 }
 
-function readOptionalAgentDefinitions(root: string): AgentDefinition[] {
+function readOptionalAgentDefinitions(
+  root: string,
+  category: "agent" | "role",
+  onWarning?: (message: string) => void,
+): AgentDefinition[] {
   const stats = statSync(root, { throwIfNoEntry: false });
   if (!stats) return [];
   if (!stats.isDirectory())
     throw new Error(`agent directory is not a directory: ${root}`);
-  return readAgentDefinitions(root);
+  return readAgentDefinitions(root, category, onWarning);
 }
 
 function assertNoLegacyCoordinatorProfiles(
@@ -485,7 +510,10 @@ function applyDefinitionLayer(
   }
 }
 
-export type DiscoverAgentDefinitionsOptions = { projectRoot?: string };
+export type DiscoverAgentDefinitionsOptions = {
+  projectRoot?: string;
+  onWarning?: (message: string) => void;
+};
 
 function validateEffectiveAgentReferences(
   definitions: readonly AgentDefinition[],
@@ -552,6 +580,11 @@ function discoverEffectiveDefinitions(
   const bundled = readAgentDefinitions(
     role ? BUILTIN_ROLE_DIR : BUILTIN_AGENT_DIR,
   );
+  for (const definition of bundled)
+    if (isReservedRoleDefinition(definition.name) !== role)
+      throw new Error(
+        `${definition.path}: ${role ? "non-coordinator name in coordinators directory" : "reserved coordinator name in agents directory; use coordinators"}`,
+      );
   const directory = role ? "coordinators" : "agents";
   const privateRoot = options.projectRoot
     ? privateRepositoryRoot(options.projectRoot)
@@ -576,23 +609,22 @@ function discoverEffectiveDefinitions(
   const project = options.projectRoot
     ? readOptionalAgentDefinitions(
         join(options.projectRoot, CONFIG_DIR_NAME, directory),
+        category,
+        options.onWarning,
       )
     : [];
   const privateRepository = privateRoot
-    ? readOptionalAgentDefinitions(join(privateRoot, directory))
+    ? readOptionalAgentDefinitions(
+        join(privateRoot, directory),
+        category,
+        options.onWarning,
+      )
     : [];
-  const user = readOptionalAgentDefinitions(join(getAgentDir(), directory));
-  for (const definition of [
-    ...bundled,
-    ...project,
-    ...user,
-    ...privateRepository,
-  ]) {
-    if (isReservedRoleDefinition(definition.name) !== role)
-      throw new Error(
-        `${definition.path}: ${role ? "non-coordinator name in coordinators directory" : "reserved coordinator name in agents directory; use coordinators"}`,
-      );
-  }
+  const user = readOptionalAgentDefinitions(
+    join(getAgentDir(), directory),
+    category,
+    options.onWarning,
+  );
   const definitions = new Map(
     bundled.map((definition) => [definition.name, definition]),
   );
@@ -666,9 +698,40 @@ function withDefaultEnabled(definition: AgentDefinition): AgentDefinition {
   };
 }
 
-export async function contextAgentDefinitions(ctx: ExtensionContext) {
+const definitionWarningSessions = new WeakMap<
+  object,
+  { sessionId: string | null; messages: Set<string> }
+>();
+
+export function notifyDefinitionWarning(
+  ctx: ExtensionContext,
+  message: string,
+): void {
+  const manager = ctx.sessionManager;
+  const sessionId = manager.getSessionId();
+  let state = definitionWarningSessions.get(manager);
+  if (!state || state.sessionId !== sessionId) {
+    state = { sessionId, messages: new Set() };
+    definitionWarningSessions.set(manager, state);
+  }
+  if (state.messages.has(message)) return;
+  state.messages.add(message);
+  if (ctx.hasUI) ctx.ui.notify(message, "warning");
+  else process.emitWarning(message, { code: "PI_HERDSMAN_DEFINITION" });
+}
+
+export async function contextAgentDefinitions(
+  ctx: ExtensionContext,
+  onWarning?: (message: string) => void,
+) {
   const projectTrusted = ctx.isProjectTrusted();
-  const options = projectTrusted ? { projectRoot: ctx.cwd } : {};
+  const options: DiscoverAgentDefinitionsOptions = projectTrusted
+    ? { projectRoot: ctx.cwd }
+    : {};
+  options.onWarning = (message) => {
+    notifyDefinitionWarning(ctx, message);
+    onWarning?.(message);
+  };
   const effective = discoverAgentDefinitions(options);
   return {
     projectTrusted,
@@ -764,6 +827,18 @@ function withoutDelegationCapability(
     ...definition,
     frontmatter,
   };
+}
+
+/**
+ * Agents are numbered by generation below the root controller: an Agent
+ * started by the Lead, Manager or Chief has depth 1, its children depth 2, and
+ * so on. An Agent whose depth has reached `maxAgentDepth` is a leaf.
+ */
+export function agentScopeAtDepth(
+  depth: number,
+  maxAgentDepth: number,
+): AgentDefinitionScope {
+  return depth >= maxAgentDepth ? "leaf" : "delegating";
 }
 
 export function projectAgentDefinition(
@@ -1059,7 +1134,7 @@ export function configuredModel(frontmatter: Frontmatter): string | undefined {
  */
 export type ChildModelDecision =
   /** Nothing to pass: the child uses its own default. */
-  | { kind: "none" }
+  | { kind: "none"; extensionDiscovery: boolean }
   /**
    * Pass `--model`. `extensionDiscovery` is true when the model's provider is
    * registered by an extension, in which case the child must not be launched
@@ -1072,14 +1147,43 @@ export function resolveChildModel(input: {
   configured?: string;
   /** The spawning controller's model; Pi already resolved its provider. */
   inherited?: { provider: string; token: string };
+  /** Selection already stored in a resumed Pi session; never passed as CLI model. */
+  saved?: { provider: string; modelId: string };
+  /** Historical model entries conflict and cannot be resolved in this registry. */
+  savedUnresolved?: boolean;
   /** True when `providerId` is registered by an extension. */
   isForeignProvider: (providerId: string) => boolean;
+  isKnownModel?: (providerId: string, modelId: string) => boolean;
 }): ChildModelDecision {
-  // A pinned model is passed through as written: the definition's own extension
-  // policy governs it, so nothing here needs to interpret the value.
-  if (input.configured !== undefined && input.configured.trim() !== "")
-    return { kind: "use", model: input.configured, extensionDiscovery: false };
-  if (input.inherited === undefined) return { kind: "none" };
+  if (input.configured !== undefined && input.configured.trim() !== "") {
+    const model = input.configured;
+    let extensionDiscovery = false;
+
+    for (
+      let slash = model.lastIndexOf("/");
+      slash > 0;
+      slash = model.lastIndexOf("/", slash - 1)
+    ) {
+      if (input.isForeignProvider(model.slice(0, slash).trim().toLowerCase())) {
+        extensionDiscovery = true;
+        break;
+      }
+    }
+
+    return { kind: "use", model, extensionDiscovery };
+  }
+  if (input.inherited === undefined) {
+    const saved = input.saved;
+    return {
+      kind: "none",
+      extensionDiscovery:
+        input.savedUnresolved === true ||
+        (!!saved &&
+          (input.isForeignProvider(saved.provider) ||
+            (input.isKnownModel !== undefined &&
+              !input.isKnownModel(saved.provider, saved.modelId)))),
+    };
+  }
   return {
     kind: "use",
     model: input.inherited.token,
@@ -1218,14 +1322,13 @@ export function agentLaunchArgs(
   const decision =
     options.modelDecision ??
     (requestedModel === undefined
-      ? { kind: "none" as const }
+      ? { kind: "none" as const, extensionDiscovery: false }
       : {
           kind: "use" as const,
           model: requestedModel,
           extensionDiscovery: false,
         });
   if (decision.kind === "use") args.push("--model", decision.model);
-
   const thinking = configuredThinking(agent) ?? inheritedThinking;
   if (thinking !== undefined) {
     args.push("--thinking", thinking);
@@ -1304,9 +1407,7 @@ export function agentLaunchArgs(
   // A model whose provider comes from an extension cannot resolve inside a
   // child denied extension discovery, so the model's needs outrank the
   // definition's preference to stay lean.
-  const extensionDiscovery =
-    decision.kind === "use" && decision.extensionDiscovery;
-  if (frontmatter.noExtensions && !extensionDiscovery)
+  if (frontmatter.noExtensions && !decision.extensionDiscovery)
     args.push("--no-extensions");
   for (const extension of frontmatter.extensions ?? [])
     args.push("--extension", extension);

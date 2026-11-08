@@ -34,6 +34,7 @@ import {
   listAgentStateIssues,
   scanAgentStates,
   observeMailbox,
+  observeNewAgentStates,
   readAgentState,
   removeResult,
   removeAgentMailbox,
@@ -135,6 +136,7 @@ import {
 } from "./herdr.ts";
 import { readEffectiveConfig } from "./config.ts";
 import {
+  agentScopeAtDepth,
   contextAgentDefinitions,
   agentLaunchArgs,
   agentDefinitionEnabled,
@@ -350,6 +352,7 @@ export function createAgentStatusRuntime() {
     }
   };
   let statusTimer: ReturnType<typeof setInterval> | undefined;
+  let stopNewAgentWatch: (() => void) | undefined;
   let statusContext: ExtensionContext | undefined;
   let statusGeneration = 0;
   let statusWidgetGeneration = 0;
@@ -444,6 +447,7 @@ export function createAgentStatusRuntime() {
       lastValidStatus = snapshot;
       reconcilePendingStarts(snapshot);
       publishStatus(snapshot);
+      syncNewAgentWatch(ctx, generation);
     } catch {
       if (generation === statusGeneration && ctx === statusContext)
         publishStatus(
@@ -474,6 +478,45 @@ export function createAgentStatusRuntime() {
   const clearTimer = (): void => {
     if (statusTimer) clearInterval(statusTimer);
     statusTimer = undefined;
+    stopNewAgentWatch?.();
+    stopNewAgentWatch = undefined;
+  };
+  // An agent launched by a descendant has no pending-start row and no watcher
+  // here, so refresh when its state.json appears instead of waiting for the
+  // periodic tick. Refreshes coalesce through the in-flight guard. Descendants
+  // exist only below live Agents, so the watcher runs only while the presented
+  // status shows some and an idle controller adds no timer. A state published
+  // between the read that showed the Agent and the watcher's baseline scan is
+  // not reported as new, so starting the watcher also requests one catch-up
+  // refresh.
+  const syncNewAgentWatch = (
+    ctx: ExtensionContext,
+    generation: number,
+  ): void => {
+    if (!presentedStatus.agents.length || !statusTimer) {
+      stopNewAgentWatch?.();
+      stopNewAgentWatch = undefined;
+      return;
+    }
+    if (stopNewAgentWatch) return;
+    let lastError: string | undefined;
+    stopNewAgentWatch = observeNewAgentStates(
+      () => {
+        lastError = undefined;
+        void refresh(ctx, generation);
+      },
+      (error) => {
+        const message = String(error).replace(/^Error: /u, "");
+        if (message === lastError) return;
+        lastError = message;
+        if (generation === statusGeneration && ctx === statusContext)
+          ctx.ui.notify(
+            `Agent status cannot watch for new agents (${message}); the view refreshes every 10 seconds instead`,
+            "warning",
+          );
+      },
+    );
+    void refresh(ctx, generation);
   };
   const removeWidget = (): void => {
     if (statusWidget) {
@@ -509,6 +552,7 @@ export function createAgentStatusRuntime() {
       requestActive = true;
       statusTimer = setInterval(() => void refresh(ctx, generation), 10_000);
       statusTimer.unref?.();
+      syncNewAgentWatch(ctx, generation);
       statusPrimed = false;
       publishStatus(presentedStatus);
       if (!primed) void refresh(ctx, generation);
@@ -576,6 +620,7 @@ export function createAgentStatusRuntime() {
       requestActive = true;
       statusTimer = setInterval(() => void refresh(ctx, generation), 10_000);
       statusTimer.unref?.();
+      syncNewAgentWatch(ctx, generation);
       statusPrimed = false;
       if (!primed) void refresh(ctx, generation);
     },
@@ -655,12 +700,13 @@ Do not silently broaden scope or make an unapproved scope, architecture,
 security, protocol, repository-boundary, product, or operational decision.
 
 Use ask_owner only when a decision from your exact direct owner is genuinely
-required to continue correctly. ask_owner may include files for supporting
-evidence; complete strict UTF-8 text may be embedded and other files remain
-canonical local references. ask_owner must be the only tool call and final
-tool call of that turn. Keep at most one question outstanding. Stop while
-blocked, wait for the exact owner reply, do not guess the answer, and do not
-complete the assignment while blocked. The reply resumes the same assignment.
+required to continue correctly. Explicit attachments must be supported UTF-8
+text fully embedded within the applicable per-file and complete-message
+budgets. Call ask_owner alone as the final tool call of the turn. Wait for the
+direct owner's reply only after the tool confirms the question was sent; if
+rejected, address the error or report a non-empty blocker. Keep at most one
+question outstanding. Do not guess the answer. The reply resumes the same
+assignment.
 
 Treat inactivity as advisory, not proof of a hang. Preserve exact identity and
 cleanup evidence on failure. Do not blindly retry destructive cleanup or
@@ -989,7 +1035,8 @@ Your herd is your internal team: you and your recursively owned Agents.
 Any review conducted within the herd is internal feedback, not user or supervisor
 review or approval.`;
 export const DELEGATING_AGENT_SCOPE_DESCRIPTION = `Own the assigned objective and your direct permitted agents. While direct assignments are unresolved, your execution scope is limited to the non-delegated remainder. Agent-started
-agents are leaves. Delegate bounded execution work when an Agent can reasonably
+agents delegate further only within the configured maximum nesting depth and
+are leaves beyond it. Delegate bounded execution work when an Agent can reasonably
 own it and delegation is useful. Keep work local when it is trivial,
 inseparable, otherwise unsuitable for an Agent, or delegation would add more
 coordination than value. Reuse adequate supplied evidence rather than
@@ -1010,6 +1057,8 @@ type ResolvedAssignmentSession = {
   definition: string;
   label: string;
   cwd: string;
+  savedModel?: { provider: string; modelId: string };
+  savedModelUnresolved?: boolean;
   evidence?: {
     requestId: string;
     projectAssignmentId?: string;
@@ -1021,6 +1070,110 @@ type ResolvedAssignmentSession = {
     terminal?: Record<string, unknown>;
   };
 };
+
+export type SavedSessionModelSelection =
+  | { kind: "none" }
+  | { kind: "resolved"; model: { provider: string; modelId: string } }
+  | {
+      kind: "unresolved";
+      candidates: { provider: string; modelId: string }[];
+    };
+
+export function resolveSavedSessionModelSelection(
+  manager: {
+    getBranch?: () => SessionEntry[];
+    buildSessionContext?: () => {
+      model: { provider: string; modelId: string } | null;
+    };
+  },
+  catalogModel: (
+    provider: string,
+    modelId: string,
+  ) => { api: string } | undefined,
+): SavedSessionModelSelection {
+  const contextModel = manager.buildSessionContext?.().model ?? undefined;
+  if (typeof manager.getBranch !== "function")
+    return contextModel
+      ? { kind: "resolved", model: contextModel }
+      : { kind: "none" };
+  const branch = manager.getBranch();
+  let change: { provider: string; modelId: string } | undefined;
+  let changeIndex = -1;
+  let response: { provider: string; modelId: string } | undefined;
+  let responseIndex = -1;
+  for (let index = 0; index < branch.length; index++) {
+    const entry = branch[index]!;
+    if (entry.type === "model_change") {
+      change = entry;
+      changeIndex = index;
+    } else if (
+      entry.type === "message" &&
+      (entry as any).message?.role === "assistant" &&
+      (entry as any).message?.stopReason !== "error" &&
+      typeof (entry as any).message?.provider === "string" &&
+      typeof (entry as any).message?.model === "string"
+    ) {
+      response = {
+        provider: (entry as any).message.provider,
+        modelId: (entry as any).message.model,
+      };
+      responseIndex = index;
+    }
+  }
+  if (!change && !response)
+    return contextModel
+      ? { kind: "resolved", model: contextModel }
+      : { kind: "none" };
+  if (change && changeIndex > responseIndex)
+    return {
+      kind: "resolved",
+      model: { provider: change.provider, modelId: change.modelId },
+    };
+  if (
+    change &&
+    response &&
+    (change.provider !== response.provider ||
+      change.modelId !== response.modelId)
+  ) {
+    const catalog = catalogModel(change.provider, change.modelId);
+    if (catalog?.api === "pi-virtual")
+      return {
+        kind: "resolved",
+        model: { provider: change.provider, modelId: change.modelId },
+      };
+    if (!catalog)
+      return {
+        kind: "unresolved",
+        candidates: [
+          { provider: change.provider, modelId: change.modelId },
+          response,
+        ],
+      };
+  }
+  return response
+    ? { kind: "resolved", model: response }
+    : change
+      ? { kind: "resolved", model: change }
+      : { kind: "none" };
+}
+
+/** Read the model selection represented by a validated Pi session branch. */
+export function savedSessionModelSelection(
+  manager: {
+    getBranch?: () => SessionEntry[];
+    buildSessionContext?: () => {
+      model: { provider: string; modelId: string } | null;
+    };
+  },
+  isVirtualModel: (provider: string, modelId: string) => boolean = () => false,
+): { provider: string; modelId: string } | undefined {
+  const selection = resolveSavedSessionModelSelection(
+    manager,
+    (provider, modelId) =>
+      isVirtualModel(provider, modelId) ? { api: "pi-virtual" } : undefined,
+  );
+  return selection.kind === "resolved" ? selection.model : undefined;
+}
 
 function requiredEvidenceEntriesForRequest(
   entries: readonly any[],
@@ -3085,6 +3238,17 @@ export function resolveAssignmentSession(
         definition: child.definition,
         label: child.label,
         cwd: manager.getCwd(),
+        ...(() => {
+          const selection = resolveSavedSessionModelSelection(
+            manager,
+            (provider, modelId) => ctx.modelRegistry.find(provider, modelId),
+          );
+          return selection.kind === "resolved"
+            ? { savedModel: selection.model }
+            : selection.kind === "unresolved"
+              ? { savedModelUnresolved: true }
+              : {};
+        })(),
         ...(evidence ? { evidence } : {}),
       };
     }
@@ -3118,7 +3282,63 @@ export type ControllerScope =
   | {
       kind: "managed-agent";
       allowedAgentDefinitions: ReadonlySet<string>;
+      /** This Agent's own depth: 1 for an Agent started by a root controller. */
+      depth: number;
     };
+
+/** Depth of an Agent this controller would start. */
+export function childAgentDepth(scope: ControllerScope): number {
+  return scope.kind === "managed-agent" ? scope.depth + 1 : 1;
+}
+
+/**
+ * Depth of a managed Agent according to the durable ownership records: 1 when
+ * its owner is its verified root controller, otherwise one more than its
+ * owner's depth. `PI_HERDSMAN_DEPTH` is only a startup hint and must agree
+ * with this before an Agent may delegate further.
+ *
+ * The chain must end at the Agent's `rootSessionId`: an owner with no stored
+ * state that is not that root is a missing intermediate Agent, not the root,
+ * so it is rejected rather than counted as the root. Duplicate records for one
+ * owner are ambiguous and rejected too. Both fail closed; the caller refuses
+ * the launch with the cause.
+ */
+export function durableAgentDepth(
+  states: readonly ManagedAgentState[],
+  agent: ManagedAgentState,
+): number {
+  const seen = new Set([agent.piSessionId]);
+  let depth = 1;
+  let current = agent;
+  for (;;) {
+    const owners = states.filter(
+      (candidate) =>
+        candidate.workspaceId === agent.workspaceId &&
+        candidate.piSessionId === current.ownerSessionId,
+    );
+    if (owners.length > 1)
+      throw new Error(
+        `owner session ${current.ownerSessionId} has ${owners.length} ownership records, so the chain is ambiguous`,
+      );
+    const owner = owners[0];
+    if (!owner) {
+      if (!agent.rootSessionId?.trim())
+        throw new Error(
+          "its record has no verified root session, so the ownership chain cannot be checked",
+        );
+      if (current.ownerSessionId !== agent.rootSessionId)
+        throw new Error(
+          `the ownership chain does not reach its verified root: owner session ${current.ownerSessionId} has no ownership record and is not root session ${agent.rootSessionId}`,
+        );
+      return depth;
+    }
+    if (seen.has(owner.piSessionId))
+      throw new Error("Managed Agent ownership records form a cycle");
+    seen.add(owner.piSessionId);
+    depth++;
+    current = owner;
+  }
+}
 
 export type RootDelegationPolicy = "all" | ReadonlySet<string>;
 export type RootDelegationGeneration = {
@@ -3154,7 +3374,15 @@ export function visibleAgentCapabilities(
   definitions: AgentDefinition[],
   scope: ControllerScope,
   rootPolicy: RootDelegationPolicy = "all",
+  maxAgentDepth: number = readConfig().maxAgentDepth,
 ) {
+  // The roster is advisory: it trusts the PI_HERDSMAN_DEPTH hint in `scope`,
+  // while the launch re-verifies depth against the durable ownership chain and
+  // is authoritative. A forged hint can only advertise definitions the launch
+  // then refuses. An Agent already at the limit (for example after the limit
+  // was lowered) cannot start any Agent, so it is advertised none.
+  if (scope.kind === "managed-agent" && scope.depth >= maxAgentDepth) return [];
+  const childScope = agentScopeAtDepth(childAgentDepth(scope), maxAgentDepth);
   const availableNames = new Set(
     definitions.filter(agentDefinitionEnabled).map(({ name }) => name),
   );
@@ -3180,7 +3408,7 @@ export function visibleAgentCapabilities(
   return available.map((definition) => {
     const metadata: Record<string, unknown> = agentDefinitionMetadata(
       definition,
-      scope.kind === "managed-agent" ? "leaf" : "delegating",
+      childScope,
     );
     return {
       name: definition.name,
@@ -3189,7 +3417,7 @@ export function visibleAgentCapabilities(
         : {}),
       tools: formatTools(metadata),
       skills: formatSkills(metadata),
-      ...(scope.kind === "root" &&
+      ...(childScope === "delegating" &&
       agentDefinitionDelegationEnabled(definition) &&
       definition.frontmatter.agents?.length
         ? { agents: [...definition.frontmatter.agents] }
@@ -3904,14 +4132,11 @@ export function listedAgentRecord(
   let closeAvailable = false;
   if (direct && (presence.kind === "live" || presence.kind === "lost")) {
     try {
-      if (scope?.kind === "root") {
-        if (!unresolvedMailboxState) {
-          const plan = dependencies.cascadePlan(view, state);
-          dependencies.assertCascadeSafe([plan.parent, ...plan.descendants]);
-          closeAvailable = true;
-        }
-      } else {
-        dependencies.assertCascadeSafe([snapshot]);
+      // stop_agent closes the Agent's whole descendant cascade at any depth, so
+      // availability is proven over that cascade for every controller.
+      if (!unresolvedMailboxState) {
+        const plan = dependencies.cascadePlan(view, state);
+        dependencies.assertCascadeSafe([plan.parent, ...plan.descendants]);
         closeAvailable = true;
       }
     } catch {
@@ -3980,6 +4205,8 @@ export type AgentControllerOptions = {
     refs: readonly string[],
   ): Promise<ManagerEvidenceScope | undefined>;
   managedAgentRootSessionId?(ctx: ExtensionContext): string;
+  /** The calling managed Agent's validated durable state, for depth verification. */
+  managedAgentState?(ctx: ExtensionContext): ManagedAgentState;
   /** Current verified root-role delegation policy; managed-Agent scope ignores it. */
   rootDelegationPolicy?(): RootDelegationPolicy;
   /** Stable authority/profile generation captured across assignment preflight. */
@@ -6720,7 +6947,21 @@ export function createAgentController(
       ].filter((id): id is string => !!id);
       if (requestIds.some((id) => id !== result.requestId))
         throw new Error("agent has newer mailbox work");
-      if (managedAgent)
+      // A delivered Agent that still owns Agents of its own (possible once
+      // maxAgentDepth allows more than one delegating level) must take them
+      // down with it, exactly as a root controller's cleanup does. An
+      // unreadable mailbox might be a descendant, so unresolved state also
+      // takes the cascade path, which fails closed on it.
+      const ownsDescendants = listAgentStates().some(
+        ({ state: candidate }) =>
+          candidate.workspaceId === state.workspaceId &&
+          candidate.ownerSessionId === state.piSessionId,
+      );
+      if (
+        managedAgent &&
+        !ownsDescendants &&
+        listAgentStateIssues().length === 0
+      )
         await finalizeDeliveredRoot(context, state, result.requestId, signal);
       else await closeCascade(context, state, signal, result.requestId);
       return true;
@@ -7170,6 +7411,40 @@ export function createAgentController(
           "Only a Herdr controller may start agent assignments",
           p.action,
         );
+      // One reading of the user-wide limit governs this whole launch; it is
+      // compared again immediately before the Agent starts.
+      const maxAgentDepth = readConfig().maxAgentDepth;
+      if (scope.kind === "managed-agent") {
+        // PI_HERDSMAN_DEPTH is only a startup hint. The durable ownership
+        // chain decides, so a hint that disagrees with it is refused.
+        let durableDepth: number;
+        try {
+          const own = options.managedAgentState?.(ctx);
+          if (!own) throw new Error("its own ownership record is unavailable");
+          durableDepth = durableAgentDepth(
+            listAgentStates().map(({ state }) => state),
+            own,
+          );
+        } catch (error) {
+          fail(
+            "invalid_request",
+            `This Agent's depth could not be verified against the durable ownership records (${String(error instanceof Error ? error.message : error).replace(/^Error: /, "")}), so it cannot start another Agent; restart it from its owner or do the work directly`,
+            p.action,
+          );
+        }
+        if (durableDepth !== scope.depth)
+          fail(
+            "invalid_request",
+            `This Agent's PI_HERDSMAN_DEPTH is ${scope.depth} but the durable ownership records place it at depth ${durableDepth}; the records are authoritative, so it cannot start another Agent. Restart it from its owner instead of editing its environment`,
+            p.action,
+          );
+        if (childAgentDepth(scope) > maxAgentDepth)
+          fail(
+            "invalid_request",
+            `This Agent is at depth ${scope.depth} and maxAgentDepth is ${maxAgentDepth}, so it cannot start another Agent; do the work directly or ask the owner to raise maxAgentDepth in the Herdsman config`,
+            p.action,
+          );
+      }
       const resumed =
         p.action === "continue"
           ? resolveAssignmentSession(ctx, p.session, {
@@ -8008,9 +8283,10 @@ export function createAgentController(
           preparedBody === definition.body
             ? definition
             : { ...definition, body: preparedBody };
+        const childDepth = childAgentDepth(scope);
         const effectiveDefinition = projectAgentDefinition(
           preparedDefinition,
-          scope.kind === "managed-agent" ? "leaf" : "delegating",
+          agentScopeAtDepth(childDepth, maxAgentDepth),
         );
         const delegationEnabled =
           agentDefinitionDelegationEnabled(effectiveDefinition);
@@ -8273,6 +8549,7 @@ export function createAgentController(
             `PI_HERDSMAN_LABEL=${label}`,
             `PI_HERDSMAN_WORKSPACE_ID=${workspaceId}`,
             `PI_HERDSMAN_AGENT_DEFINITION=${agentDefinition}`,
+            `PI_HERDSMAN_DEPTH=${childDepth}`,
             `PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS=${JSON.stringify(
               delegationEnabled ? effectiveDefinition.frontmatter.agents : [],
             )}`,
@@ -8287,7 +8564,9 @@ export function createAgentController(
           // case nothing counts as extension-provided and the model is inherited
           // exactly as before this change.
           const registeredProviderIds = new Set(
-            ctx.modelRegistry?.getRegisteredProviderIds?.() ?? [],
+            (ctx.modelRegistry?.getRegisteredProviderIds?.() ?? []).map((id) =>
+              id.toLowerCase(),
+            ),
           );
           const childModel = resolveChildModel({
             configured: configuredModel(effectiveDefinition.frontmatter),
@@ -8295,9 +8574,18 @@ export function createAgentController(
               !resumed && ctx.model
                 ? { provider: ctx.model.provider, token: modelToken(ctx.model) }
                 : undefined,
+            saved: resumed?.savedModel,
+            savedUnresolved: resumed?.savedModelUnresolved,
             isForeignProvider: (providerId) =>
-              registeredProviderIds.has(providerId),
+              registeredProviderIds.has(providerId.toLowerCase()),
+            isKnownModel: (provider, id) =>
+              ctx.modelRegistry.find(provider, id) !== undefined,
           });
+          if (
+            (resumed?.savedModel || resumed?.savedModelUnresolved) &&
+            !configuredModel(effectiveDefinition.frontmatter)
+          )
+            env.push("PI_HERDSMAN_RESTORE_MODEL=saved-session");
           const launchArgs = agentLaunchArgs(effectiveDefinition, {
             ...(effectiveDefinition.body
               ? { bodyPromptPath: promptPaths[0] }
@@ -8313,6 +8601,12 @@ export function createAgentController(
           });
           // Role/profile preflight may have changed while this assignment was prepared.
           assertRootDelegationAllowed();
+          if (readConfig().maxAgentDepth !== maxAgentDepth)
+            fail(
+              "invalid_request",
+              `maxAgentDepth changed from ${maxAgentDepth} to ${readConfig().maxAgentDepth} while this Agent was being prepared, so it was not started; retry the delegation under the new limit`,
+              p.action,
+            );
           started = await startHerdrAgent(pi, ctx, {
             label,
             runId,
@@ -9008,7 +9302,7 @@ export function createAgentController(
       pi.registerTool({
         name: "read_evidence",
         label: "Read accepted evidence",
-        exposure: "model-only",
+        exposure: "direct",
         description:
           "Read a bounded page from evidence accepted by this assigned project Lead.",
         parameters: Type.Object(
@@ -9130,7 +9424,7 @@ export function createAgentController(
       { agent: Type.String({ pattern: AGENT_LABEL_PATTERN.source }) },
       { additionalProperties: false },
     );
-    const agentExposure: ToolExposure = "model-only";
+    const agentExposure: ToolExposure = "direct";
     const agentExecutionMode: ToolExecutionMode = "sequential";
     const agentTool = {
       name: "list_agents",
@@ -9293,6 +9587,7 @@ export function createAgentController(
       ...agentTool,
       name: "delegate_agent",
       label: "delegate agent",
+      exposure: "model-only",
       description:
         "Start one fresh bounded assignment. Choose the most focused eligible Agent definition capable of completing the full task. Use a general-purpose definition when broader capabilities are needed or no focused definition fits.",
       parameters: agentDelegateParameters,
@@ -9321,6 +9616,7 @@ export function createAgentController(
       ...agentTool,
       name: "continue_agent",
       label: "continue agent",
+      exposure: "model-only",
       description:
         "Start one bounded assignment from an eligible historical managed-Agent Pi session selected by a directly owned result ref, exact path, or UUID. Retired sessions cannot be continued while context retirement is enabled.",
       parameters: agentContinueParameters,

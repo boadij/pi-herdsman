@@ -2882,18 +2882,23 @@ export function formatToolModelResult(
       ];
     };
     const rendered = new Set<Record<string, unknown>>();
-    const renderedAgents = roots.flatMap((root) => {
-      const directChildren = children(root);
-      rendered.add(root);
-      directChildren.forEach((child) => rendered.add(child));
-
+    // Ownership may be nested to any depth; each level indents under its owner.
+    const renderTree = (
+      agent: Record<string, unknown>,
+      depth: number,
+    ): string[] => {
+      rendered.add(agent);
+      const nested = children(agent).filter((child) => !rendered.has(child));
       return [
-        ...agentLines(root),
-        ...(directChildren.length ? ["  agents:"] : []),
-        ...directChildren.flatMap((child) => agentLines(child, "    ")),
-        "",
+        ...agentLines(agent, "    ".repeat(depth)),
+        ...(nested.length ? [`${"    ".repeat(depth)}  agents:`] : []),
+        ...nested.flatMap((child) => renderTree(child, depth + 1)),
       ];
-    });
+    };
+    const renderedAgents = roots.flatMap((root) => [
+      ...renderTree(root, 0),
+      "",
+    ]);
     const fallbackAgents = agents.filter((agent) => !rendered.has(agent));
     return [
       `Agents: ${agents.length}`,

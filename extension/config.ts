@@ -27,9 +27,15 @@ const DEFAULT_BYTE_LIMIT = 128 * 1024;
 export const MIN_BYTE_LIMIT = 1024;
 export const MAX_BYTE_LIMIT = 1024 * 1024;
 export const DEFAULT_STATUS_WIDGET_MAX_ROWS = 8;
+// Counts Agent generations below the root controller: an Agent started by the
+// Lead, Manager or Chief is generation 1. An Agent at the maximum generation
+// is a leaf. 2 means a root-started Agent may delegate to leaf Agents only,
+// which is the behavior before this limit was configurable.
+export const DEFAULT_MAX_AGENT_DEPTH = 2;
 
 export type HerdsmanConfig = {
   statusWidgetMaxRows: number;
+  maxAgentDepth: number;
   spawnPlacement: SpawnPlacement;
   defaultLeadExecution: LeadExecutionMode;
   contextRetirement: boolean;
@@ -44,6 +50,7 @@ export type HerdsmanConfig = {
 
 export const DEFAULT_CONFIG: HerdsmanConfig = {
   statusWidgetMaxRows: DEFAULT_STATUS_WIDGET_MAX_ROWS,
+  maxAgentDepth: DEFAULT_MAX_AGENT_DEPTH,
   spawnPlacement: "subtree",
   defaultLeadExecution: "flexible",
   contextRetirement: true,
@@ -74,9 +81,20 @@ export function validStatusWidgetMaxRows(value: unknown): value is number {
   );
 }
 
+export function validMaxAgentDepth(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
+function invalidMaxAgentDepth(value: unknown): Error {
+  return new Error(
+    `Invalid Pi Herdsman config field maxAgentDepth: expected a positive integer (1 = Agents never delegate, 2 = one delegating level), got ${JSON.stringify(value) ?? String(value)}. Edit ${herdsmanConfigPath()} or remove the field to use the default of ${DEFAULT_MAX_AGENT_DEPTH}.`,
+  );
+}
+
 type ConfigKey = keyof HerdsmanConfig;
 const CONFIG_KEYS = new Set<ConfigKey>([
   "statusWidgetMaxRows",
+  "maxAgentDepth",
   "spawnPlacement",
   "defaultLeadExecution",
   "contextRetirement",
@@ -144,6 +162,11 @@ function parseRawConfig(content: string): Partial<HerdsmanConfig> {
     if (!validStatusWidgetMaxRows(record.statusWidgetMaxRows))
       throw new Error("Invalid Pi Herdsman config field statusWidgetMaxRows");
     result.statusWidgetMaxRows = record.statusWidgetMaxRows;
+  }
+  if ("maxAgentDepth" in record) {
+    if (!validMaxAgentDepth(record.maxAgentDepth))
+      throw invalidMaxAgentDepth(record.maxAgentDepth);
+    result.maxAgentDepth = record.maxAgentDepth;
   }
   if ("spawnPlacement" in record) {
     if (!isSpawnPlacement(record.spawnPlacement))
@@ -522,6 +545,8 @@ export function updateConfig<K extends ConfigKey>(
     if (value !== undefined) {
       if (key === "statusWidgetMaxRows" && !validStatusWidgetMaxRows(value))
         throw new Error("Invalid Pi Herdsman config field statusWidgetMaxRows");
+      if (key === "maxAgentDepth" && !validMaxAgentDepth(value))
+        throw invalidMaxAgentDepth(value);
       if (key === "spawnPlacement" && !isSpawnPlacement(value))
         throw new Error("Invalid Pi Herdsman config field spawnPlacement");
       if (key === "defaultLeadExecution" && !isLeadExecutionMode(value))
@@ -557,6 +582,7 @@ export function updateConfig<K extends ConfigKey>(
       if (
         key !== "spawnPlacement" &&
         key !== "statusWidgetMaxRows" &&
+        key !== "maxAgentDepth" &&
         key !== "defaultLeadExecution" &&
         key !== "contextRetirement" &&
         key !== "autoActivateManager" &&

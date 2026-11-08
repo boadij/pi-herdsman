@@ -5,6 +5,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  chmodSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -29,6 +30,7 @@ import {
   resultRef,
   publishScopedResult,
   herdsmanDataRoot,
+  herdsmanConfigPath,
 } from "./storage.ts";
 import {
   listProjectAssignments,
@@ -66,6 +68,78 @@ function projectMessageResult(
     createdAt: Date.now(),
   };
 }
+
+test("saved-session model selection respects native branch chronology and virtual models", async () => {
+  const { resolveSavedSessionModelSelection } =
+    await import("./agent-controller.ts");
+  const change = (provider: string, modelId: string) => ({
+    type: "model_change",
+    provider,
+    modelId,
+  });
+  const response = (provider: string, model: string) => ({
+    type: "message",
+    message: { role: "assistant", provider, model, stopReason: "stop" },
+  });
+  const resolve = (branch: unknown[], catalog: Record<string, string> = {}) =>
+    resolveSavedSessionModelSelection(
+      {
+        getBranch: () => branch,
+        buildSessionContext: () => ({ model: null }),
+      } as any,
+      (provider, id) =>
+        catalog[`${provider}/${id}`]
+          ? { api: catalog[`${provider}/${id}`]! }
+          : undefined,
+    );
+  assert.deepEqual(resolve([]), { kind: "none" });
+  assert.deepEqual(
+    resolve([change("physical", "old"), response("physical", "new")], {
+      "physical/old": "openai-completions",
+    }),
+    { kind: "resolved", model: { provider: "physical", modelId: "new" } },
+  );
+  assert.deepEqual(
+    resolve([change("virtual", "router"), response("physical", "routed")], {
+      "virtual/router": "pi-virtual",
+    }),
+    { kind: "resolved", model: { provider: "virtual", modelId: "router" } },
+  );
+  assert.deepEqual(
+    resolve([change("missing", "router"), response("physical", "routed")]),
+    {
+      kind: "unresolved",
+      candidates: [
+        { provider: "missing", modelId: "router" },
+        { provider: "physical", modelId: "routed" },
+      ],
+    },
+  );
+  assert.deepEqual(
+    resolve([response("physical", "old"), change("new", "selected")]),
+    { kind: "resolved", model: { provider: "new", modelId: "selected" } },
+  );
+});
+
+test("Managed Lead restoration rejects a different model unless the trusted definition overrides it", async () => {
+  const { assertManagedLeadModelRestored } = await import("./lead-runtime.ts");
+  const saved = { provider: "mistral-native", modelId: "zai-glm-5-3" };
+  assert.throws(
+    () =>
+      assertManagedLeadModelRestored(saved, {
+        provider: "mistral",
+        modelId: "devstral-medium-latest",
+      }),
+    /Managed Lead model restoration failed: saved model mistral-native\/zai-glm-5-3 was not restored/u,
+  );
+  assert.doesNotThrow(() =>
+    assertManagedLeadModelRestored(
+      saved,
+      { provider: "mistral", modelId: "devstral-medium-latest" },
+      true,
+    ),
+  );
+});
 
 test("Agent status observer publishes freshness and invalidates old refreshes", async (t) => {
   const { createAgentStatusRuntime } = await import("./agent-controller.ts");
@@ -119,6 +193,169 @@ test("Agent status observer publishes freshness and invalidates old refreshes", 
   runtime.start(ctx);
   assert.equal(typeof widgets.at(-1), "function");
   runtime.shutdown();
+});
+
+const flush = async () => {
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+};
+const mailboxRootDirectory = () =>
+  dirname(agentMailboxPath("w-descendant", "probe"));
+const watchingMailboxRoot = () =>
+  (watchedMailboxDirectories.get(mailboxRootDirectory())?.size ?? 0) > 0;
+
+async function descendantStatusRuntime(t: TestContext) {
+  const { createAgentStatusRuntime } = await import("./agent-controller.ts");
+  t.mock.timers.enable({ apis: ["setInterval", "setImmediate"] });
+  const runtime = createAgentStatusRuntime();
+  const notices: string[] = [];
+  const ctx = {
+    mode: "tui",
+    hasUI: true,
+    ui: {
+      setWidget() {},
+      notify: (message: string) => notices.push(message),
+    },
+  } as any;
+  const state = { loads: 0, live: false, afterLoad: () => {} };
+  runtime.configure({
+    loadSnapshot: async () => {
+      state.loads++;
+      const snapshot = {
+        agents: state.live
+          ? [{ label: "child", definition: "child", state: "working" }]
+          : [],
+        stale: false,
+        unavailable: false,
+      };
+      state.afterLoad();
+      return snapshot;
+    },
+    pendingStartEntries: () => [],
+    hasPendingStart: () => false,
+    clearPendingStart: () => false,
+    runtimeForLabel: () => undefined,
+    ownToolsSnapshot: () => ({}),
+  });
+  const paths: string[] = [];
+  t.after(() => {
+    runtime.shutdown();
+    for (const path of paths) rmSync(path, { recursive: true, force: true });
+  });
+  const publish = (label: string) => {
+    const path = agentMailboxPath("w-descendant", label);
+    paths.push(path);
+    writeAgentState(path, {
+      ...managedState(label),
+      workspaceId: "w-descendant",
+    });
+  };
+  const refreshNow = async () => {
+    runtime.requestRefresh();
+    await flush();
+  };
+  // Starts the observer with one live Agent and the watcher running.
+  const startLive = async () => {
+    state.live = true;
+    runtime.prepareSession(ctx);
+    runtime.startObserver(ctx, () => {});
+    await flush();
+    assert.equal(watchingMailboxRoot(), true);
+  };
+  return { runtime, ctx, state, notices, publish, refreshNow, startLive };
+}
+
+test("Agent status observer watches for descendants only while Agents are live", async (t) => {
+  const { runtime, ctx, state, publish, refreshNow } =
+    await descendantStatusRuntime(t);
+  runtime.prepareSession(ctx);
+  runtime.startObserver(ctx, () => {});
+  await flush();
+  assert.equal(state.loads, 1);
+  assert.equal(watchingMailboxRoot(), false, "no Agents, so no watcher");
+  publish("a");
+  t.mock.timers.tick(2_000);
+  await flush();
+  assert.equal(state.loads, 1, "an idle controller does not reload for state");
+
+  state.live = true;
+  await refreshNow();
+  assert.equal(watchingMailboxRoot(), true, "a live Agent starts the watcher");
+  t.mock.timers.tick(2_000);
+  await flush();
+  const settled = state.loads;
+  t.mock.timers.tick(2_000);
+  await flush();
+  assert.equal(state.loads, settled, "state present at start is not new");
+  publish("b");
+  t.mock.timers.tick(1_000);
+  await flush();
+  assert.equal(state.loads, settled + 1, "a descendant's state.json refreshes");
+
+  state.live = false;
+  await refreshNow();
+  assert.equal(watchingMailboxRoot(), false, "all Agents finished stops it");
+  const stopped = state.loads;
+  publish("c");
+  t.mock.timers.tick(2_000);
+  await flush();
+  assert.equal(state.loads, stopped);
+
+  state.live = true;
+  await refreshNow();
+  assert.equal(watchingMailboxRoot(), true, "a later launch restarts it");
+  runtime.shutdown();
+  assert.equal(watchingMailboxRoot(), false, "shutdown stops it");
+});
+
+test("Agent status observer catches a state published before the watcher starts", async (t) => {
+  const { runtime, ctx, state, publish } = await descendantStatusRuntime(t);
+  state.live = true;
+  // Published after the snapshot is read and before the watcher's baseline scan.
+  state.afterLoad = () => {
+    if (state.loads === 1) publish("racing");
+  };
+  runtime.prepareSession(ctx);
+  runtime.startObserver(ctx, () => {});
+  await flush();
+  assert.equal(state.loads, 2, "watcher start requests one catch-up refresh");
+  t.mock.timers.tick(2_000);
+  await flush();
+  assert.equal(state.loads, 2, "the catch-up does not repeat");
+});
+
+test("Agent status observer stops its watcher on clear and on session preparation", async (t) => {
+  const { runtime, ctx, startLive } = await descendantStatusRuntime(t);
+  await startLive();
+  runtime.clear();
+  assert.equal(watchingMailboxRoot(), false, "clear stops it");
+  await startLive();
+  runtime.prepareSession(ctx);
+  assert.equal(watchingMailboxRoot(), false, "prepareSession stops it");
+});
+
+test("Agent status observer surfaces a watcher error once per message", async (t) => {
+  if (process.platform === "win32" || process.getuid?.() === 0)
+    return t.skip("POSIX permission bits are not enforced here");
+  const { startLive, publish, notices } = await descendantStatusRuntime(t);
+  publish("seed");
+  const root = mailboxRootDirectory();
+  await startLive();
+  const warnings: string[] = [];
+  try {
+    chmodSync(root, 0o000);
+    t.mock.timers.tick(3_000);
+    await flush();
+    warnings.push(
+      ...notices.filter((message) =>
+        message.includes("cannot watch for new agents"),
+      ),
+    );
+  } finally {
+    chmodSync(root, 0o700);
+  }
+  assert.equal(warnings.length, 1, "repeated identical errors notify once");
+  assert.match(warnings[0]!, /EACCES|EPERM/);
+  assert.match(warnings[0]!, /refreshes every 10 seconds/);
 });
 
 test("Agent status observer retains unavailable with pending starts", async (t) => {
@@ -212,6 +449,7 @@ import {
   resultEntryDetails,
   leadExec,
   runScopedHerdrAlias,
+  seedAncestors,
   setLeadEnvironment,
   setAgentEnvironment,
   startupExecutor,
@@ -237,6 +475,10 @@ test("Lead startup requests status refresh after execution profile initializatio
   const entered = new Promise<void>((resolve) => (preparing = resolve));
   const deferred = new Promise<void>((resolve) => (release = resolve));
   const signal = new AbortController().signal;
+  let restorationFailure = false;
+  let prepareCalls = 0;
+  const previousHerdrSocketPath = process.env.HERDR_SOCKET_PATH;
+  process.env.HERDR_SOCKET_PATH = "/tmp/test-herdr.sock";
   const host = {
     diagnostic() {},
     controller: {
@@ -247,7 +489,10 @@ test("Lead startup requests status refresh after execution profile initializatio
       async recoverRuntimes() {},
       startHealthScanner() {},
     },
-    leadInboxRuntime: { beginSession() {} },
+    leadInboxRuntime: {
+      beginSession() {},
+      start: () => calls.push("inbox"),
+    },
     leadStatusRuntime: {
       prepareSession() {},
       prime: () => calls.push("prime"),
@@ -272,7 +517,7 @@ test("Lead startup requests status refresh after execution profile initializatio
       async resolveControllerRole() {},
       shouldRestoreChief: () => false,
       mayPublishLeadPresence: () => false,
-      canStartChiefInbox: () => false,
+      canStartChiefInbox: () => true,
       chiefModeInactive: () => true,
       chiefModeActive: () => false,
       activeManager: () => false,
@@ -294,10 +539,19 @@ test("Lead startup requests status refresh after execution profile initializatio
       roleDefinitions: [],
       projectTrusted: true,
     }),
+    verifyManagedLeadModelRestoration: async () => {
+      calls.push("restore model");
+      if (restorationFailure) throw new Error("model mismatch");
+    },
     prepareLeadExecution: async () => {
+      prepareCalls++;
+      calls.push("prepare start");
       preparing();
       await deferred;
       calls.push("prepared");
+    },
+    failClosedRole: async (_ctx: unknown, error: Error) => {
+      calls.push(`failclosed:${error.message}`);
     },
     publishLeadRole() {},
     visibleAgentCapabilities: async () => [],
@@ -306,6 +560,9 @@ test("Lead startup requests status refresh after execution profile initializatio
   const startup =
     createLeadSessionStartRuntime(host).sessionStart(fakeContext());
   await entered;
+  assert.ok(calls.indexOf("restore model") >= 0);
+  assert.ok(calls.indexOf("restore model") < calls.indexOf("inbox"));
+  assert.ok(calls.indexOf("restore model") < calls.indexOf("prepare start"));
   assert.ok(calls.includes("prime"));
   assert.ok(calls.includes("snapshot"));
   assert.equal(calls.includes("refresh"), false);
@@ -318,6 +575,18 @@ test("Lead startup requests status refresh after execution profile initializatio
     "refresh",
   ]);
   assert.equal(calls.filter((call) => call === "refresh").length, 1);
+  restorationFailure = true;
+  await createLeadSessionStartRuntime(host).sessionStart(fakeContext());
+  assert.equal(
+    prepareCalls,
+    1,
+    "failed restoration must not prepare Lead work",
+  );
+  assert.ok(calls.includes("failclosed:model mismatch"));
+  assert.equal(calls.filter((call) => call === "inbox").length, 1);
+  if (previousHerdrSocketPath === undefined)
+    delete process.env.HERDR_SOCKET_PATH;
+  else process.env.HERDR_SOCKET_PATH = previousHerdrSocketPath;
 });
 
 test("read_evidence is added only to assigned project Lead tools", async () => {
@@ -744,7 +1013,7 @@ test("parent delegates two same-definition children with exact ownership", async
       const beforeClose = readAgentState(agentMailboxPath(WORKSPACE, label))!;
       const closed = await pi.tools
         .find((tool) => tool.name === "stop_agent")!
-        .execute("close", { agent: label }, undefined, undefined, context);
+        .execute("stop", { agent: label }, undefined, undefined, context);
       assert.equal(closed.details.ok, true, JSON.stringify(closed.details));
       assert.deepEqual(closed.details.closed_assignment, {
         owner_session_id: beforeClose.ownerSessionId,
@@ -1558,15 +1827,41 @@ test("ordinary Lead task ancestry presents only the direct owner and isolates si
       join(PI_AGENTS_DIR, "agent.md"),
       '---\nname: agent\nagents: ["agent"]\n---\nagent instructions\n',
     );
+    // Each Agent has its own Pi session; the durable ownership chain rejects an
+    // Agent whose owner session is its own.
+    const parentSessionId =
+      parentLabel === aLabel
+        ? "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+        : randomUUID();
     const parent = {
       ...managedState(parentLabel, parentRequest.requestId),
       runId: parentRequest.runId,
       ownerSessionId: parentRequest.ownerSessionId,
       paneId: parentRequest.paneId,
-      piSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      piSessionId: parentSessionId,
     };
     const mailbox = agentMailboxPath(WORKSPACE, parentLabel);
     writeAgentState(mailbox, parent);
+    // The owning Agent's record must exist for the durable ownership chain.
+    const ownerMailbox = agentMailboxPath(WORKSPACE, aLabel);
+    const ownsRecord = parent.ownerSessionId !== parent.rootSessionId;
+    // b is the second delegating generation, which needs a limit above the
+    // default and a depth hint that matches the ownership chain.
+    if (ownsRecord) {
+      realFs.mkdirSync(dirname(herdsmanConfigPath()), { recursive: true });
+      realFs.writeFileSync(
+        herdsmanConfigPath(),
+        JSON.stringify({ maxAgentDepth: 3 }),
+      );
+      process.env.PI_HERDSMAN_DEPTH = "2";
+    }
+    if (ownsRecord)
+      writeAgentState(ownerMailbox, {
+        ...managedState(aLabel, a!.requestId),
+        runId: a!.runId,
+        paneId: a!.paneId,
+        piSessionId: parent.ownerSessionId,
+      });
     Object.assign(process.env, {
       PI_HERDSMAN_MAILBOX: mailbox,
       PI_HERDSMAN_RUN_ID: parent.runId,
@@ -1623,6 +1918,7 @@ test("ordinary Lead task ancestry presents only the direct owner and isolates si
       },
     };
     const context = fakeAgentContext([identity, accepted]);
+    context.sessionManager.getSessionId = () => parentSessionId;
     registerExtension!(pi.pi as never);
     try {
       for (const handler of pi.events.get("session_start") ?? [])
@@ -1685,6 +1981,11 @@ test("ordinary Lead task ancestry presents only the direct owner and isolates si
       pi.events.get("session_shutdown")?.[0]();
       stop?.();
       resetAgentMailbox(mailbox);
+      if (ownsRecord) {
+        resetAgentMailbox(ownerMailbox);
+        realFs.rmSync(herdsmanConfigPath(), { force: true });
+        delete process.env.PI_HERDSMAN_DEPTH;
+      }
       resetAgentMailbox(agentMailboxPath(WORKSPACE, childLabel));
     }
   };
@@ -2480,7 +2781,7 @@ test("parent delegation lock makes concurrent close and delegate fail fast", asy
     );
 
     const closePromise = registeredAgentTool(leadPi, "stop").execute(
-      "close",
+      "stop",
       { agent: parent.agentLabel },
       undefined,
       undefined,
@@ -3212,7 +3513,7 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
     assert.equal(inspected.details.ok, true, JSON.stringify(inspected.details));
 
     const closed = await registeredAgentTool(pi, "stop").execute(
-      "close",
+      "stop",
       { agent: label },
       undefined,
       undefined,
@@ -7868,7 +8169,7 @@ test("managed project delegation references supported evidence larger than the i
       false,
       "unretained current attachments must not degrade to path-only delivery",
     );
-    assert.match(JSON.stringify(result.details), /could not be fully embedded/);
+    assert.match(JSON.stringify(result.details), /per-file inline limit is/);
     assert.equal(
       accepted,
       undefined,
@@ -13072,7 +13373,17 @@ test("scoped assignment result delivery persists terminal ownership and removes 
   }
 });
 
-test("managed parent resumes its completed scoped child after normal cleanup with accepted evidence", async () => {
+// Runs at `depth` 1 (started by the root) and at depth 3 with the limit
+// raised to 4, so continuation is exercised for a nested Agent too.
+async function exerciseManagedParentResume(depth: number) {
+  const ancestors = seedAncestors(depth);
+  if (depth > 1) {
+    realFs.mkdirSync(dirname(herdsmanConfigPath()), { recursive: true });
+    realFs.writeFileSync(
+      herdsmanConfigPath(),
+      JSON.stringify({ maxAgentDepth: 4 }),
+    );
+  }
   const parentLabel = `resume-parent-${randomUUID().slice(0, 8)}`;
   const childLabel = `resume-child-${randomUUID().slice(0, 8)}`;
   const parentMailbox = agentMailboxPath(WORKSPACE, parentLabel);
@@ -13114,6 +13425,7 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
       piSessionFile: parentSessionPath,
     }),
     projectAssignmentId,
+    ownerSessionId: ancestors.owner,
   };
   resetAgentMailbox(parentMailbox);
   writeAgentState(parentMailbox, parent);
@@ -13133,6 +13445,8 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "agent";
   process.env.PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS = JSON.stringify(["agent"]);
   process.env.HERDR_PANE_ID = parent.paneId;
+  if (depth > 1) process.env.PI_HERDSMAN_DEPTH = String(depth);
+  else delete process.env.PI_HERDSMAN_DEPTH;
 
   const identity = {
     type: "custom",
@@ -13720,7 +14034,18 @@ test("managed parent resumes its completed scoped child after normal cleanup wit
     realFs.rmSync(childSessionPath, { force: true });
     removeProjectAssignment(authorityRuntime, "repo-key", authorityBranch);
     delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.PI_HERDSMAN_DEPTH;
+    ancestors.cleanup();
+    if (depth > 1) realFs.rmSync(herdsmanConfigPath(), { force: true });
   }
+}
+
+test("managed parent resumes its completed scoped child after normal cleanup with accepted evidence", async () => {
+  await exerciseManagedParentResume(1);
+});
+
+test("a depth-3 Agent continues its completed child with the limit at 4", async () => {
+  await exerciseManagedParentResume(3);
 });
 
 test("continuation after a later unscoped assignment does not revive prior required evidence", async () => {

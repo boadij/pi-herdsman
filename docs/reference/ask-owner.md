@@ -19,7 +19,7 @@ this infrastructure capability.
 ```json
 {
   "question": "Should I use option A or option B?",
-  "files": ["options.md", "diagram.png", "result:researcher#1"]
+  "files": ["options.md", "result:researcher#1"]
 }
 ```
 
@@ -27,8 +27,10 @@ this infrastructure capability.
 `files` supplies supporting evidence using the same rules as `agent`: ordinary
 paths, exact reusable direct-agent refs such as `result:researcher#1`, and
 canonical `result:<request-id>` refs already supplied as evidence are accepted.
-Complete strict UTF-8 text may be embedded, while other files are canonical
-local references and are not copied or snapshotted. A direct-result ref is
+Explicit attachments must be supported UTF-8 text fully embedded within the
+applicable per-file and complete-message budgets. Otherwise the request is
+rejected with a diagnostic; rejected files are not sent as path-only
+references. A direct-result ref is
 resolved against the calling managed agent's current Pi branch and remains
 reusable by the owner through a hidden binding. Relative paths use the agent's
 working directory. This does not weaken the sole-final-tool-call rule.
@@ -40,7 +42,8 @@ working directory. This does not weaken the sole-final-tool-call rule.
 - the agent's only tool call in the turn;
 - the final tool call of the turn.
 
-The agent then stops and waits.
+Wait for the direct owner's reply only after the tool confirms the question
+was sent. If rejected, address the error or report a non-empty blocker.
 
 A call made alongside another tool call is rejected.
 

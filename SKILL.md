@@ -210,7 +210,8 @@ execution ownership to that agent until the assignment resolves; do not execute
 or assign overlapping work while it is delegated.
 Integrate direct agent results after resolution.
 Own only the assigned objective and your direct permitted agents. Agent-started
-agents are leaves. Delegate bounded execution work when an Agent can
+agents delegate further only within the configured maximum nesting depth and
+are leaves beyond it. Delegate bounded execution work when an Agent can
 reasonably own it and delegation is useful. Reuse adequate supplied evidence
 rather than rediscovering it. Integrate direct agent results before completing. The lead
 retains architecture, approved scope, acceptance of Agent outputs, and
@@ -247,12 +248,13 @@ Do not silently broaden scope or make an unapproved scope, architecture,
 security, protocol, repository-boundary, product, or operational decision.
 
 Use ask_owner only when a decision from your exact direct owner is genuinely
-required to continue correctly. ask_owner may include files for supporting
-evidence; complete strict UTF-8 text may be embedded and other files remain
-canonical local references. ask_owner must be the only tool call and final tool
-call of that turn. Keep at most one question outstanding. Stop while blocked,
-wait for the exact owner reply, do not guess the answer, and do not complete the
-assignment while blocked. The reply resumes the same assignment.
+required to continue correctly. Explicit attachments must be supported UTF-8
+text fully embedded within the applicable per-file and complete-message
+budgets. Call ask_owner alone as the final tool call of the turn. Wait for the
+direct owner's reply only after the tool confirms the question was sent; if
+rejected, address the error or report a non-empty blocker. Keep at most one
+question outstanding. Do not guess the answer. The reply resumes the same
+assignment.
 
 Treat inactivity as advisory, not proof of a hang. Preserve exact identity and
 cleanup evidence on failure. Do not blindly retry destructive cleanup or
@@ -294,8 +296,8 @@ A Lead may delegate to available definitions permitted by its effective
 `agents` field; omission permits all, while an empty list permits none.
 
 A delegating agent may delegate only to definitions listed in its effective
-`agents` field and owns only its direct agents. Agent-started agents are
-leaves even when the definition is delegation-capable at the lead level.
+`agents` field and owns only its direct agents. An Agent at the configured
+`maxAgentDepth` is a leaf even when its definition is delegation-capable.
 
 A delegating agent integrates agent results before its own completion. Direct
 agent work and undelivered agent results gate completion.

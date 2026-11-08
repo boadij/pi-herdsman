@@ -1,0 +1,4 @@
+services:
+  herdsman:
+    volumes:
+      - ./data/herdsman-home:/home/herdsman

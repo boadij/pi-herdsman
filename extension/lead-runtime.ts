@@ -80,6 +80,7 @@ import {
   openOwnedAssignmentSession,
   ownedAssignmentChildren,
   resolveAssignmentSession,
+  resolveSavedSessionModelSelection,
   buildAgentStatusSnapshot,
   createAgentStatusRuntime,
   type AgentControllerOptions,
@@ -109,7 +110,9 @@ import {
 } from "./coordinator-target.ts";
 import {
   AGENT_COORDINATION_TOOLS,
+  configuredModel,
   configuredToolPolicy,
+  notifyDefinitionWarning,
   discoverRoleDefinitions,
   discoverAgentDefinitions,
   validateRoleAgentDefinitionReferences,
@@ -368,7 +371,7 @@ type LeadRuntimeHost = Omit<
 type SupervisoryProfile = {
   role: "manager" | "chief";
   definition: AgentDefinition;
-  tools: string[];
+  baseline: string[];
   sessionId: string;
   valid: boolean;
 };
@@ -757,6 +760,22 @@ export type LeadRuntimeState = {
   chiefActivationRollback: boolean;
 };
 
+export function assertManagedLeadModelRestored(
+  saved: { provider: string; modelId: string },
+  actual: { provider: string; modelId: string } | undefined,
+  explicitModelOverride = false,
+): void {
+  if (explicitModelOverride) return;
+  if (
+    !actual ||
+    actual.provider !== saved.provider ||
+    actual.modelId !== saved.modelId
+  )
+    throw new Error(
+      `Managed Lead model restoration failed: saved model ${saved.provider}/${saved.modelId} was not restored; Pi selected ${actual ? `${actual.provider}/${actual.modelId}` : "no model"}.`,
+    );
+}
+
 export function createLeadRuntimeState(): LeadRuntimeState {
   return {
     instanceId: randomUUID(),
@@ -1033,6 +1052,11 @@ export function createLeadSessionStartRuntime(host: {
     ctx: ExtensionContext,
     signal: AbortSignal,
   ): Promise<void>;
+  afterManagedSessionIdentityInitialized?(): void;
+  verifyManagedLeadModelRestoration?(
+    ctx: ExtensionContext,
+    signal: AbortSignal,
+  ): Promise<void>;
   rejectNativeAgentRestore?(ctx: ExtensionContext): boolean;
   quarantineNativeAgentRestore?(ctx: ExtensionContext): void;
   resetNativeAgentRestoreQuarantine?(ctx: ExtensionContext): void;
@@ -1194,6 +1218,14 @@ export function createLeadSessionStartRuntime(host: {
           !host.roleTransitions.restoreChiefState(ctx)
         )
           malformedRole = true;
+        try {
+          await host.verifyManagedLeadModelRestoration?.(ctx, sessionSignal);
+        } catch (error) {
+          await host.failClosedRole(ctx, error);
+          host.setLeadExecutionPending(false);
+          return;
+        }
+        if (sessionSignal.aborted) return;
         if (malformedRole) host.roleTransitions.suspendMalformedRole(ctx);
         if (host.roleTransitions.shouldRestoreChief(persistedRole)) {
           try {
@@ -1355,6 +1387,7 @@ export function createLeadAgentEventRuntime(host: {
   isCurrentChief(ctx: ExtensionContext): boolean;
   setActiveTools(tools: readonly string[]): void;
   chiefTools: readonly string[];
+  managerTools?: readonly string[];
   leadInboxRuntime: Pick<
     LeadInboxRuntime,
     "holdStartPreflight" | "agentSettled"
@@ -1375,6 +1408,10 @@ export function createLeadAgentEventRuntime(host: {
   currentChiefAllowedTools(
     ctx: ExtensionContext,
   ): readonly string[] | undefined;
+  currentManagerAllowedTools?(
+    ctx: ExtensionContext,
+  ): readonly string[] | undefined;
+  reconcileRoleTools?(): void;
   supervisoryProfileBody(
     ctx: ExtensionContext,
     role: "manager" | "chief",
@@ -1431,6 +1468,13 @@ export function createLeadAgentEventRuntime(host: {
         const message = await host.prepareSupervisionMessage(ctx);
         if (message) host.sendMessage(message);
         await host.drainRetirementNotices(ctx, true);
+        try {
+          host.reconcileRoleTools?.();
+        } catch (error) {
+          host.setActiveTools([]);
+          throw error;
+        }
+        sections.pi_herdsman_role = host.roleCharter(ctx);
         return;
       }
       const activeLead = host.isActiveLead() && !host.isRoleSuspended();
@@ -1466,20 +1510,50 @@ export function createLeadAgentEventRuntime(host: {
           .catch(() => {});
       }
     },
+    turnEnd(): void {
+      if (!host.isActiveManager() || host.isRoleSuspended()) return;
+      try {
+        host.reconcileRoleTools?.();
+      } catch (error) {
+        host.setActiveTools([]);
+        throw error;
+      }
+    },
     toolCall(
       event: any,
       ctx: ExtensionContext,
     ): { block: true; reason: string } | undefined {
-      if (
-        !host.isCurrentChief(ctx) ||
-        (host.currentChiefAllowedTools(ctx) ?? host.chiefTools).includes(
-          event.toolName,
+      if (host.isCurrentChief(ctx)) {
+        if (
+          (host.currentChiefAllowedTools(ctx) ?? host.chiefTools).includes(
+            event.toolName,
+          )
         )
-      )
-        return undefined;
+          return undefined;
+        return {
+          block: true,
+          reason: "Tool is unavailable in the active Chief profile.",
+        };
+      }
+      if (!host.isActiveManager()) return undefined;
+      try {
+        if (
+          (
+            host.currentManagerAllowedTools?.(ctx) ??
+            host.managerTools ??
+            []
+          ).includes(event.toolName)
+        )
+          return undefined;
+      } catch {
+        return {
+          block: true,
+          reason: "Manager tool authorization is unavailable.",
+        };
+      }
       return {
         block: true,
-        reason: "Tool is unavailable in the active Chief profile.",
+        reason: "Tool is unavailable in the active Manager profile.",
       };
     },
   };
@@ -1529,10 +1603,10 @@ export function registerLeadRuntime(
   ): SupervisoryProfile => {
     const name =
       role === "manager" ? MANAGER_DEFINITION_NAME : CHIEF_DEFINITION_NAME;
-    const definition = options.commandHost.discoverRoleDefinition(
-      name,
-      ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
-    );
+    const definition = options.commandHost.discoverRoleDefinition(name, {
+      ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
+      onWarning: (message) => notifyDefinitionWarning(ctx, message),
+    });
     const prepared = {
       ...definition,
       body: expandAgentBodyFiles(definition.body, [], `${role} role profile`),
@@ -1545,12 +1619,7 @@ export function registerLeadRuntime(
     return {
       role,
       definition: prepared,
-      tools: leadToolState.projectRoleTools(baseline, prepared, [
-        ...(role === "manager"
-          ? options.roleTransitionHost.managerTools
-          : options.roleTransitionHost.chiefTools),
-        ...supervisoryAgentTools(ctx, prepared),
-      ]),
+      baseline,
       sessionId: ctx.sessionManager.getSessionId(),
       valid: true,
     };
@@ -1567,12 +1636,7 @@ export function registerLeadRuntime(
       frontmatter: {},
       body: "",
     },
-    tools: leadToolState.appendRegisteredTools(
-      [],
-      role === "manager"
-        ? options.roleTransitionHost.managerTools
-        : options.roleTransitionHost.chiefTools,
-    ),
+    baseline: [],
     sessionId: ctx.sessionManager.getSessionId(),
     valid: false,
   });
@@ -1680,8 +1744,21 @@ export function registerLeadRuntime(
             profile.definition,
             discoverAgentDefinitions(
               leadRuntime.leadContext!.isProjectTrusted()
-                ? { projectRoot: leadRuntime.leadContext!.cwd }
-                : {},
+                ? {
+                    projectRoot: leadRuntime.leadContext!.cwd,
+                    onWarning: (message) =>
+                      notifyDefinitionWarning(
+                        leadRuntime.leadContext!,
+                        message,
+                      ),
+                  }
+                : {
+                    onWarning: (message) =>
+                      notifyDefinitionWarning(
+                        leadRuntime.leadContext!,
+                        message,
+                      ),
+                  },
             ),
           );
           return new Set(profile.definition.frontmatter.agents ?? []);
@@ -1761,7 +1838,18 @@ export function registerLeadRuntime(
         return policy === "all" || policy.size > 0;
       }),
     );
-    const tools = profile.tools.filter(
+    const required = [
+      ...(role === "manager"
+        ? options.roleTransitionHost.managerTools
+        : options.roleTransitionHost.chiefTools),
+      ...supervisoryAgentTools(ctx, profile.definition),
+    ];
+    const projected = leadToolState.projectRoleTools(
+      profile.baseline,
+      profile.definition,
+      required,
+    );
+    const tools = projected.filter(
       (name) =>
         !(AGENT_COORDINATION_TOOLS as readonly string[]).includes(name) ||
         permitted.has(name),
@@ -3266,6 +3354,7 @@ export function registerLeadRuntime(
         sessionKind = identity;
         managedLifecycle = "unavailable";
         options.sessionStartOptions.appendRoleError(ctx, error);
+        options.sessionStartOptions.afterManagedSessionIdentityInitialized?.();
         return;
       }
       assignment = scope
@@ -3317,6 +3406,8 @@ export function registerLeadRuntime(
       persistLeadExecution(mode, []);
     }
     managedLifecycle = assignment ? "assigned" : "unavailable";
+    if (resolved.kind === "managed")
+      options.sessionStartOptions.afterManagedSessionIdentityInitialized?.();
   };
   const currentProjectAssignment = async (
     ctx: ExtensionContext,
@@ -3508,17 +3599,18 @@ export function registerLeadRuntime(
         : ORCHESTRATOR_LEAD_DEFINITION_NAME;
     const definition = definitions
       ? definitions.find((candidate) => candidate.name === name)
-      : options.commandHost.discoverRoleDefinition(
-          name,
-          ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
-        );
+      : options.commandHost.discoverRoleDefinition(name, {
+          ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
+          onWarning: (message) => notifyDefinitionWarning(ctx, message),
+        });
     if (!definition) throw new Error(`Lead definition ${name} not found`);
     if (definitions && definition.frontmatter.agents?.length)
       validateRoleAgentDefinitionReferences(
         definition,
-        discoverAgentDefinitions(
-          ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
-        ),
+        discoverAgentDefinitions({
+          ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
+          onWarning: (message) => notifyDefinitionWarning(ctx, message),
+        }),
       );
     return {
       ...definition,
@@ -3528,6 +3620,56 @@ export function registerLeadRuntime(
         `${definition.name} execution profile`,
       ),
     };
+  };
+  const managedLeadDefinition = (ctx: ExtensionContext): AgentDefinition =>
+    options.commandHost.discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME, {
+      ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
+      onWarning: (message) => notifyDefinitionWarning(ctx, message),
+    });
+  const verifyManagedLeadModelRestoration = async (
+    ctx: ExtensionContext,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    if (sessionKind?.kind !== "managed") return;
+    coordinationRuntime.invalidateStartupCoordinationState(
+      ctx.sessionManager.getSessionId(),
+    );
+    const definition = managedLeadDefinition(ctx);
+    if (signal.aborted) return;
+    const saved = resolveSavedSessionModelSelection(
+      ctx.sessionManager,
+      (provider, modelId) => ctx.modelRegistry.find(provider, modelId),
+    );
+    const explicitModelOverride =
+      configuredModel(definition.frontmatter) !== undefined;
+    if (saved.kind === "unresolved" && !explicitModelOverride)
+      throw new Error(
+        `Managed Lead model restoration failed: saved selection is ambiguous (${saved.candidates.map(({ provider, modelId }) => `${provider}/${modelId}`).join(" vs ")}).`,
+      );
+    if (saved.kind === "resolved") {
+      const actual = ctx.model
+        ? { provider: ctx.model.provider, modelId: ctx.model.id }
+        : undefined;
+      assertManagedLeadModelRestored(
+        saved.model,
+        actual,
+        explicitModelOverride,
+      );
+    }
+    const startupAttestation = {
+      kind: "model_restore" as const,
+      assignmentId: ctx.sessionManager.getSessionId(),
+      generation: leadRuntime.instanceId,
+      result: explicitModelOverride
+        ? ("definition_override" as const)
+        : saved.kind === "none"
+          ? ("no_saved_model" as const)
+          : ("verified" as const),
+    };
+    if (!coordinationRuntime.persistCoordinatorState(startupAttestation))
+      throw new Error(
+        "Managed Lead model restoration was verified, but its fresh startup attestation could not be published",
+      );
   };
   const prepareLeadExecution = async (
     ctx: ExtensionContext,
@@ -3593,10 +3735,7 @@ export function registerLeadRuntime(
       persistLeadExecution(mode, baseline);
     if (sessionKind?.kind === "managed") {
       try {
-        const definition = options.commandHost.discoverRoleDefinition(
-          MANAGED_LEAD_DEFINITION_NAME,
-          ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
-        );
+        const definition = managedLeadDefinition(ctx);
         if (signal.aborted) return;
         leadExecution = { mode, definition, valid: true, managed: true };
       } catch (error) {
@@ -3811,9 +3950,10 @@ export function registerLeadRuntime(
     discoverSessionDefinitions: async (ctx: ExtensionContext) => {
       let roleDefinitions: AgentDefinition[] = [];
       try {
-        roleDefinitions = discoverRoleDefinitions(
-          ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
-        );
+        roleDefinitions = discoverRoleDefinitions({
+          ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
+          onWarning: (message) => notifyDefinitionWarning(ctx, message),
+        });
       } catch (error) {
         options.sessionStartOptions.appendDefinitionError(ctx, error);
       }
@@ -3831,6 +3971,7 @@ export function registerLeadRuntime(
       };
     },
     initializeSessionKind,
+    verifyManagedLeadModelRestoration,
     quarantineNativeAgentRestore: (ctx: ExtensionContext) => {
       quarantinedSessionId = ctx.sessionManager.getSessionId();
       roleTransitions.suspendMalformedRole(ctx);
@@ -3940,13 +4081,15 @@ export function registerLeadRuntime(
     if (!options.hasPane()) return;
     options.queueLeadPresentation(ctx, event?.name ?? options.sessionName());
   });
-  pi.on("turn_end", (event: any, ctx: ExtensionContext) => {
+  pi.on("turn_end", async (event: any, ctx: ExtensionContext) => {
     if (isQuarantinedSession(ctx)) return;
     if (
       activeLeadRole(leadRuntime) === "lead" ||
       herdRunRuntime!.hasActiveTurn()
     )
       herdRunRuntime!.turnEnd(event);
+    if (activeLeadRole(leadRuntime) === "manager" && !leadRuntime.roleSuspended)
+      agentEvents.turnEnd();
     options.queueLeadPresentation(ctx);
   });
   pi.on("session_compact", (_event: unknown, ctx: ExtensionContext) =>
@@ -4005,6 +4148,10 @@ export function registerLeadRuntime(
         : "",
     currentChiefAllowedTools: (ctx: ExtensionContext) =>
       supervisoryTools(ctx, "chief"),
+    currentManagerAllowedTools: (ctx: ExtensionContext) =>
+      supervisoryTools(ctx, "manager"),
+    reconcileRoleTools: () => roleTransitions.reconcileRoleTools(),
+    managerTools: [...options.roleTransitionHost.managerTools],
   };
 }
 

@@ -6002,7 +6002,7 @@ test("Definition formatting preserves model, status, and source contracts", (_t)
   }
 });
 
-test("list model output renders only direct agents", (_t) => {
+test("list model output nests ownership chains of any depth", (_t) => {
   {
     const parent = { agent: "parent", agent_definition: "reviewer" };
     const rendered = formatToolModelResult("list", {
@@ -6018,8 +6018,35 @@ test("list model output renders only direct agents", (_t) => {
     assert.match(rendered, /definition reviewer/);
     assert.doesNotMatch(rendered, /role: reviewer/);
     assert.equal(parent.agent_definition, "reviewer");
-    assert.match(rendered, /grandchild · unknown · non-actionable/);
+    // A deeper chain is rendered under its owner, not as unmatched ancestry.
+    assert.match(
+      rendered,
+      /agents:\n    child · unknown\n      agents:\n        grandchild · unknown\n/,
+    );
+    assert.doesNotMatch(rendered, /Unmatched ancestry/);
+    assert.doesNotMatch(rendered, /non-actionable/);
   }
+});
+
+test("list model output nests a four-level chain and keeps a broken chain unmatched", (_t) => {
+  const rendered = formatToolModelResult("list", {
+    ok: true,
+    agents: [
+      { agent: "d1" },
+      { agent: "d2", parent_label: "d1" },
+      { agent: "d3", parent_label: "d2" },
+      { agent: "d4", parent_label: "d3" },
+      { agent: "stray", parent_label: "gone" },
+    ],
+  });
+  const lines = rendered.split("\n").filter((line) => /^\s*d\d /.test(line));
+  assert.deepEqual(
+    lines.map((line) => line.match(/^ */)![0].length),
+    [0, 4, 8, 12],
+  );
+  // Only the agent whose owner is absent is unmatched.
+  assert.match(rendered, /Unmatched ancestry \(recovery only\):\n  stray ·/);
+  assert.equal((rendered.match(/non-actionable/g) ?? []).length, 1);
 });
 
 test("List output preserves recovery, session, and diagnostic evidence", (_t) => {

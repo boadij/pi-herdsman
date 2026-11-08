@@ -96,6 +96,12 @@ directories. Files left under an applicable legacy `roles/` path cause an
 actionable Coordinator-discovery error; Agent discovery is independent. No
 configuration files are automatically copied, moved, or deleted.
 
+Recognizable definitions placed in the opposite namespace are excluded from
+discovery with a warning that identifies the source and intended destination.
+Other valid definitions in that category continue loading; the misplaced file
+is not automatically loaded from its intended category. Malformed definitions
+and the existing legacy-path errors remain strict and still fail discovery.
+
 A project or global definition whose `name` matches a lower-precedence
 definition overlays it. An unmatched definition is standalone.
 
@@ -284,7 +290,8 @@ the active controller contract remains authoritative for delegation behavior.
 
 A non-empty `agents` list is required but does not alone enable delegation;
 the effective tool policy also governs eligibility. Every managed agent retains
-mandatory `ask_owner`, and Agent-started agents are leaves. See
+mandatory `ask_owner`, and an Agent at the configured maximum nesting depth
+is a leaf. See
 [Delegation](../concepts/delegation.md) for the ownership model and the
 [agent-definition schema](../reference/agent-definition-schema.md#managed-agent-coordination-tools)
 for the exact tool-policy rules.
@@ -369,6 +376,20 @@ removes only that source's field. Unset model and
 thinking fields inherit the spawning controller for fresh delegation, while
 continuation restores the saved session's settings. Contextual help updates for
 the selected row.
+
+For continuation, an omitted model uses the saved Pi session's selection, not
+the current caller's model. The resumed Agent verifies that Pi restored the
+saved model before it accepts work; ambiguous history, an unavailable model,
+or a mismatch stops startup. Extension discovery stays enabled when the
+selected model's provider is identified as extension-registered, whether
+configured, inherited, or restored, even if the definition sets
+`noExtensions: true`. An explicit definition model overrides saved history; Pi
+resolves the unchanged selector. Enabling discovery may load other configured
+extensions too. Restarted Manager-assigned managed Leads apply
+the same check before inbox activation; a model explicitly set by the effective
+`managed-lead` definition overrides the saved selection. See the
+[execution-settings contract](../reference/agent-definition-schema.md#execution-settings)
+for the exact behavior.
 
 ## Override an existing bundled role
 

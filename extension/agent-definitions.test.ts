@@ -19,9 +19,11 @@ import {
   agentDefinitionMetadata,
   agentDefinitionEnabled,
   agentLaunchArgs,
+  configuredModel,
   AGENT_COORDINATION_TOOLS,
   discoverAgent,
   discoverAgentDefinitions,
+  contextAgentDefinitions,
   discoverRoleDefinition,
   discoverRoleDefinitions,
   definitionEditTargets,
@@ -41,6 +43,7 @@ import {
   writePrivatePromptSnapshots,
   type Frontmatter,
 } from "./agent-definitions.ts";
+import { createLeadCommandRuntime } from "./lead/commands.ts";
 
 function withPiAgentDir<T>(agentDir: string, callback: () => T): T {
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -2826,6 +2829,7 @@ test("a child with no requested model passes no --model at all", () => {
     resolveChildModel({ isForeignProvider: noForeignProviders }),
     {
       kind: "none",
+      extensionDiscovery: false,
     },
   );
 });
@@ -2836,8 +2840,26 @@ test("a blank configured model is treated as no model", () => {
       configured: "   ",
       isForeignProvider: noForeignProviders,
     }),
-    { kind: "none" },
+    { kind: "none", extensionDiscovery: false },
   );
+});
+
+test("saved extension models enable discovery without a CLI model override", () => {
+  const decision = resolveChildModel({
+    saved: { provider: "acme", modelId: "zai-glm-5-3" },
+    isForeignProvider: (id) => id === "acme",
+    isKnownModel: () => true,
+  });
+  assert.deepEqual(decision, { kind: "none", extensionDiscovery: true });
+  const definition = {
+    name: "scout",
+    path: "/agents/scout.md",
+    frontmatter: { name: "scout", noExtensions: true },
+    body: "",
+  };
+  const args = agentLaunchArgs(definition, { modelDecision: decision });
+  assert.equal(args.includes("--no-extensions"), false);
+  assert.equal(args.includes("--model"), false);
 });
 
 test("a built-in or config provider keeps the child lean", () => {
@@ -2881,6 +2903,62 @@ test("a configured model outranks the inherited one and keeps the definition's p
       extensionDiscovery: false,
     },
   );
+});
+
+test("configured extension models enable discovery without changing model precedence", () => {
+  const cases = [
+    ["mistral-native/zai-glm-5-3-flash", ["mistral-native"], true],
+    ["MISTRAL-NATIVE/zai-glm-5-3-flash", ["mistral-native"], true],
+    ["org/native/model-x", ["org/native"], true],
+    ["anthropic/claude-model", ["mistral-native"], false],
+    ["unknown/model-x", ["mistral-native"], false],
+    ["zai-glm-5-3-flash", ["mistral-native"], false],
+  ] as const;
+
+  for (const [configured, providers, extensionDiscovery] of cases) {
+    assert.deepEqual(
+      resolveChildModel({
+        configured,
+        inherited: inheritedModel("mistral-native", "mistral-native/inherited"),
+        isForeignProvider: (provider) => providers.includes(provider),
+      }),
+      { kind: "use", model: configured, extensionDiscovery },
+      configured,
+    );
+  }
+
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-pinned-model-"));
+  try {
+    const projectAgents = join(root, ".pi", "agents");
+    mkdirSync(projectAgents, { recursive: true });
+    writeFileSync(
+      join(projectAgents, "scout.md"),
+      "---\nname: scout\nmodel: mistral-native/zai-glm-5-3-flash\n---\n",
+    );
+    const effective = discoverAgent("scout", { projectRoot: root });
+    assert.equal(effective.frontmatter.noExtensions, true);
+    assert.equal(
+      effective.frontmatter.model,
+      "mistral-native/zai-glm-5-3-flash",
+    );
+
+    const decision = resolveChildModel({
+      configured: configuredModel(effective.frontmatter),
+      inherited: inheritedModel("anthropic", "anthropic/claude-model"),
+      isForeignProvider: (provider) => provider === "mistral-native",
+    });
+    const args = agentLaunchArgs(effective, {
+      bodyPromptPath: "/tmp/scout-prompt",
+      modelDecision: decision,
+    });
+    assert.deepEqual(
+      args.slice(args.indexOf("--model"), args.indexOf("--model") + 2),
+      ["--model", "mistral-native/zai-glm-5-3-flash"],
+    );
+    assert.equal(args.includes("--no-extensions"), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("the inherited provider is Pi's resolved provider, not the token's first segment", () => {
@@ -3061,7 +3139,7 @@ test("wildcard exclusions reject mandatory overlap and escape regex syntax", () 
   );
 });
 
-test("Agent and role namespaces are independent and reject misplaced names", () => {
+test("Agent and Coordinator namespaces isolate misplaced user definitions", () => {
   const root = mkdtempSync(join(tmpdir(), "herdsman-namespaces-"));
   const agents = join(root, "agents");
   const roles = join(root, "coordinators");
@@ -3069,19 +3147,120 @@ test("Agent and role namespaces are independent and reject misplaced names", () 
   mkdirSync(roles, { recursive: true });
   withPiAgentDir(root, () => {
     writeFileSync(join(roles, "bad.md"), "---\nname: custom\n---\n");
+    const roleWarnings: string[] = [];
     assert.ok(discoverAgentDefinitions().length);
-    assert.throws(
-      () => discoverRoleDefinitions(),
-      /non-coordinator name in coordinators directory/,
+    assert.ok(
+      discoverRoleDefinitions({
+        onWarning: (warning) => roleWarnings.push(warning),
+      }).length,
+    );
+    assert.match(
+      roleWarnings[0]!,
+      /bad\.md: definition belongs in .*agents.*bad\.md; file excluded/u,
     );
     unlinkSync(join(roles, "bad.md"));
     writeFileSync(join(agents, "bad.md"), "---\nname: manager\n---\n");
+    mkdirSync(join(agents, "nested"));
+    writeFileSync(
+      join(agents, "nested", "duplicate.md"),
+      "---\nname: manager\n---\n",
+    );
+    writeFileSync(join(agents, "valid.md"), "---\nname: valid\n---\n");
     assert.ok(discoverRoleDefinitions().length);
+    const agentWarnings: string[] = [];
+    assert.ok(
+      discoverAgentDefinitions({
+        onWarning: (warning) => agentWarnings.push(warning),
+      }).some(({ name }) => name === "valid"),
+    );
+    assert.equal(agentWarnings.length, 2);
+    assert.match(
+      agentWarnings[0]!,
+      /bad\.md: definition belongs in .*coordinators.*bad\.md; file excluded/u,
+    );
+    assert.match(
+      agentWarnings[1]!,
+      /nested.*duplicate\.md: definition belongs in .*coordinators.*nested.*duplicate\.md; file excluded/u,
+    );
+    writeFileSync(join(agents, "malformed.md"), "---\nname: [manager\n---\n");
     assert.throws(
-      () => discoverAgentDefinitions(),
-      /reserved coordinator name in agents directory; use coordinators/,
+      () => discoverAgentDefinitions({ onWarning: () => undefined }),
+      /malformed\.md/u,
     );
   });
+});
+
+test("contextual definition warnings are reported once per session", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdsman-definition-warning-"));
+  mkdirSync(join(root, "agents"));
+  mkdirSync(join(root, "coordinators"));
+  writeFileSync(
+    join(root, "agents", "manager.md"),
+    "---\nname: manager\n---\n",
+  );
+  const notices: string[] = [];
+  let sessionId = "session-one";
+  const manager = { getSessionId: () => sessionId };
+  const ctx = {
+    cwd: root,
+    hasUI: true,
+    sessionManager: manager,
+    isProjectTrusted: () => false,
+    ui: { notify: (message: string) => notices.push(message) },
+  } as any;
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = root;
+  try {
+    await contextAgentDefinitions(ctx);
+    writeFileSync(
+      join(root, "coordinators", "misplaced.md"),
+      "---\nname: misplaced\n---\n",
+    );
+    const coordinatorMenus: any[][] = [];
+    const selections = ["roles", undefined];
+    const runtime = createLeadCommandRuntime({
+      contextAgentDefinitions: (
+        context: any,
+        onWarning?: (message: string) => void,
+      ) => contextAgentDefinitions(context, onWarning),
+      selectMenu: async (_context: unknown, title: string, items: any[]) => {
+        if (title === "Coordinators") coordinatorMenus.push(items);
+        return selections.shift();
+      },
+      agentDefinitionEnabled: () => true,
+      getThinkingLevel: () => "high",
+    } as any);
+    await runtime.openDefinitionsMenu(ctx);
+    const menuWarning = notices.find((message) =>
+      /coordinators.*misplaced\.md.*agents/u.test(message),
+    );
+    assert.ok(menuWarning);
+    assert.equal(
+      notices.filter((message) => message === menuWarning).length,
+      1,
+    );
+    assert.ok(
+      coordinatorMenus[0]?.some(
+        (item) =>
+          item.label.includes("misplaced definition") &&
+          item.help?.includes(join("agents", "misplaced.md")),
+      ),
+    );
+    const noticeCount = notices.length;
+    await contextAgentDefinitions(ctx);
+    assert.equal(notices.length, noticeCount);
+    sessionId = "session-two";
+    selections.push("roles", undefined);
+    await runtime.openDefinitionsMenu(ctx);
+    assert.equal(
+      notices.filter((message) => message === menuWarning).length,
+      2,
+    );
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("legacy coordinator profiles diagnose only applicable trusted scopes", () => {

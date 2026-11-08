@@ -181,10 +181,51 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - run: docker compose config
+      - name: Verify persistent optional Compose selections
+        shell: bash
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          cp compose.yaml compose.tailscale.yaml compose.bind-mount.yaml "$work/"
+          cd "$work"
+
+          for files in \
+            compose.yaml:compose.tailscale.yaml \
+            compose.yaml:compose.bind-mount.yaml \
+            compose.yaml:compose.tailscale.yaml:compose.bind-mount.yaml
+          do
+            printf 'COMPOSE_FILE=%s\n' "$files" > .env
+            docker compose config --quiet
+            resolved=$(docker compose config --format json)
+
+            if [[ "$files" == *tailscale* ]]; then
+              jq -e '
+                .services.herdsman.network_mode == "service:tailscale" and
+                ((.services.herdsman.ports // []) | length) == 0 and
+                .services.tailscale.environment.TS_AUTH_ONCE == "true"
+              ' <<< "$resolved" >/dev/null
+            else
+              jq -e '
+                (.services.herdsman.ports | length) == 1 and
+                .services.herdsman.ports[0].target == 22
+              ' <<< "$resolved" >/dev/null
+            fi
+
+            if [[ "$files" == *bind-mount* ]]; then
+              home_type=bind
+            else
+              home_type=volume
+            fi
+            jq -e --arg home_type "$home_type" '
+              ([.services.herdsman.volumes[] | select(.target == "/home/herdsman")]) as $home |
+              ($home | length) == 1 and $home[0].type == $home_type and
+              any(.services.herdsman.volumes[]; .target == "/var/lib/herdsman/ssh" and .type == "volume")
+            ' <<< "$resolved" >/dev/null
+          done
       - if: ${{ needs.scope.outputs.container == 'smoke' }}
         run: scripts/container-smoke.sh
-      - run: docker compose config
-      - run: docker compose -f compose.yaml -f compose.tailscale.yaml config
 
   smoke:
     name: Simulated smoke
@@ -243,7 +284,8 @@ jobs:
             terminal-failure \
             agent-terminal-failure \
             manager-handoff \
-            agent-crash-recovery
+            agent-crash-recovery \
+            deep-chain
           do
             echo "::group::Simulated smoke: $scenario"
             npm run smoke -- "$scenario" --simulated

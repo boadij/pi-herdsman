@@ -45,6 +45,7 @@ function classify(paths) {
     if (
       path === "AGENTS.md" ||
       path === "CONTRIBUTING.md" ||
+      path === "CONTRIBUTORS.md" ||
       path === "CHANGELOG.md" ||
       path === ".prettierignore" ||
       path === "renovate.json" ||
@@ -165,7 +166,11 @@ function classify(paths) {
       continue;
     }
 
-    if (path === "compose.yaml" || path === "compose.tailscale.yaml") {
+    if (
+      path === "compose.yaml" ||
+      path === "compose.tailscale.yaml" ||
+      path === "compose.bind-mount.yaml"
+    ) {
       config();
       continue;
     }
@@ -234,15 +239,21 @@ if (process.argv[2] === "--self-test") {
     peer: true,
   });
 
-  assert.deepEqual(classify(["compose.yaml"]), {
-    format: true,
-    tests: false,
-    package: false,
-    container: "config",
-    smoke: false,
-    bootstrap: false,
-    peer: false,
-  });
+  for (const path of [
+    "compose.yaml",
+    "compose.tailscale.yaml",
+    "compose.bind-mount.yaml",
+  ]) {
+    assert.deepEqual(classify([path]), {
+      format: true,
+      tests: false,
+      package: false,
+      container: "config",
+      smoke: false,
+      bootstrap: false,
+      peer: false,
+    });
+  }
 
   assert.deepEqual(classify([".github/workflows/release.yml"]), {
     format: true,
@@ -359,6 +370,7 @@ if (process.argv[2] === "--self-test") {
   for (const path of [
     "AGENTS.md",
     "CONTRIBUTING.md",
+    "CONTRIBUTORS.md",
     ".agents/skills/testing/SKILL.md",
     ".github/pull_request_template.md",
     ".github/ISSUE_TEMPLATE/01-bug.yml",

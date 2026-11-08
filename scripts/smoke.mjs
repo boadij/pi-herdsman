@@ -60,6 +60,7 @@ const scenarioNames = [
   "manager-handoff",
   "manager-merge",
   "agent-crash-recovery",
+  "deep-chain",
 ];
 const SMOKE_MODEL_KEY = "pi-herdsman.smoke-model";
 const MAX_SOCKET_PATH_BYTES = 100;
@@ -130,6 +131,7 @@ export function parseSmokeArgs(args) {
       "manager-handoff",
       "manager-merge",
       "agent-crash-recovery",
+      "deep-chain",
     ].includes(scenario)
   )
     throw new Error(`${scenario} requires --simulated`);
@@ -3770,6 +3772,67 @@ async function tryNestedCommand(ctx, args) {
   });
 }
 
+export async function promptContinuationRoot(
+  ctx,
+  wait = waitForEvidence,
+  list = tryNestedCommand,
+  prompt = nestedCommand,
+) {
+  try {
+    await wait(
+      ctx,
+      "continuation-root-ready",
+      async () => {
+        const result = await list(ctx, ["agent", "list"]);
+        if (!result.ok) return { done: false, observationError: result.error };
+        const agent = (result.value.agents ?? []).find(
+          (item) => item.pane_id === ctx.rootPaneId,
+        );
+        return {
+          done:
+            typeof agent?.agent_session?.value === "string" &&
+            agent.agent_session.value.trim().length > 0 &&
+            ["idle", "done"].includes(agent.agent_status),
+          progress: {
+            registered: !!agent,
+            hasSession: typeof agent?.agent_session?.value === "string",
+            status: agent?.agent_status,
+          },
+        };
+      },
+      { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS, pollMs: 200 },
+    );
+  } catch (error) {
+    if (error.code !== "SMOKE_TIMEOUT" && error.code !== "SMOKE_STALLED")
+      throw error;
+    const [terminal, process] = await Promise.allSettled([
+      nestedPaneText(ctx, ctx.rootPaneId, "recent-unwrapped"),
+      tryNestedCommand(ctx, ["pane", "process-info", "--pane", ctx.rootPaneId]),
+    ]);
+    const terminalText = terminal.status === "fulfilled" ? terminal.value : "";
+    const processInfo =
+      process.status === "fulfilled" && process.value.ok
+        ? process.value.value?.process_info
+        : null;
+    const lines = sanitizeManagerBootstrapText(terminalText, ctx)
+      .split("\n")
+      .slice(-40)
+      .map((line) => line.slice(0, 300));
+    error.smoke.lastEvidence = {
+      ...error.smoke.lastEvidence,
+      paneRecentOutput: lines,
+      processInfo: {
+        observed: !!processInfo,
+        argvPresent: (processInfo?.foreground_processes ?? []).some(
+          (item) => Array.isArray(item.argv) && item.argv.length > 0,
+        ),
+      },
+    };
+    throw error;
+  }
+  await prompt(ctx, ["agent", "prompt", ctx.rootPaneId, ctx.initialPrompt]);
+}
+
 async function waitForNestedHerdr(ctx) {
   return waitForEvidence(
     ctx,
@@ -3837,7 +3900,8 @@ async function startCandidate(ctx) {
   ctx.rootWorkspaceId = pane.workspace_id;
   assert.equal(resolve(pane.cwd), ctx.rootCwd);
   ctx.rootPaneId = paneId;
-  const prompt = ctx.initialPrompt;
+  const prompt =
+    ctx.scenario === "continuation" ? undefined : ctx.initialPrompt;
   assert.ok(
     prompt === undefined || typeof prompt === "string",
     "candidate initial prompt must be a string when present",
@@ -3934,6 +3998,14 @@ function corePrompt(expected) {
   return `Delegate this task to one implementer.\n\nDo not read package.json yourself. The implementer must delegate exactly one scout to read package.json and determine its exact "name" and "version", explicitly select the Scout result for the implementer's completion, and return that result to you. Then delegate one next Agent with the exact forwardable Scout result in the files argument; it must verify the attached evidence and reply with exactly one JSON object containing the package "name" and "version" as strings, with no prose.\n\nWhen the next Agent reports the result, output exactly:\n\nPI_HERDSMAN_SMOKE_OK ${expected}\n\nDo not output that marker before the next Agent verifies the attached evidence.`;
 }
 
+const DEEP_CHAIN_DEPTH = 4;
+const DEEP_CHAIN_MARKER = "PI_HERDSMAN_DEEP_CHAIN_OK";
+const DEEP_CHAIN_RESULT = "L1:L2:L3:L4:SMOKE_DEEP_LEAF";
+
+function deepChainPrompt() {
+  return `SMOKE_DEEP_ROOT: delegate exactly one Agent, definition smoke-deep-1 with label smoke-deep-1. Its task is to delegate smoke-deep-2, which delegates smoke-deep-3, which delegates smoke-deep-4. When the chain's result reaches you, output exactly:\n\n${DEEP_CHAIN_MARKER} ${DEEP_CHAIN_RESULT}\n\nDo not output that marker before the delegated Agent reports.`;
+}
+
 function continuationPrompt() {
   return `Delegate exactly one bounded task to an implementer: read package.json, remember its exact package name, and return only CONTINUATION_FIRST_DONE. After that result reaches you, output exactly PI_HERDSMAN_CONTINUATION_FIRST. Do not read package.json yourself.`;
 }
@@ -4010,6 +4082,37 @@ export function matchPiProvenance(
   } catch (error) {
     error.code = "SMOKE_EVIDENCE";
     throw error;
+  }
+}
+
+export function assertContinuationFauxEvidence(
+  sessionStarts,
+  provenance,
+  sessionId,
+  pids,
+) {
+  assert.equal(pids.length, 2, "expected two continuation generation PIDs");
+  assert.notEqual(
+    pids[0],
+    pids[1],
+    "continuation generations must use distinct PIDs",
+  );
+  for (const pid of pids) {
+    assert.ok(
+      sessionStarts.some(
+        (record) => record.sessionId === sessionId && record.pid === pid,
+      ),
+      `missing faux session_start evidence for ${sessionId} PID ${pid}`,
+    );
+    assert.ok(
+      provenance.some(
+        (record) =>
+          record.sessionId === sessionId &&
+          record.pid === pid &&
+          record.model === "continuation",
+      ),
+      `missing faux continuation provider request for ${sessionId} PID ${pid}`,
+    );
   }
 }
 
@@ -6003,6 +6106,8 @@ export function initialPromptForScenario(scenario, ctx) {
       return undefined;
     case "agent-crash-recovery":
       return undefined;
+    case "deep-chain":
+      return deepChainPrompt();
     default:
       throw new Error(`unknown smoke scenario: ${scenario}`);
   }
@@ -6035,6 +6140,8 @@ export async function runScenario(ctx, scenario) {
       return runManagerMergeSmoke(ctx);
     case "agent-crash-recovery":
       return runAgentCrashRecoverySmoke(ctx);
+    case "deep-chain":
+      return runDeepChainSmoke(ctx);
     default:
       throw new Error(`unknown smoke scenario: ${scenario}`);
   }
@@ -7378,6 +7485,201 @@ async function runCoreSmoke(ctx) {
   await waitForDescendantsToExit(ctx);
 }
 
+// Root -> smoke-deep-1 -> smoke-deep-2 -> smoke-deep-3 -> smoke-deep-4 with the
+// limit raised to 4. Model decisions are scripted; delegation, ownership, the
+// leaf projection at the limit, and result delivery at every level are real.
+async function runDeepChainSmoke(ctx) {
+  const marker = `${DEEP_CHAIN_MARKER} ${DEEP_CHAIN_RESULT}`;
+  const labels = Array.from(
+    { length: DEEP_CHAIN_DEPTH },
+    (_, i) => `smoke-deep-${i + 1}`,
+  );
+  const seenInTree = new Set();
+  await waitForEvidence(
+    ctx,
+    "deep-chain-delegation",
+    async () => {
+      await sampleRootTreeLabels(ctx, labels, seenInTree);
+      const session = await rootSessionSnapshot(ctx);
+      if (session) {
+        ctx.rootSessionPath = session.path;
+        const assistantResult = assistantResultForSession(
+          session,
+          ctx.initialPrompt,
+          marker,
+        );
+        if (assistantResult) ctx.assistantResult = assistantResult;
+      }
+      return {
+        done: !!ctx.assistantResult,
+        progress: {
+          rootSessionBytes: session ? Buffer.byteLength(session.contents) : 0,
+          assistantResultFound: !!ctx.assistantResult,
+        },
+        evidence: {
+          rootSession: session ? summarizeSession(session.contents) : null,
+        },
+      };
+    },
+    { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS },
+  );
+  const files = (
+    await readdir(ctx.paths.piSessions, { recursive: true })
+  ).filter((file) => file.endsWith(".jsonl"));
+  const sessions = [];
+  for (const file of files) {
+    const entries = sessionEntries(
+      await readFile(join(ctx.paths.piSessions, file), "utf8"),
+    );
+    sessions.push({
+      id: entries.find((entry) => entry.type === "session")?.id,
+      entries,
+    });
+  }
+  ctx.deepChain = assertDeepChainEvidence(sessions);
+  assertDescendantVisibility(labels, seenInTree);
+  await waitForDescendantsToExit(ctx);
+}
+
+// Adds each label whose row is rendered in the root's status tree right now.
+// Only tree rows count; the prompt echo also names the labels.
+async function sampleRootTreeLabels(ctx, labels, seen) {
+  let text;
+  try {
+    text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
+  } catch {
+    return;
+  }
+  const treeRows = text
+    .split(/\r?\n/u)
+    .filter((line) => /^[ │]*[└├]─ /u.test(line));
+  for (const label of labels)
+    if (
+      treeRows.some((line) =>
+        new RegExp(`\\b${label}\\s+${label}\\b`, "u").test(line),
+      )
+    )
+      seen.add(label);
+}
+
+// Every level must have been seen in the root's rendered status tree at some
+// point before the chain finished. Without the descendant watcher a level two or
+// more hops down appears only on the 10 s refresh; the leaf is shown for a few
+// seconds, so a regression is caught when no refresh falls inside that window.
+export function assertDescendantVisibility(labels, seen) {
+  const missing = labels.filter((label) => !seen.has(label));
+  requireSmokeEvidence(
+    !missing.length,
+    `deep-chain levels never shown in the root status tree before the chain finished: ${missing.join(", ")}`,
+  );
+}
+
+// Every level must have started its direct child and received that child's
+// completed result, and the leaf's marker must have bubbled through all of them.
+export function assertDeepChainEvidence(sessions) {
+  requireSmokeEvidence(
+    sessions.length === DEEP_CHAIN_DEPTH + 1,
+    `deep-chain expected ${DEEP_CHAIN_DEPTH + 1} Pi sessions (root and ${DEEP_CHAIN_DEPTH} Agents), observed ${sessions.length}`,
+  );
+  const delegations = [];
+  for (const { id, entries } of sessions) {
+    const messages = entries
+      .filter((entry) => entry.type === "message")
+      .map((entry) => entry.message);
+    for (const message of messages) {
+      if (message?.role !== "assistant") continue;
+      for (const part of message.content ?? []) {
+        if (part.type !== "toolCall" || part.name !== "delegate_agent")
+          continue;
+        const result = messages.find(
+          (candidate) =>
+            candidate?.role === "toolResult" &&
+            candidate.toolCallId === part.id,
+        );
+        requireSmokeEvidence(
+          result && !result.isError,
+          `deep-chain delegate_agent ${part.arguments?.label} has no successful correlated result`,
+        );
+        const delivered = entries.find(
+          (entry) =>
+            entry.type === "custom_message" &&
+            entry.customType === "pi-herdsman-agent-result" &&
+            entry.details?.agentLabel === part.arguments?.label &&
+            entry.details?.status === "completed" &&
+            entry.details?.ownerSessionId === id,
+        );
+        requireSmokeEvidence(
+          delivered,
+          `deep-chain ${part.arguments?.label} result never reached its owner session`,
+        );
+        delegations.push({
+          owner: id,
+          label: part.arguments?.label,
+          result: messageText(delivered.content),
+        });
+      }
+    }
+  }
+  const labels = delegations.map(({ label }) => label).sort();
+  requireSmokeEvidence(
+    JSON.stringify(labels) ===
+      JSON.stringify(
+        Array.from(
+          { length: DEEP_CHAIN_DEPTH },
+          (_, index) => `smoke-deep-${index + 1}`,
+        ),
+      ),
+    `deep-chain expected exactly one delegation per level, observed ${labels.join(", ")}`,
+  );
+  requireSmokeEvidence(
+    new Set(delegations.map(({ owner }) => owner)).size === DEEP_CHAIN_DEPTH,
+    "deep-chain delegations must come from four distinct owner sessions",
+  );
+  const successfulCalls = (name, match) =>
+    sessions.flatMap(({ entries }) => {
+      const messages = entries
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.message);
+      return messages.flatMap((message) =>
+        message?.role === "assistant"
+          ? (message.content ?? []).filter(
+              (part) =>
+                part.type === "toolCall" &&
+                part.name === name &&
+                match(part.arguments) &&
+                messages.some(
+                  (result) =>
+                    result?.role === "toolResult" &&
+                    result.toolCallId === part.id &&
+                    !result.isError,
+                ),
+            )
+          : [],
+      );
+    });
+  requireSmokeEvidence(
+    successfulCalls(
+      "ask_owner",
+      (args) => args?.question === "SMOKE_DEEP_QUESTION",
+    ).length === 1,
+    "deep-chain leaf must escalate one ask_owner to its owner",
+  );
+  requireSmokeEvidence(
+    successfulCalls(
+      "reply_agent",
+      (args) =>
+        args?.agent === "smoke-deep-4" && args?.message === "SMOKE_DEEP_ANSWER",
+    ).length === 1,
+    "deep-chain depth-3 owner must reply to the leaf's ask",
+  );
+  const leaf = delegations.find(({ label }) => label === "smoke-deep-4");
+  requireSmokeEvidence(
+    leaf?.result.includes("L4:SMOKE_DEEP_LEAF"),
+    "deep-chain leaf result must reach its owner",
+  );
+  return delegations.map(({ label }) => label).sort();
+}
+
 async function runContinuationSmoke(ctx) {
   const deadline = Date.now() + 6 * 60_000;
   const firstPrompt = ctx.initialPrompt;
@@ -7615,6 +7917,42 @@ async function runContinuationSmoke(ctx) {
       stallMs: CONTROL_STALL_MS,
       pollMs: 200,
     },
+  );
+
+  const runtimeEvidence = join(ctx.paths.piAgent, "pi-herdsman", "runtime");
+  const readJsonl = async (name) =>
+    (await readFile(join(runtimeEvidence, name), "utf8"))
+      .split(/\r?\n/u)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  await waitForEvidence(
+    ctx,
+    "continuation-second-provider-request",
+    async () => {
+      const provenance = await readJsonl("smoke-faux-provenance.jsonl");
+      const found = provenance.some(
+        (record) =>
+          record.sessionId === firstSession.id &&
+          record.pid === firstGeneration &&
+          record.model === "continuation",
+      );
+      return {
+        done: found,
+        progress: { secondGenerationProviderRequest: found },
+        evidence: { sessionId: firstSession.id, pid: firstGeneration },
+      };
+    },
+    {
+      timeoutMs: Math.max(1, deadline - Date.now()),
+      stallMs: CONTROL_STALL_MS,
+      pollMs: 200,
+    },
+  );
+  assertContinuationFauxEvidence(
+    await readJsonl("smoke-faux-session-start.jsonl"),
+    await readJsonl("smoke-faux-provenance.jsonl"),
+    firstSession.id,
+    [firstPids.values().next().value, firstGeneration],
   );
 
   await waitForEvidence(
@@ -12988,16 +13326,18 @@ async function main() {
         ? join(paths.root, "manager-bootstrap-project")
         : scenario === "agent-crash-recovery"
           ? join(paths.root, "crash-recovery-project")
-          : scenario === "manager-recovery" ||
-              scenario === "terminal-failure" ||
-              scenario === "agent-terminal-failure" ||
-              scenario === "manager-handoff" ||
-              scenario === "manager-merge" ||
-              scenario === "supervisor-agent"
-            ? await prepareManagerRepository(paths)
-            : repoRoot;
+          : scenario === "deep-chain"
+            ? join(paths.root, "deep-chain-project")
+            : scenario === "manager-recovery" ||
+                scenario === "terminal-failure" ||
+                scenario === "agent-terminal-failure" ||
+                scenario === "manager-handoff" ||
+                scenario === "manager-merge" ||
+                scenario === "supervisor-agent"
+              ? await prepareManagerRepository(paths)
+              : repoRoot;
     if (scenario === "manager-bootstrap") await mkdir(ctx.rootCwd);
-    if (scenario === "agent-crash-recovery")
+    if (scenario === "agent-crash-recovery" || scenario === "deep-chain")
       await mkdir(ctx.rootCwd, { recursive: true });
     if (
       scenario === "manager-bootstrap" ||
@@ -13097,6 +13437,26 @@ async function main() {
         );
       }
     }
+    if (scenario === "deep-chain") {
+      // Raise the user-wide limit to the chain depth in the isolated config
+      // only; the default of 2 would make smoke-deep-2 a leaf.
+      await mkdir(join(paths.piAgent, "pi-herdsman"), { recursive: true });
+      await writeFile(
+        join(paths.piAgent, "pi-herdsman", "config.json"),
+        JSON.stringify({ maxAgentDepth: DEEP_CHAIN_DEPTH }) + "\n",
+      );
+      await mkdir(join(ctx.rootCwd, ".pi", "agents"), { recursive: true });
+      for (let level = 1; level <= DEEP_CHAIN_DEPTH; level++) {
+        const name = `smoke-deep-${level}`;
+        const agents =
+          level < DEEP_CHAIN_DEPTH ? `agents: [smoke-deep-${level + 1}]\n` : "";
+        await writeFile(
+          join(ctx.rootCwd, ".pi", "agents", `${name}.md`),
+          `---\nname: ${name}\nmodel: smoke-faux/deep-chain\nnoExtensions: false\nextensions: [${JSON.stringify(ctx.simulatedProviderExtension)}]\n${agents}---\n`,
+          { flag: "wx" },
+        );
+      }
+    }
     if (scenario === "supervisor-agent") await prepareSupervisorAgent(ctx);
     if (args.simulated) ctx.authMechanism = "not required (simulated)";
     else ctx.authMechanism = await preparePi(paths, model);
@@ -13121,6 +13481,7 @@ async function main() {
       pkg.piHerdsman.runtime.herdr.version,
     );
     ctx.rootPaneId = await startCandidate(ctx);
+    if (scenario === "continuation") await promptContinuationRoot(ctx);
     if (scenario === "agent-crash-recovery") {
       await waitForEvidence(
         ctx,
@@ -13226,6 +13587,8 @@ async function main() {
       console.log(`terminal-failure: ${JSON.stringify(ctx.terminalFailure)}`);
     if (scenario === "agent-crash-recovery")
       console.log(`agent-crash-recovery: ${JSON.stringify(ctx.crashRecovery)}`);
+    if (scenario === "deep-chain")
+      console.log(`deep-chain: ${JSON.stringify(ctx.deepChain)}`);
     console.log(`authentication: ${ctx.authMechanism}`);
   } catch (error) {
     failure = { phase, error };

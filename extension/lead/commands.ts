@@ -9,12 +9,14 @@ import {
 } from "@earendil-works/pi-ai";
 import type { SelectItem } from "@earendil-works/pi-tui";
 import {
+  DEFAULT_MAX_AGENT_DEPTH,
   DEFAULT_STATUS_WIDGET_MAX_ROWS,
   effectiveMergePolicy,
   setManagerMergeOverride,
 } from "../config.ts";
 import {
   discoverGlobalAgentDefinition,
+  notifyDefinitionWarning,
   discoverRoleDefinitions,
   definitionEditTargets,
   readDefinitionEditSnapshot,
@@ -70,7 +72,10 @@ type LeadCommandHost = {
     enabled: boolean,
     ctx: ExtensionContext,
   ): Promise<boolean>;
-  contextAgentDefinitions(ctx: ExtensionContext): Promise<{
+  contextAgentDefinitions(
+    ctx: ExtensionContext,
+    onWarning?: (message: string) => void,
+  ): Promise<{
     definitions: AgentDefinition[];
     roleDefinitions: AgentDefinition[];
     projectTrusted: boolean;
@@ -79,6 +84,7 @@ type LeadCommandHost = {
     name: RoleDefinitionName,
     options?: {
       projectRoot?: string;
+      onWarning?: (message: string) => void;
     },
   ): AgentDefinition;
   setLeadExecutionMode(
@@ -116,6 +122,7 @@ type LeadCommandHost = {
   formatMessageLimit(bytes: number): string;
   validByteLimit(bytes: number): boolean;
   validStatusWidgetMaxRows: typeof import("../config.ts").validStatusWidgetMaxRows;
+  validMaxAgentDepth: typeof import("../config.ts").validMaxAgentDepth;
   input(
     ctx: ExtensionCommandContext,
     label: string,
@@ -303,14 +310,22 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
     async openDefinitionsMenu(ctx: ExtensionCommandContext): Promise<void> {
       let selectedSection = "agents";
       const selectedDefinitions: Record<string, string | undefined> = {};
-      const loadDefinitions = async (section: string, includeProject = true) =>
+      const loadDefinitions = async (
+        section: string,
+        includeProject = true,
+        onWarning?: (message: string) => void,
+      ) =>
         section === "agents"
-          ? (await host.contextAgentDefinitions(ctx)).definitions
-          : discoverRoleDefinitions(
-              includeProject && ctx.isProjectTrusted()
+          ? (await host.contextAgentDefinitions(ctx, onWarning)).definitions
+          : discoverRoleDefinitions({
+              ...(includeProject && ctx.isProjectTrusted()
                 ? { projectRoot: ctx.cwd }
-                : {},
-            );
+                : {}),
+              onWarning: (message) => {
+                notifyDefinitionWarning(ctx, message);
+                onWarning?.(message);
+              },
+            });
       const resolveDefinition = async (name: string) => {
         const loaded = await loadDefinitions(
           isReservedRoleDefinition(name) ? "roles" : "agents",
@@ -340,8 +355,13 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         if (section !== "agents" && section !== "roles") return;
         selectedSection = section;
         definitionList: while (true) {
-          const availableDefinitions = await loadDefinitions(section);
-          if (!availableDefinitions.length) {
+          const warnings: string[] = [];
+          const availableDefinitions = await loadDefinitions(
+            section,
+            true,
+            (message) => warnings.push(message),
+          );
+          if (!availableDefinitions.length && !warnings.length) {
             ctx.ui.notify(
               `No ${section === "agents" ? "Agent definitions" : "Coordinator profiles"} are available.`,
             );
@@ -377,6 +397,16 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 : {}),
             };
           });
+          let warningValue = "__definition_warnings__";
+          while (availableDefinitions.some(({ name }) => name === warningValue))
+            warningValue += "_";
+          if (warnings.length)
+            options.unshift({
+              value: warningValue,
+              label: `⚠ ${warnings.length} misplaced definition(s)`,
+              description: "Select to inspect paths",
+              help: warnings[0],
+            });
           const selected = await host.selectMenu(
             ctx,
             section === "agents" ? "Agents" : "Coordinators",
@@ -385,6 +415,10 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           );
           if (selected === undefined) break definitionList;
           if (!selected) continue;
+          if (selected === warningValue) {
+            for (const warning of warnings) ctx.ui.notify(warning, "warning");
+            continue;
+          }
           const selectedEntry = availableDefinitions.find(
             (definition) => definition.name === selected,
           );
@@ -1000,6 +1034,12 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               help: "Maximum ambient widget lines, including header and overflow (1–100).",
             },
             {
+              value: "max-agent-depth",
+              label: "Max Agent depth",
+              description: String(config.maxAgentDepth),
+              help: "Longest chain of nested Agents below the Lead, Manager or Chief (1 = Agents never delegate). Global only; checked at each launch. Existing Agents stay manageable when it is lowered.",
+            },
+            {
               value: "message-limits",
               label: "Message limits",
               help: "Configure inline attachment and managed mailbox payload byte limits.",
@@ -1061,6 +1101,53 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             } catch (error) {
               ctx.ui.notify(
                 `Could not update status widget rows: ${String(error)}`,
+                "error",
+              );
+            }
+          }
+        } else if (selected === "max-agent-depth") {
+          while (true) {
+            const choice = await host.selectMenu(ctx, "Max Agent depth", [
+              {
+                value: "default",
+                label: `Default (${DEFAULT_MAX_AGENT_DEPTH})`,
+              },
+              ...[1, 2, 3, 4, 5].map((depth) => ({
+                value: String(depth),
+                label: String(depth),
+              })),
+              { value: "custom", label: "Custom…" },
+              { value: "reset", label: "Reset" },
+            ]);
+            if (!choice) break;
+            let value: number | undefined;
+            if (choice === "reset") value = undefined;
+            else if (choice === "custom") {
+              const input = await host.input(
+                ctx,
+                "Custom max Agent depth (positive integer)",
+              );
+              if (input === undefined) continue;
+              value = Number(input.trim());
+              if (
+                !/^\d+$/u.test(input.trim()) ||
+                !host.validMaxAgentDepth(value)
+              ) {
+                ctx.ui.notify("Enter a positive integer", "error");
+                continue;
+              }
+            } else
+              value =
+                choice === "default" ? DEFAULT_MAX_AGENT_DEPTH : Number(choice);
+            try {
+              host.updateConfig("maxAgentDepth", value);
+              ctx.ui.notify(
+                `Max Agent depth: ${value === undefined ? "reset" : value}`,
+              );
+              break;
+            } catch (error) {
+              ctx.ui.notify(
+                `Could not update max Agent depth: ${String(error)}`,
                 "error",
               );
             }

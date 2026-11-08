@@ -178,6 +178,7 @@ import {
   updateProjectOverride,
   updateConfig,
   validByteLimit,
+  validMaxAgentDepth,
   validStatusWidgetMaxRows,
 } from "./config.ts";
 import {
@@ -585,6 +586,7 @@ type TestProjectAssignmentLockHooks = {
     mailboxPath: string,
     request: import("./mailbox.ts").RequestRecord,
   ) => undefined;
+  afterManagedSessionIdentityInitialized?: () => void;
   removeProjectMessage?: typeof removeProjectMessage;
 };
 
@@ -1381,6 +1383,11 @@ function registerExtensionImpl(
       ) => leadRuntimes.supervisoryProfileBody(ctx, role),
       currentChiefAllowedTools: (ctx: ExtensionContext) =>
         leadRuntimes.currentChiefAllowedTools(ctx),
+      currentManagerAllowedTools: (ctx: ExtensionContext) =>
+        leadRuntimes.currentManagerAllowedTools(ctx),
+      reconcileRoleTools: () =>
+        leadRuntimes.roleTransitions.reconcileRoleTools(),
+      managerTools: MANAGER_TOOLS,
       isActiveManager: () =>
         activeRole() === "manager" && !leadRuntime.roleSuspended,
       isActiveLead: () => activeRole() === "lead",
@@ -1613,6 +1620,7 @@ function registerExtensionImpl(
       formatMessageLimit,
       validByteLimit,
       validStatusWidgetMaxRows,
+      validMaxAgentDepth,
       input: (ctx: ExtensionCommandContext, label: string) =>
         ctx.ui.input(label),
       updateSpawnPlacement: (placement: string) =>
@@ -1833,7 +1841,7 @@ function registerExtensionImpl(
       supervisorTool = {
         name: "message_supervisor",
         label: "message supervisor",
-        exposure: "model-only",
+        exposure: "direct",
         promptSnippet:
           "Send nonblocking material coordination to your direct supervisor",
         description:
@@ -1862,7 +1870,7 @@ function registerExtensionImpl(
       peerTool = {
         name: "message_peer",
         label: "message peer",
-        exposure: "model-only",
+        exposure: "direct",
         promptSnippet:
           "Discover same-role peers, including remote ordinary Leads, and reply through existing correspondences",
         description:
@@ -1886,7 +1894,7 @@ function registerExtensionImpl(
         name: "message_staff",
         label: "message staff",
         defaultActive: false,
-        exposure: "model-only" as const,
+        exposure: "direct" as const,
         promptSnippet:
           "Supervise direct reports; Managers may delegate new linked-worktree Leads",
         executionMode: "sequential" as const,
@@ -2205,6 +2213,8 @@ function registerExtensionImpl(
           appendDurableError(pi, ctx, "pi_herdsman_role_error", error),
       };
       const sessionStartOptions = {
+        afterManagedSessionIdentityInitialized:
+          lockHooks?.afterManagedSessionIdentityInitialized,
         rejectNativeAgentRestore: (ctx: ExtensionContext) => {
           const sessionId = ctx.sessionManager.getSessionId();
           try {
@@ -2486,7 +2496,7 @@ function registerExtensionImpl(
   pi.registerTool({
     name: "read_evidence",
     label: "Read accepted evidence",
-    exposure: "model-only",
+    exposure: "direct",
     description:
       "Read a bounded page from evidence accepted by this managed Agent.",
     parameters: Type.Object(

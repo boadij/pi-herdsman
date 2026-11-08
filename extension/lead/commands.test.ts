@@ -5,7 +5,11 @@ import {
   claimDelegationLock,
   visibleAgentSnapshots,
 } from "../agent-controller.ts";
-import { readConfig, validStatusWidgetMaxRows } from "../config.ts";
+import {
+  readConfig,
+  validMaxAgentDepth,
+  validStatusWidgetMaxRows,
+} from "../config.ts";
 import { fakeContext, WORKSPACE } from "../support.ts";
 import { createLeadCommandRuntime } from "./commands.ts";
 
@@ -75,6 +79,71 @@ test("status widget rows Settings validates choices and reports persistence erro
         notices.some(([, level]) => level !== "error"),
         false,
       );
+  }
+});
+
+test("max Agent depth Settings validates choices and reports persistence errors", async () => {
+  for (const scenario of [
+    { choices: ["4"], inputs: [], expected: [4], errors: 0 },
+    { choices: ["default"], inputs: [], expected: [2], errors: 0 },
+    {
+      choices: ["custom", "custom", "custom", "custom"],
+      inputs: ["0", "-1", "1.5", " 6 "],
+      expected: [6],
+      errors: 3,
+    },
+    { choices: ["reset"], inputs: [], expected: [undefined], errors: 0 },
+    {
+      choices: ["custom", undefined],
+      inputs: [undefined],
+      expected: [],
+      errors: 0,
+    },
+    {
+      choices: ["3", undefined],
+      inputs: [],
+      expected: [],
+      errors: 1,
+      fail: true,
+    },
+  ]) {
+    const choices = [...scenario.choices];
+    const inputs = [...scenario.inputs];
+    const updates: (number | undefined)[] = [];
+    const notices: [string, string | undefined][] = [];
+    let settings = 0;
+    const runtime = createLeadCommandRuntime({
+      readConfig,
+      validMaxAgentDepth,
+      selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
+        if (title === "Settings") {
+          assert.equal(
+            items.find((item) => item.value === "max-agent-depth").description,
+            "2",
+          );
+          return settings++ === 0 ? "max-agent-depth" : undefined;
+        }
+        return choices.shift();
+      },
+      input: async () => inputs.shift(),
+      updateConfig: (key: string, value: number | undefined) => {
+        assert.equal(key, "maxAgentDepth");
+        if (scenario.fail) throw new Error("disk failure");
+        updates.push(value);
+      },
+    } as any);
+    await runtime.openSettingsMenu({
+      isProjectTrusted: () => false,
+      ui: {
+        notify: (message: string, level?: string) =>
+          notices.push([message, level]),
+      },
+    } as any);
+    assert.deepEqual(updates, scenario.expected);
+    assert.equal(
+      notices.filter(([, level]) => level === "error").length,
+      scenario.errors,
+    );
   }
 });
 
@@ -475,6 +544,53 @@ test("Definitions retains the last selected Agent when returning to its list", a
       .filter(({ title }) => title === "Agents")
       .map(({ selected }) => selected),
     [undefined, "second"],
+  );
+});
+
+test("Definitions lists and displays misplaced-definition warnings without editing them", async () => {
+  const first = { name: "first", frontmatter: { name: "first" } } as any;
+  const warning =
+    "/agent/agents/manager.md: definition belongs in /agent/coordinators/manager.md; file excluded from discovery";
+  const menus: { title: string; items: any[] }[] = [];
+  const notices: [string, string | undefined][] = [];
+  const results = ["agents", "__definition_warnings__", undefined, undefined];
+  const runtime = createLeadCommandRuntime({
+    contextAgentDefinitions: async (
+      _ctx: unknown,
+      onWarning?: (message: string) => void,
+    ) => {
+      onWarning?.(warning);
+      return {
+        definitions: [first],
+        roleDefinitions: [],
+        projectTrusted: true,
+      };
+    },
+    selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
+      menus.push({ title, items });
+      return results.shift();
+    },
+    agentDefinitionEnabled: () => true,
+    getThinkingLevel: () => "high",
+  } as any);
+  await runtime.openDefinitionsMenu({
+    isProjectTrusted: () => false,
+    ui: {
+      notify: (message: string, level?: string) =>
+        notices.push([message, level]),
+    },
+  } as any);
+  const list = menus.find(({ title }) => title === "Agents")!;
+  assert.deepEqual(
+    list.items.map(({ value }) => value),
+    ["__definition_warnings__", "first"],
+  );
+  assert.match(list.items[0].label, /1 misplaced definition/u);
+  assert.equal(list.items[0].help, warning);
+  assert.deepEqual(notices, [[warning, "warning"]]);
+  assert.equal(
+    menus.some(({ title }) => title === "Agent: first"),
+    false,
   );
 });
 

@@ -126,6 +126,7 @@ import {
   terminalFailureAssignmentPoll,
   terminalFailureEvidence,
   matchPiProvenance,
+  assertContinuationFauxEvidence,
   managerHandoffLeadProcessProof,
   prepareManagerRepository,
   assertManagerFreshPrimary,
@@ -158,6 +159,8 @@ import {
   cleanup,
   requireSmokeEvidence,
   verifyCoreProvenanceEvidence,
+  assertDeepChainEvidence,
+  assertDescendantVisibility,
 } from "../scripts/smoke.mjs";
 
 test("preflight uses worktree Pi instead of a conflicting PATH executable", async () => {
@@ -2856,7 +2859,11 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
   assert.equal(initialPromptForScenario("manager-bootstrap", {}), undefined);
   for (const scenario of ["core", "continuation"])
     assert.equal(parseSmokeArgs([scenario, "--simulated"]).simulated, true);
-  for (const scenario of ["agent-terminal-failure", "manager-handoff"]) {
+  for (const scenario of [
+    "agent-terminal-failure",
+    "manager-handoff",
+    "deep-chain",
+  ]) {
     assert.equal(parseSmokeArgs([scenario, "--simulated"]).scenario, scenario);
     assert.throws(() => parseSmokeArgs([scenario]), /requires --simulated/);
   }
@@ -5580,6 +5587,60 @@ test("continuation completion wait tears down on abort, timeout, and filesystem 
   }
 });
 
+test("continuation root prompt waits for a session-backed idle or done Agent", async () => {
+  const source = await readFile(
+    new URL("../scripts/smoke.mjs", import.meta.url),
+    "utf8",
+  );
+  const start = source.indexOf("export async function promptContinuationRoot(");
+  const end = source.indexOf("\nasync function waitForNestedHerdr", start);
+  assert.ok(start >= 0 && end > start);
+  const implementation = source
+    .slice(start, end)
+    .trim()
+    .replace(/^export /u, "");
+  for (const status of ["idle", "done"]) {
+    const ctx = { rootPaneId: "w1:p1", initialPrompt: "same prompt" };
+    let polls = 0;
+    let prompted = false;
+    const run = new Function(
+      "waitForEvidence",
+      "tryNestedCommand",
+      "nestedCommand",
+      "CONTROL_STALL_MS",
+      `return (${implementation});`,
+    )(waitForEvidence, undefined, undefined, 1_000);
+    const list = async (_ctx, args) => {
+      assert.deepEqual(args, ["agent", "list"]);
+      polls++;
+      const agents =
+        polls === 1
+          ? []
+          : [
+              {
+                pane_id: "w1:p1",
+                agent_status: status,
+                ...(polls === 3
+                  ? { agent_session: { value: "" } }
+                  : polls >= 4
+                    ? { agent_session: { value: "session-id" } }
+                    : {}),
+              },
+            ];
+      return { ok: true, value: { agents } };
+    };
+    const prompt = async (_ctx, args) => {
+      assert.ok(polls >= 4, "prompt must follow the readiness poll");
+      assert.deepEqual(args, ["agent", "prompt", "w1:p1", "same prompt"]);
+      prompted = true;
+    };
+    const task = run(ctx, waitForEvidence, list, prompt);
+    await task;
+    assert.ok(polls >= 4, "unready rows must be polled again");
+    assert.equal(prompted, true);
+  }
+});
+
 test("evidence progress changes reset inactivity, identical evidence and read errors do not", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: 0 });
   let count = 0;
@@ -5774,6 +5835,76 @@ test("continuation installs the faux extension on the isolated implementer defin
   } finally {
     await rm(piAgent, { recursive: true, force: true });
   }
+});
+
+test("continuation requires configured faux extension and provider evidence for both generations", () => {
+  const sessionId = "saved-session";
+  const pids = [101, 202];
+  const starts = pids.map((pid) => ({ sessionId, pid }));
+  const provenance = pids.map((pid) => ({
+    sessionId,
+    pid,
+    model: "continuation",
+  }));
+  assert.doesNotThrow(() =>
+    assertContinuationFauxEvidence(starts, provenance, sessionId, pids),
+  );
+  assert.throws(
+    () =>
+      assertContinuationFauxEvidence(
+        starts.slice(0, 1),
+        provenance,
+        sessionId,
+        pids,
+      ),
+    /missing faux session_start evidence/,
+  );
+  assert.throws(
+    () =>
+      assertContinuationFauxEvidence(
+        starts,
+        provenance.slice(0, 1),
+        sessionId,
+        pids,
+      ),
+    /missing faux continuation provider request/,
+  );
+  assert.throws(
+    () =>
+      assertContinuationFauxEvidence(starts, provenance, sessionId, [101, 101]),
+    /distinct PIDs/,
+  );
+});
+
+test("continuation provider evidence wait polls until the second-generation request is recorded", async () => {
+  const ctx = {};
+  const sessionId = "saved-session";
+  const pid = 202;
+  const provenance = [{ sessionId, pid: 101, model: "continuation" }];
+  let inspections = 0;
+  const waitedPid = await waitForEvidence(
+    ctx,
+    "continuation-second-provider-request",
+    async () => {
+      inspections++;
+      if (inspections === 1)
+        setTimeout(
+          () => provenance.push({ sessionId, pid, model: "continuation" }),
+          5,
+        );
+      const found = provenance.some(
+        (record) =>
+          record.sessionId === sessionId &&
+          record.pid === pid &&
+          record.model === "continuation",
+      );
+      return { done: found, value: pid, progress: { found } };
+    },
+    { timeoutMs: 1_000, stallMs: 1_000, pollMs: 1 },
+  );
+  assert.equal(waitedPid, pid);
+  assert.ok(inspections > 1);
+  assert.equal(ctx.stage, "continuation-second-provider-request");
 });
 
 test("chief-tree startup prompt creates one ordinary Lead branch for harness controls", () => {
@@ -9511,4 +9642,211 @@ test("Manager removal variants target only the exact owned checkout without forc
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+const deepTool = { name: "delegate_agent", description: "", parameters: {} };
+const deepMessages = (task: string, withTool: boolean) => [
+  {
+    role: "system" as const,
+    content: "",
+    ...(withTool ? { toolsAdded: [deepTool] } : {}),
+    timestamp: 1,
+  },
+  { role: "user" as const, content: task, timestamp: 2 },
+];
+const firstToolCall = (message: any) =>
+  message.content.find((part: any) => part.type === "toolCall");
+
+test("deep-chain faux requires delegation below the limit and a leaf at it", () => {
+  const level2 = deepMessages("SMOKE_DEEP_LEVEL_2: go", true);
+  assert.equal(
+    firstToolCall(decideSmokeFaux("deep-chain", { messages: level2 })).arguments
+      .label,
+    "smoke-deep-3",
+  );
+  assert.throws(
+    () =>
+      decideSmokeFaux("deep-chain", {
+        messages: deepMessages("SMOKE_DEEP_LEVEL_2: go", false),
+      }),
+    /Depth 2 Agent must be able to delegate/,
+  );
+  // The leaf escalates to its owner first and finishes only after the reply.
+  const ask = decideSmokeFaux("deep-chain", {
+    messages: deepMessages("SMOKE_DEEP_LEVEL_4: go", false),
+  });
+  assert.equal(firstToolCall(ask).name, "ask_owner");
+  assert.equal(firstToolCall(ask).arguments.question, "SMOKE_DEEP_QUESTION");
+  // The depth-3 owner answers the leaf's delivered question.
+  const reply = decideSmokeFaux("deep-chain", {
+    messages: [
+      ...deepMessages("SMOKE_DEEP_LEVEL_3: go", true),
+      {
+        role: "assistant" as const,
+        content: [
+          {
+            type: "toolCall",
+            id: "d",
+            name: "delegate_agent",
+            arguments: { label: "smoke-deep-4" },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "delegate_agent",
+        toolCallId: "d",
+        content: [],
+      },
+      { role: "user", content: "Agent smoke-deep-4 asks: SMOKE_DEEP_QUESTION" },
+    ],
+  });
+  assert.equal(firstToolCall(reply).name, "reply_agent");
+  assert.throws(
+    () =>
+      decideSmokeFaux("deep-chain", {
+        messages: deepMessages("SMOKE_DEEP_LEVEL_4: go", true),
+      }),
+    /depth limit must be a leaf/,
+  );
+});
+
+const deepCall = (name: string, args: Record<string, unknown>) => [
+  {
+    type: "message",
+    message: {
+      role: "assistant",
+      content: [{ type: "toolCall", id: `c-${name}`, name, arguments: args }],
+    },
+  },
+  {
+    type: "message",
+    message: { role: "toolResult", toolCallId: `c-${name}`, content: [] },
+  },
+];
+const deepSession = (
+  id: string,
+  child?: { label: string; result: string },
+  extra: unknown[] = [],
+) => ({
+  id,
+  entries: child
+    ? [
+        ...extra,
+        { type: "session", id },
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: `call-${child.label}`,
+                name: "delegate_agent",
+                arguments: { label: child.label },
+              },
+            ],
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: `call-${child.label}`,
+            toolName: "delegate_agent",
+            content: [{ type: "text", text: "accepted" }],
+          },
+        },
+        {
+          type: "custom_message",
+          customType: "pi-herdsman-agent-result",
+          details: {
+            agentLabel: child.label,
+            status: "completed",
+            ownerSessionId: id,
+          },
+          content: `Agent result · agent=${child.label} · definition=${child.label} · status=completed\n\n${child.result}`,
+        },
+      ]
+    : [{ type: "session", id }, ...extra],
+});
+
+const deepAsk = () =>
+  deepCall("ask_owner", { question: "SMOKE_DEEP_QUESTION" });
+const deepReply = () =>
+  deepCall("reply_agent", {
+    agent: "smoke-deep-4",
+    message: "SMOKE_DEEP_ANSWER",
+  });
+const deepGood = (
+  leafResult = "L4:SMOKE_DEEP_LEAF",
+  reply = true,
+  ask = true,
+) => [
+  deepSession("s0", {
+    label: "smoke-deep-1",
+    result: "L1:L2:L3:L4:SMOKE_DEEP_LEAF",
+  }),
+  deepSession("s1", {
+    label: "smoke-deep-2",
+    result: "L2:L3:L4:SMOKE_DEEP_LEAF",
+  }),
+  deepSession("s2", {
+    label: "smoke-deep-3",
+    result: "L3:L4:SMOKE_DEEP_LEAF",
+  }),
+  deepSession(
+    "s3",
+    { label: "smoke-deep-4", result: leafResult },
+    reply ? deepReply() : [],
+  ),
+  deepSession("s4", undefined, ask ? deepAsk() : []),
+];
+
+test("deep-chain evidence needs one delegation per level, the escalation and the leaf marker", () => {
+  assert.deepEqual(assertDeepChainEvidence(deepGood()), [
+    "smoke-deep-1",
+    "smoke-deep-2",
+    "smoke-deep-3",
+    "smoke-deep-4",
+  ]);
+  assert.throws(
+    () => assertDeepChainEvidence(deepGood().slice(0, 4)),
+    /expected 5 Pi sessions/,
+  );
+  assert.throws(
+    () => assertDeepChainEvidence(deepGood("L4:WRONG")),
+    /leaf result must reach its owner/,
+  );
+  assert.throws(
+    () => assertDeepChainEvidence(deepGood(undefined, false)),
+    /owner must reply to the leaf's ask/,
+  );
+  assert.throws(
+    () => assertDeepChainEvidence(deepGood(undefined, true, false)),
+    /must escalate one ask_owner/,
+  );
+  assert.throws(
+    () =>
+      assertDeepChainEvidence([
+        ...deepGood().slice(0, 3),
+        deepSession("s3", {
+          label: "smoke-deep-3",
+          result: "L3:L4:SMOKE_DEEP_LEAF",
+        }),
+        deepSession("s4"),
+      ]),
+    /exactly one delegation per level/,
+  );
+});
+
+test("descendant visibility check requires every level to be seen in the root tree", () => {
+  const labels = ["a", "b", "c"];
+  assert.doesNotThrow(() =>
+    assertDescendantVisibility(labels, new Set(["a", "b", "c"])),
+  );
+  assert.throws(
+    () => assertDescendantVisibility(labels, new Set(["a"])),
+    /never shown in the root status tree.*: b, c/,
+  );
 });

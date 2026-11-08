@@ -206,6 +206,26 @@ the root lead. Pi clamps a thinking level to the selected model's capabilities.
 Fresh-delegation settings are snapshotted at launch; changing the controller
 does not change an active agent.
 
+On continuation, an omitted definition `model` uses the model selected in the
+saved Pi session; Herdsman does not pass that saved selection as a fresh
+command-line model. The continued Agent restores it from session history and
+checks it against the loaded model registry and Pi's active model before it
+observes requests or accepts work. If the history is ambiguous, the model is
+unavailable, or Pi selected a different model, startup fails rather than
+continuing with a different model. If resolving the saved model requires a
+provider registered by an extension, extension discovery remains enabled even
+when `noExtensions: true`. An explicit definition `model` takes precedence
+over saved history; if its provider is identified as extension-registered,
+extension discovery remains enabled even when `noExtensions: true`.
+
+The same saved-model check applies when a Manager restarts an assigned managed
+Lead with no explicit `managed-lead` model override. The Lead verifies the
+restored model before activating its inbox or preparing work; unresolved or
+mismatched restoration fails startup. A fresh, session- and generation-bound
+startup result is required for Manager readiness. An explicit `managed-lead`
+model override takes precedence over the saved selection. With no saved model,
+there is no saved-model comparison to perform.
+
 `enabled` controls Agent-definition availability. A disabled definition remains
 visible in the `/agents definitions` UI so it can be enabled again, but it is
 omitted from the runtime `agent_definitions` capability summary. A definition
@@ -317,14 +337,14 @@ Explicit `extensions` entries remain separate launch inputs and are passed to
 Pi normally. Launcher-injected infrastructure remains separate from the
 definition's extension and tool policy.
 
-One launch-derived exception applies, and only to an inherited model. Fresh
-delegation inherits the spawning controller's model, and when that model's
-provider is registered by an extension, discovery stays available for that
-launch even when `noExtensions` is `true`, because a child denied discovery
-cannot resolve a model whose provider only an extension supplies. A model
-pinned in the definition is passed to Pi as written and keeps the definition's
-own extension policy, so a definition that pins such a model must set
-`noExtensions: false` itself.
+Any selected model can require extension discovery even when
+`noExtensions: true`: this applies when its provider is positively identified
+as registered by an extension, whether the model is configured, inherited for
+fresh delegation, or restored on continuation. Configured model selectors are
+passed to Pi as written; Pi remains responsible for resolving them. On
+continuation, ambiguous or unavailable saved-model restoration fails closed.
+Enabling discovery follows Pi's normal extension-loading policy and may load
+other configured extensions, not only the model provider.
 
 ## Managed-agent coordination tools
 
@@ -337,8 +357,10 @@ tools: `list_agents`, `delegate_agent`, `continue_agent`, `steer_agent`,
 `interrupt_agent`, `reply_agent`, `stop_agent`, `inspect_agent`, and
 `read_agent_transcript`. Thus omitted `tools` permits delegation, and explicit
 ordinary tools permit it unless one of those opt-outs applies. An omitted or
-empty `agents` list always makes the agent a leaf. Every managed agent receives
-`ask_owner`.
+empty `agents` list always makes the agent a leaf, as does reaching the
+configured `maxAgentDepth` (see [Configuration](configuration.md)); the depth
+limit applies even to a definition that lists `agents`. Every managed agent
+receives `ask_owner`.
 
 The tool name `agent` is configuration-policy evidence only; it is not
 registered or callable. In `tools`, it opts into delegation when `noTools: true`

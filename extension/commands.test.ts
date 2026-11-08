@@ -2006,6 +2006,122 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
   }
 });
 
+test("registered Manager turn_end adapter reconciles late tools in the live policy", async () => {
+  setLeadEnvironment();
+  const managerOverride = join(PI_AGENT_ROOT, "coordinators", "manager.md");
+  mkdirSync(dirname(managerOverride), { recursive: true });
+  const previousOverride = realFs.existsSync(managerOverride)
+    ? readFileSync(managerOverride, "utf8")
+    : undefined;
+  process.env.HERDR_PANE_ID = "manager-late-tools-pane";
+  process.env.HERDR_TAB_ID = "manager-late-tools-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `manager-late-tools-${randomUUID()}.sock`,
+  );
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const pi = fakeRepositoryChiefPi({
+    activeTools: ["read", "bash"],
+    autoActivateRegisteredTools: true,
+    exec: (_command, args) =>
+      args[0] === "workspace" && args[1] === "get"
+        ? respond({ workspace: { worktree: { repo_key: "/tmp" } } })
+        : args[0] === "worktree" && args[1] === "list"
+          ? respond({
+              source: {
+                source_workspace_id: WORKSPACE,
+                repo_key: "/tmp",
+                repo_name: "project",
+              },
+              worktrees: [],
+            })
+          : isAgentList(args)
+            ? respond({ agents: [managerAgentIdentity()] })
+            : args[0] === "agent" && args[1] === "get"
+              ? respond({ agent: managerAgentIdentity() })
+              : isApiSnapshot(args)
+                ? respond({
+                    snapshot: { agents: [], panes: [], workspaces: [] },
+                  })
+                : respond({}),
+  });
+  const context = fakeContext(pi.entries) as any;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    const ordinaryBaseline = pi.pi.getActiveTools();
+    await pi.commandOptions.get("manager").handler("", context);
+
+    pi.pi.registerTool({ name: "late_unallowed" });
+    assert.ok(pi.pi.getActiveTools().includes("late_unallowed"));
+    await pi.events.get("before_agent_start")![0](
+      { systemPromptOptions: { sections: {} } },
+      context,
+    );
+    assert.ok(!pi.pi.getActiveTools().includes("late_unallowed"));
+    pi.pi.setActiveTools([...pi.pi.getActiveTools(), "late_unallowed"]);
+    assert.deepEqual(
+      pi.events.get("tool_call")![0]({ toolName: "late_unallowed" }, context),
+      {
+        block: true,
+        reason: "Tool is unavailable in the active Manager profile.",
+      },
+    );
+
+    writeFileSync(
+      managerOverride,
+      "---\nname: manager\ntools: [mcp__forgejo__get_issue_by_index]\n---\n",
+    );
+    await pi.commandOptions.get("manager").handler("refresh", context);
+    pi.pi.registerTool({ name: "mcp__forgejo__get_issue_by_index" });
+    await pi.events.get("before_agent_start")![0](
+      { systemPromptOptions: { sections: {} } },
+      context,
+    );
+    assert.ok(
+      pi.pi.getActiveTools().includes("mcp__forgejo__get_issue_by_index"),
+    );
+    assert.ok(!pi.pi.getActiveTools().includes("late_unallowed"));
+    assert.equal(
+      pi.events.get("tool_call")![0](
+        { toolName: "mcp__forgejo__get_issue_by_index" },
+        context,
+      ),
+      undefined,
+    );
+    const validTools = pi.pi.getActiveTools();
+    writeFileSync(managerOverride, "---\nname: manager\ntools: invalid\n---\n");
+    await pi.commandOptions.get("manager").handler("refresh", context);
+    assert.deepEqual(pi.pi.getActiveTools(), validTools);
+
+    pi.pi.registerTool({ name: "late_during_continuation" });
+    const turnEndHandlers = pi.events.get("turn_end") ?? [];
+    assert.equal(turnEndHandlers.length, 1);
+    // This handler was installed by registerExtension -> registerLeadRuntime;
+    // it must reach the production roleTransitions.reconcileRoleTools adapter.
+    await turnEndHandlers[0]!({}, context);
+    assert.ok(!pi.pi.getActiveTools().includes("late_during_continuation"));
+    assert.equal(sessionLeadRoleState(pi.entries)?.role, "manager");
+    await pi.commandOptions.get("manager").handler("leave", context);
+    assert.deepEqual(pi.pi.getActiveTools(), ordinaryBaseline);
+    assert.ok(!pi.pi.getActiveTools().includes("late_unallowed"));
+    assert.ok(!pi.pi.getActiveTools().includes("late_during_continuation"));
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    if (previousOverride === undefined)
+      rmSync(managerOverride, { force: true });
+    else writeFileSync(managerOverride, previousOverride);
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+  }
+});
+
 test("ordinary Leads deliver peer messages across non-Git sockets", async (t) => {
   setLeadEnvironment();
   const runtime = peerRuntime();
@@ -3651,6 +3767,14 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       leadPromptEvent.systemPromptOptions.sections.pi_herdsman_lead_execution,
       /Delegate bounded execution work when an Agent can reasonably own it/,
     );
+    assert.equal(
+      await first.events.get("tool_call")![0](
+        { toolName: "list_agents", input: {} },
+        ctx1,
+      ),
+      undefined,
+      "ordinary Lead retains its existing Agent coordination behavior",
+    );
     failManagerMetadata = true;
     failManagerRename = true;
     await first.commandOptions.get("manager").handler("", ctx1);
@@ -3780,12 +3904,16 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     assert.ok(managerContext);
     assert.deepEqual(managerContext.options, { triggerTurn: false });
-    assert.equal(
+    assert.deepEqual(
       await first.events.get("tool_call")![0](
         { toolName: "list_agents", input: {} },
         ctx1,
       ),
-      undefined,
+      {
+        block: true,
+        reason: "Tool is unavailable in the active Manager profile.",
+      },
+      "bundled Manager policy does not authorize Agent discovery",
     );
     const staff = first.tools.find((tool) => tool.name === "delegate_work");
     const resume = first.tools.find((tool) => tool.name === "resume_work");
@@ -9174,6 +9302,23 @@ async function managerDelegateAssignmentTest(
     ) {
       lockPhase = "manager-bind";
     }
+    if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
+      const state = readLeadCoordinationState(
+        supervisionRuntime(),
+        childSession,
+      );
+      assert.ok(state);
+      writeLeadCoordinationState(supervisionRuntime(), {
+        ...state,
+        updatedAt: Date.now(),
+        startupAttestation: {
+          kind: "model_restore",
+          assignmentId: childSession,
+          generation: state.instanceId,
+          result: "verified",
+        },
+      });
+    }
     return result;
   };
   const pi = fakeChiefPi({
@@ -9202,8 +9347,9 @@ async function managerDelegateAssignmentTest(
       }
     },
     afterOccupied: async (lockedRepo: string) => {
-      if (lockedRepo === repoKey && lockOrder === "lead-first")
+      if (lockedRepo === repoKey && lockOrder === "lead-first") {
         signalManagerWait();
+      }
     },
     afterAcquired: async (lockedRepo: string, branch: string) => {
       if (
@@ -17502,6 +17648,7 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
     "Context retirement  Global on · Effective on (global; untrusted project)",
     "Manager local merge  Global off",
     "Status widget rows  8",
+    "Max Agent depth  2",
     "Message limits",
     "Project overrides…",
   ]);
@@ -18129,6 +18276,7 @@ test("settings navigation exposes message limits and one rough token formatter",
       "Context retirement  Global on · Effective on (global; untrusted project)",
       "Manager local merge  Global off",
       "Status widget rows  8",
+      "Max Agent depth  2",
       "Message limits",
       "Project overrides…",
     ]);
@@ -18353,7 +18501,7 @@ test("message limit edits stay in the submenu with the edited field selected", a
           component.handleInput("\r");
           break;
         case 1:
-          for (let i = 0; i < 4; i++) component.handleInput("\u001b[B");
+          for (let i = 0; i < 5; i++) component.handleInput("\u001b[B");
           component.handleInput("\r");
           break;
         case 2:
@@ -21835,6 +21983,10 @@ test("Lead status child-row focus rechecks the exact Herdr session identity", as
 
 test("managed Lead marker focuses its verified Manager pane", async (t) => {
   setLeadEnvironment();
+  writeFileSync(
+    join(PI_AGENTS_DIR, "mcp-runner.md"),
+    "---\nname: mcp-runner\n---\n",
+  );
   process.env.HERDR_SOCKET_PATH = join(
     tmpdir(),
     `managed-marker-navigation-${randomUUID()}.sock`,
@@ -22761,6 +22913,131 @@ test("session-start roster uses current delegation policy and ignores superseded
     "unverified-root",
     "restored-manager-session",
   ]);
+});
+
+test("managed model-restore attestation survives Lead identity restoration and later writes", async () => {
+  const { createLeadSessionStartRuntime } = await import("./lead-runtime.ts");
+  const sessionId = "managed-session";
+  let instanceId = "initial-instance";
+  let startupAttestation:
+    | { kind: "model_restore"; assignmentId: string; generation: string }
+    | undefined;
+  let finalState: Record<string, unknown> = {};
+  const persistCoordinatorState = (attestation = startupAttestation) => {
+    finalState = {
+      instanceId,
+      ...(attestation?.assignmentId === sessionId &&
+      attestation.generation === instanceId
+        ? { startupAttestation: attestation }
+        : {}),
+    };
+  };
+  const host = {
+    diagnostic() {},
+    controller: {
+      abortSession() {},
+      clearPendingStarts() {},
+      beginSession: () => new AbortController().signal,
+      sessionStart() {},
+      recoverRuntimes: async () => undefined,
+      startHealthScanner() {},
+    },
+    leadInboxRuntime: { beginSession() {}, start() {} },
+    leadStatusRuntime: {
+      prepareSession() {},
+      prime() {},
+      setSnapshot() {},
+      start() {},
+      requestRefresh() {},
+    },
+    isRoot: () => true,
+    isManagedAgent: () => false,
+    clearLeadExecution() {},
+    setLeadExecutionPending() {},
+    hasLeadExecutionState: () => false,
+    clearDefinitionRoster() {},
+    clearChiefStartPreflight() {},
+    initializeSessionKind: async () => undefined,
+    verifyManagedLeadModelRestoration: async () => {
+      startupAttestation = {
+        kind: "model_restore",
+        assignmentId: sessionId,
+        generation: instanceId,
+      };
+      persistCoordinatorState(startupAttestation);
+    },
+    roleTransitions: {
+      beginSessionRole: () => ({
+        previousChiefMode: "inactive",
+        previousControllerRole: "lead",
+      }),
+      reconcileRoleTools() {},
+      canRestoreChiefState: () => true,
+      restoreChiefState() {
+        instanceId = "restored-instance";
+        persistCoordinatorState();
+        return true;
+      },
+      resolveControllerRole: async () => undefined,
+      finalizeOptionalManagerStartup() {
+        persistCoordinatorState();
+      },
+      activeManager: () => false,
+      shouldRestoreChief: () => false,
+      chiefModeActive: () => false,
+      chiefModeInactive: () => true,
+      canStartChiefInbox: () => false,
+      mayPublishLeadPresence: () => false,
+      currentRoleGeneration: () => 0,
+    },
+    sessionLeadRoleState: () => undefined,
+    normalizeBaseTools: (tools: string[]) => tools,
+    normalizeLeadTools: (tools: string[]) => tools,
+    setLeadTools() {},
+    activeTools: () => [],
+    failClosedRole: async (_ctx: unknown, error: unknown) => {
+      throw error;
+    },
+    publishLeadRole() {
+      persistCoordinatorState();
+    },
+    activateChief: async () => "",
+    restoreLeadExecution: async () => undefined,
+    enterSuspended() {},
+    enterLead() {},
+    schedulePeerPresence: async () => undefined,
+    herdRun: { restoreSession() {}, finishIfIdle() {} },
+    discoverSessionDefinitions: async () => ({
+      definitions: [],
+      roleDefinitions: [],
+      projectTrusted: true,
+    }),
+    prepareLeadExecution: async () => undefined,
+    queueLeadPresentation() {},
+    setOwnTools() {},
+    initialStatusBreadcrumb: () => [],
+    ownToolsSnapshot: () => ({}),
+    startSupervisionUI() {},
+    visibleAgentCapabilities: async () => [],
+    setDefinitionRoster() {},
+    appendRoleError() {},
+    appendDefinitionError() {},
+    autoActivateManager: () => true,
+  } as any;
+  const ctx = fakeContext() as any;
+  ctx.sessionManager = {
+    ...ctx.sessionManager,
+    getSessionId: () => sessionId,
+  };
+
+  await createLeadSessionStartRuntime(host).sessionStart(ctx);
+
+  assert.equal(finalState.instanceId, "restored-instance");
+  assert.deepEqual(finalState.startupAttestation, {
+    kind: "model_restore",
+    assignmentId: sessionId,
+    generation: "restored-instance",
+  });
 });
 
 test("TUI status refresh consumes the coherent Herdr session snapshot", async (t) => {

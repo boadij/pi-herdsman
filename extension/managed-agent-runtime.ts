@@ -42,6 +42,7 @@ import {
   AGENT_DEFINITION_ENTRY,
   DELEGATING_AGENT_SCOPE_DESCRIPTION,
   sessionAgentIdentity,
+  resolveSavedSessionModelSelection,
   validateManagedAgentControllerIdentity,
   validId,
   type Runtime,
@@ -855,6 +856,7 @@ export function createManagedAgentExecutionState() {
           outcome?: "completed" | "aborted" | "error";
           responseEntryId?: string;
           responseText?: string;
+          askOwnerCapacityError?: string;
         }
       | undefined,
     pendingResult: undefined as ResultRecord | undefined,
@@ -1568,7 +1570,7 @@ export function registerManagedAgentAttachHandoffTool(
   pi.registerTool({
     name: ATTACH_HANDOFF_TOOL,
     label: "Attach handoff evidence",
-    exposure: "model-only",
+    exposure: "direct",
     promptSnippet:
       "Select reusable results for this assignment's final handoff",
     description:
@@ -1619,7 +1621,7 @@ export function registerManagedAgentAskOwnerTool(
       "Ask this managed agent's direct owner for a required decision",
     promptGuidelines: [FILE_HANDOFF_GUIDANCE],
     description:
-      "Ask your direct owner for a decision that is required to continue. Call this alone as the final tool call of the turn, then stop and wait for the reply. Only one question may be outstanding.",
+      "Ask your direct owner for a decision that is required to continue. Call this alone as the final tool call of the turn. Wait for the reply only after the tool confirms the question was sent; if rejected, address the error or report a non-empty blocker. Only one question may be outstanding.",
     executionMode: "sequential",
     parameters: Type.Object(
       {
@@ -2434,7 +2436,10 @@ export function registerManagedAgentSettlementHandlers(
                   ? "Selected handoff evidence could not be verified"
                   : outcome === "error"
                     ? "Agent model execution failed"
-                    : "Agent produced no assistant text",
+                    : observation?.requestId === state.activeRequestId &&
+                        observation.askOwnerCapacityError
+                      ? `Agent produced no assistant text. Earlier in this execution, ask_owner rejected its attachments: ${observation.askOwnerCapacityError}. The question was not sent.`
+                      : "Agent produced no assistant text",
             },
           }),
       contextUsage: ctx.getContextUsage(),
@@ -2650,6 +2655,7 @@ export function registerManagedAgentRuntime(
       event.input.timeout = options.shellTimeoutSeconds;
   });
   const allowedAgentDefinitions = allowedAgentDefinitionsFromEnv();
+  const agentDepth = agentDepthFromEnv();
   const delegationEnabled = allowedAgentDefinitions.length > 0;
   let startupDefinitionRoster:
     { sessionId: string; definitions: Record<string, unknown>[] } | undefined;
@@ -2665,9 +2671,11 @@ export function registerManagedAgentRuntime(
             );
           return rootSessionId;
         },
+        managedAgentState: (ctx) => managedAgentControllerIdentity(ctx),
         scope: {
           kind: "managed-agent",
           allowedAgentDefinitions: new Set(allowedAgentDefinitions),
+          depth: agentDepth,
         },
         build: options.build,
       })
@@ -2676,6 +2684,7 @@ export function registerManagedAgentRuntime(
     const scope = {
       kind: "managed-agent" as const,
       allowedAgentDefinitions: new Set(allowedAgentDefinitions),
+      depth: agentDepth,
     };
     options.statusRuntime.configure({
       pendingStartEntries: () => controller.pendingStartEntries(),
@@ -3052,55 +3061,71 @@ export function registerManagedAgentRuntime(
       };
     },
   );
-  registerManagedAgentAskOwnerTool(
-    pi,
-    createManagedAgentAskOwnerHandler({
-      state: () => execution.assignment,
-      setState: (state) => {
-        execution.assignment = state;
-      },
-      sameIdentity: sameManagedAgentIdentity,
-      eligible: requestState.eligibleToAsk,
-      rejectionReason: requestState.askRejectionReason,
-      isSoleToolCall: (ctx) => currentTurnIsSoleToolCall(ctx, "ask_owner"),
-      messageLimits: options.messageLimits,
-      prepare: async (ctx, question, files, state, askId, createdAt, limits) =>
-        prepareMessageInput(
-          question,
-          options.resolveMessageFiles(ctx, files, "ask_owner"),
-          state.cwd,
+  const executeAskOwner = createManagedAgentAskOwnerHandler({
+    state: () => execution.assignment,
+    setState: (state) => {
+      execution.assignment = state;
+    },
+    sameIdentity: sameManagedAgentIdentity,
+    eligible: requestState.eligibleToAsk,
+    rejectionReason: requestState.askRejectionReason,
+    isSoleToolCall: (ctx) => currentTurnIsSoleToolCall(ctx, "ask_owner"),
+    messageLimits: options.messageLimits,
+    prepare: async (ctx, question, files, state, askId, createdAt, limits) =>
+      prepareMessageInput(
+        question,
+        options.resolveMessageFiles(ctx, files, "ask_owner"),
+        state.cwd,
+        "ask_owner",
+        "Question",
+        {
+          inlineLimitBytes: limits.inline.bytes,
+          mailboxLimitBytes: limits.mailbox.bytes,
+          requireInline: true,
+          serializedBytes: (text, bindings) =>
+            askRecordBytes(state, askId, text, createdAt, bindings),
+        },
+      ),
+    checkMailboxSize: (bytes, limit) => {
+      if (bytes > limit)
+        fail(
+          "invalid_request",
+          `Mailbox payload is ${bytes} bytes; configured limit is ${limit} bytes`,
           "ask_owner",
-          "Question",
-          {
-            inlineLimitBytes: limits.inline.bytes,
-            mailboxLimitBytes: limits.mailbox.bytes,
-            requireInline: true,
-            serializedBytes: (text, bindings) =>
-              askRecordBytes(state, askId, text, createdAt, bindings),
-          },
-        ),
-      checkMailboxSize: (bytes, limit) => {
-        if (bytes > limit)
-          fail(
-            "invalid_request",
-            `Mailbox payload is ${bytes} bytes; configured limit is ${limit} bytes`,
-            "ask_owner",
-          );
-      },
-      claimLock: (mailbox, state) =>
-        options.claimAssignmentLock(mailbox, "ask_owner", {
-          label: state.agentLabel,
-          paneId: state.paneId,
-        }),
-      readState: readAgentState,
-      writeState: writeAgentState,
-      writeAsk,
-      removeAsk: removeMailboxAsk,
-      latest: (value) => {
-        execution.latest = value;
-      },
-    }),
-  );
+          { details: { capacity: true } },
+        );
+    },
+    claimLock: (mailbox, state) =>
+      options.claimAssignmentLock(mailbox, "ask_owner", {
+        label: state.agentLabel,
+        paneId: state.paneId,
+      }),
+    readState: readAgentState,
+    writeState: writeAgentState,
+    writeAsk,
+    removeAsk: removeMailboxAsk,
+    latest: (value) => {
+      execution.latest = value;
+    },
+  });
+  registerManagedAgentAskOwnerTool(pi, async (...args) => {
+    const observation = execution.observation;
+    try {
+      return await executeAskOwner(...args);
+    } catch (error) {
+      if (
+        error instanceof OperationError &&
+        error.detail.operation === "ask_owner" &&
+        error.detail.details?.capacity === true &&
+        observation?.requestId &&
+        observation === execution.observation &&
+        execution.assignment?.activeRequestId === observation.requestId &&
+        !execution.assignment.pendingAskId
+      )
+        observation.askOwnerCapacityError = error.message.slice(0, 512);
+      throw error;
+    }
+  });
   const prepareDelegatingRoster = async (
     ctx: ExtensionContext,
   ): Promise<void> => {
@@ -3114,6 +3139,7 @@ export function registerManagedAgentRuntime(
           {
             kind: "managed-agent",
             allowedAgentDefinitions: new Set(allowedAgentDefinitions),
+            depth: agentDepth,
           },
         ),
       };
@@ -3459,6 +3485,21 @@ function parseAllowedAgentDefinitions(raw: string | undefined): string[] {
   return value;
 }
 
+function parseAgentDepth(raw: string | undefined): number {
+  // Agents started before depth tracking existed carry no depth and were
+  // always root-started, i.e. depth 1.
+  if (raw === undefined) return 1;
+  if (!/^[1-9][0-9]{0,8}$/.test(raw))
+    throw new Error(
+      "PI_HERDSMAN_DEPTH must be a positive integer; it is set by the launching Herdsman controller, so restart this Agent from its owner instead of editing the environment",
+    );
+  return Number(raw);
+}
+
+export function agentDepthFromEnv(): number {
+  return parseAgentDepth(process.env.PI_HERDSMAN_DEPTH);
+}
+
 export function allowedAgentDefinitionsFromEnv(): string[] {
   return parseAllowedAgentDefinitions(
     process.env.PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS,
@@ -3489,6 +3530,7 @@ export function managedAgentEnvironmentError(): string | undefined {
   if (!e.HERDR_PANE_ID?.trim()) return "HERDR_PANE_ID missing";
   try {
     parseAllowedAgentDefinitions(e.PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS);
+    parseAgentDepth(e.PI_HERDSMAN_DEPTH);
   } catch (error) {
     return String(error).replace(/^Error: /, "");
   }
@@ -3745,6 +3787,43 @@ export function registerManagedAgentSessionStartHandler(
         options.captureOwnTools(options.getActiveTools());
       options.ensureAgentIdentity(ctx);
       verified = candidate;
+      const restoreModel = process.env.PI_HERDSMAN_RESTORE_MODEL;
+      if (restoreModel) {
+        startupStage = "model_restore";
+        if (restoreModel !== "saved-session")
+          throw new Error(
+            "Cannot continue Agent: saved model expectation is invalid",
+          );
+        const selection = resolveSavedSessionModelSelection(
+          ctx.sessionManager,
+          (provider, modelId) => ctx.modelRegistry.find(provider, modelId),
+        );
+        const actual = ctx.model
+          ? { provider: ctx.model.provider, modelId: ctx.model.id }
+          : undefined;
+        if (selection.kind === "none")
+          throw new Error(
+            `Cannot continue Agent: saved model selection could not be recovered. Pi selected ${actual ? `${actual.provider}/${actual.modelId}` : "no model"}.`,
+          );
+        if (selection.kind === "unresolved")
+          throw new Error(
+            `Cannot continue Agent: saved model history is ambiguous (${selection.candidates.map((model) => `${model.provider}/${model.modelId}`).join(" vs ")}). Pi selected ${actual ? `${actual.provider}/${actual.modelId}` : "no model"}.`,
+          );
+        const expected = selection.model;
+        const available = ctx.modelRegistry.find(
+          expected.provider,
+          expected.modelId,
+        );
+        if (
+          !available ||
+          !actual ||
+          actual.provider !== expected.provider ||
+          actual.modelId !== expected.modelId
+        )
+          throw new Error(
+            `Cannot continue Agent: saved model ${expected.provider}/${expected.modelId} was not restored${available ? "" : " (unavailable in the loaded model registry)"}. Pi selected ${actual ? `${actual.provider}/${actual.modelId}` : "no model"}.`,
+          );
+      }
       const mailbox = process.env.PI_HERDSMAN_MAILBOX!;
       const existing = readAgentState(mailbox);
       if (existing && !options.sameIdentity(existing, candidate))
@@ -3977,7 +4056,10 @@ export function registerManagedAgentSessionStartHandler(
                 agentLabel: verified.agentLabel,
                 paneId: verified.paneId,
                 status: "failed",
-                error: "Managed Agent initialization failed",
+                error:
+                  startupStage === "model_restore"
+                    ? String(error).slice(0, 256)
+                    : "Managed Agent initialization failed",
                 stage: startupStage,
               });
           } finally {

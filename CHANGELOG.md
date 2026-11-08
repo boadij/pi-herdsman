@@ -1,22 +1,79 @@
 # Changelog
 
-## Unreleased
+## [0.42.1](https://github.com/boadij/pi-herdsman/compare/v0.42.0...v0.42.1) (2026-11-08)
+
+
+### Fixes
+
+* **agent:** retain ask_owner attachment errors in empty results ([#874](https://github.com/boadij/pi-herdsman/issues/874)) ([97ba8fc](https://github.com/boadij/pi-herdsman/commit/97ba8fc87fc30b3ccf9964e59526d6d3167ae9c3)), closes [#870](https://github.com/boadij/pi-herdsman/issues/870) [#871](https://github.com/boadij/pi-herdsman/issues/871)
+* **agent:** show nested descendants in the root status tree promptly ([#877](https://github.com/boadij/pi-herdsman/issues/877)) ([0f32d7e](https://github.com/boadij/pi-herdsman/commit/0f32d7e6a77d519e089f836159b4d0ccbedcc06c))
+
+
+### Documentation
+
+* guide agents to file evidence-grounded issues ([#875](https://github.com/boadij/pi-herdsman/issues/875)) ([2d9a90d](https://github.com/boadij/pi-herdsman/commit/2d9a90d982cb759a6ea0d806a20eb070a7d0a9c4))
+
+## [0.42.0](https://github.com/boadij/pi-herdsman/compare/v0.41.0...v0.42.0) (2026-11-07)
+
 
 ### Features
 
-* **config:** Edit Agent settings in the most specific existing definition
-  source, with explicit scope selection and source-local reset behavior.
-* **config:** Add a private repository definition overlay shared by trusted
-  linked worktrees in one clone (`bundled < global < trusted project < private
-  repository`).
+* **agents:** add a configurable maximum agent nesting depth ([#866](https://github.com/boadij/pi-herdsman/issues/866)) ([787601a](https://github.com/boadij/pi-herdsman/commit/787601a0faf35940f247d5e8c2ce031268491923))
 
-### Breaking changes
 
-* **config:** Trusted project Agent and role-profile definitions now override global definitions (`bundled < global < trusted project`). Projects may override global `enabled`, `tools`, `agents`, and `permission` values; review trusted project files accordingly.
-* **config:** Role profiles now use `pi-herdsman/roles/` under the Pi
-  agent directory and trusted project `.pi/`, separate from Agent definitions.
-  Move existing role overrides from `agents/` to `pi-herdsman/roles/` in the
-  same scope. Reserved role names in `agents/` are rejected.
+### Fixes
+
+* **agent:** preserve extension-backed models on continuation ([#864](https://github.com/boadij/pi-herdsman/issues/864)) ([8909d29](https://github.com/boadij/pi-herdsman/commit/8909d29e25aae6da8f8282310be1202864e98b86))
+* **manager:** enforce tool policy across late registration ([#868](https://github.com/boadij/pi-herdsman/issues/868)) ([2e189b2](https://github.com/boadij/pi-herdsman/commit/2e189b2e73844687cf46afcdcbe06ec43a5e6e82)), closes [#832](https://github.com/boadij/pi-herdsman/issues/832)
+
+
+### Other Changes
+
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.11.4 ([#873](https://github.com/boadij/pi-herdsman/issues/873)) ([c1fd32b](https://github.com/boadij/pi-herdsman/commit/c1fd32bc71646d1989222a9d626d1de5453ead7f))
+
+## [0.41.0](https://github.com/boadij/pi-herdsman/compare/v0.40.0...v0.41.0) (2026-11-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **agent:** rename close_agent to stop_agent ([#860](https://github.com/boadij/pi-herdsman/issues/860))
+
+### Fixes
+
+* **agent:** allow continuation after empty mailbox cleanup ([#847](https://github.com/boadij/pi-herdsman/issues/847)) ([83670d9](https://github.com/boadij/pi-herdsman/commit/83670d9eaa4e3f0da3d8e994d026ff49a79dc1f6)), closes [#842](https://github.com/boadij/pi-herdsman/issues/842)
+* **ci:** align test suite deadline across platforms ([#851](https://github.com/boadij/pi-herdsman/issues/851)) ([2c37524](https://github.com/boadij/pi-herdsman/commit/2c37524eacdeaafa263b9ffd2778291adead2956))
+* **container:** persist optional Compose deployment selections ([#863](https://github.com/boadij/pi-herdsman/issues/863)) ([330dac4](https://github.com/boadij/pi-herdsman/commit/330dac42155fe02601c178f6139839115b81e995))
+* detect non-repository folders on non-English locales ([#835](https://github.com/boadij/pi-herdsman/issues/835)) ([c34719b](https://github.com/boadij/pi-herdsman/commit/c34719b7cb511ca0082613908a3efa6e9b96930a))
+* **manager:** avoid speculative cross-lead coordination ([#859](https://github.com/boadij/pi-herdsman/issues/859)) ([ae49f01](https://github.com/boadij/pi-herdsman/commit/ae49f017353671be04f141f5696c3ca17829aecb)), closes [#858](https://github.com/boadij/pi-herdsman/issues/858)
+* **manager:** reject submodule-blocked removal before Lead shutdown ([#844](https://github.com/boadij/pi-herdsman/issues/844)) ([69ddb22](https://github.com/boadij/pi-herdsman/commit/69ddb220ce71c30d2bb54f66b9f029b567d8231f))
+* **manager:** remove verified worktrees without Pi session-file provenance ([#855](https://github.com/boadij/pi-herdsman/issues/855)) ([3886f89](https://github.com/boadij/pi-herdsman/commit/3886f89c3e17e6527e580a81f0a607a1655bf961)), closes [#854](https://github.com/boadij/pi-herdsman/issues/854)
+* **manager:** wait for assignment authority during delegation ([#848](https://github.com/boadij/pi-herdsman/issues/848)) ([b524e40](https://github.com/boadij/pi-herdsman/commit/b524e406201366fa58a352524a49c1dd53afb003)), closes [#845](https://github.com/boadij/pi-herdsman/issues/845)
+* **supervision:** consolidate managed Lead reporting guidance ([#856](https://github.com/boadij/pi-herdsman/issues/856)) ([3edf381](https://github.com/boadij/pi-herdsman/commit/3edf3813999a19dfba0f441db001ee2121eb91ca))
+* **trust:** preserve managed worktree trust through nested agents ([#852](https://github.com/boadij/pi-herdsman/issues/852)) ([68a04c0](https://github.com/boadij/pi-herdsman/commit/68a04c08c3676b1e0525a11732a0a869012b4ae6))
+* **types:** eliminate TypeScript and Oxlint diagnostics ([#836](https://github.com/boadij/pi-herdsman/issues/836)) ([833369d](https://github.com/boadij/pi-herdsman/commit/833369db84c82b1f1fc6e06f964bfec1b37860f6))
+
+
+### Refactoring
+
+* **agent:** rename close_agent to stop_agent ([#860](https://github.com/boadij/pi-herdsman/issues/860)) ([e04a708](https://github.com/boadij/pi-herdsman/commit/e04a708c1075d4bf62fc4dc5fdc72a4aea424e49))
+* **test:** remove verified Oxlint warnings ([#833](https://github.com/boadij/pi-herdsman/issues/833)) ([c83163b](https://github.com/boadij/pi-herdsman/commit/c83163b99ebd41a50c743944dc9a8c69f2eeb42a))
+* **trust:** inherit Manager trust for managed worktrees ([#857](https://github.com/boadij/pi-herdsman/issues/857)) ([0a4a233](https://github.com/boadij/pi-herdsman/commit/0a4a233d500cb023c57285a10462fadffc2a76ea))
+
+
+### Documentation
+
+* **agents:** include static quality in local validation gate ([#849](https://github.com/boadij/pi-herdsman/issues/849)) ([0060b7f](https://github.com/boadij/pi-herdsman/commit/0060b7f0f81d2dbaa7757754c9d722306d84f997))
+* showcase the simple Docker Compose deployment ([#862](https://github.com/boadij/pi-herdsman/issues/862)) ([1b4232f](https://github.com/boadij/pi-herdsman/commit/1b4232f0c093f7f335f6f85a73fe64f48b5bacef))
+
+
+### CI
+
+* enforce TypeScript and warning-free lint ([#837](https://github.com/boadij/pi-herdsman/issues/837)) ([062c09c](https://github.com/boadij/pi-herdsman/commit/062c09cd2c0cb9db74b2c50448be9f4094608825))
+
+
+### Other Changes
+
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.11.3 ([#839](https://github.com/boadij/pi-herdsman/issues/839)) ([25786f2](https://github.com/boadij/pi-herdsman/commit/25786f277a72abe59085a717b62d78f079040b8c))
 
 ## [0.40.0](https://github.com/boadij/pi-herdsman/compare/v0.39.0...v0.40.0) (2026-11-05)
 

@@ -70,11 +70,20 @@ for (const scenario of [
     };
     let startupReturnedAt: number | undefined;
     let agentStarted = false;
+    let startupRejected = false;
+    let rollbackPaneSettled = false;
     const pi = fakePi({
       exec: async (command, args, options) => {
         const operation = safeHerdrOperation(command, args);
         const startedAt = performance.now();
         try {
+          if (operation === "agent-list" && rollbackPaneSettled)
+            return {
+              stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
+              stderr: "",
+              code: 0,
+              killed: false,
+            };
           if (agentStarted && operation === "pane-process-info")
             return {
               stdout: JSON.stringify({
@@ -120,7 +129,10 @@ for (const scenario of [
               });
             if (scenario === "missing-state")
               realFs.unlinkSync(`${startup.mailbox}/state.json`);
+            startupRejected = true;
           }
+          if (operation === "pane-process-info" && startupRejected)
+            rollbackPaneSettled = true;
           return result;
         } finally {
           const finishedAt = performance.now();
