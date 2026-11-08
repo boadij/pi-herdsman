@@ -996,10 +996,7 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     ],
     ["reviewer", ["read", "ls", "find", "grep", "codemode"]],
     ["scout", ["read", "ls", "find", "grep", "codemode"]],
-    [
-      "generalist",
-      ["read", "bash", "powershell", "edit", "write", "codemode"],
-    ],
+    ["generalist", ["read", "bash", "powershell", "edit", "write", "codemode"]],
     ["validator", ["read", "bash", "powershell", "codemode"]],
   ]);
   const expectedDescriptions = new Map([
