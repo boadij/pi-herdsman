@@ -8365,7 +8365,9 @@ test("managed Lead prepares upgraded evidence while another process holds global
     false,
     true,
     false,
-    () => accepted++,
+    () => {
+      accepted++;
+    },
   );
   const pi = fakePi({
     exec: async (command: string, args: string[]) => {
@@ -8515,7 +8517,9 @@ test("managed Lead cancellation during final authority wait publishes and accept
     false,
     true,
     false,
-    () => accepted++,
+    () => {
+      accepted++;
+    },
   );
   let rollbackStopped = false;
   const pi = fakePi({
@@ -8776,7 +8780,9 @@ test("managed Lead keeps legacy evidence migration authority-locked and recovers
     false,
     true,
     false,
-    () => accepted++,
+    () => {
+      accepted++;
+    },
   );
   const pi = fakePi({
     exec: async (command: string, args: string[]) => {
