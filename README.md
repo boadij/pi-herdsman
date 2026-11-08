@@ -187,6 +187,9 @@ Questions, workflows, examples, and ideas are welcome in
 For reproducible bugs and concrete actionable work, use
 [GitHub Issues](https://github.com/boadij/pi-herdsman/issues).
 
+Thanks to everyone who improves Pi Herdsman through code, reports, and
+investigations. See [Community contributors](CONTRIBUTORS.md) for acknowledgments.
+
 ## License
 
 [Apache License 2.0](LICENSE)
