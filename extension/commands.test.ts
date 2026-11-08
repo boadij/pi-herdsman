@@ -9069,7 +9069,11 @@ async function managerDelegateAssignmentTest(
         ...leadTools,
         "mcp__",
       ]);
-      assert.equal(args[args.indexOf("--extension") + 1], "builtin:codemode");
+      assert.ok(
+        args.some((arg, index) =>
+          arg === "--extension" && args[index + 1] === "builtin:codemode",
+        ),
+      );
       const excludedIndex = args.indexOf("--exclude-tools");
       assert.notEqual(excludedIndex, -1);
       assert.equal(args[excludedIndex + 1], "mcp__");
