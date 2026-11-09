@@ -10252,11 +10252,7 @@ async function managerDelegateAssignmentTest(
             message.includes("Dedicated") || message.includes("Managed Leads"),
         ),
       );
-      assert.deepEqual(lead.pi.getActiveTools(), [
-        "read",
-        ...leadToolsWithoutAgents,
-        "read_evidence",
-      ]);
+      assert.deepEqual(lead.pi.getActiveTools(), []);
       unavailableScope = true;
       const unavailableNotices: string[] = [];
       leadCtx.ui.notify = (message: string) => unavailableNotices.push(message);
@@ -10264,11 +10260,7 @@ async function managerDelegateAssignmentTest(
       assert.ok(
         unavailableNotices.some((message) => message.includes("Managed Leads")),
       );
-      assert.deepEqual(lead.pi.getActiveTools(), [
-        "read",
-        ...leadToolsWithoutAgents,
-        "read_evidence",
-      ]);
+      assert.deepEqual(lead.pi.getActiveTools(), []);
       unavailableScope = false;
       leadCtx.mode = "rpc";
       let managedPresentation: string[] = [];
@@ -10303,17 +10295,9 @@ async function managerDelegateAssignmentTest(
         false,
         "retained checkout keeps both the assignment and Managed Lead tab label",
       );
-      assert.deepEqual(lead.pi.getActiveTools(), [
-        "read",
-        ...leadToolsWithoutAgents,
-        "read_evidence",
-      ]);
+      assert.deepEqual(lead.pi.getActiveTools(), []);
       await lead.commandOptions.get("lead").handler("orchestrate", leadCtx);
-      assert.deepEqual(lead.pi.getActiveTools(), [
-        "read",
-        ...leadToolsWithoutAgents,
-        "read_evidence",
-      ]);
+      assert.deepEqual(lead.pi.getActiveTools(), []);
       managedPresentation = [];
       await lead.commandOptions.get("herdsman").handler("", leadCtx);
       assert.ok(

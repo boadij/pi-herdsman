@@ -8098,6 +8098,37 @@ test("restricted Lead rejects nested tools outside its active profile", async ()
     currentLeadAllowedTools: () => undefined,
   } as any);
   assert.equal(inherited.toolCall({ toolName: "bash" }, ctx), undefined);
+  const managedExplicit = createLeadAgentEventRuntime({
+    isCurrentChief: () => false,
+    isActiveManager: () => false,
+    currentLeadAllowedTools: () => ["codemode", "list_agents"],
+  } as any);
+  assert.ok(
+    managedExplicit.toolCall(
+      { toolName: "bash", parentToolCallId: "nested" },
+      ctx,
+    )?.block,
+  );
+  const managedOverride = createLeadAgentEventRuntime({
+    isCurrentChief: () => false,
+    isActiveManager: () => false,
+    currentLeadAllowedTools: () => ["codemode", "bash"],
+  } as any);
+  assert.equal(managedOverride.toolCall({ toolName: "bash" }, ctx), undefined);
+  const invalidManaged = createLeadAgentEventRuntime({
+    isCurrentChief: () => false,
+    isActiveManager: () => false,
+    currentLeadAllowedTools: () => [],
+  } as any);
+  assert.ok(invalidManaged.toolCall({ toolName: "bash" }, ctx)?.block);
+  const unavailablePolicy = createLeadAgentEventRuntime({
+    isCurrentChief: () => false,
+    isActiveManager: () => false,
+    currentLeadAllowedTools: () => {
+      throw new Error("invalid managed policy");
+    },
+  } as any);
+  assert.ok(unavailablePolicy.toolCall({ toolName: "bash" }, ctx)?.block);
 });
 
 for (const concurrentInbox of [false, true]) {
