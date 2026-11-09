@@ -69,6 +69,7 @@ import {
   type BreadcrumbSegment,
   type FocusIntent,
 } from "./presentation.ts";
+import type { LocalHeaderActivity } from "./presentation.ts";
 import {
   publishScopedResult,
   resolveScopedResult,
@@ -323,6 +324,41 @@ export function buildAgentStatusSnapshot(
   };
 }
 
+export function observeLocalHeaderActivity(
+  pi: ExtensionAPI,
+  invalidate: () => void,
+): (ctx: ExtensionContext) => LocalHeaderActivity {
+  let promptSession: string | undefined;
+  pi.on("ui_prompt_start", (_event, ctx) => {
+    promptSession = ctx.sessionManager.getSessionId();
+    invalidate();
+  });
+  pi.on("ui_prompt_end", (_event, ctx) => {
+    if (promptSession === ctx.sessionManager.getSessionId())
+      promptSession = undefined;
+    invalidate();
+  });
+  pi.on("agent_start", invalidate);
+  pi.on("agent_settled", invalidate);
+  pi.on("session_start", () => {
+    promptSession = undefined;
+    invalidate();
+  });
+  pi.on("session_shutdown", () => {
+    promptSession = undefined;
+  });
+  return (ctx) => {
+    try {
+      if (ctx.isIdle()) return "idle";
+      return promptSession === ctx.sessionManager.getSessionId()
+        ? "blocked"
+        : "working";
+    } catch {
+      return "unknown";
+    }
+  };
+}
+
 export function createAgentStatusRuntime() {
   let options:
     | {
@@ -341,6 +377,7 @@ export function createAgentStatusRuntime() {
           import("./presentation.ts").GitChangeSummary | undefined;
         onFreshStatus?(ctx: ExtensionContext, snapshot: StatusSnapshot): void;
         onWidgetStop?(): void;
+        getLocalActivity?(ctx: ExtensionContext): LocalHeaderActivity;
       }
     | undefined;
   let statusWidget: ReturnType<typeof createStatusWidget> | undefined;
@@ -630,6 +667,7 @@ export function createAgentStatusRuntime() {
           },
           () => statusWidgetMaxRows,
           () => options?.getGitSummary?.(),
+          () => options?.getLocalActivity?.(ctx) ?? "unknown",
         );
         widget.setSnapshot(widgetSnapshot(presentedStatus, true));
         if (generation === statusGeneration && ctx === statusContext) {
