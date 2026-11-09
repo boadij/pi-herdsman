@@ -2543,30 +2543,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           parents.slice(1).map((parent) => ancestry(expectedHead, parent)),
         );
         if (!includesAcceptedSource.some(Boolean)) continue;
-        if (parents.length !== 2) return false;
-        const secondParent = parents[1]!;
-        const [preview, actualTree] = await Promise.all([
-          runGit(targetPath, [
-            "merge-tree",
-            "--write-tree",
-            firstParent,
-            secondParent,
-          ]),
-          runGit(targetPath, ["rev-parse", `${mergeHead}^{tree}`]),
-        ]);
-        const expectedTree = String(preview.stdout ?? "").trim();
-        const observedTree = String(actualTree.stdout ?? "").trim();
-        if (
-          preview.code !== 0 ||
-          preview.killed ||
-          preview.stderr?.trim() ||
-          actualTree.code !== 0 ||
-          actualTree.killed ||
-          actualTree.stderr?.trim() ||
-          !/^[0-9a-f]{40,64}$/i.test(expectedTree) ||
-          observedTree !== expectedTree
-        )
-          return false;
+        // A fresh merge-tree preview cannot prove what was checked before this retry.
+        return false;
       }
       return true;
     };

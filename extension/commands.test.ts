@@ -6624,6 +6624,7 @@ async function managerRemovalFixture(
     mergePreviewCode?: number;
     mergePreviewKilled?: boolean;
     mergeTree?: string;
+    mergeTreeSequence?: string[];
     divergentHead?: string;
     divergentTree?: string;
     integratedMergeLog?: string;
@@ -6709,6 +6710,7 @@ async function managerRemovalFixture(
   let allowDivergence = options.allowDivergence ?? false;
   let currentTargetHead = options.targetHead;
   let integratedHeadReads = 0;
+  let mergeTreeReads = 0;
   let targetBranchReads = 0;
   let leadRunning = options.runningLead ?? false;
   let leadPaneId = "child-pane";
@@ -6874,10 +6876,17 @@ async function managerRemovalFixture(
           if (options.revokeDivergenceAfterPreview) allowDivergence = false;
           if (options.targetAdvanceOnPreview)
             currentTargetHead = options.targetAdvanceOnPreview;
+          const mergeTreeSequence = options.mergeTreeSequence;
           return {
             code: options.mergePreviewCode ?? 0,
             killed: options.mergePreviewKilled,
-            stdout: options.mergeTree ?? `${"6".repeat(40)}\n`,
+            stdout: `${
+              mergeTreeSequence
+                ? mergeTreeSequence[
+                    Math.min(mergeTreeReads++, mergeTreeSequence.length - 1)
+                  ]
+                : (options.mergeTree ?? "6".repeat(40))
+            }\n`,
             stderr: options.mergePreviewCode === 1 ? "CONFLICT" : "",
           };
         }
@@ -7642,6 +7651,7 @@ test("retry of an unverified divergent merge cannot finalize by source ancestry 
     targetHead: firstParent,
     divergentHead: mergeHead,
     divergentTree: "9".repeat(40),
+    mergeTreeSequence: ["6".repeat(40), "9".repeat(40)],
     integratedMergeLog: `${mergeHead} ${firstParent} ${acceptedHead}\n`,
     integratedTargetCodes: [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0],
   });
@@ -7675,11 +7685,18 @@ test("retry of an unverified divergent merge cannot finalize by source ancestry 
   ]);
   assert.deepEqual(fixture.removals, []);
 
+  const previewsAfterFailure = fixture.gitCommands.filter(
+    (args) => args[0] === "merge-tree",
+  ).length;
   const retry = await integrate();
   assert.equal(retry.details.status, "blocked");
   assert.equal(
     retry.details.reason,
     "already_integrated_divergent_merge_unverified",
+  );
+  assert.equal(
+    fixture.gitCommands.filter((args) => args[0] === "merge-tree").length,
+    previewsAfterFailure,
   );
   assert.equal(fixture.gitMutations.length, 1);
   assert.deepEqual(fixture.removals, []);
