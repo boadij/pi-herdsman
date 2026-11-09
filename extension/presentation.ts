@@ -1120,6 +1120,59 @@ function formatGitChangeStats(git: GitChangeSummary): string {
     : "";
 }
 
+function formatGitHeaderNumeric(git: GitChangeSummary, theme: any): string {
+  const stats = formatGitChangeStats(git);
+  if (!stats) return "";
+  const lineChanges =
+    git.additions !== undefined &&
+    git.deletions !== undefined &&
+    git.additions + git.deletions > 0;
+  return [
+    lineChanges
+      ? themed(
+          theme,
+          git.additions! > 0 ? "success" : "muted",
+          `+${git.additions}`,
+        )
+      : themed(theme, "muted", stats),
+    lineChanges
+      ? ` ${themed(
+          theme,
+          git.deletions! > 0 ? "error" : "muted",
+          `-${git.deletions}`,
+        )}`
+      : "",
+    git.dirty ? themed(theme, "warning", "*") : "",
+  ].join("");
+}
+
+function formatGitHeaderSuffix(
+  git: GitChangeSummary,
+  theme: any,
+  width: number,
+): string {
+  const stats = formatGitChangeStats(git);
+  const numeric = stats ? `${stats}${git.dirty ? "*" : ""}` : "";
+  const styledNumeric = formatGitHeaderNumeric(git, theme);
+  const branch = git.checkedOutBranch ? `⎇ ${git.checkedOutBranch}` : "";
+  if (!branch)
+    return numeric && visibleWidth(numeric) <= width
+      ? styledNumeric
+      : !numeric && git.dirty && width >= 1
+        ? themed(theme, "warning", "*")
+        : "";
+  const dirtyMarker = !numeric && git.dirty ? "*" : "";
+  const branchWidth =
+    width -
+    (numeric ? visibleWidth(numeric) + 1 : 0) -
+    visibleWidth(dirtyMarker);
+  if (branchWidth < visibleWidth("⎇ …"))
+    return numeric && visibleWidth(numeric) <= width ? styledNumeric : "";
+  const shownBranch = truncateToWidth(branch, branchWidth, "…");
+  if (visibleWidth(shownBranch) > branchWidth) return "";
+  return `${themed(theme, "muted", shownBranch)}${dirtyMarker ? themed(theme, "warning", dirtyMarker) : ""}${numeric ? ` ${styledNumeric}` : ""}`;
+}
+
 type SupervisionRow = {
   text: string;
   label?: string;
@@ -1888,6 +1941,7 @@ export function createSupervisionWidget(
     getFrame?(): number;
   },
   getMaxRows: () => number = () => 8,
+  getHeaderGitSummary?: () => GitChangeSummary | undefined,
 ): {
   render(width: number): string[];
   handleMouse(event: {
@@ -1922,6 +1976,22 @@ export function createSupervisionWidget(
         undefined,
         getGitSummary,
       ).filter(({ text }, index) => index === 0 || text.length > 0);
+      if (role === "manager" && getStatus() === "fresh") {
+        const git = getHeaderGitSummary?.();
+        if (git && rows[0]) {
+          const header = rows[0].text;
+          const suffix = formatGitHeaderSuffix(
+            git,
+            theme,
+            width - visibleWidth(header) - 2,
+          );
+          if (
+            suffix &&
+            visibleWidth(header) + 2 + visibleWidth(suffix) <= width
+          )
+            rows[0]!.text = `${header}${" ".repeat(width - visibleWidth(header) - visibleWidth(suffix))}${suffix}`;
+        }
+      }
       const agentRows: (SupervisionRow & { origin?: "agent" })[] = [];
       if (showAgents && snapshot) {
         const freshness = snapshot.unavailable
@@ -4919,37 +4989,30 @@ export class StatusWidget {
         ? `${this.theme.fg("success", "●")} ${this.theme.fg("warning", "stale")}`
         : builtHeader;
     let header = truncateToWidth(compactStaleHeader, availableWidth, "…");
+    const observedGit =
+      !s.stale && !s.unavailable ? this.getGitSummary?.() : undefined;
     const gitSummary =
-      !s.stale &&
-      !s.unavailable &&
+      observedGit &&
       s.execution?.kind === "managed" &&
-      s.execution.lifecycle === "assigned"
-        ? this.getGitSummary?.()
-        : undefined;
+      s.execution.lifecycle !== "assigned"
+        ? observedGit.checkedOutBranch
+          ? {
+              dirty: observedGit.dirty,
+              checkedOutBranch: observedGit.checkedOutBranch,
+            }
+          : undefined
+        : observedGit;
     if (gitSummary) {
-      const stats = formatGitChangeStats(gitSummary);
-      const gitText = `${stats}${gitSummary.dirty ? "*" : ""}`;
-      const lineChanges =
-        gitSummary.additions !== undefined &&
-        gitSummary.deletions !== undefined &&
-        gitSummary.additions + gitSummary.deletions > 0;
-      const gitSuffix = [
-        lineChanges
-          ? this.theme.fg(
-              gitSummary.additions > 0 ? "success" : "muted",
-              `+${gitSummary.additions}`,
-            )
-          : stats
-            ? this.theme.fg("muted", stats)
-            : "",
-        lineChanges
-          ? ` ${this.theme.fg(gitSummary.deletions > 0 ? "error" : "muted", `-${gitSummary.deletions}`)}`
-          : "",
-        gitSummary.dirty ? this.theme.fg("warning", "*") : "",
-      ].join("");
-      const gitWidth = visibleWidth(gitText);
-      if (gitWidth && visibleWidth(header) + 2 + gitWidth <= availableWidth)
-        header = `${header}${" ".repeat(availableWidth - visibleWidth(header) - gitWidth)}${gitSuffix}`;
+      const suffix = formatGitHeaderSuffix(
+        gitSummary,
+        this.theme,
+        availableWidth - visibleWidth(header) - 2,
+      );
+      if (
+        suffix &&
+        visibleWidth(header) + 2 + visibleWidth(suffix) <= availableWidth
+      )
+        header = `${header}${" ".repeat(availableWidth - visibleWidth(header) - visibleWidth(suffix))}${suffix}`;
     }
     const out = [header];
     if (s.identityOnly) return out;
