@@ -305,6 +305,7 @@ type LeadRoleTransitionHost = LeadTransitionHost & {
   captureInheritedTools?(): void;
   inheritedProjection?():
     { mode: LeadExecutionMode; excluded: readonly string[] } | undefined;
+  isManagedSession?(): boolean;
   setInheritedProjection?(
     projection:
       { mode: LeadExecutionMode; excluded: readonly string[] } | undefined,
@@ -914,6 +915,129 @@ type LeadStatusRuntime = ReturnType<typeof createAgentStatusRuntime>;
 type LeadHerdRunRuntime = ReturnType<typeof createLeadHerdRunRuntime>;
 type LeadProjectRuntime = ReturnType<typeof createLeadProjectRuntime>;
 
+type GitRunner = (cwd: string, args: string[]) => Promise<string>;
+
+async function observeGitChangeSummary(
+  git: GitRunner,
+  checkoutPath: string,
+  repoKey: string,
+  comparisonHead: () => Promise<string>,
+): Promise<GitChangeSummary | undefined> {
+  const root = (
+    await git(checkoutPath, ["rev-parse", "--show-toplevel"])
+  ).trim();
+  const common = resolve(
+    checkoutPath,
+    (await git(checkoutPath, ["rev-parse", "--git-common-dir"])).trim(),
+  );
+  if (!sameDirectory(root, checkoutPath) || !sameDirectory(common, repoKey))
+    return undefined;
+  const status = (
+    await git(checkoutPath, [
+      "--no-optional-locks",
+      "status",
+      "--porcelain=v2",
+      "--branch",
+      "-z",
+      "--untracked-files=normal",
+    ])
+  ).split("\0");
+  let headerEnd = 0;
+  const headers = new Map<string, string>();
+  while (headerEnd < status.length && status[headerEnd]?.startsWith("# ")) {
+    const match = /^# (branch\.(?:head|oid)) (.*)$/u.exec(status[headerEnd]!);
+    if (match) headers.set(match[1]!, match[2]!);
+    headerEnd++;
+  }
+  const leadHead = headers.get("branch.oid");
+  const branchHead = headers.get("branch.head");
+  if (!branchHead || !leadHead || !/^[0-9a-f]{40,64}$/iu.test(leadHead))
+    return undefined;
+  const checkedOutBranch =
+    branchHead === "(detached)" ? "detached" : branchHead;
+  if (
+    checkedOutBranch === "(unknown)" ||
+    !/^(?:detached|[^\s\0]+)$/u.test(checkedOutBranch)
+  )
+    return undefined;
+  const dirty = status.slice(headerEnd).some((entry) => entry.length > 0);
+  let additions: number | undefined;
+  let deletions: number | undefined;
+  let changedFiles: number | undefined;
+  let comparisonSha: string | undefined;
+  try {
+    const head = (await comparisonHead()).trim();
+    if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(head)) {
+      const bases = (
+        await git(checkoutPath, ["merge-base", "--all", head, leadHead])
+      )
+        .trim()
+        .split(/\s+/u);
+      if (
+        bases.length === 1 &&
+        /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(bases[0]!)
+      )
+        comparisonSha = bases[0];
+    }
+  } catch {
+    // Status remains useful without a numeric comparison.
+  }
+  if (comparisonSha) {
+    try {
+      const output = await git(checkoutPath, [
+        "--no-optional-locks",
+        "diff",
+        "--numstat",
+        "-z",
+        "--find-renames",
+        comparisonSha,
+        "--",
+      ]);
+      const records = output.split("\0");
+      let valid = output === "" || output.endsWith("\0");
+      if (valid) records.pop();
+      let added = 0,
+        deleted = 0,
+        files = 0;
+      for (let i = 0; valid && i < records.length;) {
+        const match = /^(\d+|-)\t(\d+|-)\t(.*)$/su.exec(records[i++]!);
+        if (!match) {
+          valid = false;
+          break;
+        }
+        const [, a, d, path] = match;
+        if (!path && (!records[i++] || !records[i++])) {
+          valid = false;
+          break;
+        }
+        if (a === "-" && d === "-") {
+          files++;
+          continue;
+        }
+        if (!/^\d+$/u.test(a!) || !/^\d+$/u.test(d!)) {
+          valid = false;
+          break;
+        }
+        added += Number(a);
+        deleted += Number(d);
+        files++;
+        if (!Number.isSafeInteger(added) || !Number.isSafeInteger(deleted)) {
+          valid = false;
+          break;
+        }
+      }
+      if (valid) {
+        additions = added;
+        deletions = deleted;
+        changedFiles = files;
+      }
+    } catch {
+      // A valid status observation remains useful when the optional diff fails.
+    }
+  }
+  return { dirty, additions, deletions, changedFiles, checkedOutBranch };
+}
+
 export function createLeadShutdownRuntime(host: {
   roleTransitions: Pick<
     LeadRoleTransitionRuntime,
@@ -1478,6 +1602,13 @@ export function createLeadAgentEventRuntime(host: {
         sections.pi_herdsman_role = host.roleCharter(ctx);
         return;
       }
+      try {
+        if (host.currentLeadAllowedTools?.() !== undefined)
+          host.reconcileRoleTools?.();
+      } catch (error) {
+        host.setActiveTools([]);
+        throw error;
+      }
       const activeLead = host.isActiveLead() && !host.isRoleSuspended();
       const supervisorStateMessage = activeLead
         ? await host.prepareLeadSupervisorStateMessage(ctx)
@@ -1600,6 +1731,8 @@ export function registerLeadRuntime(
     | { mode: LeadExecutionMode; valid: false; managed: boolean }
     | undefined;
   let sessionKind: SessionKindEntry | undefined;
+  let verifiedManagedAssignment:
+    { sessionId: string; assignment: ProjectAssignment } | undefined;
   let managedLifecycle: "assigned" | "unavailable" | "retired" = "unavailable";
   let assignmentVerificationGeneration = 0;
   let leadExecutionPending = false;
@@ -2406,19 +2539,35 @@ export function registerLeadRuntime(
       return restrictLeadAgentTools(tools, policy, leadRuntime.leadContext);
     };
     if (!sessionKind) return [];
-    if (sessionKind.kind === "managed" && managedLifecycle !== "assigned")
-      return leadRuntime.leadContext
+    const managedRecoveryTools = () =>
+      leadRuntime.leadContext
         ? ownedAgentManagementTools(leadRuntime.leadContext)
         : [];
-    if (leadExecutionPending)
-      return restrict(leadToolState.normalizeLeadTools([]));
-    if (sessionKind.kind === "managed")
+    if (sessionKind.kind === "managed") {
+      if (
+        managedLifecycle !== "assigned" ||
+        leadRuntime.roleSuspended ||
+        leadRuntime.chiefMode === "suspended" ||
+        leadExecutionPending ||
+        !leadExecution?.valid ||
+        !leadExecution.managed
+      )
+        return managedRecoveryTools();
+      const definition = leadExecution.definition;
+      const managedBaseline =
+        definition.frontmatter.noTools === true &&
+        definition.frontmatter.tools === undefined
+          ? []
+          : baseline;
       return restrict(
         leadToolState.appendRegisteredTools(
-          leadToolState.normalizeLeadTools(baseline),
+          leadToolState.projectLeadTools(managedBaseline, definition),
           ["read_evidence"],
         ),
       );
+    }
+    if (leadExecutionPending)
+      return restrict(leadToolState.normalizeLeadTools([]));
     if (!leadExecution)
       return restrict(leadToolState.normalizeLeadTools(baseline));
     if (!leadExecution.valid)
@@ -2448,6 +2597,7 @@ export function registerLeadRuntime(
   > = { kind: "root" };
   const roleTransitionServices = {
     ...roleHost,
+    isManagedSession: () => sessionKind?.kind === "managed",
     prepareSupervisoryProfile,
     commitSupervisoryProfile,
     currentSupervisoryProfile,
@@ -2990,9 +3140,16 @@ export function registerLeadRuntime(
     if (isLead && sessionKind?.kind === "managed") {
       const previous = managedLifecycle;
       try {
-        await currentProjectAssignment(ctx);
-      } catch {}
+        const assignment = await currentProjectAssignment(ctx);
+        verifiedManagedAssignment = assignment
+          ? { sessionId: sessionKind.sessionId, assignment }
+          : undefined;
+      } catch {
+        verifiedManagedAssignment = undefined;
+      }
       if (previous !== managedLifecycle) roleTransitions.reconcileRoleTools();
+    } else {
+      verifiedManagedAssignment = undefined;
     }
     const snapshot = buildAgentStatusSnapshot(view, ctx, {
       ...options.statusSnapshotHost,
@@ -3124,6 +3281,153 @@ export function registerLeadRuntime(
       },
     );
   };
+  type ManagedGitIdentity = {
+    sessionId: string;
+    repoKey: string;
+    branch: string;
+    checkoutPath: string;
+  };
+  let managedGitCache:
+    { identity: ManagedGitIdentity; summary: GitChangeSummary } | undefined;
+  let managedGitLastAttemptAt = 0;
+  let managedGitSampling: Promise<void> | undefined;
+  let managedGitAbort: AbortController | undefined;
+  let managedGitGeneration = 0;
+  let managedGitIdentity: ManagedGitIdentity | undefined;
+  const cancelManagedGitSampling = (resetRate = true): void => {
+    managedGitGeneration++;
+    managedGitAbort?.abort();
+    managedGitAbort = undefined;
+    managedGitSampling = undefined;
+    managedGitCache = undefined;
+    managedGitIdentity = undefined;
+    if (resetRate) managedGitLastAttemptAt = 0;
+  };
+  const sameManagedGitIdentity = (
+    left: ManagedGitIdentity,
+    right: ManagedGitIdentity,
+  ): boolean =>
+    left.sessionId === right.sessionId &&
+    left.repoKey === right.repoKey &&
+    left.branch === right.branch &&
+    sameDirectory(left.checkoutPath, right.checkoutPath);
+  const sampleManagedGit = (
+    ctx: ExtensionContext,
+    snapshot: StatusSnapshot,
+  ): void => {
+    const verified = verifiedManagedAssignment;
+    const sessionId = ctx.sessionManager.getSessionId();
+    const assignment = verified?.assignment;
+    if (
+      activeLeadRole(leadRuntime) !== "lead" ||
+      !sessionKind ||
+      sessionKind.kind !== "managed" ||
+      sessionKind.sessionId !== sessionId ||
+      snapshot.stale ||
+      snapshot.unavailable ||
+      snapshot.execution?.kind !== "managed" ||
+      snapshot.execution.lifecycle !== "assigned" ||
+      managedLifecycle !== "assigned" ||
+      verified?.sessionId !== sessionId ||
+      !assignment ||
+      !statusRuntime.isWidgetActive()
+    ) {
+      cancelManagedGitSampling();
+      return;
+    }
+    const identity: ManagedGitIdentity = {
+      sessionId,
+      repoKey: assignment.repoKey,
+      branch: assignment.branch,
+      checkoutPath: ctx.cwd,
+    };
+    if (
+      managedGitIdentity &&
+      !sameManagedGitIdentity(managedGitIdentity, identity)
+    )
+      cancelManagedGitSampling();
+    managedGitIdentity = identity;
+    if (
+      managedGitCache &&
+      !sameManagedGitIdentity(managedGitCache.identity, identity)
+    )
+      managedGitCache = undefined;
+    if (managedGitSampling) return;
+    if (Date.now() - managedGitLastAttemptAt < 30_000) return;
+    managedGitLastAttemptAt = Date.now();
+    const generation = ++managedGitGeneration;
+    const abort = new AbortController();
+    managedGitAbort = abort;
+    const contextSignal = ctx.signal;
+    const abortFromContext = () => abort.abort(contextSignal?.reason);
+    contextSignal?.addEventListener("abort", abortFromContext, { once: true });
+    const deadline = setTimeout(() => abort.abort(), 15_000);
+    deadline.unref?.();
+    const stillCurrent = (): boolean => {
+      const latest = statusRuntime.getSnapshot();
+      const currentAssignment = verifiedManagedAssignment;
+      return (
+        generation === managedGitGeneration &&
+        statusRuntime.isWidgetActive() &&
+        activeLeadRole(leadRuntime) === "lead" &&
+        sessionKind?.sessionId === identity.sessionId &&
+        ctx.sessionManager.getSessionId() === identity.sessionId &&
+        managedLifecycle === "assigned" &&
+        currentAssignment?.sessionId === identity.sessionId &&
+        currentAssignment.assignment.repoKey === identity.repoKey &&
+        currentAssignment.assignment.branch === identity.branch &&
+        sameDirectory(ctx.cwd, identity.checkoutPath) &&
+        !latest.stale &&
+        !latest.unavailable &&
+        latest.execution?.kind === "managed" &&
+        latest.execution.lifecycle === "assigned" &&
+        managedGitIdentity !== undefined &&
+        sameManagedGitIdentity(managedGitIdentity, identity)
+      );
+    };
+    const current = (): boolean => !abort.signal.aborted && stillCurrent();
+    const git: GitRunner = async (cwd, args) => {
+      if (!current()) throw new Error("Git sampling cancelled");
+      const result = await pi.exec("git", args, {
+        cwd,
+        signal: abort.signal,
+        timeout: 3_000,
+      });
+      if (!current() || result.code !== 0 || result.killed)
+        throw new Error("Git observation unavailable");
+      return String(result.stdout ?? "");
+    };
+    const sampling = (async () => {
+      let summary: GitChangeSummary | undefined;
+      try {
+        summary = await observeGitChangeSummary(
+          git,
+          identity.checkoutPath,
+          identity.repoKey,
+          async () =>
+            git(identity.checkoutPath, [
+              "rev-parse",
+              "--verify",
+              "main-worktree/HEAD^{commit}",
+            ]),
+        );
+      } catch {
+        // Optional Git telemetry must not affect the managed Lead status.
+      }
+      if (!stillCurrent()) return;
+      managedGitCache =
+        summary && !abort.signal.aborted ? { identity, summary } : undefined;
+      statusRuntime.invalidateWidget();
+    })().finally(() => {
+      clearTimeout(deadline);
+      contextSignal?.removeEventListener("abort", abortFromContext);
+      if (managedGitSampling === sampling) {
+        managedGitSampling = undefined;
+        if (managedGitAbort === abort) managedGitAbort = undefined;
+      }
+    });
+    managedGitSampling = sampling;
+  };
   statusRuntime.configure({
     ...options.statusSnapshotHost,
     pendingStartEntries: () => controller.pendingStartEntries(),
@@ -3134,6 +3438,24 @@ export function registerLeadRuntime(
       loadStatusSnapshot(ctx, controller.sessionSignal(), false),
     runtimeForLabel: (label: string) => controller.runtimeForLabel(label),
     focusTarget,
+    getGitSummary: () => {
+      const snapshot = statusRuntime.getSnapshot();
+      const verified = verifiedManagedAssignment;
+      const identity = managedGitCache?.identity;
+      return identity &&
+        !snapshot.stale &&
+        !snapshot.unavailable &&
+        snapshot.execution?.kind === "managed" &&
+        snapshot.execution.lifecycle === "assigned" &&
+        identity.sessionId === sessionKind?.sessionId &&
+        verified?.sessionId === identity.sessionId &&
+        verified.assignment.repoKey === identity.repoKey &&
+        verified.assignment.branch === identity.branch
+        ? managedGitCache?.summary
+        : undefined;
+    },
+    onFreshStatus: sampleManagedGit,
+    onWidgetStop: () => cancelManagedGitSampling(),
   });
   let projectRuntime: ReturnType<typeof createLeadProjectRuntime>;
   const projectHost = options.projectHost;
@@ -3939,15 +4261,38 @@ export function registerLeadRuntime(
   };
   const agentEvents = createLeadAgentEventRuntime({
     ...options.agentEventOptions,
-    currentLeadAllowedTools: () =>
-      activeLeadRole(leadRuntime) === "lead" &&
-      !leadRuntime.roleSuspended &&
-      leadExecution &&
-      !leadExecution.managed &&
-      (!leadExecution.valid ||
-        leadExecution.definition.frontmatter.tools !== undefined)
+    currentLeadAllowedTools: () => {
+      if (sessionKind?.kind === "managed") {
+        if (
+          managedLifecycle !== "assigned" ||
+          leadExecutionPending ||
+          leadRuntime.roleSuspended ||
+          leadRuntime.chiefMode === "suspended" ||
+          !leadExecution?.valid ||
+          !leadExecution.managed
+        )
+          return executionTools();
+        const policy = leadExecution.definition.frontmatter;
+        return policy.tools !== undefined ||
+          (policy.excludeTools?.length ?? 0) > 0 ||
+          policy.noTools === true
+          ? executionTools()
+          : undefined;
+      }
+      if (
+        activeLeadRole(leadRuntime) !== "lead" ||
+        leadRuntime.roleSuspended ||
+        !leadExecution ||
+        leadExecution.managed
+      )
+        return undefined;
+      if (!leadExecution.valid) return executionTools();
+      const policy = leadExecution.definition.frontmatter;
+      return policy.tools !== undefined ||
+        (policy.excludeTools?.length ?? 0) > 0
         ? executionTools()
-        : undefined,
+        : undefined;
+    },
     executionPrompt: () =>
       leadExecution && !leadExecution.managed && leadExecution.valid
         ? leadExecution.definition.body
@@ -5144,155 +5489,28 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           const work = item.work;
           const checkoutPath = work.checkoutPath!;
           try {
-            if (
-              !(await identity(
-                checkoutPath,
-                host.state.managerLease!.descriptor.repoKey,
-              ))
-            )
-              continue;
-            const status = (
-              await git(checkoutPath, [
-                "--no-optional-locks",
-                "status",
-                "--porcelain=v2",
-                "--branch",
-                "-z",
-                "--untracked-files=normal",
-              ])
-            ).split("\0");
-            let headerEnd = 0;
-            const headers = new Map<string, string>();
-            while (
-              headerEnd < status.length &&
-              status[headerEnd]?.startsWith("# ")
-            ) {
-              const match = /^# (branch\.(?:head|oid)) (.*)$/u.exec(
-                status[headerEnd]!,
-              );
-              if (match) headers.set(match[1]!, match[2]!);
-              headerEnd++;
-            }
-            const leadHead = headers.get("branch.oid");
-            const branchHead = headers.get("branch.head");
-            if (
-              !branchHead ||
-              !leadHead ||
-              !/^[0-9a-f]{40,64}$/iu.test(leadHead)
-            )
-              continue;
-            const checkedOutBranch =
-              branchHead === "(detached)" ? "detached" : branchHead;
-            if (
-              checkedOutBranch === "(unknown)" ||
-              !/^(?:detached|[^\s\0]+)$/u.test(checkedOutBranch)
-            )
-              continue;
-            const dirty = status
-              .slice(headerEnd)
-              .some((entry) => entry.length > 0);
-            let additions: number | undefined;
-            let deletions: number | undefined;
-            let changedFiles: number | undefined;
-            let comparisonSha: string | undefined;
-            try {
-              managerHead ??= (
-                await git(managerCheckoutPath, [
-                  "rev-parse",
-                  "--verify",
-                  "HEAD^{commit}",
-                ])
-              ).trim();
-              if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(managerHead)) {
-                const bases = (
-                  await git(checkoutPath, [
-                    "merge-base",
-                    "--all",
-                    managerHead,
-                    leadHead,
+            const summary = await observeGitChangeSummary(
+              git,
+              checkoutPath,
+              host.state.managerLease!.descriptor.repoKey,
+              async () => {
+                managerHead ??= (
+                  await git(managerCheckoutPath, [
+                    "rev-parse",
+                    "--verify",
+                    "HEAD^{commit}",
                   ])
-                )
-                  .trim()
-                  .split(/\s+/u);
-                if (
-                  bases.length === 1 &&
-                  /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(bases[0]!)
-                )
-                  comparisonSha = bases[0];
-              }
-            } catch {
-              // Status remains useful without a numeric comparison.
-            }
-            if (comparisonSha) {
-              try {
-                const output = await git(checkoutPath, [
-                  "--no-optional-locks",
-                  "diff",
-                  "--numstat",
-                  "-z",
-                  "--find-renames",
-                  comparisonSha,
-                  "--",
-                ]);
-                const records = output.split("\0");
-                let valid = output === "" || output.endsWith("\0");
-                if (valid) records.pop();
-                let added = 0,
-                  deleted = 0,
-                  files = 0;
-                for (let i = 0; valid && i < records.length;) {
-                  const match = /^(\d+|-)\t(\d+|-)\t(.*)$/su.exec(
-                    records[i++]!,
-                  );
-                  if (!match) {
-                    valid = false;
-                    break;
-                  }
-                  const [, a, d, path] = match;
-                  if (!path && (!records[i++] || !records[i++])) {
-                    valid = false;
-                    break;
-                  }
-                  if (a === "-" && d === "-") {
-                    files++;
-                    continue;
-                  }
-                  if (!/^\d+$/u.test(a!) || !/^\d+$/u.test(d!)) {
-                    valid = false;
-                    break;
-                  }
-                  added += Number(a);
-                  deleted += Number(d);
-                  files++;
-                  if (
-                    !Number.isSafeInteger(added) ||
-                    !Number.isSafeInteger(deleted)
-                  ) {
-                    valid = false;
-                    break;
-                  }
-                }
-                if (valid) {
-                  additions = added;
-                  deletions = deleted;
-                  changedFiles = files;
-                }
-              } catch {
-                // A valid status observation remains useful when the optional diff fails.
-              }
-            }
+                ).trim();
+                return managerHead;
+              },
+            );
+            if (!summary) continue;
             next.set(work.session, {
               generation: expectedGeneration,
               checkoutPath,
               branch: work.branch,
               managerCheckoutPath,
-              summary: {
-                dirty,
-                additions,
-                deletions,
-                changedFiles,
-                checkedOutBranch,
-              },
+              summary,
             });
           } catch {
             /* Optional Git telemetry must not affect supervision. */
@@ -10589,6 +10807,10 @@ export function createLeadRoleTransitions(
     }
     if (state.roleSuspended || state.chiefMode === "suspended") {
       host.setInheritedProjection?.(undefined);
+      if (host.isManagedSession?.()) {
+        host.pi.setActiveTools(host.executionTools?.() ?? []);
+        return;
+      }
       const baseline = host.normalizeBaseTools(
         host.getLeadTools() ?? host.pi.getActiveTools(),
       );

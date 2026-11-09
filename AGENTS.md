@@ -69,6 +69,15 @@ Do not optimize for diagnostic counts, coverage percentages, or line counts.
 Do not add abstractions, suppressions, or tooling merely to satisfy an analyzer.
 If no worthwhile improvement is demonstrated, make no change.
 
+When discovering a material issue during work:
+
+- Verify the finding and check for existing reports.
+- Report available reproduction steps, expected and observed behavior, impact,
+  evidence, and whether it blocks the current task.
+- Record a new issue when follow-up is needed; do not create speculative or
+  duplicate reports.
+- Include the tracking reference when one exists.
+
 For occasional repository-wide investigations, use the
 [simplification-audit skill](.agents/skills/simplification-audit/SKILL.md).
 
@@ -114,6 +123,13 @@ in `AGENTS.md`.
 
 ## Code map
 
+This is a curated guide to significant architectural entry points, not an
+exhaustive file inventory. The agent making a structural change updates affected
+entries in the same PR when paths or responsibilities change or important
+components are added or removed. When an entry is found to be stale or missing,
+verify the relevant source and correct it. Reviewers check affected entries.
+Group routine tests by area rather than enumerating every test file.
+
 - `extension/index.ts`: Pi extension composition, shared registration, and runtime selection.
 - `extension/agent-controller.ts`: Shared owner-side Agent delegation, control, recovery, and result lifecycle.
 - `extension/managed-agent-runtime.ts`: Managed-Agent request, result, context, metadata, and nested-delegation runtime.
@@ -121,28 +137,27 @@ in `AGENTS.md`.
 - `extension/lead/commands.ts`: Lead command menus, settings UI, and command dispatch.
 - `extension/lead/project.ts`: Managed project work operations and Git worktree inspection.
 - `extension/lead/coordination.ts`: Lead coordination, peer messaging, and session discovery.
-- `extension/agent-definitions.ts`: Agent-definition discovery, validation, overrides, and launch arguments.
+- `extension/agent-definitions.ts`: Agent and Coordinator definition discovery, validation, overrides, and launch arguments.
+- `extension/agents/`: Bundled delegable Agent definitions.
+- `extension/coordinators/`: Bundled Lead, Manager, and Chief Coordinator profiles.
+- `extension/coordinator-target.ts`: Coordinator target identity and session bindings.
 - `extension/herdr.ts`: Herdr topology, startup, shutdown, and process ownership.
 - `extension/mailbox.ts`: Durable mailbox protocol and record persistence.
+- `extension/peer-transport.ts`: Remote peer transport, delivery, and retry handling.
+- `extension/peer-correspondence.ts`: Durable peer correspondence, replies, and evidence exchange.
+- `bin/peer-bridge.ts`: Remote peer bridge protocol and durable acceptance.
+- `extension/storage.ts`: Persistent results, evidence artifacts, and data-root paths.
+- `extension/compatibility.ts`: Runtime build identity and compatibility validation.
 - `extension/core.ts`: Shared lifecycle and message-preparation logic.
 - `extension/errors.ts`: Structured extension error categories.
 - `extension/lock.ts`: Process-lock ownership.
 - `extension/presentation.ts`: Model, TUI, and status presentation.
 - `extension/config.ts`: Flat Pi Herdsman configuration.
-- `extension/supervision.ts`: Chief lease, supervision projection, lead transport, and staff tool contracts.
+- `extension/supervision.ts`: Chief, Manager, and Lead authority, leases, supervision state, and staff tool contracts.
+- `extension/integrations/pi-codex-context-sharing.ts`: Pi Codex Conversion context-sharing integration.
 - `extension/support.ts`: Shared extension integration-test mocks and fixtures.
-- `extension/extension-contract.test.ts`: Extension and model contract behavior.
-- `extension/controller-api.test.ts`: Controller authorization and live-control behavior.
-- `extension/herdr.test.ts`: Herdr inspection/read and topology contract behavior.
-- `extension/controller-lifecycle.test.ts`: Authorized delegation lifecycle behavior.
-- `extension/agent-runtime.test.ts`: Managed-agent runtime behavior.
-- `extension/recovery.test.ts`: Failure, recovery, and cleanup behavior.
-- `extension/lead/commands.test.ts`: Direct Lead command-factory behavior.
-- `extension/lead/project.test.ts`: Direct managed project runtime and Git inventory behavior.
-- `extension/lead/coordination.test.ts`: Direct Lead coordination behavior.
-- `extension/commands.test.ts`: Command registration and integration behavior.
-- `extension/supervision.test.ts`: Chief roles, lease, supervision, transport, and staff tool behavior.
-- `extension/supervision-malformed-cleanup.test.ts`: malformed supervision cleanup behavior.
+- `extension/*.test.ts`, `extension/lead/*.test.ts`, `extension/integrations/*.test.ts`: Extension runtime, command, and integration tests.
+- `bin/*.test.ts`, `scripts/*.test.mjs`: Peer bridge and development tooling tests.
 
 ## GitHub issue creation
 
@@ -211,16 +226,6 @@ formatting/validation; see [Smoke testing](docs/development/smoke-testing.md).
 - Table-drive variants of one invariant.
 - Keep separate test files only for source boundaries or required process/module-mock isolation.
 - Add no dependency or fixture abstraction when `node:test` and a few lines suffice.
-
-## Backlog
-
-- The ignored `.backlog/` repository exists only in the main worktree.
-  Run Backlog CLI reads and writes from the worktree where `.backlog/` exists;
-  do not copy, synchronize, or manually edit it in another worktree.
-- For each newly verified material issue, search first, then record the exact
-  reproduction, expected and observed behavior, impact, and evidence through
-  the CLI. Do not file speculative or duplicate issues; report the task ID,
-  impact, and whether it blocks the current work.
 
 ## Validation
 

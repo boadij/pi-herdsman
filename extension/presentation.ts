@@ -1108,6 +1108,18 @@ export type GitChangeSummary = Readonly<{
   checkedOutBranch?: string;
 }>;
 
+function formatGitChangeStats(git: GitChangeSummary): string {
+  return git.additions !== undefined &&
+    git.deletions !== undefined &&
+    git.changedFiles !== undefined
+    ? git.additions + git.deletions > 0
+      ? `+${git.additions} -${git.deletions}`
+      : git.changedFiles > 0
+        ? `${git.changedFiles}f`
+        : "±0"
+    : "";
+}
+
 type SupervisionRow = {
   text: string;
   label?: string;
@@ -1321,16 +1333,7 @@ function renderSupervisionRows(
         const elapsed = metadata[index]!.elapsed;
         const context = metadata[index]!.context;
         const git = metadata[index]!.git;
-        const diff =
-          git?.additions !== undefined &&
-          git.deletions !== undefined &&
-          git.changedFiles !== undefined
-            ? git.additions + git.deletions > 0
-              ? `+${git.additions} -${git.deletions}`
-              : git.changedFiles > 0
-                ? `${git.changedFiles}f`
-                : "±0"
-            : "";
+        const diff = git ? formatGitChangeStats(git) : "";
         const changedBranch =
           git?.checkedOutBranch !== undefined &&
           git.checkedOutBranch !== item.work.branch;
@@ -4762,15 +4765,18 @@ export class StatusWidget {
   private renderedWidth = -1;
   private hits: HitRegion[] = [];
   private getMaxRows: () => number;
+  private getGitSummary?: () => GitChangeSummary | undefined;
   constructor(
     invalidateUI?: () => void,
     theme?: any,
     onFocus?: (intent: FocusIntent) => void,
     getMaxRows: () => number = () => 8,
+    getGitSummary?: () => GitChangeSummary | undefined,
   ) {
     this.invalidateUI = invalidateUI;
     this.getMaxRows = getMaxRows;
     this.onFocus = onFocus;
+    this.getGitSummary = getGitSummary;
     this.theme = theme ?? {
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
@@ -4904,15 +4910,48 @@ export class StatusWidget {
         : s.stale
           ? `${includeCounts ? this.theme.fg("muted", `${breadcrumb ? "  " : ""}${counts} · `) : breadcrumb ? "  " : ""}${this.theme.fg("warning", "stale")}`
           : this.theme.fg("muted", suffixText);
-    const header = `${styledBreadcrumb}${styledExecution}${styledTools}${styledRun}${styledSuffix}`;
+    const builtHeader = `${styledBreadcrumb}${styledExecution}${styledTools}${styledRun}${styledSuffix}`;
     const compactStaleHeader =
       s.stale &&
       !s.unavailable &&
       !breadcrumb &&
       visibleWidth("● stale") <= availableWidth
         ? `${this.theme.fg("success", "●")} ${this.theme.fg("warning", "stale")}`
-        : header;
-    const out = [truncateToWidth(compactStaleHeader, availableWidth, "…")];
+        : builtHeader;
+    let header = truncateToWidth(compactStaleHeader, availableWidth, "…");
+    const gitSummary =
+      !s.stale &&
+      !s.unavailable &&
+      s.execution?.kind === "managed" &&
+      s.execution.lifecycle === "assigned"
+        ? this.getGitSummary?.()
+        : undefined;
+    if (gitSummary) {
+      const stats = formatGitChangeStats(gitSummary);
+      const gitText = `${stats}${gitSummary.dirty ? "*" : ""}`;
+      const lineChanges =
+        gitSummary.additions !== undefined &&
+        gitSummary.deletions !== undefined &&
+        gitSummary.additions + gitSummary.deletions > 0;
+      const gitSuffix = [
+        lineChanges
+          ? this.theme.fg(
+              gitSummary.additions > 0 ? "success" : "muted",
+              `+${gitSummary.additions}`,
+            )
+          : stats
+            ? this.theme.fg("muted", stats)
+            : "",
+        lineChanges
+          ? ` ${this.theme.fg(gitSummary.deletions > 0 ? "error" : "muted", `-${gitSummary.deletions}`)}`
+          : "",
+        gitSummary.dirty ? this.theme.fg("warning", "*") : "",
+      ].join("");
+      const gitWidth = visibleWidth(gitText);
+      if (gitWidth && visibleWidth(header) + 2 + gitWidth <= availableWidth)
+        header = `${header}${" ".repeat(availableWidth - visibleWidth(header) - gitWidth)}${gitSuffix}`;
+    }
+    const out = [header];
     if (s.identityOnly) return out;
     const rows = renderStatusRows(s.agents, {
       now: observedNow,
@@ -4987,7 +5026,14 @@ export function createStatusWidget(
   theme?: any,
   onFocus?: (intent: FocusIntent) => void,
   getMaxRows?: () => number,
+  getGitSummary?: () => GitChangeSummary | undefined,
 ): StatusWidget {
-  return new StatusWidget(invalidate, theme, onFocus, getMaxRows);
+  return new StatusWidget(
+    invalidate,
+    theme,
+    onFocus,
+    getMaxRows,
+    getGitSummary,
+  );
 }
 export { Text, truncateToWidth, visibleWidth };
