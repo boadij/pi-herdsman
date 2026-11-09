@@ -3,7 +3,11 @@ import test from "node:test";
 import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type {
+  AssistantMessage,
+  TextContent,
+  ToolCall,
+} from "@earendil-works/pi-ai";
 import {
   decide as decideSmokeFaux,
   managerHandoffSupervisorToolAvailable,
@@ -1270,7 +1274,12 @@ test("core failure diagnostics distinguish nested result publication from delive
   ]);
   const requestId = "00000000-0000-4000-8000-000000000002";
   const intermediateRequestId = "00000000-0000-4000-8000-000000000003";
-  const entries = (owner, label, child, request) => [
+  const entries = (
+    owner: string,
+    label: string,
+    child: string,
+    request: string,
+  ): Record<string, unknown>[] => [
     { type: "session", id: owner },
     {
       type: "message",
@@ -2919,14 +2928,16 @@ test("simulated Agent failure decision requires the exact correlated failed hand
       ],
     });
   assert.match(
-    decideWith(handoff).content[0].text,
+    firstTextContent(decideWith(handoff)).text,
     /SMOKE_AGENT_FAILURE_DELIVERED/,
   );
   assert.match(
-    decideWith({
-      ...handoff,
-      content: handoff.content.replace("child-session", "wrong-session"),
-    }).content[0].text,
+    firstTextContent(
+      decideWith({
+        ...handoff,
+        content: handoff.content.replace("child-session", "wrong-session"),
+      }),
+    ).text,
     /Waiting for the exact Agent failure/,
   );
 });
@@ -3080,7 +3091,7 @@ test("manager-handoff faux Lead only calls offered message_supervisor tool", () 
   });
   assert.equal(available.content[0]?.type, "toolCall");
   assert.equal(
-    available.content[0]?.type === "toolCall" && available.content[0].name,
+    available.content[0]?.type === "toolCall" && firstToolCall(available).name,
     "message_supervisor",
   );
 
@@ -4202,31 +4213,24 @@ test("manager-recovery timeout is bounded and scoped to its ready handshake", ()
 });
 
 test("simulated Manager decision only delegates the exact requested project work", () => {
-  const answer = decide("terminal-failure", {
-    messages: [
-      {
-        role: "user",
-        content:
-          'Use delegate_work exactly once. Set branch to exactly herdsman/smoke-test, task to exactly "Wait for the report.", and omit base and files.',
-      },
-    ],
-  });
+  const request = {
+    role: "user",
+    content:
+      'Use delegate_work exactly once. Set branch to exactly herdsman/smoke-test, task to exactly "Wait for the report.", and omit base and files.',
+  };
+  const answer = decide("terminal-failure", { messages: [request] });
   assert.equal(answer.stopReason, "toolUse");
-  assert.equal(answer.content[0].name, "delegate_work");
-  assert.deepEqual(answer.content[0].arguments, {
+  assert.equal(firstToolCall(answer).name, "delegate_work");
+  assert.deepEqual(firstToolCall(answer).arguments, {
     branch: "herdsman/smoke-test",
     task: "Wait for the report.",
   });
+  const invalidRequest = {
+    role: "user",
+    content: "Remove worktree herdsman/branch",
+  };
   assert.throws(
-    () =>
-      decide("terminal-failure", {
-        messages: [
-          {
-            role: "user",
-            content: "Remove worktree herdsman/branch",
-          },
-        ],
-      }),
+    () => decide("terminal-failure", { messages: [invalidRequest] }),
     /Unexpected terminal-failure transcript/,
   );
 });
@@ -4262,8 +4266,8 @@ test("federation Manager starts its branch after an earlier completed managed as
   const answer = decide("federated-peer-b", { messages });
 
   assert.equal(answer.stopReason, "toolUse");
-  assert.equal(answer.content[0].name, "delegate_work");
-  assert.equal(answer.content[0].arguments.branch, branch);
+  assert.equal(firstToolCall(answer).name, "delegate_work");
+  assert.equal(firstToolCall(answer).arguments.branch, branch);
 });
 
 test("federation Lead correlates discovery and sends only within the current turn", () => {
@@ -4311,9 +4315,12 @@ test("federation Lead correlates discovery and sends only within the current tur
       messages: [...history, { role: "user", content }],
     });
 
-  assert.equal(discover("PEER_E2E_A_DISCOVER").content[0].name, "list_peers");
   assert.equal(
-    discover("PEER_E2E_A_LEAD_SEND result:researcher#1").content[0].name,
+    firstToolCall(discover("PEER_E2E_A_DISCOVER")).name,
+    "list_peers",
+  );
+  assert.equal(
+    firstToolCall(discover("PEER_E2E_A_LEAD_SEND result:researcher#1")).name,
     "list_peers",
   );
 
@@ -4344,8 +4351,8 @@ test("federation Lead correlates discovery and sends only within the current tur
       listedResult,
     ],
   });
-  assert.equal(send.content[0].name, "message_peer");
-  assert.equal(send.content[0].arguments.target, "new-target");
+  assert.equal(firstToolCall(send).name, "message_peer");
+  assert.equal(firstToolCall(send).arguments.target, "new-target");
 });
 
 test("federation Lead handles inbound request after its capture prompt and imported binding", () => {
@@ -4354,11 +4361,13 @@ test("federation Lead handles inbound request after its capture prompt and impor
   const messages = [
     { role: "user", content: "PEER_E2E_B_CAPTURE_SESSION" },
     {
+      role: "user",
       type: "custom_message",
       customType: "pi-herdsman-peer_message",
       content: `Peer message from ${origin}: PEER_E2E_LEAD_REQUEST; result:researcher#1\n\nForwardable received files:\nartifact: ${canonical}`,
     },
     {
+      role: "system",
       type: "custom",
       customType: "pi-herdsman-result-ref",
       data: { ref: "result:researcher#1", canonicalRef: canonical },
@@ -4368,9 +4377,9 @@ test("federation Lead handles inbound request after its capture prompt and impor
   const answer = decide("federated-peer-b", { messages });
 
   assert.equal(answer.stopReason, "toolUse");
-  assert.equal(answer.content[0].name, "read");
+  assert.equal(firstToolCall(answer).name, "read");
   assert.equal(
-    answer.content[0].arguments.path,
+    firstToolCall(answer).arguments.path,
     join(
       process.env.PI_CODING_AGENT_DIR!,
       "pi-herdsman",
@@ -4384,13 +4393,14 @@ test("federation Lead handles inbound request after its capture prompt and impor
       message.type !== "custom" ||
       message.customType !== "pi-herdsman-result-ref",
   );
-  const contextBindingAnswer = decide("federated-peer-b", {
+  const contextBinding = {
     messages: providerProjection,
     peerImportedBindingVisible: true,
-  });
-  assert.equal(contextBindingAnswer.content[0].name, "read");
+  };
+  const contextBindingAnswer = decide("federated-peer-b", contextBinding);
+  assert.equal(firstToolCall(contextBindingAnswer).name, "read");
   assert.equal(
-    contextBindingAnswer.content[0].arguments.path,
+    firstToolCall(contextBindingAnswer).arguments.path,
     join(
       process.env.PI_CODING_AGENT_DIR!,
       "pi-herdsman",
@@ -4442,7 +4452,10 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     result("delegate_agent"),
   ];
   const pendingRoot = decide("core", { messages: rootStarted });
-  assert.doesNotMatch(pendingRoot.content[0].text, /PI_HERDSMAN_SMOKE_OK/);
+  assert.doesNotMatch(
+    firstTextContent(pendingRoot).text,
+    /PI_HERDSMAN_SMOKE_OK/,
+  );
   const managerRoleRoot = rootStarted.map((message, index) =>
     index === 0
       ? {
@@ -4467,9 +4480,11 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     "implementer-session",
     `Forwardable result evidence: ${scoutRef}\n\n{"name":"pi-herdsman","version":"0.25.1"}`,
   );
-  const nextAssignment = decide("core", {
-    messages: [...rootStarted, implementerDelivery],
-  }).content[0];
+  const nextAssignment = firstToolCall(
+    decide("core", {
+      messages: [...rootStarted, implementerDelivery],
+    }),
+  );
   assert.equal(nextAssignment.name, "delegate_agent");
   assert.deepEqual(nextAssignment.arguments.files, [scoutRef]);
   const nextTask = {
@@ -4477,7 +4492,7 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     content: `<file name="${scoutRef}" bytes="49">\n{"name":"pi-herdsman","version":"0.25.1"}\n</file>\n\nTask:\nSMOKE_CORE_NEXT_AGENT: verify ${scoutRef}`,
   };
   assert.deepEqual(
-    JSON.parse(decide("core", { messages: [nextTask] }).content[0].text),
+    JSON.parse(firstTextContent(decide("core", { messages: [nextTask] })).text),
     { name: "pi-herdsman", version: "0.25.1" },
   );
   const rootAfterNext = [
@@ -4488,7 +4503,7 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     delivered("smoke-core-next", "next-session"),
   ];
   assert.equal(
-    decide("core", { messages: rootAfterNext }).content[0].text,
+    firstTextContent(decide("core", { messages: rootAfterNext })).text,
     "PI_HERDSMAN_SMOKE_OK pi-herdsman@0.25.1",
   );
 
@@ -4497,12 +4512,14 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     content:
       '<file name="evidence:work-assignment#1" bytes="41">\nSMOKE_CORE_IMPLEMENTER: delegate one scout.\n</file>\n\nTask:\nSMOKE_CORE_SCOUT: read package.json\n\nThe owner work assignment supplied as evidence is context only; follow your current Task and do not expand its scope.',
   };
+  const wrongTask = {
+    role: "user",
+    content: "SMOKE_CORE_SCOUT: read package.json",
+  };
   assert.throws(
     () =>
       decide("core", {
-        messages: [
-          { role: "user", content: "SMOKE_CORE_SCOUT: read package.json" },
-        ],
+        messages: [wrongTask],
       }),
     /Scout did not receive its owner's task as contextual evidence/,
   );
@@ -4520,7 +4537,7 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     },
   ];
   assert.deepEqual(
-    JSON.parse(decide("core", { messages: scoutRead }).content[0].text),
+    JSON.parse(firstTextContent(decide("core", { messages: scoutRead })).text),
     { name: "pi-herdsman", version: "0.25.1" },
   );
   const nestedPackage = [
@@ -4538,28 +4555,31 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
       scoutRef,
     ),
   ];
-  const attachCall = decide("core", { messages: nestedPackage }).content[0];
+  const attachCall = firstToolCall(decide("core", { messages: nestedPackage }));
   assert.equal(attachCall.name, "attach_handoff");
   assert.deepEqual(attachCall.arguments, { files: [scoutRef] });
   assert.deepEqual(
     JSON.parse(
-      decide("core", {
-        messages: [
-          ...nestedPackage,
-          call("attach_handoff", attachCall.arguments, "attach-1"),
-          result("attach_handoff", "attach-1"),
-        ],
-      }).content[0].text,
+      firstTextContent(
+        decide("core", {
+          messages: [
+            ...nestedPackage,
+            call("attach_handoff", attachCall.arguments, "attach-1"),
+            result("attach_handoff", "attach-1"),
+          ],
+        }),
+      ).text,
     ),
     { name: "pi-herdsman", version: "0.25.1" },
   );
+  const wrongReadResult = { ...scoutRead[2], toolCallId: "wrong" };
   assert.throws(
     () =>
       decide("core", {
         messages: [
           scoutTask,
           call("read", { path: "other.json" }, "wrong"),
-          { ...scoutRead[2], toolCallId: "wrong" },
+          wrongReadResult,
         ],
       }),
     /Package read result missing|Unexpected core transcript/,
@@ -4576,20 +4596,23 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     result("delegate_agent"),
   ];
   assert.doesNotMatch(
-    decide("continuation", { messages: continuationStarted }).content[0].text,
+    firstTextContent(decide("continuation", { messages: continuationStarted }))
+      .text,
     /PI_HERDSMAN_CONTINUATION_FIRST/,
   );
   assert.equal(
-    decide("continuation", {
-      messages: [
-        ...continuationStarted,
-        delivered(
-          "smoke-continuation-implementer",
-          "child-session",
-          "pi-herdsman CONTINUATION_FIRST_DONE",
-        ),
-      ],
-    }).content[0].text,
+    firstTextContent(
+      decide("continuation", {
+        messages: [
+          ...continuationStarted,
+          delivered(
+            "smoke-continuation-implementer",
+            "child-session",
+            "pi-herdsman CONTINUATION_FIRST_DONE",
+          ),
+        ],
+      }),
+    ).text,
     "PI_HERDSMAN_CONTINUATION_FIRST",
   );
 
@@ -4606,11 +4629,11 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     { role: "user", content: followup },
   ];
   const continueCall = decide("continuation", { messages: beforeContinue });
-  assert.equal(continueCall.content[0].name, "continue_agent");
-  assert.equal(continueCall.content[0].arguments.session, savedPath);
+  assert.equal(firstToolCall(continueCall).name, "continue_agent");
+  assert.equal(firstToolCall(continueCall).arguments.session, savedPath);
   const continued = [
     ...beforeContinue,
-    call("continue_agent", continueCall.content[0].arguments, "continue-1"),
+    call("continue_agent", firstToolCall(continueCall).arguments, "continue-1"),
     result("continue_agent", "continue-1", { session_id: "saved-id" }),
     delivered(
       "smoke-continuation-implementer",
@@ -4619,16 +4642,18 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     ),
   ];
   assert.equal(
-    decide("continuation", { messages: continued }).content[0].text,
+    firstTextContent(decide("continuation", { messages: continued })).text,
     "pi-herdsman PI_HERDSMAN_CONTINUATION_SECOND",
   );
   assert.doesNotMatch(
-    decide("continuation", {
-      messages: [
-        ...continued,
-        { role: "user", content: "delegation guidance" },
-      ],
-    }).content[0].text,
+    firstTextContent(
+      decide("continuation", {
+        messages: [
+          ...continued,
+          { role: "user", content: "delegation guidance" },
+        ],
+      }),
+    ).text,
     /PI_HERDSMAN_CONTINUATION_SECOND/,
   );
 
@@ -4649,7 +4674,9 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
       ],
     },
   ];
-  const evidenceCall = decide("continuation", { messages: resumed }).content[0];
+  const evidenceCall = firstToolCall(
+    decide("continuation", { messages: resumed }),
+  );
   assert.equal(evidenceCall.name, "read_evidence");
   assert.deepEqual(evidenceCall.arguments, {
     ref: "evidence:work-assignment#1",
@@ -4676,7 +4703,8 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     /Continued task could not read its prior work assignment/,
   );
   assert.equal(
-    decide("continuation", { messages: resumedWithEvidence }).content[0].text,
+    firstTextContent(decide("continuation", { messages: resumedWithEvidence }))
+      .text,
     "pi-herdsman PI_HERDSMAN_CONTINUATION_SECOND",
   );
 });
@@ -4717,7 +4745,7 @@ test("supervisor-agent accepts only its current-format completed result", () => 
     messages: [prompt, call, delegated, completed],
   });
   assert.equal(
-    accept.content[0].text,
+    firstTextContent(accept).text,
     "PI_HERDSMAN_SUPERVISOR_AGENT_DELIVERED",
   );
   const unrelated = decideSmokeFaux("supervisor-agent", {
@@ -4735,7 +4763,7 @@ test("supervisor-agent accepts only its current-format completed result", () => 
     ],
   });
   assert.match(
-    unrelated.content[0].text,
+    firstTextContent(unrelated).text,
     /Waiting for the completed Agent result/,
   );
 });
@@ -4825,22 +4853,19 @@ test("crash-recovery probes an advertised waiting-parent steer and requires reje
     },
   ];
   const steer = decideSmokeFaux("agent-crash-root", { messages });
-  assert.equal(steer.content[0].name, "steer_agent");
-  const steerCallId = steer.content[0].id;
+  assert.equal(firstToolCall(steer).name, "steer_agent");
+  const steerCallId = firstToolCall(steer).id;
+  const steerResult = {
+    role: "toolResult",
+    toolName: "steer_agent",
+    toolCallId: steerCallId,
+    isError: false,
+    details: { ok: false, error: { category: "agent_busy" } },
+  };
   const stopped = decideSmokeFaux("agent-crash-root", {
-    messages: [
-      ...messages,
-      steer,
-      {
-        role: "toolResult",
-        toolName: "steer_agent",
-        toolCallId: steerCallId,
-        isError: false,
-        details: { ok: false, error: { category: "agent_busy" } },
-      },
-    ],
+    messages: [...messages, steer, steerResult],
   });
-  assert.equal(stopped.content[0].name, "stop_agent");
+  assert.equal(firstToolCall(stopped).name, "stop_agent");
 });
 
 test("crash-recovery accepts only the resumed target's marked completion", () => {
@@ -4912,7 +4937,7 @@ test("crash-recovery accepts only the resumed target's marked completion", () =>
     ],
   });
   assert.match(
-    unrelated.content[0].text,
+    firstTextContent(unrelated).text,
     /Waiting for the continued exact session result/,
   );
   const resumed = decideSmokeFaux("agent-crash-root", {
@@ -4925,7 +4950,10 @@ test("crash-recovery accepts only the resumed target's marked completion", () =>
       },
     ],
   });
-  assert.equal(resumed.content[0].text, "PI_HERDSMAN_CRASH_RECOVERY_CONTINUED");
+  assert.equal(
+    firstTextContent(resumed).text,
+    "PI_HERDSMAN_CRASH_RECOVERY_CONTINUED",
+  );
 });
 
 test("installed faux provider requeues decisions and emits its terminal failure through native error events", async () => {
@@ -4947,8 +4975,9 @@ test("installed faux provider requeues decisions and emits its terminal failure 
       registerProvider(value) {
         provider = value;
       },
-      on(event, handler) {
+      on(event: string, handler: unknown) {
         handlers.set(event, handler);
+        return () => handlers.delete(event);
       },
     });
     handlers.get("session_start")?.(
@@ -5482,7 +5511,7 @@ test("continuation first-generation stalls if completed child retires before obs
   const answer = decide("continuation", {
     messages: [{ role: "user", content: prompt }, call, result, delivered],
   });
-  assert.equal(answer.content[0].text, "PI_HERDSMAN_CONTINUATION_FIRST");
+  assert.equal(firstTextContent(answer).text, "PI_HERDSMAN_CONTINUATION_FIRST");
   const root = {
     contents: [
       {
@@ -8033,12 +8062,12 @@ test("manager handoff faux decision waits for exact readiness after assignment",
     content: "Session: lead-session\nWorkspace: workspace",
   };
   assert.equal(
-    decide("manager-handoff", { messages: [prompt] }).content[0].type,
+    firstToolCall(decide("manager-handoff", { messages: [prompt] })).type,
     "toolCall",
   );
   const assigned = [prompt, call, result];
   assert.match(
-    decide("manager-handoff", { messages: assigned }).content[0].text,
+    firstTextContent(decide("manager-handoff", { messages: assigned })).text,
     /Waiting for the exact assigned Lead readiness/,
   );
   const ready = {
@@ -8047,14 +8076,17 @@ test("manager handoff faux decision waits for exact readiness after assignment",
       "Lead → Manager for assignment smoke/branch from lead lead-session:\n\nMANAGER_HANDOFF_READY",
   };
   assert.match(
-    decide("manager-handoff", { messages: [...assigned, ready] }).content[0]
-      .text,
+    firstTextContent(
+      decide("manager-handoff", { messages: [...assigned, ready] }),
+    ).text,
     /MANAGER_HANDOFF_READY_RECEIVED/,
   );
   assert.match(
-    decide("manager-handoff", {
-      messages: [...assigned, { ...ready, content: "MANAGER_HANDOFF_READY" }],
-    }).content[0].text,
+    firstTextContent(
+      decide("manager-handoff", {
+        messages: [...assigned, { ...ready, content: "MANAGER_HANDOFF_READY" }],
+      }),
+    ).text,
     /Waiting for the exact assigned Lead readiness/,
   );
 });
@@ -9770,8 +9802,20 @@ const deepMessages = (task: string, withTool: boolean) => [
   },
   { role: "user" as const, content: task, timestamp: 2 },
 ];
-const firstToolCall = (message: any) =>
-  message.content.find((part: any) => part.type === "toolCall");
+const firstToolCall = (message: AssistantMessage): ToolCall => {
+  const call = message.content.find(
+    (part): part is ToolCall => part.type === "toolCall",
+  );
+  assert.ok(call);
+  return call;
+};
+const firstTextContent = (message: AssistantMessage): TextContent => {
+  const text = message.content.find(
+    (part): part is TextContent => part.type === "text",
+  );
+  assert.ok(text);
+  return text;
+};
 
 test("deep-chain faux requires delegation below the limit and a leaf at it", () => {
   const level2 = deepMessages("SMOKE_DEEP_LEVEL_2: go", true);
@@ -9794,27 +9838,33 @@ test("deep-chain faux requires delegation below the limit and a leaf at it", () 
   assert.equal(firstToolCall(ask).name, "ask_owner");
   assert.equal(firstToolCall(ask).arguments.question, "SMOKE_DEEP_QUESTION");
   // The depth-3 owner answers the leaf's delivered question.
+  const depthThreeCall = {
+    role: "assistant",
+    content: [
+      {
+        type: "toolCall",
+        id: "d",
+        name: "delegate_agent",
+        arguments: { label: "smoke-deep-4" },
+      },
+    ],
+  };
+  const depthThreeResult = {
+    role: "toolResult",
+    toolName: "delegate_agent",
+    toolCallId: "d",
+    content: [],
+  };
+  const ownerQuestion = {
+    role: "user",
+    content: "Agent smoke-deep-4 asks: SMOKE_DEEP_QUESTION",
+  };
   const reply = decideSmokeFaux("deep-chain", {
     messages: [
       ...deepMessages("SMOKE_DEEP_LEVEL_3: go", true),
-      {
-        role: "assistant" as const,
-        content: [
-          {
-            type: "toolCall",
-            id: "d",
-            name: "delegate_agent",
-            arguments: { label: "smoke-deep-4" },
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolName: "delegate_agent",
-        toolCallId: "d",
-        content: [],
-      },
-      { role: "user", content: "Agent smoke-deep-4 asks: SMOKE_DEEP_QUESTION" },
+      depthThreeCall,
+      depthThreeResult,
+      ownerQuestion,
     ],
   });
   assert.equal(firstToolCall(reply).name, "reply_agent");
