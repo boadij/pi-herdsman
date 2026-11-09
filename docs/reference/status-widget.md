@@ -5,13 +5,14 @@
 The TUI status widget is a local, display-only projection of exact managed
 agents plus controller-local transient starting assignments.
 
-The header's leading symbol reports local Pi execution: `●` is working, `◐` is
-blocked on a UI prompt, `○` is idle, and `?` means local execution could not be
-observed. `◉` means the local session is idle while a fresh, verified owned
-Agent or supervised staff descendant is active. The marker is advisory,
-updates on Pi lifecycle events, and does not authorize actions or change
-assignment status. Existing Agent lifecycle, freshness, project-work, and
-navigation indicators remain separate.
+The header's leading symbol is an advisory activity indicator: `●` means local
+Pi execution is working, `◐` means it is blocked on a UI prompt, `○` means it
+is idle, and `?` means local execution could not be observed. `◉` means the
+local session is idle while a fresh, verified owned Agent or supervised staff
+descendant is active; it can reflect descendant activity and does not mean the
+current session is executing. The marker updates on Pi lifecycle events and
+does not authorize actions or change assignment status. Existing Agent
+lifecycle, freshness, project-work, and navigation indicators remain separate.
 
 It does not replace mailbox assignment/result authority.
 
@@ -50,10 +51,11 @@ selected, `●` means working, `◐` means blocked,
 `×` means lost. An idle or done lead with active delegated descendants uses
 `◉` in accent styling. Lifecycle labels use success for working, accent for
 starting and settling, warning for blocked and unknown, error for lost, and
-muted for idle and done. The leading `●` in a widget header is a
-success-colored identity marker for the status surface, not proof of active
-execution. Workspace labels are presentation text inside each lead row, not
-additional hierarchy nodes. For example, a Manager with one Lead child appears
+muted for idle and done. The current session's role is
+rendered in the theme's normal text color and bold; context and ancestor
+breadcrumb segments remain muted. Workspace labels are presentation text
+inside each lead row, not additional hierarchy nodes. For example, a Manager
+with one Lead child appears
 as:
 
 ```text

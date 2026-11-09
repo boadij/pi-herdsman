@@ -4277,6 +4277,31 @@ test("Status widget connectors preserve hierarchy and aligned family layout", (t
 
 test("Breadcrumb rendering preserves identity, truncation, and safe Unicode", (t) => {
   {
+    const theme = {
+      fg: (role: string, text: string) => `<${role}>${text}</${role}>`,
+      bold: (text: string) => `<b>${text}</b>`,
+    };
+    const widget = new StatusWidget(undefined, theme);
+    t.after(() => widget.dispose());
+    widget.setSnapshot({
+      agents: [],
+      stale: false,
+      unavailable: false,
+      breadcrumb: [
+        { text: "lead", role: "lead" },
+        { text: "scout:worker", role: "scout" },
+      ],
+      identityOnly: true,
+    });
+    assert.equal(
+      widget.render(160)[0],
+      "<warning>?</warning><muted> </muted><muted>lead</muted> → <text><b>scout</b></text><muted>:worker</muted>",
+    );
+    for (let width = 1; width <= 32; width++)
+      assert.ok(visibleWidth(widget.render(width)[0]!) <= width);
+  }
+
+  {
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
     assert.match(widget.render(160)[0]!, /^\? \?\s+unavailable$/);
@@ -7513,7 +7538,7 @@ test("Manager work rows show responsive Lead telemetry with semantic theme", () 
   });
   assert.ok(
     themedRows[0]!.includes(
-      "<warning>?</warning> <muted>manager · pi-herdsman</muted>",
+      "<warning>?</warning> <text><b>manager</b></text><muted> · pi-herdsman</muted>",
     ),
   );
   assert.ok(themedRows[1]!.includes("<success>●</success>"));
@@ -7527,7 +7552,7 @@ test("Manager work rows show responsive Lead telemetry with semantic theme", () 
   assert.ok(staleManagerHeader.includes("<warning>?</warning>"));
   assert.ok(
     staleManagerHeader.includes(
-      "<muted>manager · pi-herdsman</muted> <warning>· stale</warning>",
+      "<text><b>manager</b></text><muted> · pi-herdsman</muted> <warning>· stale</warning>",
     ),
   );
   const staleManagerRows = renderSupervisionLeads(snapshot, 140, {
@@ -7570,7 +7595,7 @@ test("Manager work rows show responsive Lead telemetry with semantic theme", () 
   assert.doesNotMatch(chiefRows.join("\n"), /14m|61%/);
   assert.ok(
     chiefRows[0]!.includes(
-      "<warning>?</warning> <muted>chief · 1 direct lead</muted>",
+      "<warning>?</warning> <text><b>chief</b></text><muted> · 1 direct lead</muted>",
     ),
   );
   assert.ok(chiefRows[1]!.includes("<success>└─ ●</success>"));
