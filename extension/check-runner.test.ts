@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import {
+  execFile,
+  spawn,
+  type ChildProcess,
+  type ExecFileException,
+} from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -133,9 +138,10 @@ test("suite timeout reuses the completed proactive snapshot", async () => {
     "ignore",
     { snapshotAt: 10, emit: (text: string) => (emitted = text) },
   );
-  assert.equal(result.kind, "suite-timeout");
+  assert.ok(!result.ok && result.kind === "suite-timeout" && result.timedOut);
   assert.equal(starts, 1);
   assert.match(emitted, /phase=pre-deadline elapsed=/);
+  assert.ok(result.workerDiagnostic);
   assert.match(result.workerDiagnostic, /unattributed node workers=1/);
 });
 
@@ -167,8 +173,8 @@ test("Windows snapshot attribution uses the repository root outside the checkout
     (
       _command: string,
       args: string[],
-      options: { cwd?: string },
-      callback: (error: null, stdout: string) => void,
+      options: { cwd?: string | URL },
+      callback: (error: ExecFileException | null, stdout: string) => void,
     ) => {
       snapshotCwdIsRepositoryRoot = options.cwd === repositoryRoot;
       snapshotScript = args.at(-1)!;
@@ -446,35 +452,32 @@ test(
     t.after(() => rm(directory, { recursive: true, force: true }));
 
     const startedAt = Date.now();
-    let pids;
-    const deadline = waitForPids(pidPath, 5_000).then((readyPids) => {
-      pids = readyPids;
-      return Date.now() + 750;
-    });
+    const pids = waitForPids(pidPath, 5_000);
+    const deadline = pids.then(() => Date.now() + 750);
     const result = await runTestRunner(
       ["scripts/check-hang.mjs", pidPath],
       deadline,
       "hanging fixture",
     );
 
-    assert.equal(result.ok, false);
-    assert.equal(result.kind, "suite-timeout");
-    assert.equal(result.timedOut, true);
+    assert.ok(!result.ok && result.kind === "suite-timeout" && result.timedOut);
     assert.match(result.diagnostic, /suite deadline/);
     assert.equal(
       result.treeGone,
       process.platform === "win32" ? undefined : true,
     );
     if (process.platform === "win32") {
-      assert.equal(result.runnerGone, true);
+      assert.ok(result.runnerGone);
       assert.match(result.diagnostic, /descendant cleanup unverified/);
+      assert.ok(result.workerDiagnostic);
       assert.doesNotMatch(result.workerDiagnostic, /[A-Za-z]:\\|node\.exe/i);
     } else {
       assert.equal(result.workerDiagnostic, undefined);
     }
     assert.ok(Date.now() - startedAt < 38_000);
 
-    for (const pid of [pids.parent, pids.child])
+    const { parent, child } = await pids;
+    for (const pid of [parent, child])
       assert.throws(
         () => process.kill(pid, 0),
         (error: any) => error?.code === "ESRCH",
@@ -498,7 +501,9 @@ test(
         "hanging fixture",
         snapshot,
       );
-      assert.equal(result.kind, "suite-timeout");
+      assert.ok(
+        !result.ok && result.kind === "suite-timeout" && result.timedOut,
+      );
       assert.equal(
         result.treeGone,
         process.platform === "win32" ? undefined : true,
@@ -549,9 +554,7 @@ test(
         return pending;
       },
     );
-    assert.equal(result.ok, false);
-    assert.equal(result.kind, "suite-timeout");
-    assert.equal(result.timedOut, true);
+    assert.ok(!result.ok && result.kind === "suite-timeout" && result.timedOut);
     assert.equal(
       result.treeGone,
       process.platform === "win32" ? undefined : true,
@@ -585,7 +588,7 @@ test(
     );
     assert.equal(snapshotStarted, true);
     assert.equal(snapshotSignal?.aborted, true);
-    assert.equal(result.kind, "suite-timeout");
+    assert.ok(!result.ok && result.kind === "suite-timeout" && result.timedOut);
     assert.equal(
       result.workerDiagnostic,
       "check: Windows timeout snapshot\ncheck: candidate test worker file=extension/check-runner.test.ts",
@@ -762,8 +765,11 @@ test(
     );
 
     assert.equal(escalationAttempted, true);
-    assert.equal(result.kind, "suite-timeout-cleanup-failed");
-    assert.equal(result.captureStopUnconfirmed, true);
+    assert.ok(
+      !result.ok &&
+        result.kind === "suite-timeout-cleanup-failed" &&
+        result.captureStopUnconfirmed,
+    );
     assert.equal(
       result.workerDiagnostic,
       "check: Windows timeout snapshot unavailable (capture stop unconfirmed)",
@@ -772,8 +778,9 @@ test(
       result.diagnostic,
       /suite cleanup proceeded without confirmed capture closure/,
     );
-    assert.ok(capturePid);
-    assert.doesNotThrow(() => process.kill(capturePid, 0));
+    const pid = capturePid;
+    assert.ok(pid);
+    assert.doesNotThrow(() => process.kill(pid, 0));
   },
 );
 
@@ -822,7 +829,7 @@ test(
     assert.equal(runnerAliveAtSnapshotAbort, true);
     assert.equal(aborted, true);
     assert.equal(snapshotSettled, true);
-    assert.equal(result.kind, "suite-timeout");
+    assert.ok(!result.ok && result.kind === "suite-timeout" && result.timedOut);
     assert.equal(
       result.workerDiagnostic,
       "check: Windows timeout snapshot unavailable (capture deadline)",
@@ -879,6 +886,8 @@ test(
     );
     assert.ok(pids);
     process.kill(pids.child, 0);
+    assert.ok(!result.ok && result.kind === "suite-timeout");
+    assert.ok(result.runnerGone);
     assert.equal(result.treeGone, undefined);
     assert.match(result.diagnostic, /descendant cleanup unverified/);
   },
@@ -893,44 +902,43 @@ test(
     );
     const pidPath = join(directory, "pids.json");
     t.after(() => rm(directory, { recursive: true, force: true }));
-    let pids;
-    const deadline = waitForPids(pidPath, 5_000).then((ready) => {
-      pids = ready;
-      return Date.now() + 750;
-    });
+    const pids = waitForPids(pidPath, 5_000);
+    const deadline = pids.then(() => Date.now() + 750);
     const previousFixture = process.env.CHECK_WORKER_FIXTURE;
     const testContext = process.env.NODE_TEST_CONTEXT;
     process.env.CHECK_WORKER_FIXTURE = pidPath;
     // The nested runner must start outside the parent node:test worker context.
     delete process.env.NODE_TEST_CONTEXT;
-    let run;
-    try {
-      // Its expected forced stop must not look like an incomplete outer test run.
-      run = runTestRunner(
-        [
-          "--test",
-          "--test-name-pattern=^native attribution fixture$",
-          "extension/check-runner.test.ts",
-        ],
-        deadline,
-        "native worker fixture",
-        undefined,
-        "ignore",
-      );
-    } finally {
-      if (previousFixture === undefined)
-        delete process.env.CHECK_WORKER_FIXTURE;
-      else process.env.CHECK_WORKER_FIXTURE = previousFixture;
-      if (testContext !== undefined)
-        process.env.NODE_TEST_CONTEXT = testContext;
-    }
+    // Its expected forced stop must not look like an incomplete outer test run.
+    const run = (() => {
+      try {
+        return runTestRunner(
+          [
+            "--test",
+            "--test-name-pattern=^native attribution fixture$",
+            "extension/check-runner.test.ts",
+          ],
+          deadline,
+          "native worker fixture",
+          undefined,
+          "ignore",
+        );
+      } finally {
+        if (previousFixture === undefined)
+          delete process.env.CHECK_WORKER_FIXTURE;
+        else process.env.CHECK_WORKER_FIXTURE = previousFixture;
+        if (testContext !== undefined)
+          process.env.NODE_TEST_CONTEXT = testContext;
+      }
+    })();
     const result = await run;
-    assert.equal(result.kind, "suite-timeout");
+    assert.ok(!result.ok && result.kind === "suite-timeout" && result.timedOut);
     assert.equal(
       result.treeGone,
       process.platform === "win32" ? undefined : true,
     );
     if (process.platform === "win32") {
+      assert.ok(result.workerDiagnostic);
       assert.match(result.workerDiagnostic, /Windows timeout snapshot/);
       assert.doesNotMatch(result.workerDiagnostic, /[A-Za-z]:\\|node\.exe/i);
       for (const line of result.workerDiagnostic.split("\n")) {
@@ -943,8 +951,9 @@ test(
     } else {
       assert.equal(result.workerDiagnostic, undefined);
     }
+    const { child } = await pids;
     assert.throws(
-      () => process.kill(pids.child, 0),
+      () => process.kill(child, 0),
       (error: any) => error?.code === "ESRCH",
     );
   },

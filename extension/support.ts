@@ -6,6 +6,12 @@ import { basename, join, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { mock } from "node:test";
 import { fileURLToPath } from "node:url";
+import type { Component, TUI } from "@earendil-works/pi-tui";
+import {
+  Theme as PiTheme,
+  type ExtensionContext,
+  type Theme,
+} from "@earendil-works/pi-coding-agent";
 import packageMetadata from "../package.json" with { type: "json" };
 import type {
   RequestRecord,
@@ -32,6 +38,65 @@ export const nativeSessions = new Map<
     sessionName?: string;
   }
 >();
+const fakeThemeColors = {
+  accent: "",
+  border: "",
+  borderAccent: "",
+  borderMuted: "",
+  success: "",
+  error: "",
+  warning: "",
+  muted: "",
+  dim: "",
+  text: "",
+  thinkingText: "",
+  scrollbarTrack: "",
+  scrollbarThumb: "",
+  selectedBg: "",
+  searchMatchBg: "",
+  searchMatchText: "",
+  userMessageBg: "",
+  userMessageText: "",
+  customMessageBg: "",
+  customMessageText: "",
+  customMessageLabel: "",
+  toolPendingBg: "",
+  toolSuccessBg: "",
+  toolErrorBg: "",
+  toolTitle: "",
+  toolOutput: "",
+  mdHeading: "",
+  mdLink: "",
+  mdLinkUrl: "",
+  mdCode: "",
+  mdCodeBlock: "",
+  mdCodeBlockBorder: "",
+  mdQuote: "",
+  mdQuoteBorder: "",
+  mdHr: "",
+  mdListBullet: "",
+  toolDiffAdded: "",
+  toolDiffRemoved: "",
+  toolDiffContext: "",
+  syntaxComment: "",
+  syntaxKeyword: "",
+  syntaxFunction: "",
+  syntaxVariable: "",
+  syntaxString: "",
+  syntaxNumber: "",
+  syntaxType: "",
+  syntaxOperator: "",
+  syntaxPunctuation: "",
+  thinkingOff: "",
+  thinkingMinimal: "",
+  thinkingLow: "",
+  thinkingMedium: "",
+  thinkingHigh: "",
+  thinkingXhigh: "",
+  thinkingMax: "",
+  bashMode: "",
+};
+const fakeTheme = new PiTheme(fakeThemeColors, fakeThemeColors, "truecolor");
 const { SessionManager: nativeSessionManager } =
   await import("@earendil-works/pi-coding-agent");
 export let sessionOpenError: unknown;
@@ -114,6 +179,8 @@ realFs.writeFileSync(
   "---\nname: agent\n---\nagent instructions\n",
 );
 const {
+  ModelRegistry: NativeModelRegistry,
+  ModelRuntime: NativeModelRuntime,
   buildContextEntries: nativeBuildContextEntries,
   buildSessionProjection: nativeBuildSessionProjection,
   CURRENT_SESSION_VERSION: nativeCurrentSessionVersion,
@@ -122,6 +189,12 @@ const {
   parseSessionEntries: nativeParseSessionEntries,
   truncateTail: nativeTruncateTail,
 } = await import("@earendil-works/pi-coding-agent");
+const fakeModelRuntime = await NativeModelRuntime.create({
+  authPath: join(testTmpRoot, "fake-auth.json"),
+  modelsPath: null,
+  refreshOnCreate: false,
+});
+const fakeModelRegistry = new NativeModelRegistry(fakeModelRuntime);
 process.on("exit", () => {
   realFs.rmSync(testTmpRoot, { recursive: true, force: true });
   realFs.rmSync(PI_AGENT_ROOT, { recursive: true, force: true });
@@ -148,27 +221,29 @@ mock.module("node:fs", {
     },
     mkdirSync: realFs.mkdirSync,
     lstatSync: realFs.lstatSync,
-    openSync: (...args: any[]) => {
-      return realFs.openSync(...args);
-    },
-    readFileSync: (...args: any[]) => {
-      fileReadHook?.(args[0]);
-      if (args[0] === join(PI_AGENT_ROOT, "pi-herdsman", "config.json"))
-        configReadHook?.();
-      if (
-        typeof args[0] === "string" &&
-        args[0].startsWith(`${PI_AGENTS_DIR}${sep}`)
-      )
-        agentDefinitionReadCount++;
-      const result = realFs.readFileSync(...args);
-      if (typeof args[0] === "string" && args[0].endsWith(`${sep}state.json`))
-        agentStateReadHook?.(args[0]);
-      return result;
-    },
-    readSync: (...args: any[]) => {
-      fileReadHook?.(args[0]);
-      return realFs.readSync(...args);
-    },
+    openSync: realFs.openSync,
+    readFileSync: new Proxy(realFs.readFileSync, {
+      apply(target, _thisArg, args) {
+        fileReadHook?.(args[0]);
+        if (args[0] === join(PI_AGENT_ROOT, "pi-herdsman", "config.json"))
+          configReadHook?.();
+        if (
+          typeof args[0] === "string" &&
+          args[0].startsWith(`${PI_AGENTS_DIR}${sep}`)
+        )
+          agentDefinitionReadCount++;
+        const result = Reflect.apply(target, realFs, args);
+        if (typeof args[0] === "string" && args[0].endsWith(`${sep}state.json`))
+          agentStateReadHook?.(args[0]);
+        return result;
+      },
+    }),
+    readSync: new Proxy(realFs.readSync, {
+      apply(target, _thisArg, args) {
+        fileReadHook?.(args[0]);
+        return Reflect.apply(target, realFs, args);
+      },
+    }),
     readdirSync: realFs.readdirSync,
     realpathSync: realFs.realpathSync,
     renameSync: (source: string, destination: string) => {
@@ -209,13 +284,15 @@ mock.module("node:fs", {
       return realFs.unlinkSync(path);
     },
     writeFileSync: realFs.writeFileSync,
-    writeSync: (...args: any[]) => {
-      if (failNextMailboxWrite) {
-        failNextMailboxWrite = false;
-        throw new Error("injected mailbox state write failure");
-      }
-      return realFs.writeSync(...args);
-    },
+    writeSync: new Proxy(realFs.writeSync, {
+      apply(target, _thisArg, args) {
+        if (failNextMailboxWrite) {
+          failNextMailboxWrite = false;
+          throw new Error("injected mailbox state write failure");
+        }
+        return Reflect.apply(target, realFs, args);
+      },
+    }),
     watch: (directory: string, _options: unknown, listener: Function) => {
       if (failNextMailboxWatch) {
         failNextMailboxWatch = false;
@@ -377,7 +454,7 @@ mock.module("@earendil-works/pi-coding-agent", {
             ],
           getBranch: () => session?.entries ?? [],
           appendCustomEntry: (customType: string, data: unknown) => {
-            session?.entries.push({ type: "custom", customType, data });
+            session?.entries?.push({ type: "custom", customType, data });
           },
           buildContextEntries: () =>
             session?.contextEntries ??
@@ -590,7 +667,7 @@ mock.module("typebox", {
     Type: {
       Object: (
         properties: Record<string, { "~optional"?: boolean }>,
-        options: unknown = {},
+        options: object = {},
       ) => {
         const required = Object.keys(properties).filter(
           (key) => !properties[key]?.["~optional"],
@@ -599,16 +676,16 @@ mock.module("typebox", {
           type: "object",
           ...(required.length ? { required } : {}),
           properties,
-          ...(options as object),
+          ...options,
         };
       },
       Optional: (value: object) =>
         Object.defineProperty({ ...value }, "~optional", { value: true }),
-      String: (options: unknown = {}) => ({ type: "string", ...options }),
-      Boolean: (options: unknown = {}) => ({ type: "boolean", ...options }),
-      Number: (options: unknown = {}) => ({ type: "number", ...options }),
-      Integer: (options: unknown = {}) => ({ type: "integer", ...options }),
-      Array: (items: unknown, options: unknown = {}) => ({
+      String: (options: object = {}) => ({ type: "string", ...options }),
+      Boolean: (options: object = {}) => ({ type: "boolean", ...options }),
+      Number: (options: object = {}) => ({ type: "number", ...options }),
+      Integer: (options: object = {}) => ({ type: "integer", ...options }),
+      Array: (items: unknown, options: object = {}) => ({
         type: "array",
         items,
         ...options,
@@ -778,15 +855,22 @@ export function assignmentLockPathForTest(mailbox: string): string {
 export function fakeContext(
   entries: unknown[] = [],
   branch: unknown[] = entries,
-): Context {
+): ExtensionContext {
   return {
     cwd: "/tmp",
     hasUI: false,
     mode: "tui",
+    modelRegistry: fakeModelRegistry,
+    model: undefined,
+    scopedModels: [],
+    signal: undefined,
     abort: () => undefined,
     isProjectTrusted: () => true,
     isIdle: () => true,
     hasPendingMessages: () => false,
+    shutdown: () => undefined,
+    compact: () => undefined,
+    getSystemPrompt: () => "",
     waitForIdle: async () => undefined,
     getContextUsage: () => ({ tokens: 2, contextWindow: 10, percent: null }),
     sessionManager: {
@@ -800,9 +884,89 @@ export function fakeContext(
       notify: () => undefined,
       select: async () => "tab",
       confirm: async () => true,
-      setWidget: (_key: string, content: WidgetContent) =>
-        assertWidgetContent(content),
-      custom: async () => undefined,
+      input: async (): Promise<never> => {
+        throw new Error(
+          "fakeContext: ui.input requires an explicit test override",
+        );
+      },
+      pasteToEditor: (): never => {
+        throw new Error(
+          "fakeContext: ui.pasteToEditor requires an explicit test override",
+        );
+      },
+      setEditorText: (): never => {
+        throw new Error(
+          "fakeContext: ui.setEditorText requires an explicit test override",
+        );
+      },
+      getEditorText: (): never => {
+        throw new Error(
+          "fakeContext: ui.getEditorText requires an explicit test override",
+        );
+      },
+      editor: async (): Promise<never> => {
+        throw new Error(
+          "fakeContext: ui.editor requires an explicit test override",
+        );
+      },
+      addAutocompleteProvider: (): never => {
+        throw new Error(
+          "fakeContext: ui.addAutocompleteProvider requires an explicit test override",
+        );
+      },
+      setEditorComponent: () => undefined,
+      getEditorComponent: (): never => {
+        throw new Error(
+          "fakeContext: ui.getEditorComponent requires an explicit test override",
+        );
+      },
+      theme: fakeTheme,
+      getAllThemes: (): never => {
+        throw new Error(
+          "fakeContext: ui.getAllThemes requires an explicit test override",
+        );
+      },
+      getTheme: (): never => {
+        throw new Error(
+          "fakeContext: ui.getTheme requires an explicit test override",
+        );
+      },
+      setTheme: (): never => {
+        throw new Error(
+          "fakeContext: ui.setTheme requires an explicit test override",
+        );
+      },
+      getToolsExpanded: (): never => {
+        throw new Error(
+          "fakeContext: ui.getToolsExpanded requires an explicit test override",
+        );
+      },
+      setToolsExpanded: () => undefined,
+      onTerminalInput: (): never => {
+        throw new Error(
+          "fakeContext: ui.onTerminalInput requires an explicit test override",
+        );
+      },
+      setStatus: () => undefined,
+      setWorkingMessage: () => undefined,
+      setWorkingVisible: () => undefined,
+      setWorkingIndicator: () => undefined,
+      setHiddenThinkingLabel: () => undefined,
+      setWidget: (
+        _key: string,
+        content:
+          | string[]
+          | undefined
+          | ((tui: TUI, theme: Theme) => Component & { dispose?(): void }),
+      ) => assertWidgetContent(content),
+      setFooter: () => undefined,
+      setHeader: () => undefined,
+      setTitle: () => undefined,
+      custom: async (): Promise<never> => {
+        throw new Error(
+          "fakeContext: ui.custom requires an explicit test override",
+        );
+      },
     },
   };
 }
@@ -835,7 +999,7 @@ export function seedLeadRole(
 export function fakeAgentContext(
   entries: unknown[] = [],
   branch: unknown[] = entries,
-): Context {
+): ExtensionContext {
   const context = fakeContext(entries, branch);
   context.sessionManager = {
     ...context.sessionManager,
@@ -856,6 +1020,11 @@ export type ExecHandler = (
   args: string[],
   options?: { timeout?: number; signal?: AbortSignal },
 ) => ExecResult | Promise<ExecResult>;
+type SyncExecHandler = (
+  command: string,
+  args: string[],
+  options?: { timeout?: number; signal?: AbortSignal },
+) => ExecResult;
 
 const HERDR_STATUS_RESPONSE = JSON.stringify({
   client: { version: "0.9.1" },
@@ -880,7 +1049,12 @@ export function fakePi(
     allTools?: unknown[] | (() => unknown[]);
   } = {},
 ) {
-  const events = new Map<string, ((event: any, ctx: Context) => unknown)[]>();
+  type StoredEventHandler = (
+    event?: unknown,
+    ctx?: ExtensionContext,
+  ) => unknown;
+  const events = new Map<string, StoredEventHandler[]>();
+  const eventListeners = new Map<string, ((event: unknown) => unknown)[]>();
   const commands: string[] = [];
   const commandOptions = new Map<string, any>();
   const entryRenderers: { customType: string; renderer: unknown }[] = [];
@@ -902,14 +1076,17 @@ export function fakePi(
       : [...(options.activeTools ?? [])];
   const pi = {
     events: {
-      on(name: string, handler: (event: any) => unknown) {
-        events.set(name, [...(events.get(name) ?? []), handler]);
+      on(name: string, handler: (event: unknown) => unknown) {
+        eventListeners.set(name, [
+          ...(eventListeners.get(name) ?? []),
+          handler,
+        ]);
       },
       emit(name: string, event: any) {
-        for (const handler of events.get(name) ?? []) handler(event);
+        for (const handler of eventListeners.get(name) ?? []) handler(event);
       },
     },
-    on(name: string, handler: (event: any, ctx: Context) => unknown) {
+    on(name: string, handler: StoredEventHandler) {
       events.set(name, [...(events.get(name) ?? []), handler]);
     },
     registerCommand(name: string, options: any) {
@@ -1247,7 +1424,7 @@ export function leadExec(
   identity: FixtureIdentity = defaultFixtureIdentity,
   useAgentStatus = false,
   agentStatus: unknown = status,
-): ExecHandler {
+): SyncExecHandler {
   const mailbox = agentMailboxPath(WORKSPACE, label);
   consumeMailboxRequest(mailbox, (request) => {
     if (onRequest) onRequest(mailbox, controlMarker(request.requestId));
@@ -1396,7 +1573,7 @@ export function agentFromState(
 export function agentControllerExecutor(
   parent: ManagedAgentState,
   children: ManagedAgentState[] = [],
-): ExecHandler {
+): SyncExecHandler {
   for (const child of [parent, ...children])
     consumeMailboxRequest(
       agentMailboxPath(child.workspaceId, child.agentLabel),
@@ -1514,7 +1691,7 @@ export function delegatedLifecycleExecutor(
   testCwd = "/tmp",
   callerPane?: { paneId: string; tabId: string },
 ): {
-  exec: ExecHandler;
+  exec: SyncExecHandler;
   live: Map<string, ManagedAgentState>;
   closeOrder: string[];
   environmentCommands: string[];
@@ -1898,7 +2075,7 @@ export function cascadeExecutor(
     omitPaneLabels?: string[];
   } = {},
 ): {
-  exec: ExecHandler;
+  exec: SyncExecHandler;
   closeOrder: string[];
   live: Map<string, ManagedAgentState>;
 } {
@@ -2456,7 +2633,7 @@ export function createStagedAssignmentFixture(
   const context = fakeContext(pi.entries) as any;
   context.mode = "tui";
   context.hasUI = true;
-  let widget: StatusWidget | undefined;
+  let widget: InstanceType<typeof StatusWidget> | undefined;
   context.ui = {
     setWidget: (_key: string, content: unknown) => {
       assertWidgetContent(content);
@@ -2487,7 +2664,7 @@ export function createStagedAssignmentFixture(
     startup,
     sessionStart,
     mailbox: startup.mailbox,
-    get widgetValue(): StatusWidget {
+    get widgetValue(): InstanceType<typeof StatusWidget> {
       assert.ok(widget, "staged fixture did not create a status widget");
       return widget;
     },
@@ -2602,7 +2779,11 @@ export function startupExecutor(
   sessionObservationId?: string,
   testPaneId = "startup-pane",
 ): {
-  exec: ExecHandler;
+  exec: (
+    command: string,
+    args: string[],
+    options?: { timeout?: number; signal?: AbortSignal },
+  ) => ExecResult;
   mailbox: string;
   getCount: () => number;
   stopMailboxConsumer: () => void;

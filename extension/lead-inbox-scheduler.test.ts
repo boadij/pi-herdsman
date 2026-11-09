@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { createLeadInboxRuntime } from "./lead-runtime.ts";
 import {
   listChiefMessagePaths,
@@ -20,9 +21,12 @@ test("managed peer inbox cleanup removes messages only for a verified scope mism
     "sock",
   );
   process.env.HERDR_SOCKET_PATH = socket;
-  const context = fakeContext([
+  const entries: SessionEntry[] = [
     {
       type: "custom",
+      id: randomUUID(),
+      parentId: null,
+      timestamp: new Date().toISOString(),
       customType: "pi-herdsman-session-kind",
       data: {
         version: 1,
@@ -32,7 +36,8 @@ test("managed peer inbox cleanup removes messages only for a verified scope mism
         branch: "feature",
       },
     },
-  ]);
+  ];
+  const context = fakeContext(entries);
   context.sessionManager.getSessionId = () => "lead-session";
   const peerInboxRuntime = supervisionRuntime(socket);
   const record = {
@@ -72,7 +77,7 @@ test("managed peer inbox cleanup removes messages only for a verified scope mism
 
   try {
     writeChiefMessage(record, peerInboxRuntime);
-    await runtime.cleanupManagedPeerInbox(context as any);
+    await runtime.cleanupManagedPeerInbox(context);
     assert.deepEqual(
       listChiefMessagePaths(peerInboxRuntime, "lead-session"),
       [],
@@ -90,7 +95,7 @@ test("managed peer inbox cleanup removes messages only for a verified scope mism
       const retained = { ...record, id: randomUUID() };
       writeChiefMessage(retained, peerInboxRuntime);
       currentScope = scope;
-      await runtime.cleanupManagedPeerInbox(context as any);
+      await runtime.cleanupManagedPeerInbox(context);
       assert.equal(
         listChiefMessagePaths(peerInboxRuntime, "lead-session").some(
           (path) => readChiefMessage(path).id === retained.id,

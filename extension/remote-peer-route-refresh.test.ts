@@ -3,12 +3,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mock, test } from "node:test";
+import type { RemotePeerSnapshot, SavedPeerMachine } from "./peer-transport.ts";
 
 const realTransport = await import("./peer-transport.ts");
 const realCorrespondence = await import("./peer-correspondence.ts");
 const { acquireProcessLock } = await import("./lock.ts");
-type Machine = realTransport.SavedPeerMachine;
-type Snapshot = realTransport.RemotePeerSnapshot;
+type Machine = SavedPeerMachine;
+type Snapshot = RemotePeerSnapshot;
 const machines: Machine[] = [];
 let listMachinesImpl: () => Promise<Machine[]> = async () => machines;
 const correspondences: any[] = [];
@@ -258,6 +259,14 @@ function fixture(
     sessionKind: "ordinary",
     role,
     name: "Local Research Manager",
+    paneId: "route-test-pane",
+    tabId: "route-test-tab",
+    workspaceId: "route-test-workspace",
+    socket: "/test-route-refresh.sock",
+    group: {
+      repoKey: assignment.repoKey,
+      primaryWorkspaceId: "route-test-workspace",
+    },
     workspaceLabel: "project-alpha/main",
     piSessionId: self,
     claim,
@@ -334,12 +343,23 @@ function fixture(
   };
 }
 
-const list = (
+const list = async (
   runtime: ReturnType<typeof createLeadCoordinationRuntime>,
   context: any,
   signal?: AbortSignal,
-) =>
-  runtime.peerMessage("list", { action: "list" }, signal, undefined, context);
+) => {
+  const value = await runtime.peerMessage(
+    "list",
+    { action: "list" },
+    signal,
+    undefined,
+    context,
+  );
+  const details = value.details;
+  if (!details || !("peers" in details))
+    throw new Error("list_peers did not return peer details");
+  return { ...value, details };
+};
 const send = (
   runtime: ReturnType<typeof createLeadCoordinationRuntime>,
   context: any,
@@ -740,6 +760,8 @@ test("internal peer reconciliation does not persist model-facing target bindings
   );
   assert.deepEqual(entries, before);
   const visible = await list(f.runtime, f.context);
+  assert.ok(visible.details && "peers" in visible.details);
+  assert.ok(visible.details.peers[0] && "target" in visible.details.peers[0]);
   assert.equal(
     visible.details?.peers[0].target,
     coordinatorTarget("manager", "remote-manager"),
@@ -766,7 +788,10 @@ test("Lead rejects a bound remote peer that becomes managed", async (t) => {
     ordinaryLeadsComplete: true,
   });
   const discovered = await list(f.runtime, f.context);
-  const target = discovered.details!.peers[0].target;
+  const discoveredPeer = discovered.details.peers[0];
+  if (!discoveredPeer || !("target" in discoveredPeer))
+    throw new Error("list_peers did not return a peer target");
+  const target = discoveredPeer.target;
   probeImpl = async () => ({
     ...snapshot([{ ...peer, sessionKind: "managed" as const }]),
     ordinaryLeadsComplete: true,
@@ -806,7 +831,7 @@ test("Lead send reports failed authorization predicates without rejecting a vali
   const remoteLead = {
     ...remote("remote-lead"),
     role: "lead",
-    sessionKind: "ordinary",
+    sessionKind: "ordinary" as const,
   };
   nextSnapshots = [
     { ...snapshot([remoteLead]), ordinaryLeadsComplete: true },
@@ -826,7 +851,7 @@ test("ambiguous remote routes are excluded and report route_ambiguous", async (t
   const remoteLead = {
     ...remote("ambiguous-peer"),
     role: "lead",
-    sessionKind: "ordinary",
+    sessionKind: "ordinary" as const,
   };
   nextSnapshots = [
     { ...snapshot([remoteLead]), ordinaryLeadsComplete: true },
@@ -925,7 +950,7 @@ test("Lead send does not reuse a Manager correspondence for the same remote sess
   const remoteLead = {
     ...remote("peer-old"),
     role: "lead",
-    sessionKind: "ordinary",
+    sessionKind: "ordinary" as const,
   };
   nextSnapshots = [
     { ...snapshot([remoteLead]), ordinaryLeadsComplete: true },
@@ -1394,7 +1419,7 @@ test("remote diagnostics are capped and report the omitted count in both result 
 
   const result = await list(f.runtime, f.context);
 
-  assert.equal(result.details?.remote_diagnostics.length, 20);
+  assert.equal(result.details?.remote_diagnostics?.length, 20);
   assert.equal(result.details?.remote_diagnostics_omitted, 5);
   assert.deepEqual(JSON.parse(result.content[0].text), {
     self: { role: "manager" },

@@ -187,7 +187,7 @@ export function persistRequiredEvidenceSnapshot(
   assignmentId: string,
   name: string,
   text: string,
-): RequiredEvidence {
+): Extract<RequiredEvidence, { path: string }> & { ref: string } {
   const bytes = Buffer.from(text, "utf8");
   if (
     bytes.length > EVIDENCE_SNAPSHOT_MAX_BYTES ||

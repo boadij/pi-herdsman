@@ -192,7 +192,9 @@ test(
         isAuthorized: () => true,
         isDelivered: () => false,
         sendMessage: () => assert.fail("malformed message was sent"),
-        cleanupError: (error) => errors.push(error),
+        cleanupError: (error) => {
+          errors.push(error);
+        },
       });
       assert.equal(errors.length, 1);
       assertCleanupError(errors[0], "unlink failed", "EACCES");
@@ -219,7 +221,9 @@ test(
         isAuthorized: () => true,
         isDelivered: () => false,
         sendMessage: () => assert.fail("malformed message was sent"),
-        cleanupError: (error) => errors.push(error),
+        cleanupError: (error) => {
+          errors.push(error);
+        },
       });
       assert.equal(errors.length, 1);
       assertCleanupError(
@@ -257,7 +261,9 @@ test(
         isAuthorized: () => true,
         isDelivered: () => false,
         sendMessage: () => assert.fail("malformed message was sent"),
-        cleanupError: (error) => errors.push(error),
+        cleanupError: (error) => {
+          errors.push(error);
+        },
       });
       assert.equal(errors.length, 1);
       assertCleanupError(errors[0], "directory fsync failed", "EIO");
@@ -332,7 +338,9 @@ test(
         isAuthorized: () => true,
         isDelivered: () => false,
         sendMessage: () => assert.fail("malformed message was sent"),
-        cleanupError: (error) => errors.push(error),
+        cleanupError: (error) => {
+          errors.push(error);
+        },
       });
       assert.equal(errors.length, 1);
       assertCleanupError(
@@ -384,7 +392,9 @@ test(
         isDelivered: () => false,
         sendMessage: () => assert.fail("unauthorized message was sent"),
         rejected: () => {},
-        cleanupError: (error) => errors.push(error),
+        cleanupError: (error) => {
+          errors.push(error);
+        },
       });
       assert.equal(errors.length, 1);
       assertCleanupError(

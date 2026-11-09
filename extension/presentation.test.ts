@@ -66,6 +66,7 @@ import {
 } from "./presentation.ts";
 import { herdsmanDataRoot, herdsmanTempRoot, resultPath } from "./storage.ts";
 import { COORDINATION_MESSAGE_KINDS } from "./supervision.ts";
+import type { SupervisedLead } from "./supervision.ts";
 import { workspacePresentationProvenance } from "./index.ts";
 
 initTheme("dark");
@@ -456,10 +457,19 @@ function assertPosixMode(path: string, expected: number): void {
   if (process.platform !== "win32") assert.equal(actual, expected);
 }
 
-const lead = (overrides: Record<string, unknown> = {}) => ({
+const lead = (overrides: Partial<SupervisedLead> = {}) => ({
   lead: "session-a",
   displayName: "api/backend",
+  workspaceId: "workspace-a",
+  tabId: "tab-a",
+  paneId: "pane-a",
   runtimeState: "idle" as const,
+  agentCounts: { active: 0, blocked: 0, total: 0 },
+  availableActions: [
+    "inspect",
+    "message",
+  ] satisfies SupervisedLead["availableActions"],
+  agents: [],
   ...overrides,
 });
 
@@ -477,7 +487,10 @@ test("Supervision context formatting preserves state, safety, and bounded record
           paneId: "pane-b",
           runtimeState: "working" as const,
           agentCounts: { active: 1, blocked: 1, total: 2 },
-          availableActions: ["inspect", "message"] as const,
+          availableActions: [
+            "inspect",
+            "message",
+          ] satisfies SupervisedLead["availableActions"],
           agents: [
             { id: "agent-z", label: "reviewer", state: "blocked" as const },
             { id: "agent-a", label: "implementer", state: "working" as const },
@@ -491,7 +504,10 @@ test("Supervision context formatting preserves state, safety, and bounded record
           paneId: "pane-a",
           runtimeState: "idle" as const,
           agentCounts: { active: 0, blocked: 0, total: 0 },
-          availableActions: ["inspect", "message"] as const,
+          availableActions: [
+            "inspect",
+            "message",
+          ] satisfies SupervisedLead["availableActions"],
           agents: [],
         },
       ],
@@ -651,7 +667,10 @@ test("Manager supervision context uses the assigned branch and ordinary session"
     workspaceId: "ws",
     runtimeState: "working" as const,
     agentCounts: { active: 0, blocked: 0, total: 0 },
-    availableActions: ["message"] as const,
+    tabId: "tab-a",
+    paneId: "pane-a",
+    agents: [],
+    availableActions: ["message"] satisfies SupervisedLead["availableActions"],
   };
   const text = formatSupervisionContext(
     {
@@ -787,11 +806,12 @@ test("Chief ambient projection pluralizes counts and handles unavailable state",
 test("Chief notification counts incompatible Manager children", () => {
   const notification = formatSupervisionNotification(
     [
-      lead({
-        role: "manager",
+      {
+        ...lead(),
+        role: "manager" as const,
         leadCounts: { active: 0, blocked: 0, total: 2 },
         incompatibleLeadCount: 1,
-      }),
+      },
     ],
     "fresh",
   );
@@ -808,18 +828,18 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (_t)
           lead: "attention",
           displayName: "attention",
           runtimeState: "blocked",
-          agentCounts: { active: 1, total: 1 },
+          agentCounts: { active: 1, blocked: 0, total: 1 },
         }),
         lead({
           lead: "working",
           displayName: "working",
           runtimeState: "working",
-          agentCounts: { active: 1, total: 1 },
+          agentCounts: { active: 1, blocked: 0, total: 1 },
         }),
         lead({
           lead: "delegated",
           displayName: "delegated",
-          agentCounts: { active: 1, total: 1 },
+          agentCounts: { active: 1, blocked: 0, total: 1 },
         }),
         lead({
           lead: "blocked",
@@ -847,7 +867,7 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (_t)
         lead({
           lead: "widget-a",
           displayName: "widget-a",
-          agentCounts: { active: 1, total: 1 },
+          agentCounts: { active: 1, blocked: 0, total: 1 },
         }),
         lead({ lead: "widget-b", displayName: "widget-b" }),
       ],
@@ -1121,7 +1141,7 @@ test("Supervision peeks remain bounded while exposing safe process evidence", (_
       lead({
         displayName: "api/backend",
         runtimeState: "working",
-        agentCounts: { active: 2 },
+        agentCounts: { active: 2, blocked: 0, total: 2 },
       }),
       {
         process: {
@@ -1203,7 +1223,7 @@ test("Supervision selection uses opaque handles and moves safely", (_t) => {
       lead({
         lead: "opaque-lead-a",
         displayName: "one",
-        agentCounts: { active: 1, total: 1 },
+        agentCounts: { active: 1, blocked: 0, total: 1 },
       }),
       lead({ lead: "opaque-lead-b", displayName: "two" }),
     ];
@@ -5845,7 +5865,6 @@ test("stop summary renderer is width-safe and keeps its transcript text", (_t) =
     };
     const rendered = renderStopSummary(
       {
-        content: "[Pi Herd] Stop all result:\nStopped agent-🙂\n✓ agent-🙂",
         details: { summary: "Stopped agent-🙂\n✓ agent-🙂" },
       },
       theme,
@@ -7026,7 +7045,7 @@ test("ambient budgets retain visible targets and the mixed Agent reserve", () =>
       {
         label: "scout",
         definition: "scout",
-        state: "done" as const,
+        state: "working" as const,
         sessionId: "agent",
       },
     ],
@@ -7110,7 +7129,7 @@ test("ordinary widget bounds rows without changing snapshot counts", () => {
     agents: Array.from({ length: 12 }, (_, index) => ({
       label: `agent-${index}`,
       definition: "scout",
-      state: "done" as const,
+      state: "working" as const,
       sessionId: `session-${index}`,
     })),
     stale: true,
@@ -7210,7 +7229,7 @@ test("Chief tree connects nested Manager Leads without nesting direct Leads", ()
           lead: "delegated",
           displayName: "delegated",
           runtimeState: "idle",
-          agentCounts: { active: 1, total: 1 },
+          agentCounts: { active: 1, blocked: 0, total: 1 },
         }),
       ],
       120,
@@ -7945,7 +7964,7 @@ test("incompatible Manager Leads retain standalone and active-work click targets
   const incompatible = {
     ...lead({ lead: "incompatible-lead", branch: "feat/older" }),
     compatibility: "incompatible" as const,
-    availableActions: [] as const,
+    availableActions: [] as SupervisedLead["availableActions"],
   };
   for (const snapshot of [
     { project: "project", work: [], leads: [incompatible] },
@@ -8065,6 +8084,8 @@ test("incompatible Lead nested under a Manager remains focusable", () => {
           displayName: "Project A",
           project: "Project A",
           workspaceId: "workspace-a",
+          paneId: "pane-a",
+          tabId: "tab-a",
           runtimeState: "working" as const,
           agentCounts: { active: 0, blocked: 0, total: 0 },
           leadCounts: { active: 0, blocked: 0, total: 2 },
@@ -8075,7 +8096,6 @@ test("incompatible Lead nested under a Manager remains focusable", () => {
               paneId: "old-pane",
               tabId: "old-tab",
               workspaceId: "old-workspace",
-              display_name: "Old Lead",
               displayName: "Old Lead",
               runtimeState: "idle" as const,
               compatibility: "incompatible" as const,
@@ -8115,6 +8135,8 @@ test("incompatible Lead nested under a Manager remains focusable", () => {
           displayName: "Project A",
           project: "Project A",
           workspaceId: "workspace-a",
+          paneId: "pane-a",
+          tabId: "tab-a",
           runtimeState: "working",
           agentCounts: { active: 0, blocked: 0, total: 0 },
           leadCounts: { active: 0, blocked: 0, total: 2 },
@@ -8147,6 +8169,8 @@ test("supervision context counts nested incompatible observations", () => {
           displayName: "Project A",
           project: "Project A",
           workspaceId: "workspace-a",
+          paneId: "pane-a",
+          tabId: "tab-a",
           runtimeState: "working",
           agentCounts: { active: 0, blocked: 0, total: 0 },
           leadCounts: { active: 0, blocked: 0, total: 0 },
@@ -8180,6 +8204,8 @@ test("Manager widget reports incompatible child totals beyond the displayed cap"
           displayName: "Project A",
           project: "Project A",
           workspaceId: "workspace-a",
+          paneId: "pane-a",
+          tabId: "tab-a",
           runtimeState: "working" as const,
           agentCounts: { active: 0, blocked: 0, total: 0 },
           leadCounts: { active: 0, blocked: 0, total: 2 },
@@ -8535,7 +8561,7 @@ test("Manager work status outranks live Lead markers except when active", () => 
   assert.match(unverified, /└─ · feat\/unverified$/);
   assert.doesNotMatch(unverified, /●/);
   const incompatible = renderSupervisionLeads(
-    [lead({ compatibility: "incompatible" as const })],
+    [{ ...lead(), compatibility: "incompatible" as const }],
     120,
     { theme },
   )[1]!;
