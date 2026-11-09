@@ -41,6 +41,7 @@ import {
   updateAgentOverride,
   validateAgentDefinitionReferences,
   writePrivatePromptSnapshots,
+  type AgentDefinition,
   type Frontmatter,
 } from "./agent-definitions.ts";
 import { createLeadCommandRuntime } from "./lead/commands.ts";
@@ -1845,7 +1846,7 @@ test("writes ordered private prompt snapshots with private permissions", () => {
 });
 
 test("builds exact Pi capability launch arguments", () => {
-  const agent = {
+  const agent: AgentDefinition = {
     name: "delegate",
     path: "/agents/delegate.md",
     frontmatter: {
@@ -2123,7 +2124,7 @@ test("bundled noExtensions Agent loads and executes native Code Mode", () => {
 });
 
 test("managed launch policy always includes ask_owner and attach_handoff", () => {
-  const launch = (frontmatter: Record<string, unknown>) =>
+  const launch = (frontmatter: Frontmatter) =>
     agentLaunchArgs(
       { name: "agent", path: "/agent.md", frontmatter, body: "" },
       {
@@ -2132,7 +2133,7 @@ test("managed launch policy always includes ask_owner and attach_handoff", () =>
         managedAgent: true,
       },
     );
-  const cases = [
+  const cases: [Frontmatter, string[]][] = [
     [
       { tools: ["read", " ask_owner", "read"] },
       [
@@ -2177,7 +2178,7 @@ test("managed launch policy always includes ask_owner and attach_handoff", () =>
       ["--no-builtin-tools", "--exclude-tools", "write"],
     ],
     [{}, []],
-  ] as const;
+  ];
   for (const [frontmatter, expected] of cases) {
     const args = launch(frontmatter);
     if (expected.length) {
@@ -2220,7 +2221,7 @@ test("managed launch policy always includes ask_owner and attach_handoff", () =>
 });
 
 test("keeps omitted tools default and closes an explicit empty allowlist", () => {
-  const launch = (frontmatter: Record<string, unknown>) =>
+  const launch = (frontmatter: Frontmatter) =>
     agentLaunchArgs(
       { name: "agent", path: "/agent.md", frontmatter, body: "" },
       { bodyPromptPath: "/prompt" },
@@ -2234,7 +2235,7 @@ test("keeps omitted tools default and closes an explicit empty allowlist", () =>
 });
 
 test("applies explicit noSkills before inheritSkills defaults", () => {
-  const launch = (frontmatter: Record<string, string | boolean>) =>
+  const launch = (frontmatter: Frontmatter) =>
     agentLaunchArgs(
       { name: "agent", path: "/agent.md", frontmatter, body: "" },
       { bodyPromptPath: "/prompt" },
@@ -3005,14 +3006,14 @@ test("a configured model outranks the inherited one and keeps the definition's p
 });
 
 test("configured extension models enable discovery without changing model precedence", () => {
-  const cases = [
+  const cases: [string, string[], boolean][] = [
     ["mistral-native/zai-glm-5-3-flash", ["mistral-native"], true],
     ["MISTRAL-NATIVE/zai-glm-5-3-flash", ["mistral-native"], true],
     ["org/native/model-x", ["org/native"], true],
     ["anthropic/claude-model", ["mistral-native"], false],
     ["unknown/model-x", ["mistral-native"], false],
     ["zai-glm-5-3-flash", ["mistral-native"], false],
-  ] as const;
+  ];
 
   for (const [configured, providers, extensionDiscovery] of cases) {
     assert.deepEqual(
