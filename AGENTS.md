@@ -220,9 +220,6 @@ formatting/validation; see [Smoke testing](docs/development/smoke-testing.md).
 
 ## Backlog
 
-- The ignored `.backlog/` repository exists only in the main worktree.
-  Run Backlog CLI reads and writes from the worktree where `.backlog/` exists;
-  do not copy, synchronize, or manually edit it in another worktree.
 - For each newly verified material issue, search first, then record the exact
   reproduction, expected and observed behavior, impact, and evidence through
   the CLI. Do not file speculative or duplicate issues; report the task ID,
