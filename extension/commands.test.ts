@@ -16131,18 +16131,23 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
           cwd: options.cwd,
           encoding: "utf8",
         });
-        const stdout = args.includes("status")
-          ? result.stdout
-              .replace(/(# branch\.oid )[0-9a-f]+/u, `$1${assignedHead}`)
-              .replace(
-                detachedStatusHead ? "# branch.head feat/assigned" : "__none__",
-                detachedStatusHead ? "# branch.head (detached)" : "__none__",
-              )
-              .replace(
-                wrongStatusBranch ? "# branch.head feat/assigned" : "__none__",
-                wrongStatusBranch ? "# branch.head unexpected" : "__none__",
-              )
-          : result.stdout;
+        const stdout =
+          args.includes("status") && options.cwd === assignedCheckout
+            ? result.stdout
+                .replace(/(# branch\.oid )[0-9a-f]+/u, `$1${assignedHead}`)
+                .replace(
+                  detachedStatusHead
+                    ? "# branch.head feat/assigned"
+                    : "__none__",
+                  detachedStatusHead ? "# branch.head (detached)" : "__none__",
+                )
+                .replace(
+                  wrongStatusBranch
+                    ? "# branch.head feat/assigned"
+                    : "__none__",
+                  wrongStatusBranch ? "# branch.head unexpected" : "__none__",
+                )
+            : result.stdout;
         return { code: result.status === 0 ? 0 : 1, stdout };
       },
     },
@@ -16275,6 +16280,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   runtime.startPeriodic(ctx);
   await runtime.refresh(ctx);
   await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.match(widget.render(120)[0]!, /⎇ manager/u);
   assert.ok(
     gitCalls.some(
       (call) => call.cwd === assignedCheckout && call.args.includes("status"),
@@ -16289,9 +16295,12 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   );
   assert.ok(
     gitCalls.some(
-      (call) => call.cwd === managerCheckout && call.args.includes("--verify"),
+      (call) =>
+        call.cwd === managerCheckout &&
+        call.args.includes("--porcelain=v2") &&
+        call.args.includes("--branch"),
     ),
-    "resolve Manager HEAD for the merge base",
+    "read the Manager checkout HEAD from status for the merge base",
   );
   assert.ok(
     gitCalls.some(
@@ -16890,6 +16899,49 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
     /(?:\+11 -4|\*)/,
     "cancelled sample must not publish its late result",
   );
+
+  diffMode = "text";
+  runGit(["reset", "--hard", "HEAD"], assignedCheckout);
+  runGit(["clean", "-fd"], assignedCheckout);
+  runGit(["switch", "--orphan", "feat/unborn"], assignedCheckout);
+  const unbornCallStart = gitCalls.length;
+  testNow += 30_001;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await t.waitFor(() =>
+    assert.ok(
+      gitCalls
+        .slice(unbornCallStart)
+        .some(
+          (call) =>
+            call.cwd === assignedCheckout && call.args.includes("status"),
+        ),
+    ),
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const unbornCalls = gitCalls.slice(unbornCallStart);
+  assert.ok(
+    widget
+      .render(120)
+      .some((line: string) => /feat\/assigned.*↪ feat\/unborn/u.test(line)),
+    "the unborn checkout still exposes its branch without a comparison",
+  );
+  assert.equal(
+    unbornCalls.some(
+      (call) => call.cwd === managerCheckout && call.args.includes("--verify"),
+    ),
+    false,
+    "an unborn status HEAD must not trigger comparison-HEAD resolution",
+  );
+  assert.equal(
+    unbornCalls.some(
+      (call) => call.args[0] === "merge-base" || call.args.includes("diff"),
+    ),
+    false,
+    "an unborn checkout must not run comparison commands",
+  );
+  runGit(["clean", "-fd"], assignedCheckout);
+  runGit(["switch", "feat/assigned"], assignedCheckout);
 
   currentRole = "chief";
   currentState.chiefMode = "active";
@@ -22360,6 +22412,7 @@ test("managed Lead sampler requires a verified assignment, caches its sample, an
   );
   assert.ok(widget);
   await t.waitFor(() => assert.match(widget!.render(120)[0]!, /\+1 -0\*/u));
+  assert.match(widget!.render(120)[0]!, /⎇ feature/u);
   assert.equal(gitCalls.filter((args) => args[1] === "status").length, 1);
   const probesAfterSample = gitCalls.length;
   for (let i = 0; i < 3; i++) widget!.render(120);
@@ -22411,9 +22464,11 @@ test("managed Lead sampler requires a verified assignment, caches its sample, an
   assert.doesNotMatch(widget!.render(120)[0]!, /\+1 -0\*/u);
   assert.equal(
     gitCalls.filter((args) => args[1] === "status").length,
-    1,
-    "an unavailable assignment clears telemetry without another Git probe",
+    2,
+    "an unavailable assignment permits a local status-only observation",
   );
+  assert.equal(gitCalls.filter((args) => args[0] === "merge-base").length, 1);
+  assert.equal(gitCalls.filter((args) => args[1] === "diff").length, 1);
   widget!.render(120);
 });
 

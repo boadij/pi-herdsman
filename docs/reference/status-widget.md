@@ -180,23 +180,44 @@ released space. The branch remains the navigation target; its suffix is not
 clickable. Git indicators are advisory display values only and do not
 establish project status, authority, or integration readiness.
 
-### Managed Lead Git indicators
+The Manager header independently shows the Manager's own checkout branch and
+dirty state when available, for example `⎇ main*`. This observation does not
+depend on having managed worktree rows; it is separate from the branch and
+comparison values shown on those rows. Header and worktree observations share
+the existing sampling pass. A stale or unavailable supervision snapshot hides
+the suffix. The optional header suffix is omitted or its branch shortened when
+the terminal is too narrow; complete numeric totals take priority over the
+branch when both are available.
 
-The standalone status widget for an assigned managed Lead can show the same
-local PR-style comparison in its header. It is available only while the exact
-managed session has a currently verified assignment and the latest status
-snapshot is fresh and assigned. The suffix is right-aligned, advisory, and
-non-clickable; it appears only when the complete value fits without truncating
-the existing header. Dirty-only state is shown as `*`; a verified clean zero
-diff is `±0`, while an unavailable comparison has no suffix. Untracked changes
-make the checkout dirty but do not contribute numeric totals.
+### Lead Git indicators
+
+Ordinary Leads show their checkout's current branch and dirty state without
+numeric diff totals, for example `⎇ main` or `⎇ feat/x*`. Untracked files make
+the checkout dirty; ignored files do not. Detached `HEAD` is shown as
+`⎇ detached`, and an unborn named branch such as `main` remains visible even
+before its first commit. If Git cannot provide a valid observation, the suffix
+is omitted.
+
+An assigned managed Lead can show its checked-out branch alongside the local
+PR-style comparison in its header, for example `⎇ feat/x +245 -52*`. Numeric
+totals remain available only while the exact managed session has a currently
+verified assignment; without that evidence, independently observed branch and
+dirty state can still be shown without numeric totals. A branch switch changes
+the displayed Git branch, not assignment identity. A verified clean zero diff
+is `±0`; an ordinary Lead never shows `±0` because no comparison is made.
+
+The suffix is right-aligned, advisory, and non-clickable. Sampling uses the
+existing minimum interval of about 30 seconds. Stale or unavailable status
+snapshots hide it. Under width pressure, complete managed totals are preserved
+before attempting a recognizable truncated branch; the optional suffix is
+omitted if it cannot fit without displacing required header information.
 
 Manager and managed Lead widgets share the same merge-base and net working-tree
 comparison semantics, but sample independently in their own processes. Their
 separate caches and schedules may therefore show temporarily different
-observations. Managed Lead sampling is triggered by the existing status
-reconciliation and has a minimum interval of 30 seconds; it adds no timer or
-filesystem watcher. Ordinary Leads and Agents do not receive these indicators.
+observations. Lead sampling is triggered by the existing status reconciliation
+and has a minimum interval of 30 seconds; it adds no timer or filesystem
+watcher. Agents and Chief headers do not receive these indicators.
 
 ## Installation
 

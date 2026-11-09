@@ -3803,6 +3803,7 @@ test("managed Lead Git summaries are right-aligned, fresh-only, and inert", (t) 
     additions?: number;
     deletions?: number;
     changedFiles?: number;
+    checkedOutBranch?: string;
   } = { dirty: true, additions: 8, deletions: 2, changedFiles: 1 };
   const widget = new StatusWidget(
     undefined,
@@ -3850,15 +3851,28 @@ test("managed Lead Git summaries are right-aligned, fresh-only, and inert", (t) 
   );
   assert.equal(reads, 1);
 
+  summary = { dirty: true, checkedOutBranch: "feat/local" };
+  widget.setSnapshot({ ...snapshot, execution: undefined });
+  assert.match(widget.render(64)[0]!, /⎇ feat\/local\*/u);
+  assert.doesNotMatch(widget.render(64)[0]!, /±0|\+\d+ -\d+/u);
+  summary = { dirty: true, checkedOutBranch: "feature-long" };
+  const narrowWidth = visibleWidth("● lead") + 2 + 7;
+  const narrow = widget.render(narrowWidth)[0]!;
+  assert.match(narrow, /⎇ .*\*$/u);
+  assert.equal(visibleWidth(narrow), narrowWidth);
+  summary = { dirty: true, additions: 8, deletions: 2, changedFiles: 1 };
+  widget.setSnapshot(snapshot);
+
+  const readsBeforeStale = reads;
   widget.setSnapshot({ ...snapshot, stale: true });
   assert.doesNotMatch(widget.render(64)[0]!, /\+8 -2\*/);
-  assert.equal(reads, 1);
+  assert.equal(reads, readsBeforeStale);
   widget.setSnapshot({
     ...snapshot,
     execution: { kind: "managed", lifecycle: "unavailable" },
   });
   assert.doesNotMatch(widget.render(64)[0]!, /\+8 -2\*/);
-  assert.equal(reads, 1);
+  assert.equal(reads, readsBeforeStale + 1);
   widget.setSnapshot(snapshot);
   assert.doesNotMatch(widget.render(12)[0]!, /\+8 -2\*/);
   assert.ok(visibleWidth(widget.render(12)[0]!) <= 12);
@@ -7539,6 +7553,34 @@ test("Manager Git stats anchor right without aligning elapsed or context", () =>
   assert.ok(visibleWidth(withoutGit[1]!) < width);
   for (let w = 1; w <= width; w++)
     assert.ok(widget.render(w).every((row) => visibleWidth(row) <= w));
+});
+
+test("Manager header Git state is optional, fresh-only, and width-safe", () => {
+  const snapshot = { project: "pi-herdsman", work: [], leads: [] };
+  let summary: { dirty: boolean; checkedOutBranch?: string } | undefined = {
+    dirty: true,
+    checkedOutBranch: "feat/header",
+  };
+  const widget = createSupervisionWidget(
+    () => snapshot,
+    () => "fresh",
+    "manager",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    () => 8,
+    () => summary,
+  );
+  const header = widget.render(64)[0]!;
+  assert.match(header, /⎇ feat\/header\*/u);
+  assert.equal(visibleWidth(header), 64);
+  for (let width = 1; width <= 64; width++)
+    assert.ok(
+      widget.render(width).every((line) => visibleWidth(line) <= width),
+    );
+  summary = undefined;
+  assert.doesNotMatch(widget.render(64)[0]!, /⎇/u);
 });
 
 test("Manager Git totals survive branch truncation before context is shown", () => {

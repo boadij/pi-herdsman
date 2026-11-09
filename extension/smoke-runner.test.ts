@@ -7199,6 +7199,7 @@ test("core observation waits for every persisted session PID or fails closed", a
   const ctx = {
     assistantResult: true,
     rootProcess: { paneId: "root", pid: 101 },
+    rootSessionId: "root",
     simulated: true,
     provenance: [
       {
@@ -7233,6 +7234,40 @@ test("core observation waits for every persisted session PID or fails closed", a
       observedPids: new Set([101, 111]),
     }),
     false,
+  );
+  assert.equal(
+    coreObservationReady({
+      ...ctx,
+      paneCount: 2,
+      provenance: ctx.provenance.slice(1),
+      observedPids: new Set([101, 202]),
+    }),
+    false,
+  );
+  for (const provenance of [
+    ctx.provenance.map((row) =>
+      row.sessionId === "root" ? { ...row, pid: 999 } : row,
+    ),
+    [...ctx.provenance, ctx.provenance[0]],
+  ]) {
+    assert.throws(
+      () =>
+        coreObservationReady({
+          ...ctx,
+          paneCount: 2,
+          provenance,
+          observedPids: new Set([101, 202]),
+        }),
+      (error: Error & { code?: string }) => error.code === "SMOKE_EVIDENCE",
+    );
+  }
+  assert.equal(
+    coreObservationReady({
+      ...ctx,
+      paneCount: 2,
+      observedPids: new Set([101, 202]),
+    }),
+    true,
   );
   assert.throws(
     () =>

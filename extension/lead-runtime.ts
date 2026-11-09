@@ -917,23 +917,18 @@ type LeadProjectRuntime = ReturnType<typeof createLeadProjectRuntime>;
 
 type GitRunner = (cwd: string, args: string[]) => Promise<string>;
 
-async function observeGitChangeSummary(
+type GitWorktreeState = {
+  checkedOutBranch: string;
+  dirty: boolean;
+  head?: string;
+};
+
+async function readGitWorktreeState(
   git: GitRunner,
-  checkoutPath: string,
-  repoKey: string,
-  comparisonHead: () => Promise<string>,
-): Promise<GitChangeSummary | undefined> {
-  const root = (
-    await git(checkoutPath, ["rev-parse", "--show-toplevel"])
-  ).trim();
-  const common = resolve(
-    checkoutPath,
-    (await git(checkoutPath, ["rev-parse", "--git-common-dir"])).trim(),
-  );
-  if (!sameDirectory(root, checkoutPath) || !sameDirectory(common, repoKey))
-    return undefined;
+  cwd: string,
+): Promise<GitWorktreeState | undefined> {
   const status = (
-    await git(checkoutPath, [
+    await git(cwd, [
       "--no-optional-locks",
       "status",
       "--porcelain=v2",
@@ -949,38 +944,64 @@ async function observeGitChangeSummary(
     if (match) headers.set(match[1]!, match[2]!);
     headerEnd++;
   }
-  const leadHead = headers.get("branch.oid");
   const branchHead = headers.get("branch.head");
-  if (!branchHead || !leadHead || !/^[0-9a-f]{40,64}$/iu.test(leadHead))
-    return undefined;
+  const oid = headers.get("branch.oid");
   const checkedOutBranch =
     branchHead === "(detached)" ? "detached" : branchHead;
   if (
+    !checkedOutBranch ||
     checkedOutBranch === "(unknown)" ||
-    !/^(?:detached|[^\s\0]+)$/u.test(checkedOutBranch)
+    !/^(?:detached|[^\s\0]+)$/u.test(checkedOutBranch) ||
+    !oid ||
+    (oid !== "(initial)" && !/^[0-9a-f]{40,64}$/iu.test(oid))
   )
     return undefined;
-  const dirty = status.slice(headerEnd).some((entry) => entry.length > 0);
+  return {
+    checkedOutBranch,
+    dirty: status.slice(headerEnd).some((entry) => entry.length > 0),
+    ...(oid === "(initial)" ? {} : { head: oid }),
+  };
+}
+
+async function observeGitChangeSummary(
+  git: GitRunner,
+  checkoutPath: string,
+  repoKey: string,
+  comparisonHead: () => Promise<string>,
+): Promise<GitChangeSummary | undefined> {
+  const root = (
+    await git(checkoutPath, ["rev-parse", "--show-toplevel"])
+  ).trim();
+  const common = resolve(
+    checkoutPath,
+    (await git(checkoutPath, ["rev-parse", "--git-common-dir"])).trim(),
+  );
+  if (!sameDirectory(root, checkoutPath) || !sameDirectory(common, repoKey))
+    return undefined;
+  const state = await readGitWorktreeState(git, checkoutPath);
+  if (!state) return undefined;
   let additions: number | undefined;
   let deletions: number | undefined;
   let changedFiles: number | undefined;
   let comparisonSha: string | undefined;
-  try {
-    const head = (await comparisonHead()).trim();
-    if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(head)) {
-      const bases = (
-        await git(checkoutPath, ["merge-base", "--all", head, leadHead])
-      )
-        .trim()
-        .split(/\s+/u);
-      if (
-        bases.length === 1 &&
-        /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(bases[0]!)
-      )
-        comparisonSha = bases[0];
+  if (state.head) {
+    try {
+      const head = (await comparisonHead()).trim();
+      if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(head)) {
+        const bases = (
+          await git(checkoutPath, ["merge-base", "--all", head, state.head])
+        )
+          .trim()
+          .split(/\s+/u);
+        if (
+          bases.length === 1 &&
+          /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(bases[0]!)
+        )
+          comparisonSha = bases[0];
+      }
+    } catch {
+      // Status remains useful without a numeric comparison.
     }
-  } catch {
-    // Status remains useful without a numeric comparison.
   }
   if (comparisonSha) {
     try {
@@ -1035,7 +1056,13 @@ async function observeGitChangeSummary(
       // A valid status observation remains useful when the optional diff fails.
     }
   }
-  return { dirty, additions, deletions, changedFiles, checkedOutBranch };
+  return {
+    dirty: state.dirty,
+    additions,
+    deletions,
+    changedFiles,
+    checkedOutBranch: state.checkedOutBranch,
+  };
 }
 
 export function createLeadShutdownRuntime(host: {
@@ -3281,83 +3308,83 @@ export function registerLeadRuntime(
       },
     );
   };
-  type ManagedGitIdentity = {
+  type LeadGitIdentity = {
     sessionId: string;
-    repoKey: string;
-    branch: string;
     checkoutPath: string;
+    comparison: boolean;
+    repoKey?: string;
+    assignmentBranch?: string;
   };
-  let managedGitCache:
-    { identity: ManagedGitIdentity; summary: GitChangeSummary } | undefined;
-  let managedGitLastAttemptAt = 0;
-  let managedGitSampling: Promise<void> | undefined;
-  let managedGitAbort: AbortController | undefined;
-  let managedGitGeneration = 0;
-  let managedGitIdentity: ManagedGitIdentity | undefined;
-  const cancelManagedGitSampling = (resetRate = true): void => {
-    managedGitGeneration++;
-    managedGitAbort?.abort();
-    managedGitAbort = undefined;
-    managedGitSampling = undefined;
-    managedGitCache = undefined;
-    managedGitIdentity = undefined;
-    if (resetRate) managedGitLastAttemptAt = 0;
+  let leadGitCache:
+    { identity: LeadGitIdentity; summary: GitChangeSummary } | undefined;
+  let leadGitLastAttemptAt = 0;
+  let leadGitSampling: Promise<void> | undefined;
+  let leadGitAbort: AbortController | undefined;
+  let leadGitGeneration = 0;
+  let leadGitIdentity: LeadGitIdentity | undefined;
+  let leadGitContext: ExtensionContext | undefined;
+  const cancelLeadGitSampling = (resetRate = true): void => {
+    leadGitGeneration++;
+    leadGitAbort?.abort();
+    leadGitAbort = undefined;
+    leadGitSampling = undefined;
+    leadGitCache = undefined;
+    leadGitIdentity = undefined;
+    leadGitContext = undefined;
+    if (resetRate) leadGitLastAttemptAt = 0;
   };
-  const sameManagedGitIdentity = (
-    left: ManagedGitIdentity,
-    right: ManagedGitIdentity,
+  const sameLeadGitIdentity = (
+    left: LeadGitIdentity,
+    right: LeadGitIdentity,
   ): boolean =>
     left.sessionId === right.sessionId &&
+    left.comparison === right.comparison &&
     left.repoKey === right.repoKey &&
-    left.branch === right.branch &&
+    left.assignmentBranch === right.assignmentBranch &&
     sameDirectory(left.checkoutPath, right.checkoutPath);
-  const sampleManagedGit = (
+  const sampleLeadGit = (
     ctx: ExtensionContext,
     snapshot: StatusSnapshot,
   ): void => {
     const verified = verifiedManagedAssignment;
     const sessionId = ctx.sessionManager.getSessionId();
     const assignment = verified?.assignment;
+    const comparison =
+      sessionKind?.kind === "managed" &&
+      managedLifecycle === "assigned" &&
+      verified?.sessionId === sessionId &&
+      !!assignment;
     if (
       activeLeadRole(leadRuntime) !== "lead" ||
       !sessionKind ||
-      sessionKind.kind !== "managed" ||
       sessionKind.sessionId !== sessionId ||
       snapshot.stale ||
       snapshot.unavailable ||
-      snapshot.execution?.kind !== "managed" ||
-      snapshot.execution.lifecycle !== "assigned" ||
-      managedLifecycle !== "assigned" ||
-      verified?.sessionId !== sessionId ||
-      !assignment ||
       !statusRuntime.isWidgetActive()
     ) {
-      cancelManagedGitSampling();
+      cancelLeadGitSampling();
       return;
     }
-    const identity: ManagedGitIdentity = {
+    const identity: LeadGitIdentity = {
       sessionId,
-      repoKey: assignment.repoKey,
-      branch: assignment.branch,
       checkoutPath: ctx.cwd,
+      comparison,
+      ...(comparison
+        ? { repoKey: assignment!.repoKey, assignmentBranch: assignment!.branch }
+        : {}),
     };
-    if (
-      managedGitIdentity &&
-      !sameManagedGitIdentity(managedGitIdentity, identity)
-    )
-      cancelManagedGitSampling();
-    managedGitIdentity = identity;
-    if (
-      managedGitCache &&
-      !sameManagedGitIdentity(managedGitCache.identity, identity)
-    )
-      managedGitCache = undefined;
-    if (managedGitSampling) return;
-    if (Date.now() - managedGitLastAttemptAt < 30_000) return;
-    managedGitLastAttemptAt = Date.now();
-    const generation = ++managedGitGeneration;
+    if (leadGitIdentity && !sameLeadGitIdentity(leadGitIdentity, identity))
+      cancelLeadGitSampling();
+    leadGitIdentity = identity;
+    leadGitContext = ctx;
+    if (leadGitCache && !sameLeadGitIdentity(leadGitCache.identity, identity))
+      leadGitCache = undefined;
+    if (leadGitSampling) return;
+    if (Date.now() - leadGitLastAttemptAt < 30_000) return;
+    leadGitLastAttemptAt = Date.now();
+    const generation = ++leadGitGeneration;
     const abort = new AbortController();
-    managedGitAbort = abort;
+    leadGitAbort = abort;
     const contextSignal = ctx.signal;
     const abortFromContext = () => abort.abort(contextSignal?.reason);
     contextSignal?.addEventListener("abort", abortFromContext, { once: true });
@@ -3365,24 +3392,23 @@ export function registerLeadRuntime(
     deadline.unref?.();
     const stillCurrent = (): boolean => {
       const latest = statusRuntime.getSnapshot();
-      const currentAssignment = verifiedManagedAssignment;
       return (
-        generation === managedGitGeneration &&
+        generation === leadGitGeneration &&
         statusRuntime.isWidgetActive() &&
         activeLeadRole(leadRuntime) === "lead" &&
         sessionKind?.sessionId === identity.sessionId &&
         ctx.sessionManager.getSessionId() === identity.sessionId &&
-        managedLifecycle === "assigned" &&
-        currentAssignment?.sessionId === identity.sessionId &&
-        currentAssignment.assignment.repoKey === identity.repoKey &&
-        currentAssignment.assignment.branch === identity.branch &&
+        (!identity.comparison ||
+          (managedLifecycle === "assigned" &&
+            verifiedManagedAssignment?.sessionId === identity.sessionId &&
+            verifiedManagedAssignment.assignment.repoKey === identity.repoKey &&
+            verifiedManagedAssignment.assignment.branch ===
+              identity.assignmentBranch)) &&
         sameDirectory(ctx.cwd, identity.checkoutPath) &&
         !latest.stale &&
         !latest.unavailable &&
-        latest.execution?.kind === "managed" &&
-        latest.execution.lifecycle === "assigned" &&
-        managedGitIdentity !== undefined &&
-        sameManagedGitIdentity(managedGitIdentity, identity)
+        leadGitIdentity !== undefined &&
+        sameLeadGitIdentity(leadGitIdentity, identity)
       );
     };
     const current = (): boolean => !abort.signal.aborted && stillCurrent();
@@ -3400,33 +3426,40 @@ export function registerLeadRuntime(
     const sampling = (async () => {
       let summary: GitChangeSummary | undefined;
       try {
-        summary = await observeGitChangeSummary(
-          git,
-          identity.checkoutPath,
-          identity.repoKey,
-          async () =>
-            git(identity.checkoutPath, [
-              "rev-parse",
-              "--verify",
-              "main-worktree/HEAD^{commit}",
-            ]),
-        );
+        if (identity.comparison) {
+          summary = await observeGitChangeSummary(
+            git,
+            identity.checkoutPath,
+            identity.repoKey!,
+            async () =>
+              git(identity.checkoutPath, [
+                "rev-parse",
+                "--verify",
+                "main-worktree/HEAD^{commit}",
+              ]),
+          );
+        } else {
+          const state = await readGitWorktreeState(git, identity.checkoutPath);
+          summary = state
+            ? { dirty: state.dirty, checkedOutBranch: state.checkedOutBranch }
+            : undefined;
+        }
       } catch {
         // Optional Git telemetry must not affect the managed Lead status.
       }
       if (!stillCurrent()) return;
-      managedGitCache =
+      leadGitCache =
         summary && !abort.signal.aborted ? { identity, summary } : undefined;
       statusRuntime.invalidateWidget();
     })().finally(() => {
       clearTimeout(deadline);
       contextSignal?.removeEventListener("abort", abortFromContext);
-      if (managedGitSampling === sampling) {
-        managedGitSampling = undefined;
-        if (managedGitAbort === abort) managedGitAbort = undefined;
+      if (leadGitSampling === sampling) {
+        leadGitSampling = undefined;
+        if (leadGitAbort === abort) leadGitAbort = undefined;
       }
     });
-    managedGitSampling = sampling;
+    leadGitSampling = sampling;
   };
   statusRuntime.configure({
     ...options.statusSnapshotHost,
@@ -3440,22 +3473,30 @@ export function registerLeadRuntime(
     focusTarget,
     getGitSummary: () => {
       const snapshot = statusRuntime.getSnapshot();
-      const verified = verifiedManagedAssignment;
-      const identity = managedGitCache?.identity;
-      return identity &&
-        !snapshot.stale &&
-        !snapshot.unavailable &&
-        snapshot.execution?.kind === "managed" &&
-        snapshot.execution.lifecycle === "assigned" &&
-        identity.sessionId === sessionKind?.sessionId &&
-        verified?.sessionId === identity.sessionId &&
-        verified.assignment.repoKey === identity.repoKey &&
-        verified.assignment.branch === identity.branch
-        ? managedGitCache?.summary
+      const cached = leadGitCache;
+      const identity = cached?.identity;
+      if (
+        !identity ||
+        activeLeadRole(leadRuntime) !== "lead" ||
+        !sessionKind ||
+        sessionKind.sessionId !== identity.sessionId ||
+        leadGitContext?.sessionManager.getSessionId() !== identity.sessionId ||
+        snapshot.stale ||
+        snapshot.unavailable ||
+        !sameDirectory(identity.checkoutPath, leadGitContext.cwd)
+      )
+        return undefined;
+      return !identity.comparison ||
+        (managedLifecycle === "assigned" &&
+          verifiedManagedAssignment?.sessionId === identity.sessionId &&
+          verifiedManagedAssignment.assignment.repoKey === identity.repoKey &&
+          verifiedManagedAssignment.assignment.branch ===
+            identity.assignmentBranch)
+        ? cached.summary
         : undefined;
     },
-    onFreshStatus: sampleManagedGit,
-    onWidgetStop: () => cancelManagedGitSampling(),
+    onFreshStatus: sampleLeadGit,
+    onWidgetStop: () => cancelLeadGitSampling(),
   });
   let projectRuntime: ReturnType<typeof createLeadProjectRuntime>;
   const projectHost = options.projectHost;
@@ -5367,6 +5408,14 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     managerCheckoutPath: string;
     summary: GitChangeSummary;
   };
+  let managerHeaderGit:
+    | {
+        generation: string;
+        checkoutPath: string;
+        repoKey: string;
+        summary: GitChangeSummary;
+      }
+    | undefined;
   const gitSummaries = new Map<string, CachedGitSummary>();
   let gitSampling: Promise<void> | undefined;
   let gitLastAttemptAt = 0;
@@ -5377,6 +5426,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     gitAbort = undefined;
     gitSampling = undefined;
     gitSummaries.clear();
+    managerHeaderGit = undefined;
     if (resetRate) gitLastAttemptAt = 0;
   };
 
@@ -5431,10 +5481,6 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
           (item.work.status === "active" || item.work.status === "paused") &&
           !!item.work.checkoutPath,
       );
-    if (!entries.length) {
-      gitSummaries.clear();
-      return;
-    }
     gitLastAttemptAt = Date.now();
     const abort = new AbortController();
     gitAbort = abort;
@@ -5445,6 +5491,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     overallTimeout.unref?.();
     const run = async (): Promise<void> => {
       const next = new Map<string, CachedGitSummary>();
+      let headerSummary: GitChangeSummary | undefined;
       const current = () =>
         !abort.signal.aborted &&
         uiContext === ctx &&
@@ -5479,10 +5526,25 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             host.state.managerLease!.descriptor.repoKey,
           ))
         ) {
-          if (current()) gitSummaries.clear();
+          if (current()) {
+            gitSummaries.clear();
+            managerHeaderGit = undefined;
+          }
           return;
         }
         let managerHead: string | undefined;
+        try {
+          const state = await readGitWorktreeState(git, managerCheckoutPath);
+          if (state) {
+            headerSummary = {
+              dirty: state.dirty,
+              checkedOutBranch: state.checkedOutBranch,
+            };
+            managerHead = state.head;
+          }
+        } catch {
+          // A failed header observation does not disable managed-worktree diffs.
+        }
         for (const item of entries) {
           if (!current()) return;
           if (item.kind !== "work") continue;
@@ -5519,9 +5581,20 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         if (!current()) return;
         gitSummaries.clear();
         for (const [session, result] of next) gitSummaries.set(session, result);
+        managerHeaderGit = headerSummary
+          ? {
+              generation: expectedGeneration,
+              checkoutPath: managerCheckoutPath,
+              repoKey: host.state.managerLease!.descriptor.repoKey,
+              summary: headerSummary,
+            }
+          : undefined;
         renderWidget?.();
       } catch {
-        if (current()) gitSummaries.clear();
+        if (current()) {
+          gitSummaries.clear();
+          managerHeaderGit = undefined;
+        }
         /* Baseline failure suppresses this optional sample only. */
       }
     };
@@ -6621,6 +6694,22 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
               },
             },
             () => statusWidgetMaxRows,
+            () => {
+              const cached = managerHeaderGit;
+              const currentSnapshot = isProjectSnapshot(snapshot)
+                ? snapshot
+                : undefined;
+              const lease = host.state.managerLease;
+              return cached &&
+                host.activeRole() === "manager" &&
+                status(ctx) === "fresh" &&
+                currentSnapshot?.managerCheckoutPath &&
+                cached.generation === generation(ctx) &&
+                cached.checkoutPath === currentSnapshot.managerCheckoutPath &&
+                cached.repoKey === lease?.descriptor.repoKey
+                ? cached.summary
+                : undefined;
+            },
           );
         });
       } catch {
