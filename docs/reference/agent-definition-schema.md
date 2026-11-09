@@ -41,6 +41,21 @@ Unknown frontmatter fields fail validation.
 An explicit `tools` list is a closed allowlist. Tool entries cannot use Pi's
 `+name` or `-name` modifier syntax, including inside comma-separated values.
 
+Bundled Agents and the managed Lead enable Pi's native `codemode` by default.
+Definitions that specify `noExtensions: true` also load only
+`extensions: [builtin:codemode]` explicitly. A user's higher-precedence overlay
+can remove `codemode` or its extension. Runtime role profiles cannot configure
+extensions, so the `codemode` tool is available there only when Pi has loaded
+its built-in extension. The Flexible Lead continues to inherit the user's
+ordinary Pi tool selection.
+
+Code Mode does not add `bash`, `edit`, or `write` to a role's tool policy.
+Ordinary Lead profiles with explicit tools also enforce that policy during
+nested tool execution. `delegate_agent`, `continue_agent`, and `ask_owner`
+remain model-only and cannot be called from Code Mode scripts. Other extensions
+may have different execution permissions; the bundled default applies only to
+Pi's native `codemode`.
+
 Malformed files fail discovery; Pi Herdsman does not silently drop one invalid
 definition and return a partial roster.
 
@@ -140,7 +155,8 @@ active, observed changes to Pi's active ordinary tools update the saved
 baseline before subsequent role reconciliation. Explicit allowlists and
 `excludeTools` remain authoritative, and restrictive roles do not supply the
 ordinary baseline. Bundled Orchestrate Lead, Manager, and Chief definitions
-explicitly select `tools: []`, disabling ordinary tools by default. Explicit
+explicitly select `tools: [codemode]`, enabling Pi's native Code Mode when the
+built-in extension is loaded while keeping other ordinary tools disabled. Explicit
 effective allowlists select matching registered ordinary tools; required
 coordination tools remain available independently. `excludeTools` is applied
 after the ordinary allowlist. Herdsman-owned tools cannot be activated through

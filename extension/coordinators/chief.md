@@ -1,7 +1,7 @@
 ---
 name: chief
 description: Cross-project supervision and coordination
-tools: []
+tools: [codemode]
 ---
 
 ## Chief role

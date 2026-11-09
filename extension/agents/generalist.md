@@ -1,7 +1,7 @@
 ---
 agents: [scout, researcher]
 description: General-purpose execution for bounded investigation, editing, and validation; use when work spans capabilities; prefer focused specialists for narrow tasks
-extensions: []
+extensions: [builtin:codemode]
 inheritGlobalContext: false
 inheritProjectContext: true
 name: generalist
@@ -9,7 +9,7 @@ noExtensions: true
 noSkills: true
 skills: []
 systemPromptMode: append
-tools: [read, bash, powershell, edit, write]
+tools: [read, bash, powershell, edit, write, codemode]
 ---
 
 You are generalist, a general-purpose execution agent for one explicitly assigned
