@@ -7826,6 +7826,29 @@ test("native Code Mode preserves accepted Agent lifecycle through reopen and con
     for (const handler of controller.events.get("agent_start") ?? [])
       await handler(undefined, activeContext);
   };
+  const acceptedSessionAt = (
+    index: number,
+    action: "delegate_agent" | "continue_agent",
+  ): { sessionId: string; sessionPath: string } => {
+    const controllerResult = controllerResults[index];
+    assert.ok(controllerResult);
+    assert.equal(controllerResult.name, action);
+    const result = controllerResult.result;
+    assert.ok(result && typeof result === "object" && "details" in result);
+    const details = result.details;
+    assert.ok(
+      details &&
+        typeof details === "object" &&
+        "session_id" in details &&
+        typeof details.session_id === "string" &&
+        "session_path" in details &&
+        typeof details.session_path === "string",
+    );
+    return {
+      sessionId: details.session_id,
+      sessionPath: details.session_path,
+    };
+  };
   const { session } = await createAgentSession({
     cwd: WORKSPACE,
     agentDir: testTmpRoot,
@@ -7863,6 +7886,14 @@ test("native Code Mode preserves accepted Agent lifecycle through reopen and con
       reopenOwnerHistory,
     );
     assert.equal(accepted.length, 2);
+    assert.deepEqual(
+      acceptedSessionAt(2, "continue_agent"),
+      acceptedSessionAt(0, "delegate_agent"),
+    );
+    assert.deepEqual(acceptedSessionAt(2, "continue_agent"), {
+      sessionId: DEFAULT_PI_SESSION_ID,
+      sessionPath: childPath,
+    });
     assert.equal(
       nativeSessions.get(DEFAULT_PI_SESSION_ID)?.id,
       DEFAULT_PI_SESSION_ID,

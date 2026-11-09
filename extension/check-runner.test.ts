@@ -886,7 +886,8 @@ test(
     );
     assert.ok(pids);
     process.kill(pids.child, 0);
-    assert.ok(!result.ok && result.kind === "suite-timeout-cleanup-failed");
+    assert.ok(!result.ok && result.kind === "suite-timeout");
+    assert.ok(result.runnerGone);
     assert.equal(result.treeGone, undefined);
     assert.match(result.diagnostic, /descendant cleanup unverified/);
   },
