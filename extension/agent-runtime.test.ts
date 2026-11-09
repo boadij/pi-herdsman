@@ -233,7 +233,7 @@ test("Lead visibility follows only uniquely proven workspace-scoped ancestry", (
         direct,
       ],
     },
-    { kind: "lead" },
+    { kind: "root" },
     LEAD_SESSION_ID,
   );
   assert.deepEqual(
@@ -2558,7 +2558,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
   writeAgentState(childTwoMailbox, childTwo);
   writeAgentState(childThreeMailbox, childThree);
   writeAgentState(foreignChildMailbox, foreignChild);
-  const entries = [
+  const entries: unknown[] = [
     {
       type: "custom",
       customType: "pi-herdsman-result-ref",
@@ -3855,7 +3855,14 @@ test("shared Agent instructions do not advertise optional shell tools", () => {
 
 test("managed agents cap direct built-in shell calls without explicit timeouts", async () => {
   setAgentEnvironment();
-  const cases = [
+  const cases: {
+    name: string;
+    toolName: string;
+    source: "builtin" | "extension";
+    input: { command?: string; timeout?: number; value?: string };
+    timeout?: number;
+    hasTimeoutProperty?: boolean;
+  }[] = [
     {
       name: "bash",
       toolName: "bash",
@@ -5239,7 +5246,9 @@ test("fresh foreign-root recipient reads an accepted result after producer clean
       context,
     );
     assert.equal(transferredPage.content[0].text, text);
-    assert.equal(resolveScopedResult(semantic)?.rootSessionId, LEAD_SESSION_ID);
+    const resolved = resolveScopedResult(semantic);
+    assert.ok(resolved && typeof resolved === "object");
+    assert.equal(resolved.rootSessionId, LEAD_SESSION_ID);
 
     // Legacy valid state has no ownership scope: accepted result access still works,
     // but the arbitrary inherited environment scope is not used for authorization.
@@ -5618,10 +5627,10 @@ test("acceptance upgrades legacy evidence durably without rewriting saved contin
       managedAgentRequiredEvidence(reloadedContext)?.effectiveEvidence,
       [{ ...legacyEvidence, ref: snapshot.ref }],
     );
-    assert.equal(
-      managedAgentRequiredEvidence(reloadedContext)?.effectiveEvidence[0]?.ref,
-      snapshot.ref,
-    );
+    const reloadedEvidence =
+      managedAgentRequiredEvidence(reloadedContext)?.effectiveEvidence[0];
+    assert.ok(reloadedEvidence && !("result" in reloadedEvidence));
+    assert.equal(reloadedEvidence.ref, snapshot.ref);
     const reader = agent.tools.find((tool) => tool.name === "read_evidence");
     assert.ok(reader);
     const read = await reader.execute(
@@ -6368,6 +6377,12 @@ test("overflow retires without cancellation and inactive sessions stay untouched
     const calls = agent.sentMessageCalls.slice(sentBefore);
     assert.equal(calls.length, 1);
     assert.deepEqual(calls[0].options, { triggerTurn: false });
+    assert.ok(
+      calls[0].message &&
+        typeof calls[0].message === "object" &&
+        "content" in calls[0].message,
+    );
+    assert.ok(typeof calls[0].message.content === "string");
     assert.deepEqual(calls[0].message, {
       customType: "pi-herdsman-agent-context-retired",
       content: calls[0].message.content,
@@ -6560,7 +6575,9 @@ test("overflow reminder is deduplicated only against the effective instruction",
     const queued: any[] = [];
     const agent = fakePi({
       entries,
-      sendMessage: (message: any) => queued.push(message),
+      sendMessage: (message: any) => {
+        queued.push(message);
+      },
     });
     registerManagedAgentContextHandlers(agent.pi as never, {
       contextRetirementEnabled: () => true,
@@ -6669,7 +6686,9 @@ test("threshold retirement bridges guidance into the next request once", () => {
   const alreadyVisibleQueued: any[] = [];
   const alreadyVisibleAgent = fakePi({
     entries: alreadyVisibleEntries,
-    sendMessage: (message: any) => alreadyVisibleQueued.push(message),
+    sendMessage: (message: any) => {
+      alreadyVisibleQueued.push(message);
+    },
   });
   registerManagedAgentContextHandlers(alreadyVisibleAgent.pi as never, {
     contextRetirementEnabled: () => true,
@@ -6846,6 +6865,7 @@ test("Pi 1.1.0 delivers retirement before an adversarial Agent continues tool us
         parameters: Type.Object({}),
         execute: async () => ({
           content: [{ type: "text", text: "context pressure ".repeat(750) }],
+          details: undefined,
         }),
       },
       {
@@ -6855,7 +6875,10 @@ test("Pi 1.1.0 delivers retirement before an adversarial Agent continues tool us
         parameters: Type.Object({}),
         execute: async () => {
           unnecessaryReads++;
-          return { content: [{ type: "text", text: "file contents" }] };
+          return {
+            content: [{ type: "text", text: "file contents" }],
+            details: undefined,
+          };
         },
       },
     ],
@@ -7293,7 +7316,7 @@ test("owner ask resolved while busy is not delivered after settlement", async ()
     await pi.events.get("session_start")![0](undefined, context);
     assert.equal(pi.sent.length, 0);
     writeAgentState(mailbox, { ...waiting, pendingAskId: undefined });
-    removeAsk(mailbox, waiting.pendingAskId!);
+    removeAsk(mailbox);
     (context as any).isIdle = () => true;
     for (const handler of pi.events.get("agent_settled") ?? [])
       await handler({ aborted: false }, context);
@@ -7455,12 +7478,14 @@ test("Pi native nested dispatch executes direct tools and actual staff handler d
             branch: Type.String(),
             expected_head: Type.String(),
           }),
-          execute: async (...args: any[]) => {
+          execute: async (id, params, signal, update, context) => {
             staffExecutions++;
             return projectRuntime.executeStaff(
-              ...args.slice(0, 3),
-              args[3],
-              args[4],
+              id,
+              params,
+              signal,
+              update,
+              context,
             );
           },
         });
@@ -7491,6 +7516,7 @@ test("Pi native nested dispatch executes direct tools and actual staff handler d
                   text: `list_agents ${JSON.stringify(nestedAgentList)};${denied.isError ? `project denied: ${JSON.stringify(denied)}` : "project invoked"}`,
                 },
               ],
+              details: undefined,
             };
           },
         });
@@ -7800,6 +7826,29 @@ test("native Code Mode preserves accepted Agent lifecycle through reopen and con
     for (const handler of controller.events.get("agent_start") ?? [])
       await handler(undefined, activeContext);
   };
+  const acceptedSessionAt = (
+    index: number,
+    action: "delegate_agent" | "continue_agent",
+  ): { sessionId: string; sessionPath: string } => {
+    const controllerResult = controllerResults[index];
+    assert.ok(controllerResult);
+    assert.equal(controllerResult.name, action);
+    const result = controllerResult.result;
+    assert.ok(result && typeof result === "object" && "details" in result);
+    const details = result.details;
+    assert.ok(
+      details &&
+        typeof details === "object" &&
+        "session_id" in details &&
+        typeof details.session_id === "string" &&
+        "session_path" in details &&
+        typeof details.session_path === "string",
+    );
+    return {
+      sessionId: details.session_id,
+      sessionPath: details.session_path,
+    };
+  };
   const { session } = await createAgentSession({
     cwd: WORKSPACE,
     agentDir: testTmpRoot,
@@ -7837,8 +7886,19 @@ test("native Code Mode preserves accepted Agent lifecycle through reopen and con
       reopenOwnerHistory,
     );
     assert.equal(accepted.length, 2);
-    assert.equal(accepted[1]!.sessionId, accepted[0]!.sessionId);
-    assert.equal(accepted[1]!.sessionPath, accepted[0]!.sessionPath);
+    assert.deepEqual(
+      acceptedSessionAt(2, "continue_agent"),
+      acceptedSessionAt(0, "delegate_agent"),
+    );
+    assert.deepEqual(acceptedSessionAt(2, "continue_agent"), {
+      sessionId: DEFAULT_PI_SESSION_ID,
+      sessionPath: childPath,
+    });
+    assert.equal(
+      nativeSessions.get(DEFAULT_PI_SESSION_ID)?.id,
+      DEFAULT_PI_SESSION_ID,
+    );
+    assert.equal(nativeSessions.get(DEFAULT_PI_SESSION_ID)?.path, childPath);
     await completeRequest(accepted[1]!);
     for (let attempt = 0; attempt < 100; attempt++) {
       if (
@@ -7946,6 +8006,7 @@ test("Manager event boundaries enforce actual faux-provider declarations on firs
             parameters: Type.Object({}),
             execute: async () => ({
               content: [{ type: "text", text: "probe completed" }],
+              details: undefined,
             }),
           });
           const toolState = createLeadToolState(
@@ -7979,6 +8040,7 @@ test("Manager event boundaries enforce actual faux-provider declarations on firs
                 parameters: Type.Object({}),
                 execute: async () => ({
                   content: [{ type: "text", text: "unused" }],
+                  details: undefined,
                 }),
               });
             }
@@ -7989,6 +8051,7 @@ test("Manager event boundaries enforce actual faux-provider declarations on firs
               parameters: Type.Object({}),
               execute: async () => ({
                 content: [{ type: "text", text: "unused" }],
+                details: undefined,
               }),
             });
             firstLateToolAutoActivated = api
@@ -8005,6 +8068,7 @@ test("Manager event boundaries enforce actual faux-provider declarations on firs
               parameters: Type.Object({}),
               execute: async () => ({
                 content: [{ type: "text", text: "unused" }],
+                details: undefined,
               }),
             });
             continuationLateToolAutoActivated = api

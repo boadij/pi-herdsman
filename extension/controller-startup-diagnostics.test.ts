@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { performance } from "node:perf_hooks";
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
   AGENT_ID,
   DEFAULT_PI_SESSION_ID,
+  LEAD_SESSION_ID,
   fakeContext,
   fakePi,
   isPaneClose,
@@ -14,12 +16,42 @@ import {
   realFs,
   registerExtension,
   resetAgentMailbox,
-  seedLeadRole,
   setLeadEnvironment,
   startupExecutor,
   readAgentStartupOutcome,
   writeAgentStartupOutcome,
 } from "./support.ts";
+
+function startupRoleHistory(): SessionEntry[] {
+  const timestamp = new Date().toISOString();
+  const roleId = "startup-role-entry";
+  return [
+    {
+      type: "custom",
+      id: roleId,
+      parentId: null,
+      timestamp,
+      customType: "pi-herdsman-role",
+      data: {
+        sessionId: LEAD_SESSION_ID,
+        role: "lead",
+        leadTools: ["read"],
+      },
+    },
+    {
+      type: "custom",
+      id: "startup-execution-entry",
+      parentId: roleId,
+      timestamp,
+      customType: "pi-herdsman-lead-execution",
+      data: {
+        sessionId: LEAD_SESSION_ID,
+        mode: "orchestrate",
+        leadTools: ["read"],
+      },
+    },
+  ];
+}
 
 function safeHerdrOperation(
   command: string,
@@ -69,6 +101,7 @@ for (const scenario of [
       }[],
     };
     let startupReturnedAt: number | undefined;
+    let agentStarted = false;
     let startupRejected = false;
     let rollbackPaneSettled = false;
     const pi = fakePi({
@@ -83,8 +116,31 @@ for (const scenario of [
               code: 0,
               killed: false,
             };
+          if (agentStarted && operation === "pane-process-info")
+            return {
+              stdout: JSON.stringify({
+                id: AGENT_ID,
+                result: {
+                  process_info: {
+                    pane_id: "startup-pane",
+                    shell_pid: 123,
+                    foreground_process_group_id: 456,
+                    foreground_processes: [{ pid: 456, argv0: "node" }],
+                  },
+                },
+              }),
+              stderr: "",
+              code: 0,
+            };
+          if (command === "herdr" && isPreservePaneStop(args))
+            return {
+              stdout: "",
+              stderr: "fixture rollback stop failed",
+              code: 1,
+            };
           const result = await startup.exec(command, args, options);
           if (operation === "agent-start") {
+            agentStarted = true;
             const outcome = readAgentStartupOutcome(startup.mailbox)!;
             if (scenario === "failed")
               writeAgentStartupOutcome(startup.mailbox, {
@@ -127,7 +183,7 @@ for (const scenario of [
       },
     });
     registerExtension!(pi.pi as never);
-    seedLeadRole(fakeContext(pi.entries));
+    pi.entries.push(...startupRoleHistory());
     await pi.events.get("session_start")![0](
       undefined,
       fakeContext(pi.entries),
@@ -259,7 +315,7 @@ test(
       },
     });
     registerExtension!(pi.pi as never);
-    seedLeadRole(fakeContext(pi.entries));
+    pi.entries.push(...startupRoleHistory());
     await pi.events.get("session_start")![0](
       undefined,
       fakeContext(pi.entries),
@@ -357,7 +413,7 @@ test(
       },
     });
     registerExtension!(pi.pi as never);
-    seedLeadRole(fakeContext(pi.entries));
+    pi.entries.push(...startupRoleHistory());
     await pi.events.get("session_start")![0](
       undefined,
       fakeContext(pi.entries),

@@ -99,7 +99,9 @@ const {
   writeLeadCoordinationState,
 } = await import("./supervision.ts");
 import type {
+  ChiefInboxDrainOptions,
   GlobalProjectAssignment,
+  LiveAgent,
   LeadCoordinationState,
   OpenProjectWorkspace,
   PeerLeadRecord,
@@ -165,7 +167,9 @@ test("verified Pi-history delivery persists peer receipt before inbox removal", 
     sessionId: record.toSessionId,
     isAuthorized: () => true,
     isDelivered: () => true,
-    sendMessage: () => submitted++,
+    sendMessage: () => {
+      submitted++;
+    },
     accepted: (delivered) => writePeerDeliveryReceipt(runtime, delivered),
   });
   assert.equal(submitted, 0);
@@ -697,9 +701,12 @@ test("missing or corrupt Chief overflow bodies are retained without Pi submissio
       sessionId: record.toSessionId,
       isAuthorized: () => true,
       isDelivered: () => false,
-      sendMessage: (_message, _options, delivered) =>
-        submitted.push(delivered.id),
-      cleanupError: (error) => reported.push(error),
+      sendMessage: (_message, _options, delivered) => {
+        submitted.push(delivered.id);
+      },
+      cleanupError: (error) => {
+        reported.push(error);
+      },
     });
     assert.deepEqual(submitted, [unrelated.id], failure);
     assert.equal(reported.length, 1, failure);
@@ -720,7 +727,9 @@ test("inbox receipt and rejection cleanup do not require overflow bodies", async
       sessionId: record.toSessionId,
       isAuthorized: () => delivered,
       isDelivered: () => delivered,
-      sendMessage: () => sent++,
+      sendMessage: () => {
+        sent++;
+      },
     });
     assert.equal(sent, 0);
     assert.equal(existsSync(path), false);
@@ -749,7 +758,9 @@ test("unreadable overflow messages do not consume the bounded delivery window", 
     sessionId: valid.toSessionId,
     isAuthorized: () => true,
     isDelivered: (id) => sent.includes(id),
-    sendMessage: (_message, _options, record) => sent.push(record.id),
+    sendMessage: (_message, _options, record) => {
+      sent.push(record.id);
+    },
   });
   assert.deepEqual(sent, [valid.id]);
   assert.equal(
@@ -774,7 +785,9 @@ test("overflow body reads reject FIFOs without blocking", async (t) => {
     isAuthorized: () => true,
     isDelivered: () => false,
     sendMessage: () => assert.fail("FIFO body must not be delivered"),
-    cleanupError: (error) => reported.push(error),
+    cleanupError: (error) => {
+      reported.push(error);
+    },
   });
   assert.equal(reported.length, 1);
   assert.equal(existsSync(path), true);
@@ -1247,12 +1260,15 @@ test("peer inbox defers transient topology failures and delivers after recovery"
     },
   });
   assert.equal(paths().length, 1);
-  assert.deepEqual(delivered, []);
+  assert.deepEqual([...delivered], []);
 
   await drainCoordinationInbox({
     runtime,
     sessionId: "lead-b",
-    isAuthorized: (candidate) => candidate.peerSource?.managed === false,
+    isAuthorized: (candidate) =>
+      candidate.peerSource?.role === "lead" &&
+      "managed" in candidate.peerSource &&
+      !candidate.peerSource.managed,
     isDelivered: () => receipt,
     sendMessage: (payload) => {
       delivered.push(payload);
@@ -1287,7 +1303,9 @@ test("peer inbox removes a definitively ineligible message without replay", asyn
     sessionId: "lead-b",
     isAuthorized: () => false,
     isDelivered: () => false,
-    sendMessage: () => sends++,
+    sendMessage: () => {
+      sends++;
+    },
   });
   assert.deepEqual(listCoordinationMessagePaths(runtime, "lead-b"), []);
 
@@ -1296,7 +1314,9 @@ test("peer inbox removes a definitively ineligible message without replay", asyn
     sessionId: "lead-b",
     isAuthorized: () => true,
     isDelivered: () => false,
-    sendMessage: () => sends++,
+    sendMessage: () => {
+      sends++;
+    },
   });
   assert.equal(sends, 0);
 });
@@ -1388,7 +1408,9 @@ test("peer receiver authorization rejects a self-addressed record", async () => 
         candidate.fromSessionId !== candidate.toSessionId &&
         candidate.leadSessionId === candidate.fromSessionId,
       isDelivered: () => false,
-      sendMessage: (value) => sent.push(value),
+      sendMessage: (value) => {
+        sent.push(value);
+      },
     }),
     0,
   );
@@ -1668,7 +1690,6 @@ test("supervision authority is coordinator state, not metadata", () => {
   const snapshot = projectSupervision({
     agents: [lead],
     managedAgents: [],
-    supervisor: { piSessionId: "chief", leaseId: id(), role: "chief" },
     coordinationStates: [state(piSessionId)],
   });
   assert.deepEqual(snapshot.leads[0].availableActions, ["inspect", "message"]);
@@ -1930,7 +1951,7 @@ test("supervision presentation preserves provenance and naming fallbacks", () =>
       "88888888-8888-4888-8888-888888888888",
       "99999999-9999-4999-8999-999999999999",
     ];
-    const agents = sessions.map((sessionId) => ({
+    const agents: LiveAgent[] = sessions.map((sessionId) => ({
       sessionId,
       sessionKind: "id" as const,
       workspaceId: "workspace",
@@ -2469,7 +2490,7 @@ test("a rejected delivery policy leaves its record pending and drains later reco
     await drainCoordinationInbox({
       runtime,
       sessionId: rejected.toSessionId,
-      deliveryMode: async (record) => {
+      deliveryMode: async (record): Promise<"followUp"> => {
         if (record.id === rejected.id)
           throw new Error("authority changed during delivery policy");
         return "followUp";
@@ -2576,14 +2597,16 @@ test("sender binding failure defers delivery without losing the inbox record", a
   const record = message();
   const path = writeChiefMessage(record, runtime);
   let persisted = false;
-  let sent: any;
+  type SentMessage = Parameters<ChiefInboxDrainOptions["sendMessage"]>[0];
+  const sent: SentMessage[] = [];
+  const getSentMessage = (): SentMessage | undefined => sent.at(0);
   const options = {
     runtime,
     sessionId: record.toSessionId,
     isAuthorized: () => true,
     isDelivered: () => persisted,
-    sendMessage: (payload: unknown) => {
-      sent = payload;
+    sendMessage: (payload: SentMessage) => {
+      sent.push(payload);
       persisted = true;
     },
   };
@@ -2596,7 +2619,7 @@ test("sender binding failure defers delivery without losing the inbox record", a
     }),
     0,
   );
-  assert.equal(sent, undefined);
+  assert.deepEqual(sent, []);
   assert.equal(existsSync(path), true);
   assert.equal(
     await drainCoordinationInbox({
@@ -2605,8 +2628,10 @@ test("sender binding failure defers delivery without losing the inbox record", a
     }),
     1,
   );
-  assert.match(sent.content, /^From Lead lead:0123456789: /);
-  assert.equal(sent.details.fromSessionId, record.fromSessionId);
+  const sentMessage = getSentMessage();
+  assert.ok(sentMessage);
+  assert.match(sentMessage.content, /^From Lead lead:0123456789: /);
+  assert.equal(sentMessage.details.fromSessionId, record.fromSessionId);
   assert.equal(existsSync(path), false);
 });
 
@@ -2632,7 +2657,9 @@ test("inbox orders valid records by createdAt and retains transient failures", a
     transaction: {
       begin: (record) => record.id,
       revalidate: () => {},
-      clear: (token) => cleared.push(token as string),
+      clear: (token) => {
+        cleared.push(token as string);
+      },
     },
   });
   assert.equal(listChiefMessagePaths(runtime, "chief").length, 3);
@@ -2774,7 +2801,7 @@ test("coordination envelopes identify senders without claiming recipient roles",
       toSessionId: "manager-from-chief",
       leadSessionId: "manager-session",
     },
-  ];
+  ] as const;
   const traffic = routes.map((route) => {
     const record = message({
       kind: route.kind,
@@ -3040,13 +3067,11 @@ test("coordinator state and peer presence admit only Lead or Manager roles", () 
       state("chief", { role: "chief" as never }),
     ),
   );
+  const unknownStateFields: Partial<LeadCoordinationState> & {
+    unknown: boolean;
+  } = { role: "lead", unknown: true };
   assert.throws(() =>
-    writeLeadCoordinationState(
-      runtime,
-      state("bad", {
-        unknown: true,
-      }),
-    ),
+    writeLeadCoordinationState(runtime, state("bad", unknownStateFields)),
   );
   const peers = peerRuntime();
   const manager = peerRecord(peers, `manager-${id()}`, { role: "manager" });
@@ -3441,6 +3466,7 @@ test("project assignments are scoped by repository and branch, strict, and remov
   assert.throws(
     () => readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
     (error) => {
+      assert.ok(error instanceof Error);
       assert.ok(
         error.message.includes(`${path}: assignment payload is too large`),
       );
@@ -3454,6 +3480,7 @@ test("project assignments are scoped by repository and branch, strict, and remov
   assert.throws(
     () => listProjectAssignments(runtime, assignment.repoKey),
     (error) => {
+      assert.ok(error instanceof Error);
       assert.ok(error.message.includes(`${path}: invalid assignment schema`));
       assert.doesNotMatch(error.message, /task/);
       return true;
@@ -3463,6 +3490,7 @@ test("project assignments are scoped by repository and branch, strict, and remov
   assert.throws(
     () => readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
     (error) => {
+      assert.ok(error instanceof Error);
       assert.ok(
         error.message.includes(`${path}: assignment identity mismatch`),
       );
@@ -3478,6 +3506,7 @@ test("project assignments are scoped by repository and branch, strict, and remov
   assert.throws(
     () => readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
     (error) => {
+      assert.ok(error instanceof Error);
       assert.ok(error.message.includes(`${path}: invalid JSON`));
       assert.doesNotMatch(error.message, /private task details/);
       return true;
@@ -3494,6 +3523,7 @@ test("project assignments are scoped by repository and branch, strict, and remov
   assert.throws(
     () => readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
     (error) => {
+      assert.ok(error instanceof Error);
       assert.ok(
         error.message.includes(`${path}: assignment identity mismatch`),
       );
@@ -3505,6 +3535,7 @@ test("project assignments are scoped by repository and branch, strict, and remov
   assert.throws(
     () => readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
     (error) => {
+      assert.ok(error instanceof Error);
       assert.ok(error.message.includes(`${path}: file is too large`));
       return true;
     },
@@ -5045,11 +5076,7 @@ test("pending retirement validation fails closed without deleting evidence", () 
       );
     }
     if (scenario !== "parent symlink") assert.equal(readErrors.length, 1);
-    assert.throws(
-      () => removePendingRetirement(runtime, a),
-      undefined,
-      scenario,
-    );
+    assert.throws(() => removePendingRetirement(runtime, a), scenario);
     assert.ok(realFs.lstatSync(path), scenario);
   }
 });

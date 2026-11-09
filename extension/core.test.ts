@@ -89,7 +89,10 @@ mock.module("node:fs", {
               ([, canonical]) => canonical === args[0],
             )?.[0] ?? args[0])
           : args[0];
-      const fd = realFs.openSync(physicalPath, ...args.slice(1));
+      const fd = Reflect.apply(realFs.openSync, realFs, [
+        physicalPath,
+        ...args.slice(1),
+      ]);
       if (messageReadFailurePath && args[0] === messageReadFailurePath)
         messageReadFailureFd = fd;
       if (candidateReadPath && args[0] === candidateReadPath) {
@@ -101,7 +104,7 @@ mock.module("node:fs", {
       if (countMessageReads) messageReadCount++;
       if (messageReadFailurePath && args[0] === messageReadFailurePath)
         throw new Error("simulated read failure");
-      return realFs.readFileSync(...args);
+      return Reflect.apply(realFs.readFileSync, realFs, args);
     },
     readSync: (...args: any[]) => {
       if (countMessageReads) messageReadCount++;
@@ -126,7 +129,7 @@ mock.module("node:fs", {
         args[0] === messageReadFailureFd
       )
         throw new Error("simulated read failure");
-      return realFs.readSync(...args);
+      return Reflect.apply(realFs.readSync, realFs, args);
     },
     readdirSync: realFs.readdirSync,
     realpathSync: (path: any, ...args: any[]) =>

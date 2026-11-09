@@ -59,7 +59,10 @@ import {
   coordinatorTarget,
   rememberCoordinatorTarget,
 } from "./coordinator-target.ts";
-import { AGENT_COORDINATION_TOOLS } from "./agent-definitions.ts";
+import {
+  AGENT_COORDINATION_TOOLS,
+  type AgentDefinition,
+} from "./agent-definitions.ts";
 import { herdsmanTempRoot, readRequiredEvidenceSnapshot } from "./storage.ts";
 import { createLeadProjectRuntime } from "./lead/project.ts";
 
@@ -72,6 +75,10 @@ const tuiMenuKeybindings = {
       "tui.select.cancel": "\u001b",
     })[key] === data,
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
 test("Manager Required evidence route removes persisted evidence and cancellation preserves it", async (t) => {
   const { createLeadSupervisionRuntime } = await import("./lead-runtime.ts");
@@ -647,11 +654,18 @@ import {
   writeResult,
   writeAgentState,
   writeAgentStartupOutcome,
+  type ExecHandler,
+  type ExecResult,
+  type FixtureIdentity,
 } from "./support.ts";
 import {
   createLeadToolState,
   sessionLeadExecutionState as readLeadExecutionState,
 } from "./lead-runtime.ts";
+
+type CommandTestExecOptions = NonNullable<Parameters<ExecHandler>[2]> & {
+  cwd?: string;
+};
 
 const leadTools = [
   "list_agents",
@@ -2129,7 +2143,9 @@ test("ordinary Leads deliver peer messages across non-Git sockets", async (t) =>
       ...(index === 1
         ? {
             entries: recipientEntries,
-            sendMessage: (message: unknown) => recipientEntries.push(message),
+            sendMessage: (message: unknown) => {
+              recipientEntries.push(message);
+            },
           }
         : {}),
     });
@@ -2289,7 +2305,9 @@ test("Manager peer messages deliver to a live Manager without changing its role"
                   : respond({}),
       ...(recipient
         ? {
-            sendMessage: (message: unknown) => recipientEntries.push(message),
+            sendMessage: (message: unknown) => {
+              recipientEntries.push(message);
+            },
           }
         : {}),
     });
@@ -2431,7 +2449,7 @@ test("Manager restoration does not claim a lease when identity changes during di
   let claims = 0;
   await resolveLeadControllerRole(state, fakeContext() as any, "manager", {
     identity: { paneId: "pane", tabId: "tab", workspaceId: "workspace" },
-    build: "test",
+    build: HERDSMAN_BUILD,
     localRepositoryScope: async () => {
       identityCurrent = false;
       return { isPrimary: true, repoKey: "repo" };
@@ -2484,7 +2502,7 @@ test("superseded Manager restoration releases its lease without replacing curren
       "lead",
       {
         identity: { paneId: "pane", tabId: "tab", workspaceId: "workspace" },
-        build: "test",
+        build: HERDSMAN_BUILD,
         localRepositoryScope: async () => ({
           isPrimary: true,
           repoKey: "repo",
@@ -2682,7 +2700,7 @@ test("persisted Chief restores the saved ordinary execution profile on exit", as
     );
     const promptEvent = {
       systemPrompt: "base",
-      systemPromptOptions: { sections: {} },
+      systemPromptOptions: { sections: {} as Record<string, string> },
     };
     await pi.events.get("before_agent_start")![0](promptEvent, context);
     assert.match(
@@ -3277,8 +3295,14 @@ test("active Manager supervision refreshes serialize and coalesce concurrent req
     stderr: "",
     code: 0,
   });
-  const release = Promise.withResolvers<void>();
-  const gatedSnapshotStarted = Promise.withResolvers<void>();
+  let resolveRelease!: () => void;
+  const release = new Promise<void>((resolve) => {
+    resolveRelease = resolve;
+  });
+  let resolveGatedSnapshotStarted!: () => void;
+  const gatedSnapshotStarted = new Promise<void>((resolve) => {
+    resolveGatedSnapshotStarted = resolve;
+  });
   let snapshots = 0;
   let active = 0;
   let maxActive = 0;
@@ -3311,8 +3335,8 @@ test("active Manager supervision refreshes serialize and coalesce concurrent req
         active++;
         maxActive = Math.max(maxActive, active);
         if (gateRefresh && snapshots === refreshSnapshotBase + 1) {
-          gatedSnapshotStarted.resolve();
-          await release.promise;
+          resolveGatedSnapshotStarted();
+          await release;
         }
         active--;
         return respond({ snapshot: { agents: [], panes: [], workspaces: [] } });
@@ -3324,7 +3348,7 @@ test("active Manager supervision refreshes serialize and coalesce concurrent req
   context.mode = "rpc";
   registerExtension!(pi.pi as never);
   t.after(async () => {
-    release.resolve();
+    resolveRelease();
     await pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_TAB_ID;
@@ -3349,7 +3373,7 @@ test("active Manager supervision refreshes serialize and coalesce concurrent req
   };
   promptEvents.push(firstEvent);
   const firstCaller = beforeStart(firstEvent, context);
-  await gatedSnapshotStarted.promise;
+  await gatedSnapshotStarted;
   const callers = Array.from({ length: 4 }, () => {
     const event = {
       systemPrompt: "base",
@@ -3358,7 +3382,7 @@ test("active Manager supervision refreshes serialize and coalesce concurrent req
     promptEvents.push(event);
     return beforeStart(event, context);
   });
-  release.resolve();
+  resolveRelease();
   const results = await Promise.all([firstCaller, ...callers]);
   assert.ok(
     results.every((result, index) => {
@@ -3388,10 +3412,12 @@ function nonGitWorkspaceResponse() {
 function fakeRepositoryChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
   return fakeChiefPi({
     ...options,
-    exec: async (command, args, extra) => {
+    exec: async (command, args, extra: CommandTestExecOptions | undefined) => {
       if (command === "git" && args[0] === "rev-parse")
         return {
-          stdout: args.includes("--show-toplevel") ? extra.cwd : "/tmp",
+          stdout: args.includes("--show-toplevel")
+            ? (extra?.cwd ?? "/tmp")
+            : "/tmp",
           stderr: "",
           code: 0,
         };
@@ -3410,7 +3436,7 @@ function fakeRepositoryChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
           return { ...response, stdout: JSON.stringify(parsed) };
         }
       }
-      return response;
+      return response ?? { stdout: "", stderr: "", code: 1 };
     },
   });
 }
@@ -3737,12 +3763,23 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     assert.deepEqual(first.pi.getActiveTools(), ["read", ...leadTools]);
     assert.equal(first.pi.getActiveTools().includes("message_staff"), false);
     assert.equal(
-      first.pi.getAllTools().some((tool) => tool.name === "delegate_work"),
+      first.pi
+        .getAllTools()
+        .some(
+          (tool) =>
+            typeof tool === "object" &&
+            tool !== null &&
+            "name" in tool &&
+            tool.name === "delegate_work",
+        ),
       true,
     );
     const leadPromptEvent = {
       systemPrompt: "base",
-      systemPromptOptions: { sections: {}, contextFiles: [] },
+      systemPromptOptions: {
+        sections: {} as Record<string, string>,
+        contextFiles: [],
+      },
     };
     const leadPrompt = await first.events.get("before_agent_start")![0](
       leadPromptEvent,
@@ -3785,7 +3822,15 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       staffMessage,
     );
     assert.equal(
-      first.pi.getAllTools().some((tool) => tool.name === "delegate_work"),
+      first.pi
+        .getAllTools()
+        .some(
+          (tool) =>
+            typeof tool === "object" &&
+            tool !== null &&
+            "name" in tool &&
+            tool.name === "delegate_work",
+        ),
       true,
     );
     assert.equal(first.pi.getActiveTools().includes("delegate_agent"), false);
@@ -3837,13 +3882,19 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     const managerPromptEvent = {
       systemPrompt: "base",
-      systemPromptOptions: { sections: {}, contextFiles: [] },
+      systemPromptOptions: {
+        sections: {} as Record<string, string>,
+        contextFiles: [],
+      },
     };
     const managerPrompt = await first.events.get("before_agent_start")![0](
       managerPromptEvent,
       ctx1,
     );
-    assert.equal(managerPrompt, undefined);
+    assert.equal(
+      isRecord(managerPrompt) ? managerPrompt.message : undefined,
+      undefined,
+    );
     assert.match(
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
       /You are the verified Manager[\s\S]*Project execution belongs to assigned Leads and their Agent trees[\s\S]*Supervision is event-driven[\s\S]*Coordinate assigned project work through Leads[\s\S]*Leave technical investigation, implementation, review, validation, and\s+integration to that Lead and its Agents rather than doing or delegating\s+the work yourself/i,
@@ -3887,11 +3938,14 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
         .pi_herdsman_lead_execution,
       undefined,
     );
-    assert.equal(managerPrompt?.message, undefined);
-    const managerContext = first.sentMessageCalls.findLast(
-      ({ message }: any) =>
-        message?.customType === "pi-herdsman-supervision-context",
-    );
+    assert.equal(managerPrompt, undefined);
+    const managerContext = first.sentMessageCalls
+      .slice()
+      .reverse()
+      .find(
+        ({ message }: any) =>
+          message?.customType === "pi-herdsman-supervision-context",
+      );
     assert.ok(managerContext);
     assert.deepEqual(managerContext.options, { triggerTurn: false });
     assert.deepEqual(
@@ -3966,12 +4020,14 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       peerLeadLockPath(peerRuntime(), leadPeerSession),
     );
     const leadPeer = {
-      version: 1 as const,
+      version: 2 as const,
       role: "lead" as const,
+      sessionKind: "ordinary" as const,
       piSessionId: leadPeerSession,
       workspaceId: "unrelated",
       paneId: "lead-pane",
       tabId: "lead-tab",
+      socket: join(tmpdir(), `${leadPeerSession}.sock`),
       claim: peerLease.claim,
       updatedAt: Date.now(),
     };
@@ -4137,9 +4193,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     assert.deepEqual(first.pi.getActiveTools(), activeManagerTools);
     await first.commandOptions.get("manager").handler("leave", ctx1);
-    const leadMetadata = metadataReports.findLast((args) =>
-      args.includes("pi_herdsman_name=current lead name"),
-    );
+    const leadMetadata = metadataReports
+      .slice()
+      .reverse()
+      .find((args) => args.includes("pi_herdsman_name=current lead name"));
     const titleIndex = leadMetadata?.indexOf("--title") ?? -1;
     const nameTokenIndex =
       leadMetadata?.indexOf("pi_herdsman_name=current lead name") ?? -1;
@@ -4703,7 +4760,15 @@ test("restored Manager registers supervision tools and restores Manager tools", 
         entry.data.sessionId = sessionId;
     await pi.events.get("session_start")![0](undefined, context);
     assert.deepEqual(pi.pi.getActiveTools(), managerTools);
-    assert.ok(pi.tools.some((tool) => tool.name === "delegate_work"));
+    assert.ok(
+      pi.tools.some(
+        (tool) =>
+          typeof tool === "object" &&
+          tool !== null &&
+          "name" in tool &&
+          tool.name === "delegate_work",
+      ),
+    );
     assert.equal(pi.pi.getActiveTools().includes("delegate_agent"), false);
     assert.equal(
       pi.calls.some((args) => args[0] === "agent" && args[1] === "list"),
@@ -4711,16 +4776,26 @@ test("restored Manager registers supervision tools and restores Manager tools", 
     );
     assert.equal(
       pi.entries
-        .filter((entry: any) => entry.customType === "pi-herdsman-role")
-        .at(-1).data.role,
+        .filter(
+          (
+            entry: unknown,
+          ): entry is { customType: unknown; data: Record<string, unknown> } =>
+            isRecord(entry) &&
+            entry.customType === "pi-herdsman-role" &&
+            isRecord(entry.data),
+        )
+        .at(-1)?.data.role,
       "manager",
     );
-    const managerMetadata = pi.calls.findLast(
-      (args) =>
-        args[0] === "pane" &&
-        args[1] === "report-metadata" &&
-        args.includes("pi_herdsman_role=manager"),
-    );
+    const managerMetadata = pi.calls
+      .slice()
+      .reverse()
+      .find(
+        (args) =>
+          args[0] === "pane" &&
+          args[1] === "report-metadata" &&
+          args.includes("pi_herdsman_role=manager"),
+      );
     assert.ok(managerMetadata);
     for (const token of [
       "pi_herdsman_name",
@@ -4970,7 +5045,7 @@ test("Manager auto-start does not bootstrap a non-Git workspace", async () => {
     activeTools: ["read"],
     exec: (command, args) => {
       if (command === "git") gitCalls.push(args);
-      return undefined;
+      return { stdout: "", stderr: "", code: 1 };
     },
   });
   registerExtension!(pi.pi as never);
@@ -5079,7 +5154,10 @@ function managerBootstrapHarness(
       ...(result.error
         ? {
             spawnError: {
-              code: result.error.code,
+              code:
+                "code" in result.error && typeof result.error.code === "string"
+                  ? result.error.code
+                  : undefined,
               message: result.error.message,
             },
           }
@@ -5096,7 +5174,7 @@ function managerBootstrapHarness(
   });
   const pi = fakeChiefPi({
     activeTools: ["read"],
-    exec: (command, args, execOptions) => {
+    exec: (command, args, execOptions: CommandTestExecOptions | undefined) => {
       invocations.push({ command, args, cwd: execOptions?.cwd });
       if (command === "git") {
         if (
@@ -5157,7 +5235,7 @@ function managerBootstrapHarness(
           code: result.status ?? 1,
         };
       }
-      if (command !== "herdr") return undefined;
+      if (command !== "herdr") return { stdout: "", stderr: "", code: 1 };
       if (args[0] === "workspace" && args[1] === "get")
         return respond({
           workspace: {
@@ -6434,7 +6512,7 @@ test("malformed Lead coordination blocks Manager auto-start", async () => {
           code: 0,
         };
       }
-      return undefined;
+      return { stdout: "", stderr: "", code: 1 };
     },
   });
   registerExtension!(pi.pi as never);
@@ -6500,7 +6578,7 @@ test("malformed Lead coordination skips fallback topology restoration when auto-
           code: 0,
         };
       }
-      return undefined;
+      return { stdout: "", stderr: "", code: 1 };
     },
   });
   registerExtension!(pi.pi as never);
@@ -7249,6 +7327,7 @@ test("legacy assignment release cancellation and stale Manager leave authority i
     "feat/remove-test",
     cancelled.ctx,
   );
+  assert.ok("cancelled" in result.details);
   assert.equal(result.details.cancelled, true);
   assert.ok(cancelled.assignment());
 
@@ -7925,6 +8004,7 @@ test("Manager removal requests are actionable, nonblocking, and consumed once", 
     selected,
     fixture.ctx,
   );
+  assert.ok("checkout_removed" in approved.details);
   assert.equal(approved.details.checkout_removed, true);
   assert.equal(fixture.runtime.listPendingRemovals(fixture.ctx).length, 0);
   await assert.rejects(
@@ -7954,6 +8034,7 @@ test("successful direct Manager removal clears matching pending approval", async
     fixture.ctx,
   );
 
+  assert.ok("checkout_removed" in result.details);
   assert.equal(result.details.checkout_removed, true);
   assert.deepEqual(fixture.runtime.listPendingRemovals(fixture.ctx), []);
   assert.equal(fixture.statusUpdates.at(-1)?.[1], undefined);
@@ -7978,6 +8059,7 @@ test("integrated cleanup rechecks exact source HEAD and target ancestry immediat
         },
       },
     );
+    assert.ok("checkout_removed" in result.details);
     assert.equal(result.details.checkout_removed, false);
     assert.match(result.content[0].text, /changed before removal/);
     assert.deepEqual(fixture.removals, []);
@@ -8002,6 +8084,7 @@ test("integrated cleanup does not reconcile a same-branch replacement assignment
     },
   );
 
+  assert.ok("checkout_removed" in result.details);
   assert.equal(fixture.reconciliationAssignmentId(), "assigned-lead");
   assert.equal(fixture.assignment()?.id, "replacement-assignment");
   assert.equal(result.details.checkout_removed, true);
@@ -8027,6 +8110,7 @@ test("successful direct Manager removal preserves a newer pending replacement", 
     fixture.ctx,
   );
 
+  assert.ok("checkout_removed" in result.details);
   assert.equal(result.details.checkout_removed, true);
   assert.equal(
     fixture.runtime.listPendingRemovals(fixture.ctx)[0]?.id,
@@ -8055,10 +8139,12 @@ test("Manager removal retires assignment when pending approval resolution persis
     fixture.ctx,
   );
 
+  assert.ok("checkout_removed" in result.details);
   assert.equal(result.details.checkout_removed, true);
   assert.equal(result.details.assignment_retired, true);
   assert.equal(fixture.assignment(), undefined);
   assert.equal(existsSync(fixture.checkoutPath), false);
+  assert.ok(result.details.pendingResolutionError);
   assert.match(
     result.details.pendingResolutionError,
     /session append failed during resolution/,
@@ -8182,6 +8268,7 @@ test("cancelling an approved request preserves a newer pending request", async (
     selected,
     fixture.ctx,
   );
+  assert.ok("cancelled" in result.details);
   assert.equal(result.details.cancelled, true);
   assert.equal(
     fixture.runtime.listPendingRemovals(fixture.ctx)[0].assignmentId,
@@ -8240,6 +8327,7 @@ test("Manager preauthorization lets explicit model requests use the guarded remo
     undefined,
     fixture.ctx,
   );
+  assert.ok("checkout_removed" in result.details);
   assert.equal(result.details.checkout_removed, true);
   assert.equal(result.details.forced, false);
   assert.equal(fixture.confirmationCount(), 0);
@@ -8278,6 +8366,7 @@ test("Manager removal requires the exact confirmation word", async (t) => {
       "feat/remove-test",
       fixture.ctx,
     );
+    assert.ok("cancelled" in result.details);
     assert.equal(result.details.cancelled, true);
     assert.equal(fixture.stoppedLeadCount(), 0);
     assert.deepEqual(fixture.removals, []);
@@ -8314,6 +8403,7 @@ test("Manager removal covers paused, running, and reopened checkout lifecycles",
         "feat/remove-test",
         fixture.ctx,
       );
+      assert.ok("checkout_removed" in result.details);
       assert.equal(result.details.checkout_removed, true);
       assert.equal(result.details.assignment_retired, true);
       assert.equal(result.details.forced, false);
@@ -8396,12 +8486,16 @@ test("Manager removal preflights submodule eligibility before stopping the Lead"
       const fixture = await managerRemovalFixture(subtest, {
         runningLead: true,
         ...scenario.options,
+        submoduleStatusSequence: scenario.options.submoduleStatusSequence
+          ? [...scenario.options.submoduleStatusSequence]
+          : undefined,
       });
       if (scenario.succeeds) {
         const result = await fixture.runtime.removeWorktree(
           "feat/remove-test",
           fixture.ctx,
         );
+        assert.ok("checkout_removed" in result.details);
         assert.equal(result.details.checkout_removed, true);
         assert.equal(result.details.assignment_retired, true);
         assert.equal(result.details.forced, false);
@@ -8478,6 +8572,7 @@ test(
       "feat/remove-test",
       fixture.ctx,
     );
+    assert.ok("checkout_removed" in result.details);
     assert.equal(result.details.checkout_removed, true);
     assert.equal(result.details.assignment_retired, true);
     assert.deepEqual(fixture.removals, ["new-child-workspace"]);
@@ -8493,9 +8588,11 @@ test("Manager removal reports native failure and uncertain assignment reconcilia
     "feat/remove-test",
     failed.ctx,
   );
+  assert.ok("checkout_removed" in failure.details);
   assert.equal(failure.details.lead_stopped, true);
   assert.equal(failure.details.checkout_removed, false);
   assert.equal(failure.details.assignment_retired, false);
+  assert.ok(failure.details.removal_error);
   assert.match(failure.details.removal_error, /Herdr remove failed/);
   assert.ok(failed.assignment());
 
@@ -8504,9 +8601,11 @@ test("Manager removal reports native failure and uncertain assignment reconcilia
     "feat/remove-test",
     uncertain.ctx,
   );
+  assert.ok("checkout_removed" in outcome.details);
   assert.equal(outcome.details.checkout_removed, true);
   assert.equal(outcome.details.assignment_retired, false);
   assert.equal(uncertain.assignment()?.id, "assigned-lead");
+  assert.ok(outcome.details.retirement_error);
   assert.match(outcome.details.retirement_error, /reconcile uncertain/);
 
   const stopped = await managerRemovalFixture(t, {
@@ -8532,6 +8631,7 @@ test("Manager removal reports interrupted CLI as unconfirmed and preserves assig
   );
   const text = result.content[0].text;
 
+  assert.ok("checkout_removed" in result.details);
   assert.equal(fixture.removalOptions.length, 1);
   assert.equal(fixture.removalOptions[0].timeout, 180_000);
   assert.equal(fixture.removalOptions[0].signal, fixture.ctx.signal);
@@ -8542,6 +8642,7 @@ test("Manager removal reports interrupted CLI as unconfirmed and preserves assig
   assert.match(text, /checkout was present at the last check/);
   assert.match(text, /assignment remains recorded/);
   assert.match(text, /Herdr may still complete removal after the CLI stopped/);
+  assert.ok(result.details.removal_error);
   assert.match(result.details.removal_error, /Herdr command was killed/);
   assert.equal(fixture.assignment()?.id, "assigned-lead");
   assert.ok(existsSync(fixture.checkoutPath));
@@ -8627,6 +8728,7 @@ test("Manager removes a verified checkout without a Pi session file", async (t) 
     fixture.ctx,
   );
 
+  assert.ok("checkout_removed" in result.details);
   assert.equal(result.details.checkout_removed, true);
   assert.equal(result.details.assignment_retired, true);
   assert.equal(result.details.lead_stopped, true);
@@ -8831,7 +8933,7 @@ async function managerDelegateAssignmentTest(
   const exec = (
     command: string,
     args: string[],
-    options?: { cwd?: string },
+    options?: { cwd?: string; timeout?: number; signal?: AbortSignal },
   ) => {
     if (command === "herdr" && args[0] === "tab" && args[1] === "list") {
       tabCommands.push(args);
@@ -9205,7 +9307,7 @@ async function managerDelegateAssignmentTest(
   const managerExec = async (
     command: string,
     args: string[],
-    options?: { cwd?: string },
+    options?: { cwd?: string; timeout?: number; signal?: AbortSignal },
   ) => {
     mutateRetainedSource?.();
     if (
@@ -9854,11 +9956,17 @@ async function managerDelegateAssignmentTest(
       { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
       ctx,
     );
-    assert.equal(contextProjection?.message, undefined);
-    const contextMessage = pi.sentMessageCalls.findLast(
-      ({ message }: any) =>
-        message?.customType === "pi-herdsman-supervision-context",
+    assert.equal(
+      isRecord(contextProjection) ? contextProjection.message : undefined,
+      undefined,
     );
+    const contextMessage = pi.sentMessageCalls
+      .slice()
+      .reverse()
+      .find(
+        ({ message }: any) =>
+          message?.customType === "pi-herdsman-supervision-context",
+      );
     assert.match(
       String((contextMessage?.message as any)?.content),
       new RegExp(
@@ -10131,7 +10239,7 @@ async function managerDelegateAssignmentTest(
       await waitForStage("failed scope lookup recorded", () =>
         assert.ok(
           lead.callResults.some(
-            ({ args, succeeded }) =>
+            ({ args, succeeded }: { args: string[]; succeeded: boolean }) =>
               args[0] === "worktree" && args[1] === "list" && !succeeded,
           ),
         ),
@@ -10174,15 +10282,19 @@ async function managerDelegateAssignmentTest(
       await waitForStage("managed label restored after scope recovery", () =>
         assert.equal(tabLabels.get("child-tab"), "Managed Lead"),
       );
-      const message = await lead.tools
-        .find((tool) => tool.name === "message_supervisor")!
-        .execute(
-          "message",
-          { message: "Ready for review" },
-          undefined,
-          undefined,
-          leadCtx,
-        );
+      const messageTool: unknown = lead.tools.find(
+        (tool: unknown) => isRecord(tool) && tool.name === "message_supervisor",
+      );
+      assert.ok(
+        isRecord(messageTool) && typeof messageTool.execute === "function",
+      );
+      const message = await messageTool.execute(
+        "message",
+        { message: "Ready for review" },
+        undefined,
+        undefined,
+        leadCtx,
+      );
       assert.match(
         JSON.stringify(message),
         /Project message saved for Manager/,
@@ -10499,6 +10611,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
     workspace_id: incompatibleWorkspace,
     pane_id: "incompatible-manager-pane",
     tab_id: "incompatible-manager-tab",
+    cwd: "/tmp",
   };
   const incompatibleManagerLease = claimManagerLease({
     build: OTHER_HERDSMAN_BUILD,
@@ -10527,6 +10640,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
     workspace_id: incompatibleWorkspace,
     pane_id: "nested-incompatible-manager-lead-pane",
     tab_id: "nested-incompatible-manager-lead-tab",
+    cwd: "/tmp",
   };
   writeLeadCoordinationState(supervisionRuntime(), {
     version: 1,
@@ -10546,6 +10660,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
     workspace_id: WORKSPACE,
     pane_id: "incompatible-compatible-manager-child-pane",
     tab_id: "incompatible-compatible-manager-child-tab",
+    cwd: "/tmp",
   };
   writeLeadCoordinationState(supervisionRuntime(), {
     version: 1,
@@ -10672,6 +10787,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
       workspace_id: WORKSPACE,
       pane_id: `many-compatible-${index}`,
       tab_id: `many-compatible-${index}`,
+      cwd: "/tmp",
     };
   });
   let revokeOrdinaryDuringRead = false;
@@ -11039,24 +11155,32 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
         return originalOpen.apply(sessionManager, args);
       };
       let chiefPrompt;
+      const chiefPromptEvent = {
+        systemPrompt: "base",
+        systemPromptOptions: { contextFiles: [] },
+      };
       try {
         chiefPrompt = await chief.events.get("before_agent_start")![0](
-          { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
+          chiefPromptEvent,
           chiefCtx,
         );
       } finally {
         sessionManager.open = originalOpen;
       }
       assert.equal(openCalls, 0);
-      assert.equal(chiefPrompt?.message, undefined);
+      assert.ok(isRecord(chiefPrompt));
+      assert.ok(typeof chiefPrompt.systemPrompt === "string");
       assert.match(
-        chiefPrompt?.systemPrompt ?? "",
+        chiefPrompt.systemPrompt,
         /When eligible same-role direct reports need technical coordination,[\s\S]*communicate directly rather than relaying their messages/,
       );
-      const contextMessage = chief.sentMessageCalls.findLast(
-        ({ message }: any) =>
-          message?.customType === "pi-herdsman-supervision-context",
-      );
+      const contextMessage = chief.sentMessageCalls
+        .slice()
+        .reverse()
+        .find(
+          ({ message }: any) =>
+            message?.customType === "pi-herdsman-supervision-context",
+        );
       assert.ok(
         JSON.stringify(contextMessage?.message).includes(
           coordinatorTarget("manager", LEAD_SESSION_ID),
@@ -11213,10 +11337,13 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
         { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
         chiefCtx,
       );
-      const nestedOnlyContext = chief.sentMessageCalls.findLast(
-        ({ message }: any) =>
-          message?.customType === "pi-herdsman-supervision-context",
-      );
+      const nestedOnlyContext = chief.sentMessageCalls
+        .slice()
+        .reverse()
+        .find(
+          ({ message }: any) =>
+            message?.customType === "pi-herdsman-supervision-context",
+        );
       assert.match(
         JSON.stringify(nestedOnlyContext?.message),
         /incompatible_staff_observations: 1/,
@@ -11459,7 +11586,7 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     (manager.pi as any).exec = async (
       command: string,
       args: string[],
-      options: { cwd?: string } | undefined,
+      options: CommandTestExecOptions | undefined,
     ) =>
       command === "git" &&
       args[0] === "rev-parse" &&
@@ -11633,9 +11760,11 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
         managerCtx,
       );
     useLeadIdentity();
+    const currentLead = lead;
+    assert.ok(currentLead);
     await t.waitFor(() =>
       assert.ok(
-        lead!.sent.some(
+        currentLead.sent.some(
           (message: any) =>
             message?.customType === "pi-herdsman-manager_message" &&
             message?.details?.id === managerMessage.details.id &&
@@ -11677,7 +11806,7 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     useLeadIdentity();
     await t.waitFor(() =>
       assert.equal(
-        lead.sentMessageCalls.filter(
+        currentLead.sentMessageCalls.filter(
           ({ message }: any) =>
             message?.customType === "pi-herdsman-manager_message" &&
             message?.details?.toSessionId === leadSession,
@@ -11686,11 +11815,14 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
       ),
     );
     assert.deepEqual(
-      lead.sentMessageCalls.findLast(
-        ({ message }: any) =>
-          message?.customType === "pi-herdsman-manager_message" &&
-          message?.details?.toSessionId === leadSession,
-      )?.options,
+      lead.sentMessageCalls
+        .slice()
+        .reverse()
+        .find(
+          ({ message }: any) =>
+            message?.customType === "pi-herdsman-manager_message" &&
+            message?.details?.toSessionId === leadSession,
+        )?.options,
       { deliverAs: "steer", triggerTurn: true },
       "an idle ordinary Lead receives a Manager message that starts a turn",
     );
@@ -13047,7 +13179,9 @@ test("peer delivery revalidates queued sender assignment context", async (t) => 
       const receiver = fakeChiefPi({
         entries,
         exec: peerTopologyExec,
-        sendMessage: (message) => entries.push(message),
+        sendMessage: (message) => {
+          entries.push(message);
+        },
         activeTools: ["read", "bash"],
       });
       const context = fakeContext(entries) as any;
@@ -13687,7 +13821,7 @@ test("Chief accepts a recorded Manager sender independently of source workspace"
           },
           worktrees: [{ open_workspace_id: sender.workspace_id }],
         });
-      return undefined;
+      return { stdout: "", stderr: "", code: 1 };
     },
   });
   const context = fakeContext(pi.entries) as any;
@@ -13935,9 +14069,17 @@ test("Chief activation rollback fails closed when its restrictive projection fai
   ]);
   const savedRole = [...entries]
     .reverse()
-    .find((entry: any) => entry.customType === "pi-herdsman-role");
-  assert.equal(savedRole?.data.role, "lead");
-  assert.deepEqual(savedRole?.data.leadTools, ["read", "bash"]);
+    .find(
+      (
+        entry: unknown,
+      ): entry is { customType: unknown; data: Record<string, unknown> } =>
+        isRecord(entry) &&
+        entry.customType === "pi-herdsman-role" &&
+        isRecord(entry.data),
+    );
+  assert.ok(savedRole && isRecord(savedRole.data));
+  assert.equal(savedRole.data.role, "lead");
+  assert.deepEqual(savedRole.data.leadTools, ["read", "bash"]);
   assert.ok(
     entries.some(
       (entry: any) =>
@@ -14024,7 +14166,7 @@ test("Chief tool activation failure restores ordinary Lead tools", async () => {
             stderr: "",
             code: 0,
           }
-        : undefined,
+        : { stdout: "", stderr: "", code: 1 },
   });
   const context = fakeContext() as any;
   const notices: string[] = [];
@@ -14162,9 +14304,11 @@ test("selecting a historical Chief branch activates its lease and staff tools", 
     assert.equal(
       sessionLeadRoleState(
         entries,
-        (entries as any[]).findLast(
-          (entry: any) => entry.customType === "pi-herdsman-role",
-        )?.data.sessionId ?? LEAD_SESSION_ID,
+        (entries as any[])
+          .slice()
+          .reverse()
+          .find((entry: any) => entry.customType === "pi-herdsman-role")?.data
+          .sessionId ?? LEAD_SESSION_ID,
       )?.role,
       "chief",
     );
@@ -14281,7 +14425,14 @@ test("manual chief leave completes lead cleanup when tool restoration fails", as
   );
   assert.deepEqual(
     entries
-      .filter((entry: any) => entry.customType === "pi-herdsman-role")
+      .filter(
+        (
+          entry: unknown,
+        ): entry is { customType: unknown; data: Record<string, unknown> } =>
+          isRecord(entry) &&
+          entry.customType === "pi-herdsman-role" &&
+          isRecord(entry.data),
+      )
       .at(-1)?.data,
     { sessionId: LEAD_SESSION_ID, role: "lead", leadTools: ["read", "bash"] },
   );
@@ -14546,6 +14697,32 @@ test("Herdsman and agents share command handling and grammar", async () => {
   context.hasUI = true;
   const notices: string[] = [];
   context.ui.select = async () => undefined;
+  context.ui.custom = async <T>(
+    factory: (
+      tui: { requestRender: () => void },
+      theme: {
+        fg: (_color: string, text: string) => string;
+        bold: (text: string) => string;
+      },
+      keybindings: { matches: (data: string, key: string) => boolean },
+      done: (result: T) => void,
+    ) => { handleInput: (data: string) => void },
+  ): Promise<T> =>
+    new Promise<T>((resolve) => {
+      const component = factory(
+        { requestRender: () => undefined },
+        {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        },
+        {
+          matches: (data: string, key: string) =>
+            data === "\u001b" && key === "tui.select.cancel",
+        },
+        resolve,
+      );
+      component.handleInput("\u001b");
+    });
   context.ui.notify = (message: string) => notices.push(message);
   await command.handler("", context);
   await command.handler("agents extra", context);
@@ -14630,19 +14807,15 @@ test("Chief profile drives the turn-start tools, prompt, and tool-call guard", a
       systemPromptOptions: { contextFiles: [] },
     };
     const prompt = await pi.events.get("before_agent_start")![0](event, ctx);
+    assert.ok(isRecord(prompt));
+    assert.ok(typeof prompt.systemPrompt === "string");
+    assert.match(prompt.systemPrompt, /verified workspace-neutral Chief/);
     assert.match(
-      prompt?.systemPrompt ?? "",
-      /verified workspace-neutral Chief/,
-    );
-    assert.match(
-      prompt?.systemPrompt ?? "",
+      prompt.systemPrompt,
       /Each unresolved unit of work has one executor/,
     );
-    assert.match(
-      prompt?.systemPrompt ?? "",
-      /A proven lost Agent remains unresolved/,
-    );
-    assert.match(prompt?.systemPrompt ?? "", /Configured chief body/);
+    assert.match(prompt.systemPrompt, /A proven lost Agent remains unresolved/);
+    assert.match(prompt.systemPrompt, /Configured chief body/);
     assert.ok(pi.pi.getActiveTools().includes("read"));
     assert.ok(pi.pi.getActiveTools().includes("list_staff"));
     for (const name of ["list_agents", "reply_agent", "stop_agent"])
@@ -14699,7 +14872,9 @@ test("Chief profile drives the turn-start tools, prompt, and tool-call guard", a
       event,
       ctx,
     );
-    assert.match(afterInvalid?.systemPrompt ?? "", /Configured chief body/);
+    assert.ok(isRecord(afterInvalid));
+    assert.ok(typeof afterInvalid.systemPrompt === "string");
+    assert.match(afterInvalid.systemPrompt, /Configured chief body/);
 
     writeFileSync(
       overridePath,
@@ -14773,9 +14948,26 @@ test("root assignment rejects a role generation changed during preflight", async
         held = true;
         enteredPreflight();
         await preflightRelease;
-        return undefined;
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { snapshot: { agents: [], panes: [], workspaces: [] } },
+          }),
+          stderr: "",
+          code: 0,
+        };
       }
-      return undefined;
+      return {
+        stdout:
+          command === "herdr" && isApiSnapshot(_args)
+            ? JSON.stringify({
+                id: AGENT_ID,
+                result: { snapshot: { agents: [], panes: [], workspaces: [] } },
+              })
+            : "{}",
+        stderr: "",
+        code: 0,
+      };
     },
   });
   const context = fakeContext() as any;
@@ -19198,7 +19390,7 @@ test("Running selects duplicate TUI labels by stable value and revalidates ident
         tuiMenuKeybindings,
         resolve,
       );
-      const lines = () => component.render(200);
+      const lines = (): string[] => component.render(200);
       const call = customCall++;
       if (call === 0 || call === 3) {
         selectTuiItem(component, "Agents");
@@ -19418,7 +19610,7 @@ test("Definitions contextual help distinguishes managed Lead and Agent launches 
         tuiMenuKeybindings,
         resolve,
       );
-      const lines = () => component.render(200);
+      const lines = (): string[] => component.render(200);
       const moveTo = (target: string) => {
         for (let attempts = 0; attempts < 20; attempts++) {
           if (
@@ -20743,6 +20935,7 @@ test("Lead stop does not let the Lead continue a nested descendant directly", as
     assert.match(stopSummary(pi), /✓ pi-herdsman-parent/);
     assert.equal(pi.sentMessageCalls.length, 1);
     assert.deepEqual(pi.sentMessageCalls[0]?.options, { triggerTurn: false });
+    assert.ok(isRecord(pi.sentMessageCalls[0]?.message));
     assert.equal(pi.sentMessageCalls[0]?.message.display, true);
     assert.equal(
       pi.sentMessageCalls[0]?.message.content,
@@ -21657,7 +21850,7 @@ test("delegating managed Agents focus only fresh owned child-row identities", as
   ]) as any;
   ctx.mode = "tui";
   ctx.hasUI = true;
-  let widget: StatusWidget | undefined;
+  let widget: InstanceType<typeof StatusWidget> | undefined;
   const notices: string[] = [];
   ctx.ui = {
     ...ctx.ui,
@@ -21972,7 +22165,7 @@ test("Lead status child-row focus rechecks the exact Herdr session identity", as
   const ctx = fakeContext() as any;
   ctx.mode = "tui";
   ctx.hasUI = true;
-  let widget: StatusWidget | undefined;
+  let widget: InstanceType<typeof StatusWidget> | undefined;
   const notices: string[] = [];
   ctx.ui = {
     ...ctx.ui,
@@ -22186,7 +22379,7 @@ test("managed Lead sampler requires a verified assignment, caches its sample, an
   ctx.mode = "tui";
   ctx.hasUI = true;
   ctx.cwd = assignedCheckout;
-  let widget: StatusWidget | undefined;
+  let widget: InstanceType<typeof StatusWidget> | undefined;
   const notices: string[] = [];
   ctx.ui = {
     ...ctx.ui,
@@ -22450,7 +22643,7 @@ test("valid managed leaf agents receive identity-only TUI presentation", async (
   context.sessionManager.getSessionId = () => currentSessionId;
   context.mode = "tui";
   context.hasUI = true;
-  let widget: StatusWidget | undefined;
+  let widget: InstanceType<typeof StatusWidget> | undefined;
   const notices: string[] = [];
   context.ui = {
     setWidget: (_key: string, content: unknown) => {
@@ -22544,7 +22737,7 @@ test("status session preparation drops the previous session snapshot", async (t)
     runtimeForLabel: () => undefined,
     ownToolsSnapshot: () => ({}),
   });
-  const widgets: StatusWidget[] = [];
+  const widgets: InstanceType<typeof StatusWidget>[] = [];
   const context = () => {
     const ctx = fakeContext() as any;
     ctx.mode = "tui";
@@ -22616,22 +22809,26 @@ test("restarting status runtime replaces and unreferences its timer", async (t) 
   const { createAgentStatusRuntime } = await import("./agent-controller.ts");
   const originalSetInterval = globalThis.setInterval;
   const originalClearInterval = globalThis.clearInterval;
-  const timers = new Set<ReturnType<typeof setInterval>>();
+  const timers = new Set<NodeJS.Timeout>();
   let unrefCalls = 0;
-  globalThis.setInterval = ((callback: TimerHandler) => {
-    const timer = originalSetInterval(callback, 60_000);
-    const unref = timer.unref.bind(timer);
-    timer.unref = () => {
-      unrefCalls++;
-      return unref();
-    };
-    timers.add(timer);
-    return timer;
-  }) as typeof setInterval;
-  globalThis.clearInterval = ((timer) => {
-    timers.delete(timer);
-    originalClearInterval(timer);
-  }) as typeof clearInterval;
+  Object.defineProperty(globalThis, "setInterval", {
+    value: (callback: () => void) => {
+      const timer = originalSetInterval(callback, 60_000);
+      const unref = timer.unref.bind(timer);
+      timer.unref = () => {
+        unrefCalls++;
+        return unref();
+      };
+      timers.add(timer);
+      return timer;
+    },
+  });
+  Object.defineProperty(globalThis, "clearInterval", {
+    value: (timer: NodeJS.Timeout | undefined) => {
+      if (timer) timers.delete(timer);
+      originalClearInterval(timer);
+    },
+  });
   const runtime = createAgentStatusRuntime();
   runtime.configure({
     loadSnapshot: async () => ({
@@ -22749,7 +22946,7 @@ test("TUI status widget is registered as a Pi component factory", async (t) => {
     theme,
   );
   assert.ok(component instanceof StatusWidget);
-  (component as StatusWidget).setSnapshot({
+  (component as InstanceType<typeof StatusWidget>).setSnapshot({
     agents: [{ label: "agent", definition: "agent", state: "working" }],
     stale: false,
     unavailable: false,
@@ -22758,7 +22955,7 @@ test("TUI status widget is registered as a Pi component factory", async (t) => {
   assert.notEqual(factory, component);
   const leadSignal = pi.execOptions.find((options) => options.signal)?.signal;
   assert.ok(leadSignal);
-  (component as StatusWidget).dispose();
+  (component as InstanceType<typeof StatusWidget>).dispose();
   await pi.events.get("session_shutdown")?.[0]();
   assert.equal(leadSignal.aborted, true);
 });
@@ -22772,8 +22969,11 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
     resolve: (value: { stdout: string; stderr: string; code: number }) => void;
     signal?: AbortSignal;
   }[] = [];
-  const widgets: StatusWidget[] = [];
-  const factories: ((tui: any, theme: any) => StatusWidget)[] = [];
+  const widgets: InstanceType<typeof StatusWidget>[] = [];
+  const factories: ((
+    tui: any,
+    theme: any,
+  ) => InstanceType<typeof StatusWidget>)[] = [];
   const originalDispose = StatusWidget.prototype.dispose;
   let disposeCalls = 0;
   let registrations = 0;
@@ -22781,15 +22981,19 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
     disposeCalls++;
     originalDispose.call(this);
   };
-  globalThis.setInterval = ((callback: TimerHandler) => {
-    const timer = originalSetInterval(callback, 60_000);
-    activeTimers.add(timer);
-    return timer;
-  }) as typeof setInterval;
-  globalThis.clearInterval = ((timer) => {
-    activeTimers.delete(timer);
-    originalClearInterval(timer);
-  }) as typeof clearInterval;
+  Object.defineProperty(globalThis, "setInterval", {
+    value: (callback: () => void) => {
+      const timer = originalSetInterval(callback, 60_000);
+      activeTimers.add(timer);
+      return timer;
+    },
+  });
+  Object.defineProperty(globalThis, "clearInterval", {
+    value: (timer: NodeJS.Timeout | undefined) => {
+      if (timer) activeTimers.delete(timer);
+      originalClearInterval(timer);
+    },
+  });
   try {
     const pi = fakePi({
       exec: (command, args, options) => {
@@ -22832,9 +23036,19 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
         setWidget: (_key: string, content: unknown) => {
           registrations++;
           if (typeof content === "function") {
-            factories.push(content as (tui: any, theme: any) => StatusWidget);
+            factories.push(
+              content as (
+                tui: any,
+                theme: any,
+              ) => InstanceType<typeof StatusWidget>,
+            );
             widgets.push(
-              (content as (tui: any, theme: any) => StatusWidget)(
+              (
+                content as (
+                  tui: any,
+                  theme: any,
+                ) => InstanceType<typeof StatusWidget>
+              )(
                 { requestRender: () => undefined },
                 {
                   fg: (_color: string, text: string) => text,
@@ -23248,14 +23462,16 @@ test("TUI status refresh consumes the coherent Herdr session snapshot", async (t
   resetAgentMailbox(mailbox);
   writeAgentState(mailbox, managedState(label, REQUEST_ID, identity));
   const calls: string[][] = [];
-  let refreshTimer: TimerHandler | undefined;
+  let refreshTimer: (() => void) | undefined;
   const intervalDelays: number[] = [];
   const originalSetInterval = globalThis.setInterval;
-  globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
-    refreshTimer = callback;
-    if (delay !== undefined) intervalDelays.push(delay);
-    return {} as ReturnType<typeof setInterval>;
-  }) as typeof setInterval;
+  Object.defineProperty(globalThis, "setInterval", {
+    value: (callback: () => void, delay?: number) => {
+      refreshTimer = callback;
+      if (delay !== undefined) intervalDelays.push(delay);
+      return originalSetInterval(callback, delay);
+    },
+  });
   const herdrAgent = {
     agent: "pi",
     name: herdrAlias("sleep-smoke-a"),
@@ -23374,7 +23590,7 @@ test("TUI status refresh consumes the coherent Herdr session snapshot", async (t
   const context = fakeContext() as any;
   context.mode = "tui";
   context.hasUI = true;
-  let widget: StatusWidget | undefined;
+  let widget: InstanceType<typeof StatusWidget> | undefined;
   context.ui = {
     setWidget: (_key: string, content: unknown) => {
       if (typeof content === "function")
@@ -23417,7 +23633,10 @@ test("TUI status refresh consumes the coherent Herdr session snapshot", async (t
   assert.doesNotMatch(rendered, /\[read, bash, ask_owner\]/);
   const promptEvent = {
     systemPrompt: "base",
-    systemPromptOptions: { sections: {}, contextFiles: [] },
+    systemPromptOptions: {
+      sections: {} as Record<string, string>,
+      contextFiles: [],
+    },
   };
   await pi.events.get("before_agent_start")![0](promptEvent, context);
   assert.match(
@@ -23530,7 +23749,7 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
   const context = fakeContext() as any;
   context.mode = "tui";
   context.hasUI = true;
-  let widget: StatusWidget | undefined;
+  let widget: InstanceType<typeof StatusWidget> | undefined;
   context.ui = {
     setWidget: (_key: string, content: unknown) => {
       if (typeof content === "function")
@@ -23578,6 +23797,7 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
   });
   await t.waitFor(() => {
     assert.ok(listCount > countBeforeReconciliation, JSON.stringify(pi.calls));
+    assert.ok(widget);
     const rendered = widget.render(160).join("\n");
     assert.match(rendered, /● lead\s+× 1/);
     assert.match(rendered, /fresh-widget-agent/);
@@ -23669,7 +23889,7 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
   };
   let startedRunId = AGENT_ID;
   let startedOwnerSessionId = LEAD_SESSION_ID;
-  let widget: StatusWidget | undefined;
+  let widget: InstanceType<typeof StatusWidget> | undefined;
   try {
     setLeadEnvironment();
     resetAgentMailbox(mailbox);

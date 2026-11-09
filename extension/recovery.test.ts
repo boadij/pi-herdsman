@@ -3,7 +3,11 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { RequestRecord, ManagedAgentState } from "./mailbox.ts";
+import type {
+  RequestRecord,
+  ManagedAgentState,
+  ResultRecord,
+} from "./mailbox.ts";
 import { claimProcessLock } from "./lock.ts";
 import { resultPath, resultRef } from "./storage.ts";
 import support, {
@@ -153,7 +157,9 @@ test("recovery delivers Manager-owned results and asks only to the exact owner",
   const pi = fakePi({
     entries,
     exec: agentControllerExecutor(parent, states.slice(1)),
-    sendMessage: (message) => entries.push(message),
+    sendMessage: (message) => {
+      entries.push(message);
+    },
   });
   registerExtension!(pi.pi as never);
   const context = fakeAgentContext(entries);
@@ -272,7 +278,9 @@ test("combined status reports a completed agent as pending, not active", async (
   const pi = fakePi({
     entries,
     exec: agentControllerExecutor(parent, [trigger, pending, settling]),
-    sendMessage: (message) => entries.push(message),
+    sendMessage: (message) => {
+      entries.push(message);
+    },
   });
   registerExtension!(pi.pi as never);
   try {
@@ -3614,6 +3622,11 @@ test("result is removed after agent state reaches completed", async (t) => {
       entry.details?.requestId === REQUEST_ID,
   );
   assert.equal(durableResults.length, 1);
+  assert.ok(
+    typeof durableResults[0] === "object" &&
+      durableResults[0] !== null &&
+      "details" in durableResults[0],
+  );
   assert.deepEqual(
     durableResults[0].details,
     resultEntryDetails(activeState, REQUEST_ID),
@@ -4409,6 +4422,19 @@ test("stale scanner starts immediately, reschedules, deduplicates, and retries f
       if (attempts === 1) throw new Error("transient");
     },
   });
+  const latestReminderMs = () => {
+    const message = pi.sent.at(-1);
+    assert.ok(
+      message &&
+        typeof message === "object" &&
+        "details" in message &&
+        message.details !== null &&
+        typeof message.details === "object" &&
+        "nextReminderMs" in message.details &&
+        typeof message.details.nextReminderMs === "number",
+    );
+    return message.details.nextReminderMs;
+  };
   registerExtension!(pi.pi as never);
   t.mock.timers.enable({ apis: ["setTimeout"] });
   await pi.events.get("session_start")![0](undefined, fakeContext());
@@ -4428,19 +4454,19 @@ test("stale scanner starts immediately, reschedules, deduplicates, and retries f
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(attempts, 3);
-  assert.equal(pi.sent.at(-1)?.details?.nextReminderMs, 5 * 60_000);
+  assert.equal(latestReminderMs(), 5 * 60_000);
 
   now += 5 * 60_000;
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(attempts, 4);
-  assert.equal(pi.sent.at(-1)?.details?.nextReminderMs, 5 * 60_000);
+  assert.equal(latestReminderMs(), 5 * 60_000);
 
   now += 5 * 60_000;
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(attempts, 5);
-  assert.equal(pi.sent.at(-1)?.details?.nextReminderMs, 5 * 60_000);
+  assert.equal(latestReminderMs(), 5 * 60_000);
 
   writeAgentState(mailbox, {
     ...readAgentState(mailbox)!,
@@ -4722,7 +4748,9 @@ test("delegation parent notifies only its direct stale child", async (t) => {
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "parent";
   const parentPi = fakePi({
     exec,
-    sendMessage: (message) => sent.push(message),
+    sendMessage: (message) => {
+      sent.push(message);
+    },
   });
   registerExtension!(parentPi.pi as never);
   const parentContext = fakeAgentContext([
@@ -4848,7 +4876,9 @@ test("delegation parent notifies only its direct stale child", async (t) => {
   const rootSent: unknown[] = [];
   const rootPi = fakePi({
     exec: agentControllerExecutor(parent, [child, unrelated]),
-    sendMessage: (message) => rootSent.push(message),
+    sendMessage: (message) => {
+      rootSent.push(message);
+    },
   });
   registerExtension!(rootPi.pi as never);
   await rootPi.events.get("session_start")![0](undefined, fakeContext());
@@ -5084,7 +5114,9 @@ test("health scanner alerts true runtime blocking", async () => {
       true,
       "blocked",
     ),
-    sendMessage: (message) => sent.push(message),
+    sendMessage: (message) => {
+      sent.push(message);
+    },
   });
   registerExtension!(pi.pi as never);
   await pi.events.get("session_start")![0](undefined, fakeContext());
@@ -5153,7 +5185,9 @@ test("health attention stays idle-only and does not queue resolved stale work", 
       DEFAULT_PI_SESSION_ID,
       identity,
     ),
-    sendMessage: (message) => sent.push(message),
+    sendMessage: (message) => {
+      sent.push(message);
+    },
   });
   const context = fakeContext();
   (context as any).isIdle = () => false;
@@ -5192,8 +5226,8 @@ test("result errors wake the direct owner with durable recovery evidence", async
       originalStatus: "completed" as const,
       attempts: 8,
       failedAt: Date.now() - 1_000,
-      retrySafe: false,
-      cleanupSafe: true,
+      retrySafe: false as const,
+      cleanupSafe: true as const,
       nextAction:
         "Resolve the mailbox persistence failure described by result_error, then use stop_agent before starting another assignment.",
     },
@@ -5337,7 +5371,7 @@ test("delivered owner asks repeat without duplicating first delivery", async (t)
     /Use reply_agent to reply to this exact pending ask/,
   );
   writeAgentState(mailbox, { ...state, pendingAskId: undefined });
-  removeAsk(mailbox, ask.askId);
+  removeAsk(mailbox);
   now += 3 * 60_000;
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
@@ -5442,8 +5476,8 @@ test("health reconciliation publishes at most one attention per scan", async (t)
         originalStatus: "completed" as const,
         attempts: 8,
         failedAt: Date.now() - 1_000,
-        retrySafe: false,
-        cleanupSafe: true,
+        retrySafe: false as const,
+        cleanupSafe: true as const,
         nextAction:
           "Use inspect_agent to inspect the stored result error, then use stop_agent to close this agent.",
       },
@@ -6670,7 +6704,9 @@ test("stale scanner shutdown invalidates old inventory generation", async (t) =>
         DEFAULT_PI_SESSION_ID,
       )(command, args);
     },
-    sendMessage: (message) => sends.push(message),
+    sendMessage: (message) => {
+      sends.push(message);
+    },
   });
   registerExtension!(pi.pi as never);
   t.mock.timers.enable({ apis: ["setTimeout"] });
