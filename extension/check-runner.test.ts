@@ -452,11 +452,8 @@ test(
     t.after(() => rm(directory, { recursive: true, force: true }));
 
     const startedAt = Date.now();
-    let pids;
-    const deadline = waitForPids(pidPath, 5_000).then((readyPids) => {
-      pids = readyPids;
-      return Date.now() + 750;
-    });
+    const pids = waitForPids(pidPath, 5_000);
+    const deadline = pids.then(() => Date.now() + 750);
     const result = await runTestRunner(
       ["scripts/check-hang.mjs", pidPath],
       deadline,
@@ -479,7 +476,8 @@ test(
     }
     assert.ok(Date.now() - startedAt < 38_000);
 
-    for (const pid of [pids.parent, pids.child])
+    const { parent, child } = await pids;
+    for (const pid of [parent, child])
       assert.throws(
         () => process.kill(pid, 0),
         (error: any) => error?.code === "ESRCH",
@@ -780,8 +778,9 @@ test(
       result.diagnostic,
       /suite cleanup proceeded without confirmed capture closure/,
     );
-    assert.ok(capturePid);
-    assert.doesNotThrow(() => process.kill(capturePid, 0));
+    const pid = capturePid;
+    assert.ok(pid);
+    assert.doesNotThrow(() => process.kill(pid, 0));
   },
 );
 
@@ -902,37 +901,35 @@ test(
     );
     const pidPath = join(directory, "pids.json");
     t.after(() => rm(directory, { recursive: true, force: true }));
-    let pids;
-    const deadline = waitForPids(pidPath, 5_000).then((ready) => {
-      pids = ready;
-      return Date.now() + 750;
-    });
+    const pids = waitForPids(pidPath, 5_000);
+    const deadline = pids.then(() => Date.now() + 750);
     const previousFixture = process.env.CHECK_WORKER_FIXTURE;
     const testContext = process.env.NODE_TEST_CONTEXT;
     process.env.CHECK_WORKER_FIXTURE = pidPath;
     // The nested runner must start outside the parent node:test worker context.
     delete process.env.NODE_TEST_CONTEXT;
-    let run;
-    try {
-      // Its expected forced stop must not look like an incomplete outer test run.
-      run = runTestRunner(
-        [
-          "--test",
-          "--test-name-pattern=^native attribution fixture$",
-          "extension/check-runner.test.ts",
-        ],
-        deadline,
-        "native worker fixture",
-        undefined,
-        "ignore",
-      );
-    } finally {
-      if (previousFixture === undefined)
-        delete process.env.CHECK_WORKER_FIXTURE;
-      else process.env.CHECK_WORKER_FIXTURE = previousFixture;
-      if (testContext !== undefined)
-        process.env.NODE_TEST_CONTEXT = testContext;
-    }
+    // Its expected forced stop must not look like an incomplete outer test run.
+    const run = (() => {
+      try {
+        return runTestRunner(
+          [
+            "--test",
+            "--test-name-pattern=^native attribution fixture$",
+            "extension/check-runner.test.ts",
+          ],
+          deadline,
+          "native worker fixture",
+          undefined,
+          "ignore",
+        );
+      } finally {
+        if (previousFixture === undefined)
+          delete process.env.CHECK_WORKER_FIXTURE;
+        else process.env.CHECK_WORKER_FIXTURE = previousFixture;
+        if (testContext !== undefined)
+          process.env.NODE_TEST_CONTEXT = testContext;
+      }
+    })();
     const result = await run;
     assert.ok(!result.ok && result.kind === "suite-timeout" && result.timedOut);
     assert.equal(
@@ -953,8 +950,9 @@ test(
     } else {
       assert.equal(result.workerDiagnostic, undefined);
     }
+    const { child } = await pids;
     assert.throws(
-      () => process.kill(pids.child, 0),
+      () => process.kill(child, 0),
       (error: any) => error?.code === "ESRCH",
     );
   },
