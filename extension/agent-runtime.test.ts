@@ -13,6 +13,7 @@ import {
 } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
+  createCodemodeExtension,
   DefaultResourceLoader,
   ModelRuntime,
   SessionManager,
@@ -77,6 +78,8 @@ import support, {
   writeResult,
   writeAgentState,
   testTmpRoot,
+  nativeSessions,
+  seedLeadRole,
 } from "./support.ts";
 const { readConfig, updateConfig } = await import("./config.ts");
 const {
@@ -7571,6 +7574,355 @@ test("Pi native nested dispatch executes direct tools and actual staff handler d
     await session.dispose();
     listController.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(nestedMailbox);
+  }
+});
+
+test("native Code Mode preserves accepted Agent lifecycle through reopen and continuation", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "native-codemode-lead-pane";
+  const label = `native-codemode-${randomUUID().slice(0, 8)}`;
+  const childPath = join(testTmpRoot, `${label}.jsonl`);
+  const ownerPath = join(testTmpRoot, "native-codemode-owner.jsonl");
+  const foreignId = randomUUID();
+  const foreignPath = join(testTmpRoot, "native-codemode-foreign.jsonl");
+  const foreignEntry = {
+    type: "custom",
+    customType: "pi-herdsman-agent-definition",
+    data: { sessionId: foreignId, definition: "agent", label: "foreign" },
+  };
+  nativeSessions.set(foreignId, {
+    id: foreignId,
+    path: foreignPath,
+    cwd: WORKSPACE,
+    entries: [foreignEntry],
+  });
+  realFs.writeFileSync(
+    foreignPath,
+    `${JSON.stringify({ type: "session", version: 3, id: foreignId, timestamp: new Date().toISOString(), cwd: WORKSPACE })}\n${JSON.stringify(foreignEntry)}\n`,
+    "utf8",
+  );
+  const ownerEntries: any[] = [];
+  const ownerSession = {
+    id: LEAD_SESSION_ID,
+    path: ownerPath,
+    cwd: WORKSPACE,
+    entries: ownerEntries,
+  };
+  nativeSessions.set(LEAD_SESSION_ID, ownerSession);
+  const accepted: RequestRecord[] = [];
+  const persistChild = (request: RequestRecord) => {
+    accepted.push(request);
+    const current = nativeSessions.get(DEFAULT_PI_SESSION_ID);
+    const session = current ?? {
+      id: DEFAULT_PI_SESSION_ID,
+      path: childPath,
+      cwd: WORKSPACE,
+      entries: [
+        {
+          type: "custom",
+          customType: "pi-herdsman-agent-definition",
+          data: {
+            sessionId: DEFAULT_PI_SESSION_ID,
+            definition: "agent",
+            label,
+          },
+        },
+      ],
+    };
+    session.entries = (session.entries ?? []).filter(
+      (entry: any) => entry.customType !== AGENT_REQUIRED_EVIDENCE_ENTRY,
+    );
+    session.entries.push({
+      type: "custom",
+      customType: AGENT_REQUIRED_EVIDENCE_ENTRY,
+      data: {
+        version: 1,
+        sessionId: DEFAULT_PI_SESSION_ID,
+        requestId: request.requestId,
+        runId: request.runId,
+        ownerSessionId: request.ownerSessionId,
+        workspaceId: request.workspaceId,
+        agentLabel: request.agentLabel,
+        paneId: request.paneId,
+        projectAssignmentId: request.projectAssignmentId,
+        evidenceAssignmentId: request.evidenceAssignmentId,
+        taskEvidenceId: request.taskEvidenceId,
+        inheritedEvidence: request.inheritedEvidence ?? [],
+        localEvidence: request.localEvidence ?? [],
+        currentEvidenceIds: request.currentEvidenceIds ?? [],
+      },
+    });
+    session.path = childPath;
+    nativeSessions.set(DEFAULT_PI_SESSION_ID, session);
+    const persisted = (session.entries as any[]).map((entry, index) => ({
+      ...entry,
+      id: `entry-${index}`,
+      parentId: index ? `entry-${index - 1}` : null,
+      timestamp: new Date().toISOString(),
+    }));
+    realFs.writeFileSync(
+      childPath,
+      `${JSON.stringify({ type: "session", version: 3, id: session.id, timestamp: new Date().toISOString(), cwd: session.cwd })}\n${persisted.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      "utf8",
+    );
+  };
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    WORKSPACE,
+    AGENT_ID,
+    false,
+    true,
+    false,
+    persistChild,
+    childPath,
+  );
+  const controller = fakePi({
+    exec: startup.exec,
+    entries: ownerEntries,
+    persistMessages: true,
+  });
+  registerExtension!(controller.pi as never);
+  const context = fakeContext(ownerEntries);
+  context.cwd = WORKSPACE;
+  seedLeadRole(context);
+  for (const handler of controller.events.get("session_start") ?? [])
+    await handler(undefined, context);
+  for (const handler of controller.events.get("agent_start") ?? [])
+    await handler(undefined, context);
+  let activeContext = context;
+  const controllerResults: { name: string; result: unknown }[] = [];
+  const controllerTools = ["delegate", "continue", "stop"].map((name) =>
+    agentTool(controller, name),
+  );
+  const faux = fauxProvider({
+    provider: `native-codemode-${randomUUID()}`,
+    models: [{ id: "test", reasoning: false, input: ["text"] }],
+  });
+  const modelRuntime = await ModelRuntime.create({
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  modelRuntime.registerNativeProvider(faux.provider);
+  const settingsManager = SettingsManager.inMemory({
+    compaction: { enabled: false },
+  });
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    settingsManager,
+    noExtensions: true,
+    noContextFiles: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    extensionFactories: [
+      createCodemodeExtension(),
+      (api) => {
+        for (const tool of controllerTools)
+          api.registerTool({
+            name: tool.name,
+            label: tool.label,
+            description: tool.description,
+            exposure: tool.exposure,
+            executionMode: tool.executionMode,
+            parameters: tool.parameters,
+            execute: async (...args: any[]) => {
+              const result = await tool.execute(
+                ...args.slice(0, 4),
+                activeContext,
+              );
+              controllerResults.push({ name: tool.name, result });
+              return result;
+            },
+          });
+        api.on("session_start", () => api.setActiveTools(["codemode"]));
+      },
+    ],
+  });
+  await resourceLoader.reload();
+  const reopenOwnerHistory = () => {
+    const serializedOwner =
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: LEAD_SESSION_ID,
+          timestamp: new Date().toISOString(),
+          cwd: WORKSPACE,
+        }),
+        ...ownerEntries.map((entry, index) =>
+          JSON.stringify({
+            ...entry,
+            id: `owner-${index}`,
+            parentId: index ? `owner-${index - 1}` : null,
+            timestamp: new Date().toISOString(),
+          }),
+        ),
+      ].join("\n") + "\n";
+    realFs.writeFileSync(ownerPath, serializedOwner, "utf8");
+    const reopenedOwnerEntries = realFs
+      .readFileSync(ownerPath, "utf8")
+      .trim()
+      .split("\n")
+      .slice(1)
+      .map((line) => JSON.parse(line));
+    assert.equal(
+      reopenedOwnerEntries.filter(
+        (entry: any) =>
+          entry.customType === "pi-herdsman-agent-accepted-assignment",
+      ).length,
+      1,
+    );
+    assert.equal(
+      reopenedOwnerEntries.filter(
+        (entry: any) =>
+          entry.customType === "pi-herdsman-agent-closed-assignment",
+      ).length,
+      1,
+    );
+    activeContext = fakeContext(reopenedOwnerEntries);
+    activeContext.cwd = WORKSPACE;
+  };
+  const script =
+    (code: string, before?: () => void) => (providerContext: any) => {
+      before?.();
+      assert.ok(
+        getCurrentTools(providerContext.messages).some(
+          (tool) => tool.name === "codemode",
+        ),
+      );
+      return fauxAssistantMessage([fauxToolCall("codemode", { code })], {
+        stopReason: "toolUse",
+      });
+    };
+  const completeRequest = async (request: RequestRecord) => {
+    const mailbox = agentMailboxPath(WORKSPACE, label);
+    const state = readAgentState(mailbox)!;
+    writeAgentState(mailbox, {
+      ...state,
+      activeRequestId: undefined,
+      completedRequestId: request.requestId,
+      updatedAt: Date.now(),
+    });
+    writeResult(mailbox, {
+      version: 5,
+      runId: request.runId,
+      requestId: request.requestId,
+      ownerSessionId: request.ownerSessionId,
+      workspaceId: request.workspaceId,
+      agentLabel: request.agentLabel,
+      paneId: request.paneId,
+      status: "completed",
+      text: "completed result",
+      completedAt: Date.now(),
+    });
+    emitMailboxChange(mailbox, `result-${request.requestId}.json`);
+    emitMailboxChange(mailbox, `result-${request.requestId}.json`);
+    for (const handler of controller.events.get("agent_start") ?? [])
+      await handler(undefined, activeContext);
+  };
+  const { session } = await createAgentSession({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    modelRuntime,
+    model: faux.getModel()!,
+    settingsManager,
+    resourceLoader,
+    sessionManager: SessionManager.inMemory(WORKSPACE),
+    tools: ["codemode", "delegate_agent", "continue_agent", "stop_agent"],
+  });
+  try {
+    assert.ok(session.getActiveToolNames().includes("codemode"));
+    for (const name of ["delegate_agent", "continue_agent", "stop_agent"])
+      assert.ok(session.getCallableToolNames().includes(name));
+    const promptCode = async (code: string, before?: () => void) => {
+      faux.setResponses([
+        script(code, before),
+        () => fauxAssistantMessage("Finished."),
+      ]);
+      await session.prompt("Continue the Agent lifecycle using Code Mode.");
+    };
+    await promptCode(
+      `await tools.delegate_agent({ definition: "agent", label: ${JSON.stringify(label)}, task: "first assignment" }); throw new Error("fail after accepted launch");`,
+    );
+    assert.equal(accepted.length, 1, "accepted launch survives script failure");
+    assert.ok(
+      watchedMailboxDirectories.get(agentMailboxPath(WORKSPACE, label))?.size,
+      "accepted delegation installs a result watcher",
+    );
+    await promptCode(
+      `await tools.stop_agent({ agent: ${JSON.stringify(label)} });`,
+    );
+    await promptCode(
+      `await tools.continue_agent({ session: ${JSON.stringify(childPath)}, task: "continued assignment" });`,
+      reopenOwnerHistory,
+    );
+    assert.equal(accepted.length, 2);
+    assert.equal(accepted[1]!.sessionId, accepted[0]!.sessionId);
+    assert.equal(accepted[1]!.sessionPath, accepted[0]!.sessionPath);
+    await completeRequest(accepted[1]!);
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (
+        ownerEntries.some(
+          (entry: any) => entry.customType === "pi-herdsman-agent-result",
+        )
+      )
+        break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(
+      ownerEntries.filter(
+        (entry: any) => entry.customType === "pi-herdsman-agent-result",
+      ).length,
+      1,
+      "duplicate mailbox notifications deliver the continued result exactly once",
+    );
+    await promptCode(
+      `await tools.continue_agent({ session: ${JSON.stringify(foreignPath)}, task: "foreign session must be denied" });`,
+    );
+    assert.equal(accepted.length, 2, JSON.stringify(controllerResults));
+    assert.equal(
+      (controllerResults.at(-1)?.result as any)?.details?.ok,
+      false,
+      "continuation of a valid foreign saved session is denied",
+    );
+    assert.notEqual(accepted[0]!.requestId, accepted[1]!.requestId);
+    const acceptanceReceipts = ownerEntries.filter(
+      (entry: any) =>
+        entry.customType === "pi-herdsman-agent-accepted-assignment",
+    );
+    assert.equal(acceptanceReceipts.length, 2);
+    assert.equal(
+      ownerEntries.filter(
+        (entry: any) =>
+          entry.customType === "pi-herdsman-agent-closed-assignment",
+      ).length,
+      1,
+      "nested stop persists the clean closure proof",
+    );
+    assert.equal(
+      controller.calls.filter(
+        (args) => args[0] === "agent" && args[1] === "start",
+      ).length,
+      2,
+      "foreign continuation does not start an Agent",
+    );
+  } finally {
+    await session.dispose();
+    controller.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    nativeSessions.delete(LEAD_SESSION_ID);
+    nativeSessions.delete(DEFAULT_PI_SESSION_ID);
+    nativeSessions.delete(foreignId);
+    resetAgentMailbox(startup.mailbox);
+    realFs.rmSync(childPath, { force: true });
+    realFs.rmSync(ownerPath, { force: true });
+    realFs.rmSync(foreignPath, { force: true });
   }
 });
 

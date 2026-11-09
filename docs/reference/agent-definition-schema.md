@@ -51,9 +51,11 @@ ordinary Pi tool selection.
 
 Code Mode does not add `bash`, `edit`, or `write` to a role's tool policy.
 Ordinary Lead profiles with explicit tools also enforce that policy during
-nested tool execution. `delegate_agent`, `continue_agent`, and `ask_owner`
-remain model-only and cannot be called from Code Mode scripts. Other extensions
-may have different execution permissions; the bundled default applies only to
+nested tool execution. `ask_owner` remains model-only and cannot be called from
+Code Mode scripts. `delegate_agent` and `continue_agent` are direct tools when
+active for the role; they return after acceptance, while completion arrives
+through the normal result-delivery mechanism. Other extensions may have
+different execution permissions; the bundled default applies only to
 Pi's native `codemode`.
 
 Malformed files fail discovery; Pi Herdsman does not silently drop one invalid

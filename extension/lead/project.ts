@@ -42,6 +42,7 @@ import {
 import {
   acceptedCloseProof,
   resolveSavedSessionModelSelection,
+  STOP_CLOSURE_ENTRY,
 } from "../agent-controller.ts";
 import type { ExpectedSession, HerdrRecord } from "../herdr.ts";
 import type { RuntimeBuild } from "../compatibility.ts";
@@ -296,7 +297,7 @@ export type LeadProjectHost = {
 };
 
 export function createLeadProjectRuntime(host: LeadProjectHost) {
-  const stopClosureEntry = "pi-herdsman-agent-closed-assignment";
+  const stopClosureEntry = STOP_CLOSURE_ENTRY;
   const stopClosureProof = (
     branch: readonly any[],
     ownerSessionId: string,
