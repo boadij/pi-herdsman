@@ -6619,6 +6619,15 @@ async function managerRemovalFixture(
     integratedTargetCodes?: number[];
     replaceAssignmentAfterRemoval?: boolean;
     mergeEnabled?: boolean;
+    allowDivergence?: boolean;
+    revokeDivergenceAfterPreview?: boolean;
+    mergePreviewCode?: number;
+    mergePreviewKilled?: boolean;
+    mergeTree?: string;
+    divergentHead?: string;
+    divergentTree?: string;
+    targetAdvanceOnPreview?: string;
+    wrongMergeParents?: boolean;
     sourceHead?: string;
     targetHead?: string;
     revokeMergeAfterMutation?: boolean;
@@ -6696,6 +6705,7 @@ async function managerRemovalFixture(
   let checkoutPresent = !options.absentCheckout;
   let checkoutDirty = false;
   let mergeEnabled = options.mergeEnabled ?? true;
+  let allowDivergence = options.allowDivergence ?? false;
   let currentTargetHead = options.targetHead;
   let integratedHeadReads = 0;
   let targetBranchReads = 0;
@@ -6718,6 +6728,7 @@ async function managerRemovalFixture(
   const removals: string[] = [];
   const removalOptions: any[] = [];
   const calls: string[][] = [];
+  const gitCommands: string[][] = [];
   const gitMutations: string[][] = [];
   let reconciliationAssignmentId: string | undefined;
   let reconciliationProjectWorkLocked: boolean | undefined;
@@ -6784,6 +6795,7 @@ async function managerRemovalFixture(
           };
         }
         assert.equal(command, "git");
+        gitCommands.push(args);
         if (args[0] === "rev-parse" && args[1] === "--show-toplevel")
           return {
             code: 0,
@@ -6849,12 +6861,39 @@ async function managerRemovalFixture(
         }
         if (args[0] === "merge") {
           gitMutations.push(args);
-          currentTargetHead = args.at(-1);
+          currentTargetHead = args.includes("--no-ff")
+            ? (options.divergentHead ?? "5".repeat(40))
+            : args.at(-1);
           if (options.revokeMergeAfterMutation) mergeEnabled = false;
           if (options.replaceAssignmentOnMerge)
             assignment = { ...assignment, id: "replacement-assignment" };
           return { code: 0, stdout: "", stderr: "" };
         }
+        if (args[0] === "merge-tree" && args[1] === "--write-tree") {
+          if (options.revokeDivergenceAfterPreview) allowDivergence = false;
+          if (options.targetAdvanceOnPreview)
+            currentTargetHead = options.targetAdvanceOnPreview;
+          return {
+            code: options.mergePreviewCode ?? 0,
+            killed: options.mergePreviewKilled,
+            stdout: options.mergeTree ?? `${"6".repeat(40)}\n`,
+            stderr: options.mergePreviewCode === 1 ? "CONFLICT" : "",
+          };
+        }
+        if (args[0] === "show" && args[1] === "-s")
+          return {
+            code: 0,
+            stdout: options.wrongMergeParents
+              ? `${"7".repeat(40)} ${"2".repeat(40)}\n`
+              : `${"1".repeat(40)} ${"2".repeat(40)}\n`,
+            stderr: "",
+          };
+        if (args[0] === "rev-parse" && args[1] === "HEAD^{tree}")
+          return {
+            code: 0,
+            stdout: `${options.divergentTree ?? "6".repeat(40)}\n`,
+            stderr: "",
+          };
         if (args[0] === "rev-parse" && args[1] === "--git-path")
           return {
             code: 0,
@@ -6892,7 +6931,7 @@ async function managerRemovalFixture(
     managerLease: () => ({ descriptor: manager }),
     activeRole: () => "manager",
     readConfig: () => ({
-      managerMergeEnabled: mergeEnabled,
+      managerMergeEnabled: allowDivergence ? "divergent" : mergeEnabled,
       managerMergeOverrides: {},
     }),
     currentManager: async () =>
@@ -7175,6 +7214,7 @@ async function managerRemovalFixture(
     repoKey,
     calls,
     gitMutations,
+    gitCommands,
     removals,
     removalOptions,
     confirmationCount: () => confirmationCount,
@@ -7453,6 +7493,132 @@ test("Manager merge runtime reports target divergence without checkout mutation"
   assert.equal(result.details.status, "needs_update");
   assert.equal(result.details.integrated, false);
   assert.equal(result.details.source_branch, undefined);
+  assert.deepEqual(fixture.gitMutations, []);
+  assert.ok(!fixture.gitCommands.some((args) => args[0] === "merge-tree"));
+  assert.deepEqual(fixture.removals, []);
+});
+
+test("Manager divergent merge preflights, verifies exact parents and finalizes", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    allowDivergence: true,
+    targetHead: "1".repeat(40),
+    integratedTargetCodes: [1, 1, 1, 1, 1, 1, 0, 0],
+  });
+  const result = await fixture.runtime.executeStaff(
+    "merge",
+    {
+      action: "merge",
+      branch: "feat/remove-test",
+      expected_head: "2".repeat(40),
+    },
+    undefined,
+    undefined,
+    fixture.ctx,
+  );
+  assert.equal(result.details.status, "complete");
+  assert.equal(result.details.integrated, true);
+  assert.equal(result.details.checkout_removed, true);
+  assert.equal(result.details.assignment_retired, true);
+  assert.ok(fixture.gitMutations[0]?.includes("--no-ff"));
+  assert.ok(fixture.gitMutations[0]?.includes("-s"));
+  assert.equal(fixture.removals.length, 1);
+});
+
+test("Manager divergent conflict and unavailable/interrupted previews preserve the Lead and checkouts", async (t) => {
+  for (const options of [
+    { mergePreviewCode: 1 },
+    { mergePreviewCode: 129 },
+    { mergePreviewKilled: true },
+  ]) {
+    const fixture = await managerRemovalFixture(t, {
+      allowDivergence: true,
+      runningLead: true,
+      targetHead: "1".repeat(40),
+      integratedTargetCodes: [1, 1, 1, 1],
+      ...options,
+    });
+    const result = await fixture.runtime.executeStaff(
+      "merge",
+      {
+        action: "merge",
+        branch: "feat/remove-test",
+        expected_head: "2".repeat(40),
+      },
+      undefined,
+      undefined,
+      fixture.ctx,
+    );
+    assert.equal(
+      result.details.status,
+      options.mergePreviewCode === 1 ? "needs_update" : "blocked",
+    );
+    assert.equal(
+      result.details.reason,
+      options.mergePreviewCode === 1
+        ? "merge_conflict"
+        : options.mergePreviewKilled
+          ? "merge_preview_interrupted"
+          : "merge_preview_unavailable",
+    );
+    assert.equal(fixture.stoppedLeadCount(), 0);
+    assert.deepEqual(fixture.gitMutations, []);
+    assert.deepEqual(fixture.removals, []);
+  }
+});
+
+test("Manager divergent merge rejects a target advance and failed verification without cleanup", async (t) => {
+  for (const options of [
+    { targetAdvanceOnPreview: "8".repeat(40) },
+    { wrongMergeParents: true },
+    { divergentTree: "9".repeat(40) },
+  ]) {
+    const fixture = await managerRemovalFixture(t, {
+      allowDivergence: true,
+      targetHead: "1".repeat(40),
+      integratedTargetCodes: [1, 1, 1, 1, 1, 1, 0, 0],
+      ...options,
+    });
+    const result = await fixture.runtime.executeStaff(
+      "merge",
+      {
+        action: "merge",
+        branch: "feat/remove-test",
+        expected_head: "2".repeat(40),
+      },
+      undefined,
+      undefined,
+      fixture.ctx,
+    );
+    assert.equal(result.details.status, "blocked");
+    assert.equal(
+      result.details.reason,
+      options.targetAdvanceOnPreview
+        ? "target_changed_before_merge"
+        : "divergent_merge_verification_failed",
+    );
+    assert.deepEqual(fixture.removals, []);
+  }
+});
+
+test("Manager divergent permission revocation after preview blocks mutation", async (t) => {
+  const fixture = await managerRemovalFixture(t, {
+    allowDivergence: true,
+    revokeDivergenceAfterPreview: true,
+    targetHead: "1".repeat(40),
+    integratedTargetCodes: [1, 1, 1, 1, 1, 1],
+  });
+  const result = await fixture.runtime.executeStaff(
+    "merge",
+    {
+      action: "merge",
+      branch: "feat/remove-test",
+      expected_head: "2".repeat(40),
+    },
+    undefined,
+    undefined,
+    fixture.ctx,
+  );
+  assert.notEqual(result.details.status, "complete");
   assert.deepEqual(fixture.gitMutations, []);
   assert.deepEqual(fixture.removals, []);
 });

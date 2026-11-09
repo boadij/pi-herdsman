@@ -186,15 +186,17 @@ does not necessarily require implementing them sequentially.
 When an assigned Lead has completed and validated its work, the Manager can
 accept the exact commit on the named branch currently checked out in its
 verified checkout and use the Manager-only `integrate_branch` staff tool to
-fast-forward the verified primary branch. The assignment branch remains the
+integrate into the verified primary branch. The assignment branch remains the
 selector; the actual source branch may differ and must still point to the
 accepted SHA. This is local Git
 integration; it does not fetch, push, or merge a hosted pull request. The source
-and target must be clean, and a branch that does not contain the current target
-is returned as `needs_update`. That result is not proof of a content conflict.
-Use `message_staff` to ask the responsible Lead to incorporate the reported
-target revision, resolve any actual conflicts, run relevant checks, and report
-the exact validated new source HEAD. Then accept that revision before retrying.
+and target must be clean. Fast-forward-only permission returns `needs_update`
+for divergent histories. With explicit conflict-free merge permission, Git
+preflight identifies conflicts before stopping the Lead; clean divergence can
+create a verified merge commit. This does not prove combined functionality or
+tests passed. Ask the responsible Lead for required validation evidence before
+accepting the result. A stopped Lead is not automatically restarted if a later
+integration step fails.
 
 Independent feature branches may be integrated one at a time; a later branch
 may need to incorporate earlier integration first. The Git branch is preserved.

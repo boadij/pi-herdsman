@@ -74,8 +74,8 @@ An absent file means these defaults:
 | `inlineAttachmentLimitBytes`             | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB)                             |
 | `mailboxPayloadLimitBytes`               | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB)                             |
 | `worktreeRemovalPreapprovedRepos`        |               `[]` | exact verified repository identities explicitly opted in by an active Manager |
-| `managerMergeEnabled`                    |            `false` | boolean; global default for Manager local Git integration                     |
-| `managerMergeOverrides`                  |               `{}` | map of verified repository identities to boolean overrides                    |
+| `managerMergeEnabled`                    |            `false` | `false`, `true` (fast-forward only), or `"divergent"`                         |
+| `managerMergeOverrides`                  |               `{}` | map of verified repository identities to the same three policy values         |
 
 Malformed JSON, a non-object root, unknown fields, and invalid known values
 are errors. Reads do not create the directory or file. Herdsman's human
@@ -178,16 +178,18 @@ Manager local-merge permission is stored only in this user-wide Herdsman
 configuration, not in project `.pi/settings.json`, Agent-modifiable project
 settings, or Manager definition overlays. It is disabled by default. The
 global `managerMergeEnabled` value applies unless the exact verified repository
-identity has an entry in `managerMergeOverrides`; `true` enables and `false`
-denies for that repository. Removing an entry restores inheritance from the
-global value. This policy is separate from
+identity has an entry in `managerMergeOverrides`; `false` denies, `true` allows
+fast-forward only, and `"divergent"` also allows clean divergent merges.
+Removing an entry restores inheritance from the global value. Existing `true`
+values remain fast-forward-only. This policy is separate from
 `worktreeRemovalPreapprovedRepos`: enabling local merge does not authorize
 general worktree-removal requests.
 
-The permission covers fast-forward integration and the operation's narrowly
+The permission covers the selected integration mode and the operation's narrowly
 scoped guarded cleanup of an integrated source checkout; it does not grant
-arbitrary removal authority. Settings provides a global toggle, and a verified
-Manager's project overrides provide `Inherit / On / Off` controls for that
+arbitrary removal authority. Settings provides `Off / Fast-forward only /
+Conflict-free merges` globally, and verified Manager project overrides provide
+`Inherit / Off / Fast-forward only / Conflict-free merges` controls for that
 repository. Enabling either requires typing `enable`. The policy is persisted
 in user-wide Herdsman configuration, not project settings. `cleanup_pending`
 means integration succeeded but checkout removal and/or assignment retirement

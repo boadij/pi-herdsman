@@ -816,25 +816,10 @@ export function decide(model, context) {
     return call("message_supervisor", { message: marker });
   }
   if (model === "manager-merge-lead") {
-    const firstSupervisorResult = messages.findIndex(
-      (message) =>
-        message.role === "toolResult" &&
-        message.toolName === "message_supervisor",
-    );
-    const repairIndex = messages.findIndex(
-      (message, index) =>
-        index > firstSupervisorResult &&
-        message.role === "user" &&
-        text(message).includes("MANAGER_MERGE_REPAIR"),
-    );
-    const repair =
-      firstSupervisorResult >= 0 && repairIndex > firstSupervisorResult;
-    const command = repair
-      ? "git merge --no-edit main && test -f manager-merge-source.txt && git status --porcelain && git rev-parse HEAD"
-      : "git config user.name 'Herdsman Smoke' && git config user.email smoke@example.invalid && printf 'source\n' > manager-merge-source.txt && git add manager-merge-source.txt && git commit -m 'Manager merge smoke source' && git rev-parse HEAD";
+    const command =
+      "git config user.name 'Herdsman Smoke' && git config user.email smoke@example.invalid && printf 'source\n' > manager-merge-source.txt && git add manager-merge-source.txt && git commit -m 'Manager merge smoke source' && git rev-parse HEAD";
     const bash = correlatedCall(messages, "bash");
-    if (!bash || (repair && bash.resultIndex < repairIndex))
-      return call("bash", { command, timeout: 30000 });
+    if (!bash) return call("bash", { command, timeout: 30000 });
     const result = bash.result;
     if (!result || result.isError)
       throw new Error("Manager merge Lead Git command failed");
@@ -842,7 +827,7 @@ export function decide(model, context) {
       .match(/\b[0-9a-f]{40,64}\b/gi)
       ?.at(-1);
     if (!sha) throw new Error("Manager merge Lead Git command omitted HEAD");
-    const message = `${repair ? "MANAGER_MERGE_REPAIRED" : "MANAGER_MERGE_SOURCE_READY"} ${sha}`;
+    const message = `MANAGER_MERGE_SOURCE_READY ${sha}`;
     const reported = correlatedCall(messages, "message_supervisor");
     if (!reported || reported.resultIndex < bash.resultIndex)
       return call("message_supervisor", { message });
@@ -857,7 +842,7 @@ export function decide(model, context) {
       if (!branch) throw new Error("Manager merge assignment omitted branch");
       return call("delegate_work", {
         branch,
-        task: "Create a committed source change using bash, then message_supervisor with MANAGER_MERGE_SOURCE_READY and its exact full HEAD. Wait for a MANAGER_MERGE_REPAIR message; merge main, validate the source file and clean Git status, then message_supervisor with MANAGER_MERGE_REPAIRED and the exact resulting HEAD.",
+        task: "Create and commit one source file using bash, then message_supervisor with MANAGER_MERGE_SOURCE_READY and its exact full HEAD. Wait for further Manager direction.",
       });
     }
     if (!assignment)
@@ -872,19 +857,6 @@ export function decide(model, context) {
       return call("integrate_branch", {
         branch: assignment.call.arguments.branch,
         expected_head: attempt[1],
-      });
-    }
-    const repair = prompt.match(
-      /MANAGER_MERGE_NOTIFY (\S+) ([0-9a-f]{40,64})/i,
-    );
-    if (repair) {
-      if (correlatedCall(messages, "message_staff"))
-        return waitForResult(
-          "Waiting for the assigned Lead's reconciliation report.",
-        );
-      return call("message_staff", {
-        branch: repair[1],
-        message: `MANAGER_MERGE_REPAIR Incorporate target main at ${repair[2]}, preserve your source change, validate, and report exact final HEAD.`,
       });
     }
     return waitForResult(
@@ -1562,19 +1534,6 @@ export default function install(pi) {
     if (model.id === "manager-merge" || model.id === "manager-merge-lead") {
       const tools = getCurrentTools(context.messages).map((tool) => tool.name);
       const latestUser = lastUser(context.messages);
-      const firstSupervisorResult = context.messages.findIndex(
-        (message) =>
-          message.role === "toolResult" &&
-          message.toolName === "message_supervisor",
-      );
-      const repairInstructionObserved =
-        model.id === "manager-merge-lead" &&
-        context.messages.some(
-          (message, index) =>
-            index > firstSupervisorResult &&
-            message.role === "user" &&
-            text(message).includes("MANAGER_MERGE_REPAIR"),
-        );
       appendFileSync(
         join(
           process.env.PI_CODING_AGENT_DIR,
@@ -1582,7 +1541,7 @@ export default function install(pi) {
           "runtime",
           "smoke-faux-attempts.jsonl",
         ),
-        `${JSON.stringify({ model: model.id, prompt: text(latestUser).match(/MANAGER_MERGE_[A-Z_]+/)?.[0] ?? "other", repairInstructionObserved, tools: tools.filter((name) => ["bash", "delegate_work", "integrate_branch", "message_staff", "message_supervisor"].includes(name)), priorCalls: context.messages.filter((message) => message.role === "toolResult" && ["bash", "message_staff", "message_supervisor", "integrate_branch"].includes(message.toolName)).map((message) => message.toolName) })}\n`,
+        `${JSON.stringify({ model: model.id, prompt: text(latestUser).match(/MANAGER_MERGE_[A-Z_]+/)?.[0] ?? "other", tools: tools.filter((name) => ["bash", "delegate_work", "integrate_branch", "message_staff", "message_supervisor"].includes(name)), priorCalls: context.messages.filter((message) => message.role === "toolResult" && ["bash", "message_staff", "message_supervisor", "integrate_branch"].includes(message.toolName)).map((message) => message.toolName) })}\n`,
       );
     }
     if (!recordedSessions.has(currentSessionId)) {

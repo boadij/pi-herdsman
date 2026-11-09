@@ -2110,7 +2110,7 @@ function registerExtensionImpl(
           name: "integrate_branch",
           label: "integrate branch",
           description:
-            "Integrate an assigned local branch into the verified primary branch using fast-forward-only Git. Supply the exact full source SHA accepted after validation. This may stop running managed execution before integration. If a later step fails after execution stops, it is not automatically restarted. Verified integration triggers guarded cleanup, but integration and cleanup can complete separately; do not treat integration alone as full finalization.",
+            "Integrate an assigned local branch into the verified primary branch using fast-forward Git, or a clean divergent merge when explicitly authorized. Supply the exact full source SHA accepted after validation. A divergent merge may create a merge commit; actual conflicts are distinguished from divergent ancestry. Merge preflight failure/conflict occurs before stopping the Lead. If a later step fails after execution stops, it is not automatically restarted. Git integration does not prove tests or semantic acceptance. Verified integration triggers separately guarded cleanup; integration and cleanup can complete separately, so do not treat integration alone as full finalization.",
           parameters: Type.Object(
             {
               branch: Type.String({

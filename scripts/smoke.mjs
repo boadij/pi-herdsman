@@ -5734,7 +5734,6 @@ async function runManagerMergeSmoke(ctx) {
   );
   const assignmentRecord = JSON.parse(await readFile(assignmentPath, "utf8"));
   assert.equal(assignmentRecord.branch, branch);
-  const assignmentId = assignmentRecord.id;
   assert.ok(sourcePath && sourcePath !== ctx.primaryCheckoutPath);
   assert.equal(
     (await run("git", ["remote"], { cwd: ctx.rootCwd })).stdout.trim(),
@@ -5784,157 +5783,15 @@ async function runManagerMergeSmoke(ctx) {
   );
   assert.equal(targetAdvanced.branch, "main");
   assert.notEqual(targetAdvanced.head, primaryBefore.head);
-  const divergencePrompt = `MANAGER_MERGE_ATTEMPT ${initialSha}`;
-  await submitPaneCommand(ctx, ctx.rootPaneId, divergencePrompt);
-  const needsUpdate = await waitForEvidence(
-    ctx,
-    "manager-merge-needs-update",
-    async () => {
-      const session = await manager();
-      const rows = session ? managerMergeToolRows(session.contents) : [];
-      const matching = rows.find(
-        (row) =>
-          row.arguments?.expected_head === initialSha &&
-          row.result?.details?.status === "needs_update",
-      );
-      const attempts = await readFile(
-        join(
-          ctx.paths.piAgent,
-          "pi-herdsman",
-          "runtime",
-          "smoke-faux-attempts.jsonl",
-        ),
-        "utf8",
-      ).catch(() => "");
-      const managerAttempts = attempts
-        .split("\n")
-        .filter(Boolean)
-        .flatMap((line) => {
-          try {
-            const entry = JSON.parse(line);
-            return entry.model === "manager-merge" ? [entry] : [];
-          } catch {
-            return [];
-          }
-        });
-      return {
-        done: !!matching,
-        value: matching,
-        progress: {
-          calls: rows.map((row) => ({
-            arguments: row.arguments,
-            result: row.result,
-          })),
-          attempts: managerAttempts,
-        },
-      };
-    },
-    { timeoutMs: DEFAULT_MANAGER_READY_TIMEOUT_MS, stallMs: MODEL_STALL_MS },
-  );
-  assert.equal(needsUpdate.arguments.branch, branch);
-  assert.equal(needsUpdate.result.isError, false);
-  assert.equal(needsUpdate.result.details.target_branch, "main");
-  assert.equal(needsUpdate.result.details.integrated, false);
-  assert.equal(needsUpdate.result.details.checkout_removed, false);
-  assert.equal(needsUpdate.result.details.assignment_retired, false);
-  assert.deepEqual(
-    await managerMergeCheckoutState(sourcePath),
-    sourceInitial,
-    "needs_update must preserve source branch/worktree/HEAD/files",
-  );
-  assert.deepEqual(
-    await managerMergeCheckoutState(ctx.primaryCheckoutPath),
-    targetAdvanced,
-    "needs_update must preserve target branch/worktree/HEAD/files",
-  );
-  const topologyAfterDivergence = await nestedCommand(ctx, [
-    "worktree",
-    "list",
-    "--workspace",
-    ctx.rootWorkspaceId,
-  ]);
-  assert.equal(topologyAfterDivergence.source?.repo_key, assigned.repoKey);
-  assert.equal(
-    captureManagerHandoffWorktree(
-      ctx,
-      topologyAfterDivergence.worktrees ?? [],
-      branch,
-      assigned.row.workspace_id,
-    )?.path,
-    sourcePath,
-  );
-  assert.equal(
-    JSON.parse(await readFile(assignmentPath, "utf8")).id,
-    assignmentId,
-  );
-
-  const notifyPrompt = `MANAGER_MERGE_NOTIFY ${branch} ${targetAdvanced.head}`;
-  await submitPaneCommand(ctx, ctx.rootPaneId, notifyPrompt);
-  await waitForEvidence(
-    ctx,
-    "manager-merge-repair-message",
-    async () => {
-      const session = await manager();
-      const sent =
-        session &&
-        staffActionResults(
-          session.contents,
-          "message_staff",
-          "message",
-          notifyPrompt,
-        );
-      return { done: !!sent?.length };
-    },
-    { timeoutMs: DEFAULT_MANAGER_READY_TIMEOUT_MS, stallMs: MODEL_STALL_MS },
-  );
-  const repaired = await waitForEvidence(
-    ctx,
-    "manager-merge-lead-repair",
-    async () => {
-      const session = await manager();
-      const sha =
-        session && reportedSha(session.contents, "MANAGER_MERGE_REPAIRED");
-      const attempts = await readFile(
-        join(
-          ctx.paths.piAgent,
-          "pi-herdsman",
-          "runtime",
-          "smoke-faux-attempts.jsonl",
-        ),
-        "utf8",
-      ).catch(() => "");
-      const mergeAttempts = attempts
-        .split("\n")
-        .filter(Boolean)
-        .flatMap((line) => {
-          try {
-            const entry = JSON.parse(line);
-            return entry.model.startsWith("manager-merge") ? [entry] : [];
-          } catch {
-            return [];
-          }
-        });
-      return {
-        done: !!sha,
-        value: sha,
-        progress: { mergeAttempts: mergeAttempts.slice(-8) },
-      };
-    },
-    { timeoutMs: DEFAULT_MANAGER_READY_TIMEOUT_MS, stallMs: MODEL_STALL_MS },
-  );
-  assert.notEqual(repaired, initialSha);
-  const repairedState = await managerMergeCheckoutState(sourcePath);
-  assert.equal(repairedState.branch, branch);
-  assert.equal(repairedState.head, repaired);
-  assert.equal(repairedState.status, "");
-  await run(
-    "git",
-    ["merge-base", "--is-ancestor", targetAdvanced.head, repaired],
-    { cwd: sourcePath },
-  );
-
-  const retryPrompt = `MANAGER_MERGE_ATTEMPT ${repaired}`;
-  await submitPaneCommand(ctx, ctx.rootPaneId, retryPrompt);
+  const expectedTree = (
+    await run(
+      "git",
+      ["merge-tree", "--write-tree", targetAdvanced.head, initialSha],
+      { cwd: ctx.primaryCheckoutPath },
+    )
+  ).stdout.trim();
+  const mergePrompt = `MANAGER_MERGE_ATTEMPT ${initialSha}`;
+  await submitPaneCommand(ctx, ctx.rootPaneId, mergePrompt);
   const complete = await waitForEvidence(
     ctx,
     "manager-merge-complete",
@@ -5943,7 +5800,7 @@ async function runManagerMergeSmoke(ctx) {
       const rows = session ? managerMergeToolRows(session.contents) : [];
       const matching = rows.find(
         (row) =>
-          row.arguments?.expected_head === repaired &&
+          row.arguments?.expected_head === initialSha &&
           row.result?.details?.status === "complete",
       );
       return { done: !!matching, value: matching };
@@ -5952,7 +5809,7 @@ async function runManagerMergeSmoke(ctx) {
   );
   assert.equal(complete.arguments.branch, branch);
   assert.equal(complete.result.isError, false);
-  assert.equal(complete.result.details.source_head, repaired);
+  assert.equal(complete.result.details.source_head, initialSha);
   assert.equal(complete.result.details.target_branch, "main");
   assert.equal(complete.result.details.integrated, true);
   assert.equal(complete.result.details.checkout_removed, true);
@@ -5964,14 +5821,31 @@ async function runManagerMergeSmoke(ctx) {
     "target branch identity must remain main",
   );
   assert.equal(
-    finalTarget.head,
-    repaired,
-    "verified target must reach exactly the accepted source SHA",
+    (
+      await run("git", ["show", "-s", "--format=%P", "HEAD"], {
+        cwd: ctx.primaryCheckoutPath,
+      })
+    ).stdout.trim(),
+    `${targetAdvanced.head} ${initialSha}`,
+    "verified target must be a two-parent merge of the observed target and accepted source",
   );
   assert.equal(finalTarget.status, "");
   await run(
     "git",
-    ["merge-base", "--is-ancestor", repaired, finalTarget.head],
+    ["merge-base", "--is-ancestor", initialSha, finalTarget.head],
+    { cwd: ctx.primaryCheckoutPath },
+  );
+  assert.equal(
+    (
+      await run("git", ["rev-parse", "HEAD^{tree}"], {
+        cwd: ctx.primaryCheckoutPath,
+      })
+    ).stdout.trim(),
+    expectedTree,
+  );
+  await run(
+    "git",
+    ["merge-base", "--is-ancestor", targetAdvanced.head, finalTarget.head],
     { cwd: ctx.primaryCheckoutPath },
   );
   const finalTopology = await nestedCommand(ctx, [
@@ -13475,7 +13349,7 @@ async function main() {
       await mkdir(join(paths.piAgent, "pi-herdsman"), { recursive: true });
       await writeFile(
         join(paths.piAgent, "pi-herdsman", "config.json"),
-        JSON.stringify({ managerMergeEnabled: true }) + "\n",
+        JSON.stringify({ managerMergeEnabled: "divergent" }) + "\n",
       );
     }
     if (scenario === "agent-crash-recovery") {

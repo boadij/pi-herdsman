@@ -5906,6 +5906,7 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
         "integrate_branch",
         [
           "integration and cleanup can complete separately",
+          "explicitly authorized",
           "If a later step fails after execution stops, it is not automatically restarted",
         ],
       ],

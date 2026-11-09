@@ -2432,6 +2432,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       "HEAD",
     ]);
     const targetHead = await output(targetPath, ["rev-parse", "HEAD"]);
+    const initialTargetHead = targetHead;
     const clean = async (path: string) => {
       const status = await runGit(path, [
         "status",
@@ -2515,7 +2516,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error("Git ancestry could not be verified");
     };
     const initiallyIntegrated = await ancestry(expectedHead, targetHead);
-    if (!initiallyIntegrated && !(await ancestry(targetHead, expectedHead)))
+    const initiallyFastForwardable = initiallyIntegrated
+      ? false
+      : await ancestry(targetHead, expectedHead);
+    if (
+      !initiallyIntegrated &&
+      !initiallyFastForwardable &&
+      !permission().allowDivergence
+    )
       return {
         content: [
           {
@@ -2531,6 +2539,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           source_head: expectedHead,
           target_head: targetHead,
           status: "needs_update",
+          reason: "divergent_fast_forward_only",
           integrated: false,
           checkout_removed: false,
           assignment_retired: false,
@@ -2584,10 +2593,18 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                     "rev-parse",
                     "HEAD",
                   ]);
-                  if (
-                    !(await ancestry(expectedHead, preStopTarget)) &&
-                    !(await ancestry(preStopTarget, expectedHead))
-                  )
+                  if (await ancestry(expectedHead, preStopTarget))
+                    return {
+                      kind: "integrated",
+                      targetHead: preStopTarget,
+                      targetBranch,
+                      alreadyIntegrated: true as const,
+                    };
+                  const preStopFastForward = await ancestry(
+                    preStopTarget,
+                    expectedHead,
+                  );
+                  if (!preStopFastForward && !permission().allowDivergence)
                     return {
                       kind: "tool-result",
                       result: {
@@ -2605,12 +2622,86 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                           source_head: expectedHead,
                           target_head: preStopTarget,
                           status: "needs_update",
+                          reason: "divergent_fast_forward_only",
                           integrated: false,
                           checkout_removed: false,
                           assignment_retired: false,
                         },
                       },
                     };
+                  let expectedMergeTree: string | undefined;
+                  if (!preStopFastForward) {
+                    if (preStopTarget !== initialTargetHead)
+                      return {
+                        kind: "blocked",
+                        targetHead: preStopTarget,
+                        targetBranch,
+                        integrated: false,
+                        reason: "target_changed_before_merge",
+                      };
+                    let preview;
+                    try {
+                      preview = await runGit(targetPath, [
+                        "merge-tree",
+                        "--write-tree",
+                        preStopTarget,
+                        expectedHead,
+                      ]);
+                    } catch {
+                      return {
+                        kind: "blocked",
+                        targetHead: preStopTarget,
+                        targetBranch,
+                        integrated: false,
+                        reason: operationSignal?.aborted
+                          ? "merge_preview_interrupted"
+                          : "merge_preview_unavailable",
+                      };
+                    }
+                    if (preview.killed || operationSignal?.aborted)
+                      return {
+                        kind: "blocked",
+                        targetHead: preStopTarget,
+                        targetBranch,
+                        integrated: false,
+                        reason: "merge_preview_interrupted",
+                      };
+                    if (preview.code === 1)
+                      return {
+                        kind: "tool-result",
+                        result: {
+                          content: [
+                            {
+                              type: "text" as const,
+                              text: `Branch ${branch} conflicts with target ${targetBranch}; the Lead was not stopped and neither checkout was changed.`,
+                            },
+                          ],
+                          details: {
+                            ok: false,
+                            action: "merge",
+                            branch,
+                            target_branch: targetBranch,
+                            source_head: expectedHead,
+                            target_head: preStopTarget,
+                            status: "needs_update",
+                            reason: "merge_conflict",
+                            integrated: false,
+                            checkout_removed: false,
+                            assignment_retired: false,
+                          },
+                        },
+                      };
+                    const tree = String(preview.stdout ?? "").trim();
+                    if (preview.code !== 0 || !/^[0-9a-f]{40,64}$/i.test(tree))
+                      return {
+                        kind: "blocked",
+                        targetHead: preStopTarget,
+                        targetBranch,
+                        integrated: false,
+                        reason: "merge_preview_unavailable",
+                      };
+                    expectedMergeTree = tree;
+                  }
                   if (current.liveLead)
                     await stopExecution(
                       current.assignment.id,
@@ -2683,7 +2774,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                       targetBranch,
                       alreadyIntegrated: true as const,
                     };
-                  if (!(await ancestry(currentTarget, expectedHead)))
+                  if (
+                    !(await ancestry(currentTarget, expectedHead)) &&
+                    !permission().allowDivergence
+                  )
                     return {
                       kind: "tool-result",
                       result: {
@@ -2707,14 +2801,27 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                         },
                       },
                     };
-                  if (!permission().enabled)
+                  if (!preStopFastForward && currentTarget !== preStopTarget)
+                    return {
+                      kind: "blocked",
+                      targetHead: currentTarget,
+                      targetBranch,
+                      integrated: false,
+                      reason: "target_changed_before_merge",
+                    };
+                  if (
+                    !permission().enabled ||
+                    (!preStopFastForward && !permission().allowDivergence)
+                  )
                     throw new Error(
                       "Manager local merge permission was revoked",
                     );
                   let mergeError: string | undefined;
                   const merged = await runGit(targetPath, [
                     "merge",
-                    "--ff-only",
+                    ...(preStopFastForward
+                      ? ["--ff-only"]
+                      : ["--no-ff", "--no-edit", "-s", "ort"]),
                     "--no-autostash",
                     "--no-overwrite-ignore",
                     expectedHead,
@@ -2750,6 +2857,26 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                     ["merge-base", "--is-ancestor", expectedHead, "HEAD"],
                     { cwd: targetPath, timeout: 10_000 },
                   );
+                  const parents = !preStopFastForward
+                    ? await host.pi.exec(
+                        "git",
+                        ["show", "-s", "--format=%P", "HEAD"],
+                        { cwd: targetPath, timeout: 10_000 },
+                      )
+                    : undefined;
+                  const mergedTree = !preStopFastForward
+                    ? await host.pi.exec("git", ["rev-parse", "HEAD^{tree}"], {
+                        cwd: targetPath,
+                        timeout: 10_000,
+                      })
+                    : undefined;
+                  const containsOriginalTarget = !preStopFastForward
+                    ? await host.pi.exec(
+                        "git",
+                        ["merge-base", "--is-ancestor", preStopTarget, "HEAD"],
+                        { cwd: targetPath, timeout: 10_000 },
+                      )
+                    : undefined;
                   const observedBranch = await host.pi.exec(
                     "git",
                     ["symbolic-ref", "--quiet", "--short", "HEAD"],
@@ -2805,9 +2932,24 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                     !index.stdout?.trim() &&
                     !stateUnknown &&
                     operationStates.length === 0;
+                  const divergentVerified =
+                    preStopFastForward ||
+                    (!!parents &&
+                      parents.code === 0 &&
+                      !parents.killed &&
+                      String(parents.stdout ?? "").trim() ===
+                        `${preStopTarget} ${expectedHead}` &&
+                      !!mergedTree &&
+                      mergedTree.code === 0 &&
+                      !mergedTree.killed &&
+                      String(mergedTree.stdout ?? "").trim() ===
+                        expectedMergeTree &&
+                      containsOriginalTarget?.code === 0 &&
+                      !containsOriginalTarget.killed);
                   if (
                     !integrationVerified ||
                     !gitStateClean ||
+                    !divergentVerified ||
                     (merged.code !== 0 && !interrupted)
                   )
                     return {
@@ -2817,7 +2959,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                       integrated: integrationVerified,
                       reason: !integrationVerified
                         ? "accepted_revision_not_verified_after_merge"
-                        : `git_state_after_merge:${stateUnknown ? "unknown" : operationStates.join(",") || (index.stdout?.trim() ? "unmerged_index" : status.stdout?.trim() ? "dirty_worktree" : mergeError || merged.stderr || "merge_failed")}`,
+                        : !divergentVerified
+                          ? "divergent_merge_verification_failed"
+                          : `git_state_after_merge:${stateUnknown ? "unknown" : operationStates.join(",") || (index.stdout?.trim() ? "unmerged_index" : status.stdout?.trim() ? "dirty_worktree" : mergeError || merged.stderr || "merge_failed")}`,
                     };
                   return {
                     kind: "integrated",
