@@ -14697,6 +14697,32 @@ test("Herdsman and agents share command handling and grammar", async () => {
   context.hasUI = true;
   const notices: string[] = [];
   context.ui.select = async () => undefined;
+  context.ui.custom = async <T>(
+    factory: (
+      tui: { requestRender: () => void },
+      theme: {
+        fg: (_color: string, text: string) => string;
+        bold: (text: string) => string;
+      },
+      keybindings: { matches: (data: string, key: string) => boolean },
+      done: (result: T) => void,
+    ) => { handleInput: (data: string) => void },
+  ): Promise<T> =>
+    new Promise<T>((resolve) => {
+      const component = factory(
+        { requestRender: () => undefined },
+        {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        },
+        {
+          matches: (data: string, key: string) =>
+            data === "\u001b" && key === "tui.select.cancel",
+        },
+        resolve,
+      );
+      component.handleInput("\u001b");
+    });
   context.ui.notify = (message: string) => notices.push(message);
   await command.handler("", context);
   await command.handler("agents extra", context);
@@ -22301,7 +22327,7 @@ test("managed Lead sampler requires a verified assignment, caches its sample, an
   ctx.mode = "tui";
   ctx.hasUI = true;
   ctx.cwd = assignedCheckout;
-  let widget: StatusWidget | undefined;
+  let widget: InstanceType<typeof StatusWidget> | undefined;
   const notices: string[] = [];
   ctx.ui = {
     ...ctx.ui,

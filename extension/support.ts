@@ -6,7 +6,12 @@ import { basename, join, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { mock } from "node:test";
 import { fileURLToPath } from "node:url";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Component, TUI } from "@earendil-works/pi-tui";
+import {
+  Theme as PiTheme,
+  type ExtensionContext,
+  type Theme,
+} from "@earendil-works/pi-coding-agent";
 import packageMetadata from "../package.json" with { type: "json" };
 import type {
   RequestRecord,
@@ -33,6 +38,65 @@ export const nativeSessions = new Map<
     sessionName?: string;
   }
 >();
+const fakeThemeColors = {
+  accent: "",
+  border: "",
+  borderAccent: "",
+  borderMuted: "",
+  success: "",
+  error: "",
+  warning: "",
+  muted: "",
+  dim: "",
+  text: "",
+  thinkingText: "",
+  scrollbarTrack: "",
+  scrollbarThumb: "",
+  selectedBg: "",
+  searchMatchBg: "",
+  searchMatchText: "",
+  userMessageBg: "",
+  userMessageText: "",
+  customMessageBg: "",
+  customMessageText: "",
+  customMessageLabel: "",
+  toolPendingBg: "",
+  toolSuccessBg: "",
+  toolErrorBg: "",
+  toolTitle: "",
+  toolOutput: "",
+  mdHeading: "",
+  mdLink: "",
+  mdLinkUrl: "",
+  mdCode: "",
+  mdCodeBlock: "",
+  mdCodeBlockBorder: "",
+  mdQuote: "",
+  mdQuoteBorder: "",
+  mdHr: "",
+  mdListBullet: "",
+  toolDiffAdded: "",
+  toolDiffRemoved: "",
+  toolDiffContext: "",
+  syntaxComment: "",
+  syntaxKeyword: "",
+  syntaxFunction: "",
+  syntaxVariable: "",
+  syntaxString: "",
+  syntaxNumber: "",
+  syntaxType: "",
+  syntaxOperator: "",
+  syntaxPunctuation: "",
+  thinkingOff: "",
+  thinkingMinimal: "",
+  thinkingLow: "",
+  thinkingMedium: "",
+  thinkingHigh: "",
+  thinkingXhigh: "",
+  thinkingMax: "",
+  bashMode: "",
+};
+const fakeTheme = new PiTheme(fakeThemeColors, fakeThemeColors, "truecolor");
 const { SessionManager: nativeSessionManager } =
   await import("@earendil-works/pi-coding-agent");
 export let sessionOpenError: unknown;
@@ -390,7 +454,7 @@ mock.module("@earendil-works/pi-coding-agent", {
             ],
           getBranch: () => session?.entries ?? [],
           appendCustomEntry: (customType: string, data: unknown) => {
-            session?.entries.push({ type: "custom", customType, data });
+            session?.entries?.push({ type: "custom", customType, data });
           },
           buildContextEntries: () =>
             session?.contextEntries ??
@@ -603,7 +667,7 @@ mock.module("typebox", {
     Type: {
       Object: (
         properties: Record<string, { "~optional"?: boolean }>,
-        options: unknown = {},
+        options: object = {},
       ) => {
         const required = Object.keys(properties).filter(
           (key) => !properties[key]?.["~optional"],
@@ -612,16 +676,16 @@ mock.module("typebox", {
           type: "object",
           ...(required.length ? { required } : {}),
           properties,
-          ...(options as object),
+          ...options,
         };
       },
       Optional: (value: object) =>
         Object.defineProperty({ ...value }, "~optional", { value: true }),
-      String: (options: unknown = {}) => ({ type: "string", ...options }),
-      Boolean: (options: unknown = {}) => ({ type: "boolean", ...options }),
-      Number: (options: unknown = {}) => ({ type: "number", ...options }),
-      Integer: (options: unknown = {}) => ({ type: "integer", ...options }),
-      Array: (items: unknown, options: unknown = {}) => ({
+      String: (options: object = {}) => ({ type: "string", ...options }),
+      Boolean: (options: object = {}) => ({ type: "boolean", ...options }),
+      Number: (options: object = {}) => ({ type: "number", ...options }),
+      Integer: (options: object = {}) => ({ type: "integer", ...options }),
+      Array: (items: unknown, options: object = {}) => ({
         type: "array",
         items,
         ...options,
@@ -820,9 +884,89 @@ export function fakeContext(
       notify: () => undefined,
       select: async () => "tab",
       confirm: async () => true,
-      setWidget: (_key: string, content: WidgetContent) =>
-        assertWidgetContent(content),
-      custom: async () => undefined,
+      input: async (): Promise<never> => {
+        throw new Error(
+          "fakeContext: ui.input requires an explicit test override",
+        );
+      },
+      pasteToEditor: (): never => {
+        throw new Error(
+          "fakeContext: ui.pasteToEditor requires an explicit test override",
+        );
+      },
+      setEditorText: (): never => {
+        throw new Error(
+          "fakeContext: ui.setEditorText requires an explicit test override",
+        );
+      },
+      getEditorText: (): never => {
+        throw new Error(
+          "fakeContext: ui.getEditorText requires an explicit test override",
+        );
+      },
+      editor: async (): Promise<never> => {
+        throw new Error(
+          "fakeContext: ui.editor requires an explicit test override",
+        );
+      },
+      addAutocompleteProvider: (): never => {
+        throw new Error(
+          "fakeContext: ui.addAutocompleteProvider requires an explicit test override",
+        );
+      },
+      setEditorComponent: () => undefined,
+      getEditorComponent: (): never => {
+        throw new Error(
+          "fakeContext: ui.getEditorComponent requires an explicit test override",
+        );
+      },
+      theme: fakeTheme,
+      getAllThemes: (): never => {
+        throw new Error(
+          "fakeContext: ui.getAllThemes requires an explicit test override",
+        );
+      },
+      getTheme: (): never => {
+        throw new Error(
+          "fakeContext: ui.getTheme requires an explicit test override",
+        );
+      },
+      setTheme: (): never => {
+        throw new Error(
+          "fakeContext: ui.setTheme requires an explicit test override",
+        );
+      },
+      getToolsExpanded: (): never => {
+        throw new Error(
+          "fakeContext: ui.getToolsExpanded requires an explicit test override",
+        );
+      },
+      setToolsExpanded: () => undefined,
+      onTerminalInput: (): never => {
+        throw new Error(
+          "fakeContext: ui.onTerminalInput requires an explicit test override",
+        );
+      },
+      setStatus: () => undefined,
+      setWorkingMessage: () => undefined,
+      setWorkingVisible: () => undefined,
+      setWorkingIndicator: () => undefined,
+      setHiddenThinkingLabel: () => undefined,
+      setWidget: (
+        _key: string,
+        content:
+          | string[]
+          | undefined
+          | ((tui: TUI, theme: Theme) => Component & { dispose?(): void }),
+      ) => assertWidgetContent(content),
+      setFooter: () => undefined,
+      setHeader: () => undefined,
+      setTitle: () => undefined,
+      custom: async (): Promise<never> => {
+        throw new Error(
+          "fakeContext: ui.custom requires an explicit test override",
+        );
+      },
     },
   };
 }

@@ -279,7 +279,7 @@ test("trusted project preferences override only the two supported global values"
     realFs.mkdirSync(`${cwd}/.pi`, { recursive: true });
     updateConfig("autoActivateManager", true);
     updateConfig("contextRetirement", true);
-    const ctx = { cwd, isProjectTrusted: () => true } as never;
+    const ctx = { cwd, isProjectTrusted: () => true };
     realFs.writeFileSync(
       `${cwd}/.pi/settings.json`,
       '\uFEFF{"other":1,"piHerdsman":{"autoActivateManager":false}}',

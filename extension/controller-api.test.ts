@@ -6088,9 +6088,14 @@ async function runManagerStartupScenario(
           const leadAcceptedHistory = [
             {
               type: "message",
+              id: "lead-entry-0",
+              parentId: null,
+              timestamp: new Date().toISOString(),
               message: {
                 role: "toolResult",
+                toolCallId: "delegate-call",
                 toolName: "delegate_agent",
+                content: [],
                 details: {
                   ok: true,
                   owner_session_id: staleId,
@@ -6100,6 +6105,8 @@ async function runManagerStartupScenario(
                   agent: researcher.agentLabel,
                   definition: "scout",
                 },
+                isError: false,
+                timestamp: new Date().toISOString(),
               },
             },
           ];
@@ -6115,12 +6122,7 @@ async function runManagerStartupScenario(
               label: researcher.agentLabel,
             },
           };
-          const leadHistory = leadAcceptedHistory.map((entry, index) => ({
-            ...entry,
-            id: `lead-entry-${index}`,
-            ...(index ? { parentId: `lead-entry-${index - 1}` } : {}),
-            timestamp: new Date().toISOString(),
-          }));
+          const leadHistory = leadAcceptedHistory;
           realFs.writeFileSync(
             researcherSessionPath,
             [

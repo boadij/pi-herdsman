@@ -372,11 +372,12 @@ test("released runtime metadata matches locked Pi packages and has Herdr checksu
     "macos-x86_64",
   ]);
   for (const checksum of Object.values(runtime.herdr.sha256)) {
+    assert.ok(typeof checksum === "string");
     assert.match(checksum, /^[0-9a-f]{64}$/u);
   }
 });
 
-function executable(path, content) {
+function executable(path: string, content: string) {
   writeFileSync(path, content);
   chmodSync(path, 0o755);
 }

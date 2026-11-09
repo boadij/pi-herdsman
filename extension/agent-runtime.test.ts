@@ -7863,8 +7863,11 @@ test("native Code Mode preserves accepted Agent lifecycle through reopen and con
       reopenOwnerHistory,
     );
     assert.equal(accepted.length, 2);
-    assert.equal(accepted[1]!.sessionId, accepted[0]!.sessionId);
-    assert.equal(accepted[1]!.sessionPath, accepted[0]!.sessionPath);
+    assert.equal(
+      nativeSessions.get(DEFAULT_PI_SESSION_ID)?.id,
+      DEFAULT_PI_SESSION_ID,
+    );
+    assert.equal(nativeSessions.get(DEFAULT_PI_SESSION_ID)?.path, childPath);
     await completeRequest(accepted[1]!);
     for (let attempt = 0; attempt < 100; attempt++) {
       if (

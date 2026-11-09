@@ -17,7 +17,10 @@ import type { TestContext } from "node:test";
 import { Value } from "typebox/value";
 import type {
   BeforeAgentStartEvent,
+  BuildSystemPromptOptions,
+  InputEventResult,
   NormalizedBuildSystemPromptOptions,
+  SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import type { RequestRecord, ManagedAgentState } from "./mailbox.ts";
 
@@ -39,6 +42,7 @@ import {
   projectAssignmentPath,
   projectAssignmentAuthorityLockPath,
   managerDescriptorPath,
+  type ProjectAssignment,
   type ProjectMessage,
   readSessionKind,
   readProjectAssignment,
@@ -243,7 +247,7 @@ async function descendantStatusRuntime(t: TestContext) {
       state.loads++;
       const snapshot = {
         agents: state.live
-          ? [{ label: "child", definition: "child", state: "working" }]
+          ? [{ label: "child", definition: "child", state: "working" as const }]
           : [],
         stale: false,
         unavailable: false,
@@ -884,12 +888,20 @@ test("parent delegates two same-definition children with exact ownership", async
           context,
         );
       assert.equal(started.details.ok, true, JSON.stringify(started.details));
+      assert.ok(typeof started.details.agent === "string");
       context.sessionManager.getEntries().push({
+        id: `delegate-${started.details.agent}`,
+        parentId: null,
+        timestamp: new Date().toISOString(),
         type: "message",
         message: {
           role: "toolResult",
+          toolCallId: started.details.agent,
           toolName: "delegate_agent",
+          content: [{ type: "text", text: JSON.stringify(started.details) }],
           details: started.details,
+          timestamp: Date.now(),
+          isError: false,
         },
       });
       const childMailbox = agentMailboxPath(
@@ -2174,8 +2186,14 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
     HERDR_PANE_ID: parent.paneId,
   });
   const lifecycle = delegatedLifecycleExecutor(parent);
-  let published: RequestRecord | undefined;
-  let stopConsumer: (() => void) | undefined;
+  const captured: {
+    published: RequestRecord | undefined;
+    stopConsumer: ReturnType<typeof consumeMailboxRequest> | undefined;
+  } = { published: undefined, stopConsumer: undefined };
+  const getPublished = (): RequestRecord | undefined => captured.published;
+  const getStopConsumer = ():
+    ReturnType<typeof consumeMailboxRequest> | undefined =>
+    captured.stopConsumer;
   const pi = fakePi({
     exec: (command, args, options) => {
       if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
@@ -2200,8 +2218,8 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
           WORKSPACE,
           lifecycle.paneEnvironment.PI_HERDSMAN_LABEL!,
         );
-        stopConsumer = consumeMailboxRequest(mailbox, (request) => {
-          published = request;
+        captured.stopConsumer = consumeMailboxRequest(mailbox, (request) => {
+          captured.published = request;
         });
       }
       return result;
@@ -2330,10 +2348,10 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
       );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     childMailbox = agentMailboxPath(WORKSPACE, result.details.agent as string);
-    assert.ok(published);
-    assert.equal(published!.requiredEvidence?.length, 7);
+    assert.ok(getPublished());
+    assert.equal(getPublished()!.requiredEvidence?.length, 7);
     assert.equal(
-      published!.requiredEvidence!.filter(
+      getPublished()!.requiredEvidence!.filter(
         (entry) =>
           "path" in entry &&
           readRequiredEvidenceSnapshot(entry.sourceAssignmentId, entry) ===
@@ -2344,19 +2362,22 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
     assert.equal(
       readRequiredEvidenceSnapshot(
         parentRequestId,
-        published!.requiredEvidence![3]!,
+        getPublished()!.requiredEvidence![3]!,
       ),
       "agent-local reviewer note",
     );
-    assert.equal(published!.projectAssignmentId, projectAssignmentId);
-    assert.equal(published!.evidenceAssignmentId, published!.requestId);
+    assert.equal(getPublished()!.projectAssignmentId, projectAssignmentId);
+    assert.equal(
+      getPublished()!.evidenceAssignmentId,
+      getPublished()!.requestId,
+    );
     assert.ok(
-      published!.text.indexOf("Task:") <
-        published!.text.indexOf("agent-local reviewer note"),
-      published!.text,
+      getPublished()!.text.indexOf("Task:") <
+        getPublished()!.text.indexOf("agent-local reviewer note"),
+      getPublished()!.text,
     );
     assert.equal(
-      published!.text.match(/agent-local reviewer note/g)?.length,
+      getPublished()!.text.match(/agent-local reviewer note/g)?.length,
       1,
     );
     const orderedCurrent = [
@@ -2364,27 +2385,30 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
       "result:reviewer#2",
       "interleaved result content",
       "agent-local note after result",
-    ].map((content) => published!.text.indexOf(content));
+    ].map((content) => getPublished()!.text.indexOf(content));
     assert.ok(
       orderedCurrent.every((index) => index >= 0),
-      published!.text,
+      getPublished()!.text,
     );
     assert.deepEqual(
       orderedCurrent,
       [...orderedCurrent].sort((a, b) => a - b),
-      published!.text,
+      getPublished()!.text,
     );
     for (const ref of [inherited.ref!, local.ref!]) {
-      assert.ok(published!.text.indexOf(ref) > orderedCurrent.at(-1)!);
-      assert.equal(published!.text.split(ref).length - 1, 1);
+      assert.ok(getPublished()!.text.indexOf(ref) > orderedCurrent.at(-1)!);
+      assert.equal(getPublished()!.text.split(ref).length - 1, 1);
     }
-    assert.equal(published!.text.split("result:reviewer#2").length - 1, 1);
-    assert.match(published!.text, /evidence:plan#1 — plan\.md/);
-    assert.match(published!.text, /evidence:review#1 — review\.md/);
-    assert.doesNotMatch(published!.text, /parent plan body|parent review body/);
-    const retained = published!.requiredEvidence![3]!;
+    assert.equal(getPublished()!.text.split("result:reviewer#2").length - 1, 1);
+    assert.match(getPublished()!.text, /evidence:plan#1 — plan\.md/);
+    assert.match(getPublished()!.text, /evidence:review#1 — review\.md/);
+    assert.doesNotMatch(
+      getPublished()!.text,
+      /parent plan body|parent review body/,
+    );
+    const retained = getPublished()!.requiredEvidence![3]!;
     assert.ok(!("result" in retained));
-    assert.ok(!published!.text.includes(retained.path));
+    assert.ok(!getPublished()!.text.includes(retained.path));
     realFs.rmSync(retainedFile, { force: true });
     realFs.rmSync(retainedFileAfterResult, { force: true });
     realFs.rmSync(resultArtifact, { force: true });
@@ -2405,20 +2429,20 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
       retainedAfterAcceptedResult,
       "text after accepted result",
     );
-    stopConsumer?.();
-    stopConsumer = undefined;
-    published = undefined;
+    getStopConsumer()?.();
+    captured.stopConsumer = undefined;
+    captured.published = undefined;
 
-    stopConsumer?.();
-    published = undefined;
+    getStopConsumer()?.();
+    captured.published = undefined;
     assert.deepEqual(
       listProjectAssignments(projectRuntime, "repo-key").find(
         (item) => item.branch === projectBranch,
       )?.requiredEvidence,
       [laterProjectRequirement],
     );
-    stopConsumer?.();
-    published = undefined;
+    getStopConsumer()?.();
+    captured.published = undefined;
     const ordinaryChild = await pi.tools
       .find((tool) => tool.name === "delegate_agent")!
       .execute(
@@ -2446,51 +2470,54 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
       WORKSPACE,
       ordinaryChild.details.agent as string,
     );
-    assert.ok(published);
+    assert.ok(getPublished());
     const mixedOrder = [
       "text before accepted result",
       "result:reviewer#1",
       "already accepted result",
       "text after accepted result",
-    ].map((content) => published!.text.indexOf(content));
+    ].map((content) => getPublished()!.text.indexOf(content));
     assert.ok(
       mixedOrder.every((index) => index >= 0),
-      published!.text,
+      getPublished()!.text,
     );
     assert.deepEqual(
       mixedOrder,
       [...mixedOrder].sort((a, b) => a - b),
     );
-    assert.equal(published!.text.split("result:reviewer#1").length - 1, 1);
+    assert.equal(getPublished()!.text.split("result:reviewer#1").length - 1, 1);
     assert.equal(
-      published!.text.split("already accepted result").length - 1,
+      getPublished()!.text.split("already accepted result").length - 1,
       1,
     );
     realFs.rmSync(retainedBeforeAcceptedResult, { force: true });
     realFs.rmSync(retainedAfterAcceptedResult, { force: true });
     realFs.rmSync(acceptedResultArtifact, { force: true });
-    assert.deepEqual(published!.requiredEvidence?.slice(0, 2), [
+    assert.deepEqual(getPublished()!.requiredEvidence?.slice(0, 2), [
       inherited,
       local,
     ]);
-    assert.equal(published!.requiredEvidence?.length, 9);
+    assert.equal(getPublished()!.requiredEvidence?.length, 9);
     assert.ok(
-      published!.requiredEvidence?.some(
+      getPublished()!.requiredEvidence?.some(
         (entry) =>
           "result" in entry && entry.result.ref === "result:reviewer#1",
       ),
     );
-    assert.doesNotMatch(published!.text, /agent-local reviewer note/);
-    assert.ok(!published!.text.includes(retained.path));
-    assert.match(published!.text, /evidence:plan#1 — plan\.md/);
-    assert.match(published!.text, /evidence:review#1 — review\.md/);
-    assert.doesNotMatch(published!.text, /parent plan body|parent review body/);
+    assert.doesNotMatch(getPublished()!.text, /agent-local reviewer note/);
+    assert.ok(!getPublished()!.text.includes(retained.path));
+    assert.match(getPublished()!.text, /evidence:plan#1 — plan\.md/);
+    assert.match(getPublished()!.text, /evidence:review#1 — review\.md/);
     assert.doesNotMatch(
-      published!.text,
+      getPublished()!.text,
+      /parent plan body|parent review body/,
+    );
+    assert.doesNotMatch(
+      getPublished()!.text,
       /project requirement not accepted by parent/,
     );
 
-    stopConsumer?.();
+    getStopConsumer()?.();
     const clearedRequestId = randomUUID();
     const clearedParent = {
       ...parent,
@@ -2514,7 +2541,7 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
         localEvidence: [],
       },
     });
-    published = undefined;
+    captured.published = undefined;
     const unavailableRetention = await nestedDelegate.execute(
       "nested-without-evidence-authority",
       {
@@ -2532,7 +2559,7 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
       JSON.stringify(unavailableRetention.details),
       /Managed-Agent evidence scope is unavailable/,
     );
-    assert.equal(published, undefined);
+    assert.equal(getPublished(), undefined);
     const cleared = await pi.tools
       .find((tool) => tool.name === "delegate_agent")!
       .execute(
@@ -2545,14 +2572,20 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
     assert.equal(cleared.details.ok, true, JSON.stringify(cleared.details));
     childMailbox = agentMailboxPath(WORKSPACE, cleared.details.agent as string);
     await new Promise((resolve) => setTimeout(resolve, 30));
-    assert.ok(published);
-    assert.equal(published!.projectAssignmentId, undefined);
-    assert.equal(published!.requiredEvidence?.length, 1);
-    assert.equal(published!.taskEvidenceId, published!.localEvidence?.[0]?.id);
-    assert.doesNotMatch(published!.text, /parent plan body|parent review body/);
+    assert.ok(getPublished());
+    assert.equal(getPublished()!.projectAssignmentId, undefined);
+    assert.equal(getPublished()!.requiredEvidence?.length, 1);
+    assert.equal(
+      getPublished()!.taskEvidenceId,
+      getPublished()!.localEvidence?.[0]?.id,
+    );
+    assert.doesNotMatch(
+      getPublished()!.text,
+      /parent plan body|parent review body/,
+    );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
-    stopConsumer?.();
+    getStopConsumer()?.();
     resetAgentMailbox(parentMailbox);
     resetAgentMailbox(childMailbox);
     realFs.rmSync(inherited.path, { force: true });
@@ -3460,7 +3493,11 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
     undefined,
     sessionPath,
   );
-  const pathSession = (result: { stdout: string; [key: string]: unknown }) => {
+  const pathSession = (result: {
+    stdout: string;
+    stderr: string;
+    code: number;
+  }) => {
     const payload = JSON.parse(result.stdout);
     const agents = [payload.result?.agent, ...(payload.result?.agents ?? [])];
     for (const agent of agents)
@@ -4824,7 +4861,13 @@ test("Lead failure report keeps its assigned-project destination across retireme
     },
   });
   let role: "lead" | "manager" = "lead";
-  let assignment: object | undefined = { project: "assigned" };
+  let assignment: ProjectAssignment | undefined = {
+    version: 2,
+    id: "assigned",
+    repoKey: "repo-key",
+    branch: "assigned-branch",
+    text: "assigned",
+  };
   let chiefFailures = 0;
   let projectPublications = 0;
   const isManagedLead = () =>
@@ -5370,7 +5413,13 @@ test("managed success waits for its exact assignment after persisting the report
   const pi = fakePi();
   const context = fakeContext(pi.entries);
   context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
-  const assignment = { project: "original assignment" };
+  const assignment = {
+    version: 2 as const,
+    id: "original-assignment",
+    repoKey: "repo-key",
+    branch: "assigned-branch",
+    text: "original assignment",
+  };
   let authorityAvailable = false;
   let publications = 0;
   const herd = createLeadHerdRunRuntime({
@@ -5668,7 +5717,13 @@ test("direct managed Lead preserves success before authority verification and re
       currentProjectAssignment: async () => {
         authorityLookups++;
         if (!restored) throw new Error("assignment temporarily unavailable");
-        return { project: "assigned" } as any;
+        return {
+          version: 2,
+          id: "assigned",
+          repoKey: "repo-key",
+          branch: "assigned-branch",
+          text: "assigned",
+        };
       },
       publishProjectMessage: async (_ctx, _assignment, message) => {
         publications++;
@@ -5827,7 +5882,7 @@ test("managed Lead herd preserves success before authority verification and repl
       ) => {
         publications++;
         publishedKinds.push(kind);
-        if (kindlessProjectMessages.has(reportId))
+        if (reportId && kindlessProjectMessages.has(reportId))
           assert.equal(
             kind,
             undefined,
@@ -6210,15 +6265,17 @@ test("legacy herd-ID recovery failure receipt does not suppress later successful
           text: message,
           kind: kind ?? "herd_run",
         };
-        const existing = projectMessages.get(reportId);
-        if (
-          existing &&
-          (existing.text !== payload.text || existing.kind !== payload.kind)
-        )
-          throw new Error(
-            "Project message identity conflicts with durable payload",
-          );
-        if (!existing) projectMessages.set(reportId, payload);
+        if (reportId) {
+          const existing = projectMessages.get(reportId);
+          if (
+            existing &&
+            (existing.text !== payload.text || existing.kind !== payload.kind)
+          )
+            throw new Error(
+              "Project message identity conflicts with durable payload",
+            );
+          if (!existing) projectMessages.set(reportId, payload);
+        }
         messages.push(message);
         return projectMessageResult(message);
       },
@@ -6791,7 +6848,8 @@ test("suspended and unverified sessions do not receive Lead execution sections",
       },
       prepareSupervisionMessage: async () => undefined,
       sendMessage: (message: string) => sentMessages.push(message),
-      chiefSystemPrompt: (_options, body) => body,
+      chiefSystemPrompt: (_options: BuildSystemPromptOptions, body: string) =>
+        body,
       isActiveManager: () => false,
       roleCharter: () => "neutral",
       currentChiefAllowedTools: () => undefined,
@@ -8081,7 +8139,10 @@ test("managed project delegation references supported evidence larger than the i
     currentEvidenceIds: [snapshot.id],
   };
   writeProjectAssignment(runtime, assignment);
-  let accepted: RequestRecord | undefined;
+  const captured: { accepted: RequestRecord | undefined } = {
+    accepted: undefined,
+  };
+  const getAccepted = (): RequestRecord | undefined => captured.accepted;
   const label = `er-${randomUUID().slice(0, 8)}`;
   const finalPaneId = "pane-" + "p".repeat(1_000);
   const startup = startupExecutor(
@@ -8097,7 +8158,7 @@ test("managed project delegation references supported evidence larger than the i
     true,
     false,
     (request) => {
-      accepted = request;
+      captured.accepted = request;
     },
     undefined,
     undefined,
@@ -8206,7 +8267,7 @@ test("managed project delegation references supported evidence larger than the i
     );
     assert.match(JSON.stringify(result.details), /per-file inline limit is/);
     assert.equal(
-      accepted,
+      getAccepted(),
       undefined,
       "failed current delivery must not be advertised as accepted",
     );
@@ -8224,15 +8285,20 @@ test("managed project delegation references supported evidence larger than the i
     );
     assert.equal(automatic.details.ok, true, JSON.stringify(automatic.details));
     await new Promise((resolve) => setTimeout(resolve, 30));
-    assert.ok(accepted);
-    assert.equal(accepted!.paneId, finalPaneId);
-    assert.match(accepted!.text, /Current evidence — reference-only batch/);
-    assert.ok(accepted!.text.includes(`- ${snapshot.ref} — plan.md`));
-    assert.ok(
-      accepted!.text.includes(`<file name="${realpathSync(collisionPath)}"`),
+    assert.ok(getAccepted());
+    assert.equal(getAccepted()!.paneId, finalPaneId);
+    assert.match(
+      getAccepted()!.text,
+      /Current evidence — reference-only batch/,
     );
-    assert.ok(accepted!.text.includes("unrelated inline file"));
-    assert.match(accepted!.text, /explicit supporting patch/);
+    assert.ok(getAccepted()!.text.includes(`- ${snapshot.ref} — plan.md`));
+    assert.ok(
+      getAccepted()!.text.includes(
+        `<file name="${realpathSync(collisionPath)}"`,
+      ),
+    );
+    assert.ok(getAccepted()!.text.includes("unrelated inline file"));
+    assert.match(getAccepted()!.text, /explicit supporting patch/);
     assert.deepEqual(automatic.details.evidence, {
       currentInline: [],
       explicitInline: [basename(smallExplicitPath), snapshot.ref],
@@ -9194,8 +9260,8 @@ test("managed Lead keeps legacy evidence migration authority-locked and recovers
     void migrating.catch(() => {});
     const settledWhileHeld = await Promise.race([
       migrating.then(
-        (result) => ({ settled: true, result }),
-        (error) => ({ settled: true, error: String(error) }),
+        (result: Awaited<typeof migrating>) => ({ settled: true, result }),
+        (error: unknown) => ({ settled: true, error: String(error) }),
       ),
       new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 75)),
     ]);
@@ -9782,20 +9848,26 @@ test("assigned project handoff remains pending when assignment resolution is loc
     false,
     true,
   );
+  const entries: SessionEntry[] = [];
+  const appendEntry = (customType: string, data: unknown) => {
+    entries.push({
+      id: randomUUID(),
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      type: "custom",
+      customType,
+      data,
+    });
+  };
+  appendEntry("pi-herdsman-session-kind", {
+    version: 1,
+    sessionId: LEAD_SESSION_ID,
+    kind: "managed",
+    repoKey: "repo-key",
+    branch,
+  });
   const pi = fakePi({
-    entries: [
-      {
-        type: "custom",
-        customType: "pi-herdsman-session-kind",
-        data: {
-          version: 1,
-          sessionId: LEAD_SESSION_ID,
-          kind: "managed",
-          repoKey: "repo-key",
-          branch,
-        },
-      },
-    ],
+    entries,
     exec: async (command: string, args: string[]) => {
       if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
         return {
@@ -9816,16 +9888,25 @@ test("assigned project handoff remains pending when assignment resolution is loc
       return startup.exec(command, args);
     },
   });
-  const context = fakeContext(pi.entries);
+  pi.pi.appendEntry = appendEntry;
+  const context = fakeContext(entries);
   context.cwd = tmpdir();
   context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
-  context.sessionManager.getEntries = () => pi.entries;
-  seedLeadRole(context, false);
+  context.sessionManager.getEntries = () => entries;
+  appendEntry("pi-herdsman-role", {
+    sessionId: LEAD_SESSION_ID,
+    role: "lead",
+    leadTools: ["read"],
+  });
   const assignmentMessage = {
+    type: "custom_message",
+    id: randomUUID(),
+    parentId: null,
+    timestamp: new Date().toISOString(),
     customType: "pi-herdsman-project_assignment",
-    details: { id: LEAD_SESSION_ID, branch },
-    timestamp: Date.now(),
     content: `Project assignment for branch\nImplement the assigned project`,
+    display: true,
+    details: { id: LEAD_SESSION_ID, branch },
   };
   context.hasUI = true;
   let widget: any;
@@ -10136,7 +10217,8 @@ test("replacement Manager wakes once for exact-assignment failure backlog only",
       "busy custom startup preserves the authorized durable message",
     );
     assert.ok(
-      customStartup.systemPromptOptions.sections.pi_herdsman_role,
+      "pi_herdsman_role" in customStartup.systemPromptOptions.sections &&
+        customStartup.systemPromptOptions.sections.pi_herdsman_role,
       "custom startup applies the Manager role projection",
     );
 
@@ -11084,12 +11166,41 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     setNestedAgentEnv(childLabel, parent.piSessionId, "child", []);
     childAgent = fakePi();
     registerExtension!(childAgent.pi as never);
-    const childBranch: unknown[] = [
+    const childBranch: SessionEntry[] = [
       {
         type: "message",
+        id: "child-ask-owner-entry",
+        parentId: null,
+        timestamp: new Date().toISOString(),
         message: {
           role: "assistant",
-          content: [{ type: "toolCall", name: "ask_owner" }],
+          api: "test",
+          provider: "test",
+          model: "test",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+          stopReason: "toolUse",
+          timestamp: Date.now(),
+          content: [
+            {
+              type: "toolCall",
+              id: "child-ask-owner",
+              name: "ask_owner",
+              arguments: { question: "Which implementation should I use?" },
+            },
+          ],
         },
       },
     ];
@@ -11097,6 +11208,9 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       [
         {
           type: "custom",
+          id: "child-agent-definition",
+          parentId: null,
+          timestamp: new Date().toISOString(),
           customType: "pi-herdsman-agent-definition",
           data: {
             sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
@@ -11132,9 +11246,12 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
 
     setNestedAgentEnv(parentLabel, LEAD_SESSION_ID, "agent", ["child"]);
     const parentBase = agentControllerExecutor(parent, [child]);
-    const parentEntries: unknown[] = [
+    const parentEntries: SessionEntry[] = [
       {
         type: "custom",
+        id: "parent-agent-definition",
+        parentId: null,
+        timestamp: new Date().toISOString(),
         customType: "pi-herdsman-agent-definition",
         data: {
           sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
@@ -11145,12 +11262,41 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     ];
     parentAgent = fakePi({ exec: parentBase, entries: parentEntries });
     registerExtension!(parentAgent.pi as never);
-    const parentBranch: unknown[] = [
+    const parentBranch: SessionEntry[] = [
       {
         type: "message",
+        id: "parent-ask-owner-entry",
+        parentId: null,
+        timestamp: new Date().toISOString(),
         message: {
           role: "assistant",
-          content: [{ type: "toolCall", name: "ask_owner" }],
+          api: "test",
+          provider: "test",
+          model: "test",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+          stopReason: "toolUse",
+          timestamp: Date.now(),
+          content: [
+            {
+              type: "toolCall",
+              id: "parent-ask-owner",
+              name: "ask_owner",
+              arguments: { question: "Which implementation should I use?" },
+            },
+          ],
         },
       },
     ];
@@ -11496,9 +11642,11 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     assert.ok(readPendingAsk(childMailbox, readAgentState(childMailbox)!));
     writeRequest(childMailbox, parentReply!);
     assert.equal(
-      childAgent.events.get("input")![0](
-        { text: controlMarker(parentReply!.requestId) },
-        childResultContext,
+      (
+        childAgent.events.get("input")![0](
+          { text: controlMarker(parentReply!.requestId) },
+          childResultContext,
+        ) as InputEventResult
       ).action,
       "transform",
     );
@@ -11534,9 +11682,12 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     setNestedAgentEnv(parentLabel, LEAD_SESSION_ID, "agent", ["child"]);
     parentAgent = fakePi({ exec: parentBase });
     registerExtension!(parentAgent.pi as never);
-    const parentResultEntries: unknown[] = [
+    const parentResultEntries: SessionEntry[] = [
       {
         type: "custom",
+        id: "parent-result-agent-definition",
+        parentId: null,
+        timestamp: new Date().toISOString(),
         customType: "pi-herdsman-agent-definition",
         data: {
           sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
@@ -11545,7 +11696,13 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
         },
       },
       {
+        type: "custom_message",
+        id: randomUUID(),
+        parentId: null,
+        timestamp: new Date().toISOString(),
         customType: "pi-herdsman-agent-result",
+        content: "ALPHA",
+        display: true,
         details: resultEntryDetails(child, childRequestId),
       },
     ];
@@ -13299,12 +13456,12 @@ test("scoped assignment result delivery persists terminal ownership and removes 
     assert.deepEqual(accepted!.inheritedEvidence, [inherited]);
     assert.deepEqual(accepted!.localEvidence, [taskEvidence]);
     assert.deepEqual(accepted!.currentEvidenceIds, [inherited.id]);
-    const acceptedEvidenceEntry = nativeSessions
-      .get(sessionId)!
-      .entries.find(
-        (entry: any) =>
-          entry?.customType === "pi-herdsman-agent-required-evidence",
-      ) as any;
+    const sessionEntries = nativeSessions.get(sessionId)?.entries;
+    assert.ok(sessionEntries, "Agent session entries are available");
+    const acceptedEvidenceEntry = sessionEntries.find(
+      (entry: any) =>
+        entry?.customType === "pi-herdsman-agent-required-evidence",
+    ) as any;
     assert.ok(acceptedEvidenceEntry, "Agent persists accepted evidence");
     assert.deepEqual(acceptedEvidenceEntry.data.inheritedEvidence, [inherited]);
     assert.deepEqual(acceptedEvidenceEntry.data.localEvidence, [taskEvidence]);
@@ -13659,13 +13816,19 @@ async function exerciseManagedParentResume(depth: number) {
     const continuation = parentPi.tools.find(
       (tool) => tool.name === "continue_agent",
     );
-    const persistToolResult = (toolName: string, result: any) =>
+    const persistToolResult = (
+      toolName: string,
+      result: { details: unknown; isError?: boolean },
+    ) =>
       parentContext.sessionManager.getEntries().push({
         type: "message",
         message: {
           role: "toolResult",
+          toolCallId: `${toolName}-call`,
           toolName,
+          content: [{ type: "text", text: JSON.stringify(result.details) }],
           details: result.details,
+          timestamp: Date.now(),
           ...(result.isError ? { isError: true } : {}),
         },
       });
@@ -13775,7 +13938,7 @@ async function exerciseManagedParentResume(depth: number) {
     const control = childPi.events.get("input")![0](
       { text: controlMarker(firstRequest.requestId) },
       activeChildContext,
-    );
+    ) as InputEventResult;
     assert.ok(["handled", "transform"].includes(control.action));
     childPi.events.get("message_end")![0](
       { message: { role: "assistant", content: "Reviewed." } },
@@ -14047,6 +14210,7 @@ async function exerciseManagedParentResume(depth: number) {
       readRequiredEvidenceSnapshot(projectAssignmentId, local),
       "accepted local review contents",
     );
+    assert.ok(firstRequest.evidenceAssignmentId);
     assert.equal(
       readRequiredEvidenceSnapshot(
         firstRequest.evidenceAssignmentId,

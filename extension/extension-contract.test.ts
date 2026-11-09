@@ -14,6 +14,7 @@ import {
   type BeforeAgentStartEvent,
   type ExtensionContext,
   type NormalizedBuildSystemPromptOptions,
+  type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
 import { acquireProcessLock } from "./lock.ts";
@@ -3020,9 +3021,12 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
     },
   });
   registerExtension!(pi.pi as never);
-  const entries = [
+  const entries: SessionEntry[] = [
     {
       type: "custom",
+      id: randomUUID(),
+      parentId: null,
+      timestamp: new Date().toISOString(),
       customType: "pi-herdsman-session-kind",
       data: { version: 1, sessionId: LEAD_SESSION_ID, kind: "ordinary" },
     },
@@ -5129,8 +5133,11 @@ test("managed Lead prompt remains managed after its assignment is replaced", asy
   const repoKey = `managed-prompt-retired-${randomUUID()}`;
   const branch = `managed-prompt-retired-${randomUUID()}`;
   const runtime = supervisionRuntime();
-  const identity = {
+  const identity: SessionEntry = {
     type: "custom",
+    id: randomUUID(),
+    parentId: null,
+    timestamp: new Date().toISOString(),
     customType: "pi-herdsman-session-kind",
     data: {
       version: 1,

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { test } from "node:test";
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { fakeContext, HERDSMAN_BUILD, testTmpRoot } from "../support.ts";
 import { supervisionRuntime } from "../supervision.ts";
 import { createLeadCoordinationRuntime } from "./coordination.ts";
@@ -14,13 +15,17 @@ test("scoped peer presence writes its worktree group", async () => {
   const groupedRecordWritten = new Promise<void>((resolve) => {
     provenanceStarted = resolve;
   });
-  const context = fakeContext([
+  const entries: SessionEntry[] = [
     {
       type: "custom",
+      id: randomUUID(),
+      parentId: null,
+      timestamp: new Date().toISOString(),
       customType: "pi-herdsman-session-kind",
       data: { version: 1, sessionId, kind: "ordinary" },
     },
-  ]) as any;
+  ];
+  const context = fakeContext(entries) as any;
   context.sessionManager.getSessionId = () => sessionId;
   const root = join(testTmpRoot, randomUUID());
   const runtime = createLeadCoordinationRuntime(
@@ -158,9 +163,12 @@ test("Managed supervisor messages never fall through when the active role is not
   ) as any;
   const runtime = createLeadCoordinationRuntime(host);
   const sessionId = randomUUID();
-  const context = fakeContext([
+  const entries: SessionEntry[] = [
     {
       type: "custom",
+      id: randomUUID(),
+      parentId: null,
+      timestamp: new Date().toISOString(),
       customType: "pi-herdsman-session-kind",
       data: {
         version: 1,
@@ -170,7 +178,8 @@ test("Managed supervisor messages never fall through when the active role is not
         branch: "managed-branch",
       },
     },
-  ]) as any;
+  ];
+  const context = fakeContext(entries) as any;
   context.sessionManager.getSessionId = () => sessionId;
 
   await assert.rejects(

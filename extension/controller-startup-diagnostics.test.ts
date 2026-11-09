@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { performance } from "node:perf_hooks";
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
   AGENT_ID,
   DEFAULT_PI_SESSION_ID,
+  LEAD_SESSION_ID,
   fakeContext,
   fakePi,
   isPaneClose,
@@ -14,12 +16,42 @@ import {
   realFs,
   registerExtension,
   resetAgentMailbox,
-  seedLeadRole,
   setLeadEnvironment,
   startupExecutor,
   readAgentStartupOutcome,
   writeAgentStartupOutcome,
 } from "./support.ts";
+
+function startupRoleHistory(): SessionEntry[] {
+  const timestamp = new Date().toISOString();
+  const roleId = "startup-role-entry";
+  return [
+    {
+      type: "custom",
+      id: roleId,
+      parentId: null,
+      timestamp,
+      customType: "pi-herdsman-role",
+      data: {
+        sessionId: LEAD_SESSION_ID,
+        role: "lead",
+        leadTools: ["read"],
+      },
+    },
+    {
+      type: "custom",
+      id: "startup-execution-entry",
+      parentId: roleId,
+      timestamp,
+      customType: "pi-herdsman-lead-execution",
+      data: {
+        sessionId: LEAD_SESSION_ID,
+        mode: "orchestrate",
+        leadTools: ["read"],
+      },
+    },
+  ];
+}
 
 function safeHerdrOperation(
   command: string,
@@ -151,7 +183,7 @@ for (const scenario of [
       },
     });
     registerExtension!(pi.pi as never);
-    seedLeadRole(fakeContext(pi.entries));
+    pi.entries.push(...startupRoleHistory());
     await pi.events.get("session_start")![0](
       undefined,
       fakeContext(pi.entries),
@@ -283,7 +315,7 @@ test(
       },
     });
     registerExtension!(pi.pi as never);
-    seedLeadRole(fakeContext(pi.entries));
+    pi.entries.push(...startupRoleHistory());
     await pi.events.get("session_start")![0](
       undefined,
       fakeContext(pi.entries),
@@ -381,7 +413,7 @@ test(
       },
     });
     registerExtension!(pi.pi as never);
-    seedLeadRole(fakeContext(pi.entries));
+    pi.entries.push(...startupRoleHistory());
     await pi.events.get("session_start")![0](
       undefined,
       fakeContext(pi.entries),

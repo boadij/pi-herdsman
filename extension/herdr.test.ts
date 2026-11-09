@@ -1333,7 +1333,7 @@ test("runHerdr enforces stdout success envelopes and preserves diagnostics", asy
           }),
         } as any,
         ctx,
-        args,
+        [...args],
       ),
       /without a result envelope/,
     );

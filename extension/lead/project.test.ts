@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
   AGENT_ID,
   HERDSMAN_BUILD,
@@ -254,11 +255,18 @@ test("stop Lead observes liveness after waiting for project-work serialization",
 });
 
 test("staff message rejects an identity change during attachment preparation", async () => {
-  const entries: unknown[] = [];
+  const entries: SessionEntry[] = [];
   const ctx = fakeContext(entries) as any;
   const pi = {
     appendEntry: (customType: string, data: unknown) =>
-      entries.push({ type: "custom", customType, data }),
+      entries.push({
+        type: "custom",
+        id: randomUUID(),
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        customType,
+        data,
+      } satisfies SessionEntry),
   };
   const session = randomUUID();
   const target = rememberCoordinatorTarget(pi as any, ctx, "lead", session);
@@ -321,11 +329,18 @@ test("staff message rejects an identity change during attachment preparation", a
 });
 
 test("staff handoff reports failure after required evidence retention commits", async () => {
-  const entries: unknown[] = [];
+  const entries: SessionEntry[] = [];
   const ctx = fakeContext(entries) as any;
   const pi = {
     appendEntry: (customType: string, data: unknown) =>
-      entries.push({ type: "custom", customType, data }),
+      entries.push({
+        type: "custom",
+        id: randomUUID(),
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        customType,
+        data,
+      } satisfies SessionEntry),
   };
   const session = randomUUID();
   const manager = {

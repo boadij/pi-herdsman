@@ -1260,7 +1260,7 @@ test("peer inbox defers transient topology failures and delivers after recovery"
     },
   });
   assert.equal(paths().length, 1);
-  assert.deepEqual(delivered, []);
+  assert.deepEqual([...delivered], []);
 
   await drainCoordinationInbox({
     runtime,
