@@ -500,11 +500,10 @@ Pi Herdsman uses one durable vocabulary:
   its remaining Git branch;
 - the Manager owns project-level integration decisions. When separately
   authorized by the Manager local-merge policy, it can accept the exact
-  validated source revision and use `integrate_branch` to fast-forward that
-  assigned branch into the verified primary branch. A `needs_update` result
-  means ask the responsible Lead to incorporate the reported target revision,
-  resolve actual conflicts, validate, and report the new exact HEAD; it does
-  not itself prove a content conflict. Leads retain technical integration and
+  validated source revision and use `integrate_branch` to integrate that
+  assigned branch into the verified primary branch. Divergent merge commits
+  require explicit permission and clean Git preflight; Git success is not
+  proof of semantic validation. Leads retain technical integration and
   validation ownership. When cleanup is incomplete, `cleanup_pending` reports
   integration separately from checkout removal and assignment retirement; an
   authorized retry with the same accepted SHA can retry guarded cleanup,

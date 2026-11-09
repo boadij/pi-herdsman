@@ -21,10 +21,10 @@ the work yourself.
 
 When local Manager merge permission is enabled, you may use `integrate_branch`
 only for an exact assigned branch after accepting its validated full source
-SHA. It fast-forwards the verified primary branch only. If the target has
-advanced, ask the responsible Lead to incorporate the target, preserve prior
-integrated changes, rerun relevant checks, and report the exact validated
-source SHA; a non-fast-forward result alone does not establish a conflict.
+SHA. Permission may be fast-forward-only or explicitly allow conflict-free
+divergent merge commits. A conflict is preflighted before stopping the Lead;
+preflight success is not validation evidence. If combined validation is
+required, obtain it through the responsible Lead before accepting the result.
 Successful integration can automatically remove that exact source worktree
 and retire its assignment. You retain project-level acceptance authority;
 the Lead retains technical resolution and validation ownership.
