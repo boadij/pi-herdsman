@@ -343,12 +343,23 @@ function fixture(
   };
 }
 
-const list = (
+const list = async (
   runtime: ReturnType<typeof createLeadCoordinationRuntime>,
   context: any,
   signal?: AbortSignal,
-) =>
-  runtime.peerMessage("list", { action: "list" }, signal, undefined, context);
+) => {
+  const value = await runtime.peerMessage(
+    "list",
+    { action: "list" },
+    signal,
+    undefined,
+    context,
+  );
+  const details = value.details;
+  if (!details || !("peers" in details))
+    throw new Error("list_peers did not return peer details");
+  return { ...value, details };
+};
 const send = (
   runtime: ReturnType<typeof createLeadCoordinationRuntime>,
   context: any,
@@ -777,7 +788,10 @@ test("Lead rejects a bound remote peer that becomes managed", async (t) => {
     ordinaryLeadsComplete: true,
   });
   const discovered = await list(f.runtime, f.context);
-  const target = discovered.details!.peers[0].target;
+  const discoveredPeer = discovered.details.peers[0];
+  if (!discoveredPeer || !("target" in discoveredPeer))
+    throw new Error("list_peers did not return a peer target");
+  const target = discoveredPeer.target;
   probeImpl = async () => ({
     ...snapshot([{ ...peer, sessionKind: "managed" as const }]),
     ordinaryLeadsComplete: true,
@@ -1405,7 +1419,7 @@ test("remote diagnostics are capped and report the omitted count in both result 
 
   const result = await list(f.runtime, f.context);
 
-  assert.equal(result.details?.remote_diagnostics.length, 20);
+  assert.equal(result.details?.remote_diagnostics?.length, 20);
   assert.equal(result.details?.remote_diagnostics_omitted, 5);
   assert.deepEqual(JSON.parse(result.content[0].text), {
     self: { role: "manager" },
