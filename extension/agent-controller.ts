@@ -232,7 +232,7 @@ export type AgentStatusSnapshotHost = {
 export function rootStatusBreadcrumb(
   role: "lead" | "manager" | "chief" | undefined,
 ): BreadcrumbSegment[] {
-  return [{ text: role ?? "owner/controller" }];
+  return [{ text: role ?? "owner/controller", ...(role ? { role } : {}) }];
 }
 
 export function buildAgentStatusSnapshot(
@@ -2000,12 +2000,14 @@ export function statusBreadcrumb(
           identity.definition && identity.label
             ? displayIdentity(identity.definition, identity.label)
             : (identity.definition ?? "?"),
+        ...(identity.definition ? { role: identity.definition } : {}),
       },
     ];
   const definitions = [
     {
       text: displayIdentity(current.agentDefinition, current.state.agentLabel),
       sessionId: current.state.piSessionId,
+      role: current.agentDefinition,
     },
   ];
   const visited = new Set([current.state.piSessionId]);
@@ -2023,6 +2025,7 @@ export function statusBreadcrumb(
       definitions.push({
         text: displayIdentity(parent.agentDefinition, parent.state.agentLabel),
         sessionId: parent.state.piSessionId,
+        role: parent.agentDefinition,
       });
       ownerSessionId = parent.state.ownerSessionId;
       continue;
@@ -2038,7 +2041,11 @@ export function statusBreadcrumb(
     );
     return roots.length === 1
       ? [
-          { text: roots[0]!.role, sessionId: ownerSessionId },
+          {
+            text: roots[0]!.role,
+            sessionId: ownerSessionId,
+            role: roots[0]!.role,
+          },
           ...definitions.reverse(),
         ]
       : [{ text: "?" }, ...definitions.reverse()];

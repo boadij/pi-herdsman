@@ -105,9 +105,15 @@ const {
 } = await import("./agent-controller.ts");
 
 test("root status breadcrumb uses only the supplied verified role", () => {
-  assert.deepEqual(rootStatusBreadcrumb("manager"), [{ text: "manager" }]);
-  assert.deepEqual(rootStatusBreadcrumb("chief"), [{ text: "chief" }]);
-  assert.deepEqual(rootStatusBreadcrumb("lead"), [{ text: "lead" }]);
+  assert.deepEqual(rootStatusBreadcrumb("manager"), [
+    { text: "manager", role: "manager" },
+  ]);
+  assert.deepEqual(rootStatusBreadcrumb("chief"), [
+    { text: "chief", role: "chief" },
+  ]);
+  assert.deepEqual(rootStatusBreadcrumb("lead"), [
+    { text: "lead", role: "lead" },
+  ]);
   assert.deepEqual(rootStatusBreadcrumb(undefined), [
     { text: "owner/controller" },
   ]);
@@ -257,8 +263,8 @@ test("status breadcrumb trusts only validated root ancestry", () => {
         sameIdentity,
       ),
       [
-        { text: role, sessionId: LEAD_SESSION_ID },
-        { text: "scout:scout", sessionId: state.piSessionId },
+        { text: role, sessionId: LEAD_SESSION_ID, role },
+        { text: "scout:scout", sessionId: state.piSessionId, role: "scout" },
       ],
     );
   assert.deepEqual(
@@ -268,7 +274,10 @@ test("status breadcrumb trusts only validated root ancestry", () => {
       { definition: "scout", label: "scout" },
       sameIdentity,
     ),
-    [{ text: "?" }, { text: "scout:scout", sessionId: state.piSessionId }],
+    [
+      { text: "?" },
+      { text: "scout:scout", sessionId: state.piSessionId, role: "scout" },
+    ],
   );
   const ambiguousParent = {
     ...managedState("parent"),
@@ -290,7 +299,10 @@ test("status breadcrumb trusts only validated root ancestry", () => {
       { definition: "scout", label: "scout" },
       sameIdentity,
     ),
-    [{ text: "?" }, { text: "scout:scout", sessionId: state.piSessionId }],
+    [
+      { text: "?" },
+      { text: "scout:scout", sessionId: state.piSessionId, role: "scout" },
+    ],
   );
   assert.deepEqual(
     statusBreadcrumb(
@@ -305,7 +317,10 @@ test("status breadcrumb trusts only validated root ancestry", () => {
       { definition: "scout", label: "scout" },
       sameIdentity,
     ),
-    [{ text: "?" }, { text: "scout:scout", sessionId: state.piSessionId }],
+    [
+      { text: "?" },
+      { text: "scout:scout", sessionId: state.piSessionId, role: "scout" },
+    ],
   );
   const parent = {
     ...managedState("research"),
@@ -328,9 +343,13 @@ test("status breadcrumb trusts only validated root ancestry", () => {
       sameIdentity,
     ),
     [
-      { text: "manager", sessionId: LEAD_SESSION_ID },
-      { text: "researcher:research", sessionId: parent.piSessionId },
-      { text: "scout:scout", sessionId: child.piSessionId },
+      { text: "manager", sessionId: LEAD_SESSION_ID, role: "manager" },
+      {
+        text: "researcher:research",
+        sessionId: parent.piSessionId,
+        role: "researcher",
+      },
+      { text: "scout:scout", sessionId: child.piSessionId, role: "scout" },
     ],
   );
 });

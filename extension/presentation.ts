@@ -160,7 +160,11 @@ export interface StatusAgent {
   inactiveMs?: number;
   parentLabel?: string;
 }
-export type BreadcrumbSegment = { text: string; sessionId?: string };
+export type BreadcrumbSegment = {
+  text: string;
+  sessionId?: string;
+  role?: string;
+};
 export type FocusIntent =
   | { kind: "session"; sessionId: string; parentSessionId?: string }
   | { kind: "assigned-manager" };
@@ -1224,6 +1228,7 @@ function identifyingLabelVisible(
 }
 
 function renderSupervisionHeader(
+  role: "chief" | "manager",
   label: string,
   status: SupervisionContextStatus,
   width: number,
@@ -1237,7 +1242,8 @@ function renderSupervisionHeader(
   );
   const marker = themed(theme, color, markerValue);
   const markerWidth = visibleWidth(markerValue);
-  const identity = themed(theme, "muted", label);
+  const roleText = themed(theme, "text", theme?.bold?.(role) ?? role);
+  const identity = `${roleText}${themed(theme, "muted", label.slice(role.length))}`;
   const freshnessText = status === "fresh" ? "" : `· ${status}`;
   const freshness = freshnessText
     ? themed(theme, "warning", freshnessText)
@@ -1291,6 +1297,7 @@ function renderSupervisionRows(
       {
         text: renderSupervisionHeader(
           role,
+          role,
           status,
           width,
           options.theme,
@@ -1328,6 +1335,7 @@ function renderSupervisionRows(
       ? `manager${project ? ` · ${project}` : ""}`
       : `chief · ${supervisionCountLabel(managers, leads)}${incompatible ? ` · ${incompatible} incompatible` : ""}`;
   const header = renderSupervisionHeader(
+    role,
     headerText,
     status,
     width,
@@ -2453,6 +2461,7 @@ function renderBreadcrumb(
   segments: BreadcrumbSegment[],
   width: number,
   marker = "?",
+  theme?: any,
 ): { text: string; hits: HitRegion[] } {
   if (width <= 0) return { text: "", hits: [] };
   const visible = segments
@@ -2461,7 +2470,7 @@ function renderBreadcrumb(
   const current = visible.at(-1) ?? { text: "?" };
   if (width <= visibleWidth(marker))
     return { text: truncateToWidth(marker, width, ""), hits: [] };
-  const prefix = `${marker} `;
+  const prefix = `${marker}${themed(theme, "muted", " ")}`;
   const available = width - visibleWidth(prefix);
   if (available <= 0) return { text: marker, hits: [] };
   const currentText = tailTruncate(current.text, available);
@@ -2472,7 +2481,19 @@ function renderBreadcrumb(
     if (visibleWidth(candidateText) <= width) included.unshift(visible[index]!);
     else break;
   }
-  const text = `${prefix}${included.map(({ text }) => text).join(" → ")}`;
+  const text = `${prefix}${included
+    .map((segment, index) => {
+      const role =
+        index === included.length - 1 &&
+        segment.role &&
+        segment.text.startsWith(segment.role)
+          ? segment.role
+          : undefined;
+      return role
+        ? `${themed(theme, "text", theme?.bold?.(role) ?? role)}${themed(theme, "muted", segment.text.slice(role.length))}`
+        : themed(theme, "muted", segment.text);
+    })
+    .join(" → ")}`;
   const hits: HitRegion[] = [];
   let x = visibleWidth(prefix);
   included.forEach((segment, index) => {
@@ -5058,8 +5079,12 @@ export class StatusWidget {
     const freshnessSuffixWidth = visibleWidth(freshnessSuffix);
     const breadcrumbSegments = s.breadcrumb ?? [{ text: "?" }];
     const fullIdentityWidth = visibleWidth(
-      renderBreadcrumb(breadcrumbSegments, Number.MAX_SAFE_INTEGER, marker)
-        .text,
+      renderBreadcrumb(
+        breadcrumbSegments,
+        Number.MAX_SAFE_INTEGER,
+        marker,
+        this.theme,
+      ).text,
     );
     const reservedSuffixWidth =
       freshness && fullSuffixWidth + fullIdentityWidth <= availableWidth
@@ -5072,6 +5097,7 @@ export class StatusWidget {
       breadcrumbSegments,
       Math.max(0, availableWidth - reservedSuffixWidth),
       marker,
+      this.theme,
     );
     const breadcrumb = renderedBreadcrumb.text;
     if (!s.stale && !s.unavailable) this.hits.push(...renderedBreadcrumb.hits);
@@ -5126,7 +5152,7 @@ export class StatusWidget {
       run = "";
     const markerColor = headerActivity(local, marker === "◉").color;
     const styledBreadcrumb = breadcrumb.startsWith(marker)
-      ? `${this.theme.fg(markerColor, marker)}${this.theme.fg("muted", breadcrumb.slice(marker.length))}`
+      ? `${this.theme.fg(markerColor, marker)}${breadcrumb.slice(marker.length)}`
       : breadcrumb;
     const styledExecution = shownExecution
       ? this.theme.fg("muted", shownExecution)

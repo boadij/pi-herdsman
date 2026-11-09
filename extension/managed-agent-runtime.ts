@@ -1255,6 +1255,9 @@ export function createManagedAgentLeafStatus(options: {
                       process.env.PI_HERDSMAN_LABEL,
                     )
                   : (process.env.PI_HERDSMAN_AGENT_DEFINITION ?? "?"),
+              ...(process.env.PI_HERDSMAN_AGENT_DEFINITION
+                ? { role: process.env.PI_HERDSMAN_AGENT_DEFINITION }
+                : {}),
             },
           ],
           ...ownToolsSnapshot(),
@@ -1326,6 +1329,9 @@ export function createManagedAgentLeafStatus(options: {
                       process.env.PI_HERDSMAN_LABEL,
                     )
                   : (process.env.PI_HERDSMAN_AGENT_DEFINITION ?? "?"),
+              ...(process.env.PI_HERDSMAN_AGENT_DEFINITION
+                ? { role: process.env.PI_HERDSMAN_AGENT_DEFINITION }
+                : {}),
             },
           ],
           ...ownToolsSnapshot(),
