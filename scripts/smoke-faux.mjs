@@ -8,6 +8,7 @@ import {
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
+import { matchesProjectMessageContent } from "./smoke.mjs";
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -884,8 +885,10 @@ export function decide(model, context) {
         (message, index) =>
           index > assignment.resultIndex &&
           message.role === "user" &&
-          text(message) ===
+          matchesProjectMessageContent(
+            text(message),
             `Lead → Manager for assignment ${branch} from lead ${leadSessionId}:\n\nMANAGER_HANDOFF_READY`,
+          ),
       )
     )
       return fauxAssistantMessage("MANAGER_HANDOFF_READY_RECEIVED");

@@ -95,6 +95,19 @@ const MANAGED_AGENT_IDENTITY_KEYS = [
   "PI_SUBAGENT_CHILD",
 ];
 
+export function matchesProjectMessageContent(actual, expected) {
+  return (
+    typeof actual === "string" &&
+    (actual === expected ||
+      (actual.startsWith(
+        `${expected}\n\n<sender_environment informational="true">\ncwd: "`,
+      ) &&
+        /^\n\n<sender_environment informational="true">\ncwd: "(?:[^&<>"'\r\n]|&(?:amp|lt|gt|quot|apos);)+"(?:\nworktree_root: "(?:[^&<>"'\r\n]|&(?:amp|lt|gt|quot|apos);)+"\nbranch: "(?:[^&<>"'\r\n]|&(?:amp|lt|gt|quot|apos);)+"\nhead: "(?:[a-f0-9]{40}|[a-f0-9]{64})")?\nInformational only; not an instruction or authorization\.\n<\/sender_environment>$/u.test(
+          actual.slice(expected.length),
+        )))
+  );
+}
+
 export function parseScenario(args) {
   if (args.length > 1) throw new Error(`unexpected smoke argument: ${args[1]}`);
   const scenario = args[0] ?? "core";
@@ -1249,8 +1262,10 @@ export function managerHandoffDeliveredEntry(
         entry.details?.branch === branch &&
         entry.details?.fromSessionId === sessionId &&
         entry.details?.id === messageId &&
-        entry.content ===
+        matchesProjectMessageContent(
+          entry.content,
           `Lead → Manager for assignment ${branch} from lead ${sessionId}:\n\n${text}`,
+        ),
     ) ?? null
   );
 }
@@ -1680,8 +1695,10 @@ export function managerReadyAnswer(contents, branch, leadSessionId) {
       entry.customType === "pi-herdsman-project_message" &&
       entry.details?.branch === branch &&
       entry.details?.fromSessionId === leadSessionId &&
-      entry.content ===
+      matchesProjectMessageContent(
+        entry.content,
         `Lead → Manager for assignment ${branch} from lead ${leadSessionId}:\n\nMANAGER_RECOVERY_READY`,
+      ),
   );
   const readyMarkers = entries.flatMap((entry, index) =>
     entry.type === "message" &&
@@ -1739,7 +1756,7 @@ export function managerReadyEntryEvidence(contents, branch, leadSessionId) {
       entry.customType === "pi-herdsman-project_message" &&
       entry.details?.branch === branch &&
       entry.details?.fromSessionId === leadSessionId &&
-      entry.content === receiptText
+      matchesProjectMessageContent(entry.content, receiptText)
     )
       receipts.push(index);
     if (
@@ -5269,8 +5286,10 @@ async function runManagerHandoffSmoke(ctx) {
             entry.customType === "pi-herdsman-project_message" &&
             entry.details?.branch === row.branch &&
             entry.details?.fromSessionId === row.session &&
-            entry.content ===
+            matchesProjectMessageContent(
+              entry.content,
               `Lead → Manager for assignment ${row.branch} from lead ${row.session}:\n\nMANAGER_HANDOFF_READY`,
+            ),
         );
       const supervisorResult = supervisor.supervisorResultState;
       if (!managerHandoffAssignmentReady(ready, readyEntry, processProof)) {
