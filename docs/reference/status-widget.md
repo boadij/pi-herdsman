@@ -5,6 +5,14 @@
 The TUI status widget is a local, display-only projection of exact managed
 agents plus controller-local transient starting assignments.
 
+The header's leading symbol reports local Pi execution: `●` is working, `◐` is
+blocked on a UI prompt, `○` is idle, and `?` means local execution could not be
+observed. `◉` means the local session is idle while a fresh, verified owned
+Agent or supervised staff descendant is active. The marker is advisory,
+updates on Pi lifecycle events, and does not authorize actions or change
+assignment status. Existing Agent lifecycle, freshness, project-work, and
+navigation indicators remain separate.
+
 It does not replace mailbox assignment/result authority.
 
 An active Chief's supervision widget shows its current direct reports

@@ -823,7 +823,7 @@ test("Supervision ambient projections share status and empty-state semantics", (
   {
     assert.equal(
       renderSupervisionLeads([], 120, { status: "fresh" })[0],
-      "● chief · no reports",
+      "? chief · no reports",
     );
     assert.match(formatSupervisionNotification([], "fresh"), /no reports/);
     assert.match(
@@ -864,7 +864,7 @@ test("Chief ambient projection pluralizes counts and handles unavailable state",
       120,
       { status: "unavailable" },
     );
-    assert.deepEqual(rows, ["● chief · unavailable"]);
+    assert.deepEqual(rows, ["? chief · unavailable"]);
   }
 });
 
@@ -1195,7 +1195,7 @@ test("Supervision rows cap ordinary leads, retain attention, and fit every width
     );
     assert.equal(
       renderSupervisionLeads(leads, 13, { status: "unavailable" })[0],
-      "● unavailable",
+      "? unavailable",
     );
   }
 });
@@ -1642,7 +1642,7 @@ test("status widget animates only moving states and collapses quiet trees", (t) 
       breadcrumb: [{ text: "lead" }],
     });
     assert.deepEqual(widget.render(160), [
-      "● lead  ◌ 1",
+      "? lead  ◌ 1",
       "└─ ◌ agent  settling",
     ]);
     assert.equal((widget as any).timer, undefined);
@@ -3791,18 +3791,18 @@ test("Status widget renders complete execution metadata without changing ownersh
     breadcrumb: [{ text: "lead" }],
   };
   widget.setSnapshot({ ...snapshot, execution: { kind: "managed" } });
-  assert.equal(widget.render(160)[0], "● lead · managed");
-  assert.ok(calls.includes("success:● lead"));
+  assert.equal(widget.render(160)[0], "? lead · managed");
+  assert.ok(calls.includes("warning:?"));
   assert.ok(calls.includes("muted: · managed"));
   for (const [mode, label] of [
     ["flexible", "flexible"],
     ["orchestrate", "orchestrate"],
   ] as const) {
     widget.setSnapshot({ ...snapshot, execution: { kind: "ordinary", mode } });
-    assert.equal(widget.render(160)[0], `● lead · ${label}`);
+    assert.equal(widget.render(160)[0], `? lead · ${label}`);
   }
   widget.setSnapshot(snapshot);
-  assert.equal(widget.render(160)[0], "● lead");
+  assert.equal(widget.render(160)[0], "? lead");
 
   const breadcrumb = [
     { text: "lead" },
@@ -3818,14 +3818,14 @@ test("Status widget renders complete execution metadata without changing ownersh
   });
   assert.equal(
     widget.render(160)[0],
-    "● lead → implementer → scout · managed  [read, bash]",
+    "? lead → implementer → scout · managed  [read, bash]",
   );
   assert.deepEqual(breadcrumb, [
     { text: "lead" },
     { text: "implementer" },
     { text: "scout" },
   ]);
-  assert.equal(widget.render(41)[0], "● lead → implementer → scout · managed");
+  assert.equal(widget.render(41)[0], "? lead → implementer → scout · managed");
   assert.doesNotMatch(widget.render(8)[0]!, /· managed/);
   for (let width = 0; width <= 160; width++)
     assert.ok(
@@ -3834,7 +3834,7 @@ test("Status widget renders complete execution metadata without changing ownersh
   assert.match(widget.render(8)[0]!, /scout/);
 
   widget.setSnapshot({ ...snapshot, execution: { kind: "managed" } });
-  assert.equal(widget.render(11)[0], "● lead");
+  assert.equal(widget.render(11)[0], "? lead");
   for (const [lifecycle, label] of [
     ["unavailable", "managed · unavailable"],
     ["retired", "managed · retired"],
@@ -3843,9 +3843,9 @@ test("Status widget renders complete execution metadata without changing ownersh
       ...snapshot,
       execution: { kind: "managed", lifecycle },
     });
-    assert.equal(widget.render(160)[0], `● lead · ${label}`);
+    assert.equal(widget.render(160)[0], `? lead · ${label}`);
     const width = visibleWidth(widget.render(160)[0]!);
-    assert.equal(widget.render(width)[0], `● lead · ${label}`);
+    assert.equal(widget.render(width)[0], `? lead · ${label}`);
     assert.doesNotMatch(widget.render(width - 1)[0]!, new RegExp(`${label}$`));
   }
 
@@ -3856,8 +3856,88 @@ test("Status widget renders complete execution metadata without changing ownersh
       { label: "implementer", definition: "implementer", state: "blocked" },
     ],
   });
-  assert.match(widget.render(160)[0]!, /^● lead · managed  ◐ 1$/);
+  assert.match(widget.render(160)[0]!, /^\? lead · managed  ◐ 1$/);
   assert.match(widget.render(160)[1]!, /└─ .*implementer/);
+});
+
+test("status headers use local activity and only fresh verified descendants", (t) => {
+  for (const [local, descendant, expected] of [
+    ["working", false, "●"],
+    ["working", true, "●"],
+    ["idle", true, "◉"],
+    ["idle", false, "○"],
+    ["blocked", true, "◐"],
+    ["unknown", true, "?"],
+  ] as const) {
+    const widget = new StatusWidget(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => local,
+    );
+    t.after(() => widget.dispose());
+    widget.setSnapshot({
+      agents: descendant
+        ? [{ label: "worker", definition: "agent", state: "working" }]
+        : [],
+      stale: false,
+      unavailable: false,
+      breadcrumb: [{ text: "lead" }],
+    });
+    assert.equal(widget.render(80)[0]!.slice(0, 1), expected);
+  }
+
+  const reports = {
+    managers: [
+      {
+        session: "manager",
+        displayName: "manager",
+        project: "project",
+        workspaceId: "workspace",
+        paneId: "pane",
+        tabId: "tab",
+        runtimeState: "idle" as const,
+        agentCounts: { active: 0, blocked: 0, total: 0 },
+        leadCounts: { active: 1, blocked: 0, total: 1 },
+        availableActions: [],
+        leads: [],
+      },
+    ],
+    leads: [],
+  };
+  const rows = createSupervisionWidget(
+    () => reports,
+    () => "fresh",
+    "chief",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    () => "idle",
+  ).render(100);
+  assert.equal(rows[0]!.slice(0, 1), "◉");
+  assert.match(rows[1]!, /^└─ ◉/);
+
+  const staleOwned = new StatusWidget(
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    () => "idle",
+  );
+  t.after(() => staleOwned.dispose());
+  staleOwned.setSnapshot({
+    agents: [{ label: "worker", definition: "agent", state: "working" }],
+    stale: true,
+    unavailable: false,
+    breadcrumb: [{ text: "manager" }],
+  });
+  assert.equal(staleOwned.render(80)[0]!.slice(0, 1), "○");
 });
 
 test("managed Lead Git summaries are right-aligned, fresh-only, and inert", (t) => {
@@ -3921,7 +4001,7 @@ test("managed Lead Git summaries are right-aligned, fresh-only, and inert", (t) 
   assert.match(widget.render(64)[0]!, /⎇ feat\/local\*/u);
   assert.doesNotMatch(widget.render(64)[0]!, /±0|\+\d+ -\d+/u);
   summary = { dirty: true, checkedOutBranch: "feature-long" };
-  const narrowWidth = visibleWidth("● lead") + 2 + 7;
+  const narrowWidth = visibleWidth("? lead") + 2 + 7;
   const narrow = widget.render(narrowWidth)[0]!;
   assert.match(narrow, /⎇ .*\*$/u);
   assert.equal(visibleWidth(narrow), narrowWidth);
@@ -4002,18 +4082,18 @@ test("identity-only Agent headers retain freshness without Agent counts", (t) =>
     identityOnly: true,
     breadcrumb: [{ text: "lead" }],
   });
-  assert.equal(widget.render(160)[0], "● lead  stale");
+  assert.equal(widget.render(160)[0], "? lead  stale");
   assert.doesNotMatch(widget.render(160)[0]!, /1 working/);
   assert.ok(warnings.includes("stale"));
   for (let width = 5; width <= 10; width++) {
     const header = widget.render(width)[0]!;
     assert.ok(visibleWidth(header) <= width, `width ${width}`);
     assert.match(header, /stale/, `width ${width}`);
-    if (width >= visibleWidth("● stale"))
-      assert.match(header, /●/, `identity marker at width ${width}`);
-    else assert.doesNotMatch(header, /●/, `identity marker at width ${width}`);
+    if (width >= visibleWidth("? stale"))
+      assert.match(header, /\?/, `identity marker at width ${width}`);
+    else assert.doesNotMatch(header, /\?/, `identity marker at width ${width}`);
   }
-  assert.equal(widget.render(7)[0], "● stale");
+  assert.equal(widget.render(7)[0], "? stale");
   widget.setSnapshot({
     agents: [{ label: "worker", definition: "agent", state: "working" }],
     stale: false,
@@ -4021,7 +4101,7 @@ test("identity-only Agent headers retain freshness without Agent counts", (t) =>
     identityOnly: true,
     breadcrumb: [{ text: "lead" }],
   });
-  assert.equal(widget.render(160)[0], "● lead  unavailable");
+  assert.equal(widget.render(160)[0], "? lead  unavailable");
   assert.doesNotMatch(widget.render(160)[0]!, /1 working/);
   assert.ok(warnings.some((text) => text.includes("unavailable")));
 });
@@ -4054,7 +4134,7 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
     });
     assert.equal(
       widget.render(160)[0],
-      "● lead → implementer:one  [read, bash, ask_owner]",
+      "? lead → implementer:one  [read, bash, ask_owner]",
     );
     const truncated = widget.render(32)[0]!;
     assert.match(truncated, /implementer:one/);
@@ -4068,7 +4148,7 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
       ownTools: [],
       identityOnly: true,
     });
-    assert.equal(widget.render(160)[0], "● lead → implementer:one");
+    assert.equal(widget.render(160)[0], "? lead → implementer:one");
     widget.setSnapshot({
       agents: [],
       stale: false,
@@ -4079,7 +4159,7 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
     });
     assert.equal(
       widget.render(160)[0],
-      "● lead → implementer:one  [read, bash, list_agents, delegate_agent, continue_agent, steer_agent, interrupt_agent, reply_agent, stop_agent, inspect_agent, …]",
+      "? lead → implementer:one  [read, bash, list_agents, delegate_agent, continue_agent, steer_agent, interrupt_agent, reply_agent, stop_agent, inspect_agent, …]",
     );
     assert.doesNotMatch(
       widget.render(160)[0]!,
@@ -4200,7 +4280,7 @@ test("Status widget connectors preserve hierarchy and aligned family layout", (t
       breadcrumb: [{ text: "lead" }],
     });
     const rendered = widget.render(160).join("\n");
-    assert.match(rendered, /● lead/);
+    assert.match(rendered, /\? lead/);
     assert.match(rendered, /one\s+gpt/);
     assert.match(rendered, /└─ ⠋ scout\s+scout:one/);
     assert.match(rendered, /gpt/);
@@ -4252,7 +4332,7 @@ test("Status widget connectors preserve hierarchy and aligned family layout", (t
     });
 
     assert.deepEqual(widget.render(160), [
-      "● lead → implementer  ● 3",
+      "? lead → implementer  ● 3",
       "└─ ⠋ implementer  implementer:feature  0s  gpt-5.6-luna  low  3%  Parent task",
       "   ├─ ⠋ scout        scout:child-1     0s  gpt-5.6-luna  low  1%  Child one",
       "   └─ ⠋ scout        scout:child-2     0s  gpt-5.6-luna  low  1%  Child two",
@@ -4264,7 +4344,7 @@ test("Breadcrumb rendering preserves identity, truncation, and safe Unicode", (t
   {
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
-    assert.match(widget.render(160)[0]!, /^● \?\s+unavailable$/);
+    assert.match(widget.render(160)[0]!, /^\? \?\s+unavailable$/);
   }
 
   {
@@ -4281,7 +4361,7 @@ test("Breadcrumb rendering preserves identity, truncation, and safe Unicode", (t
       ],
       identityOnly: true,
     });
-    assert.deepEqual(widget.render(160), ["● lead → implementer → scout"]);
+    assert.deepEqual(widget.render(160), ["? lead → implementer → scout"]);
     widget.setSnapshot({
       agents: [],
       stale: false,
@@ -4289,7 +4369,7 @@ test("Breadcrumb rendering preserves identity, truncation, and safe Unicode", (t
       breadcrumb: [{ text: "?" }, { text: "scout" }],
       identityOnly: true,
     });
-    assert.deepEqual(widget.render(160), ["● ? → scout"]);
+    assert.deepEqual(widget.render(160), ["? ? → scout"]);
     assert.doesNotMatch(
       widget.render(160)[0],
       /implementer:|child|pane|session/,
@@ -4335,7 +4415,7 @@ test("Breadcrumb rendering preserves identity, truncation, and safe Unicode", (t
       assert.ok(visibleWidth(line) <= width);
       assert.equal(line.includes("\u001b"), false);
     }
-    assert.match(widget.render(160)[0], /● lead → 審査🙂é/);
+    assert.match(widget.render(160)[0], /\? lead → 審査🙂é/);
   }
 });
 
@@ -4645,7 +4725,7 @@ test("managed marker has an independent visible-only hit region", (t) => {
     identityOnly: true,
   });
   widget.render(80);
-  const start = visibleWidth("● lead · ");
+  const start = visibleWidth("? lead · ");
   const click = (x: number) =>
     widget.handleMouse({ type: "click", button: "left", x, y: 0, width: 80 });
   assert.equal(click(start)?.handled, true);
@@ -4715,7 +4795,7 @@ test("widget uses logical labels in the shared row formatter", (t) => {
       unavailable: false,
     });
     for (const line of widget.render(1)) assert.ok(visibleWidth(line) <= 1);
-    assert.ok(calls.some((call) => call.startsWith("success:●")));
+    assert.ok(calls.some((call) => call.startsWith("warning:?")));
     assert.ok(calls.some((call) => call.startsWith("muted:")));
     assert.ok(
       !calls.some(
@@ -6803,14 +6883,14 @@ test("Manager supervision presentation is role-aware and classifies direct Leads
   );
   assert.equal(
     renderSupervisionLeads(snapshot, 120, { role: "manager" })[0],
-    "● manager",
+    "? manager",
   );
   assert.equal(
     renderSupervisionLeads(snapshot, 120, {
       role: "manager",
       status: "unavailable",
     })[0],
-    "● manager · unavailable",
+    "? manager · unavailable",
   );
   const context = formatSupervisionContext(snapshot, {
     status: "fresh",
@@ -6909,7 +6989,7 @@ test("Chief tree shows project and branch without internal paths or zero counts"
     ],
   };
   const rows = renderSupervisionLeads(snapshot, 120);
-  assert.equal(rows[0], "● chief · 1 manager");
+  assert.equal(rows[0], "? chief · 1 manager");
   assert.equal(rows[1], "└─ ○ pi-herdsman · 1 compatible lead");
   assert.equal(rows[2], "   └─ ○ feat/session-usage-stats");
   assert.doesNotMatch(
@@ -6921,7 +7001,7 @@ test("Chief tree shows project and branch without internal paths or zero counts"
       { ...snapshot, leads: [lead(), lead({ lead: "other" })] },
       120,
     )[0],
-    "● chief · 1 manager · 2 direct leads",
+    "? chief · 1 manager · 2 direct leads",
   );
   const focused: unknown[] = [];
   const widget = createSupervisionWidget(
@@ -7336,7 +7416,7 @@ test("Manager widget shares one bounded work/Lead tree and context includes proj
     ],
   };
   const rows = renderSupervisionLeads(snapshot, 120, { role: "manager" });
-  assert.equal(rows[0], "● manager · pi-herdsman");
+  assert.equal(rows[0], "? manager · pi-herdsman");
   assert.match(rows[1]!, /◐ feat\/active.* · blocked/);
   assert.doesNotMatch(rows[1]!, /!◐/);
   assert.match(rows[2]!, /! feat\/conflict.* · conflict/);
@@ -7399,7 +7479,7 @@ test("Manager widget shares one bounded work/Lead tree and context includes proj
       () => "fresh",
       "manager",
     ).render(120)[0],
-    "● manager · pi-herdsman",
+    "? manager · pi-herdsman",
   );
 });
 
@@ -7498,7 +7578,7 @@ test("Manager work rows show responsive Lead telemetry with semantic theme", () 
   });
   assert.ok(
     themedRows[0]!.includes(
-      "<success>●</success> <muted>manager · pi-herdsman</muted>",
+      "<warning>?</warning> <muted>manager · pi-herdsman</muted>",
     ),
   );
   assert.ok(themedRows[1]!.includes("<success>●</success>"));
@@ -7509,7 +7589,7 @@ test("Manager work rows show responsive Lead telemetry with semantic theme", () 
     status: "stale",
     theme,
   })[0]!;
-  assert.ok(staleManagerHeader.includes("<success>●</success>"));
+  assert.ok(staleManagerHeader.includes("<warning>?</warning>"));
   assert.ok(
     staleManagerHeader.includes(
       "<muted>manager · pi-herdsman</muted> <warning>· stale</warning>",
@@ -7555,7 +7635,7 @@ test("Manager work rows show responsive Lead telemetry with semantic theme", () 
   assert.doesNotMatch(chiefRows.join("\n"), /14m|61%/);
   assert.ok(
     chiefRows[0]!.includes(
-      "<success>●</success> <muted>chief · 1 direct lead</muted>",
+      "<warning>?</warning> <muted>chief · 1 direct lead</muted>",
     ),
   );
   assert.ok(chiefRows[1]!.includes("<success>└─ ●</success>"));
@@ -8007,7 +8087,7 @@ test("Manager standalone Lead rows expose their exact click target", () => {
   );
 
   assert.deepEqual(widget.render(120), [
-    "● manager · pi-herdsman",
+    "? manager · pi-herdsman",
     "└─ ○ feat/unassigned · Lead",
   ]);
   assert.equal(
@@ -8601,7 +8681,7 @@ test("Manager work status outranks live Lead markers except when active", () => 
     assert.deepEqual(
       renderSupervisionLeads(snapshot, 120, { role: "manager" }, "assigned"),
       [
-        "● manager",
+        "? manager",
         `└─ >${marker} feat/example${status === "conflict" || status === "unknown" ? ` · ${status}` : ""}`,
       ],
     );
@@ -9160,14 +9240,14 @@ test("Manager mixed tree has one final connector and independent Leads share the
     ],
   };
   assert.deepEqual(renderSupervisionLeads(snapshot, 120, { role: "manager" }), [
-    "● manager · pi-herdsman",
+    "? manager · pi-herdsman",
     "├─ ◉ test/manager-lifecycle-smoke · Lead",
     "└─ ◫ worktree/lead-management-smoke-ping",
   ]);
   assert.deepEqual(
     renderSupervisionLeads(snapshot, 120, { role: "manager", ordinaryCap: 1 }),
     [
-      "● manager · pi-herdsman",
+      "? manager · pi-herdsman",
       "├─ ◉ test/manager-lifecycle-smoke · Lead",
       "└─ … 1 more · /manager",
     ],

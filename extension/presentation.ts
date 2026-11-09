@@ -144,6 +144,7 @@ export function projectWorkspaceProvenance(
 
 export type AgentLifecycleState =
   "working" | "blocked" | "settling" | "starting" | "unknown" | "lost";
+export type LocalHeaderActivity = "working" | "blocked" | "idle" | "unknown";
 export interface StatusAgent {
   label: string;
   state: AgentLifecycleState;
@@ -1080,7 +1081,7 @@ export function managerSupervisionItems(
 }
 
 function supervisionActivityMarker(
-  state: LifecyclePresentationState,
+  state: LifecyclePresentationState | LocalHeaderActivity,
   activeAgents: number,
 ): string {
   return (state === "idle" || state === "done") && activeAgents > 0
@@ -1091,12 +1092,36 @@ function supervisionActivityMarker(
 function supervisionLeadMarker(lead: SupervisedLeadDisplay): string {
   return supervisionActivityMarker(
     lead.runtimeState,
-    lead.agentCounts?.active ?? 0,
+    (lead.agentCounts?.active ?? 0) + (lead.leadCounts?.active ?? 0),
   );
 }
 
 function lifecycleColor(state: LifecyclePresentationState): string {
   return STATE_COLOR[lifecycleLabel(state)] ?? "muted";
+}
+
+function headerActivity(local: LocalHeaderActivity, active: boolean) {
+  const marker = supervisionActivityMarker(local, active ? 1 : 0);
+  return {
+    marker,
+    color: marker === "◉" ? "accent" : lifecycleColor(local),
+  };
+}
+
+function activeStaffSnapshot(
+  reports: readonly SupervisedLeadSnapshot[] | SupervisionPresentationSnapshot,
+  fresh: boolean,
+): boolean {
+  return (
+    fresh &&
+    presentationReports(reports).some(
+      (report) =>
+        report.compatibility !== "incompatible" &&
+        (["working", "starting", "settling"].includes(report.runtimeState) ||
+          (report.agentCounts?.active ?? 0) > 0 ||
+          (report.leadCounts?.active ?? 0) > 0),
+    )
+  );
 }
 
 function supervisionLeadColor(lead: SupervisedLeadDisplay): string {
@@ -1203,9 +1228,15 @@ function renderSupervisionHeader(
   status: SupervisionContextStatus,
   width: number,
   theme: any,
+  local: LocalHeaderActivity = "unknown",
+  activeDescendants = false,
 ): string {
-  const marker = themed(theme, "success", "●");
-  const markerWidth = visibleWidth("●");
+  const { marker: markerValue, color } = headerActivity(
+    local,
+    activeDescendants,
+  );
+  const marker = themed(theme, color, markerValue);
+  const markerWidth = visibleWidth(markerValue);
   const identity = themed(theme, "muted", label);
   const freshnessText = status === "fresh" ? "" : `· ${status}`;
   const freshness = freshnessText
@@ -1247,6 +1278,8 @@ function renderSupervisionRows(
     role?: "chief" | "manager";
     theme?: any;
     hasFollowingGroup?: boolean;
+    localActivity?: LocalHeaderActivity;
+    activeDescendants?: boolean;
   } = {},
   selectedLead?: string,
   getGitSummary?: (work: ProjectWorkSnapshot) => GitChangeSummary | undefined,
@@ -1256,7 +1289,14 @@ function renderSupervisionRows(
   if (status === "unavailable")
     return [
       {
-        text: renderSupervisionHeader(role, status, width, options.theme),
+        text: renderSupervisionHeader(
+          role,
+          status,
+          width,
+          options.theme,
+          options.localActivity,
+          options.activeDescendants,
+        ),
       },
     ];
   const displays = orderedSupervisionLeads(presentationReports(reports));
@@ -1292,6 +1332,8 @@ function renderSupervisionRows(
     status,
     width,
     options.theme,
+    options.localActivity,
+    options.activeDescendants,
   );
   if (
     managerSnapshot &&
@@ -1649,12 +1691,22 @@ export function renderSupervisionLeads(
     ordinaryCap?: number;
     role?: "chief" | "manager";
     theme?: any;
+    localActivity?: LocalHeaderActivity;
   } = {},
   selectedLead?: string,
 ): string[] {
-  return renderSupervisionRows(reports, width, options, selectedLead).map(
-    ({ text }) => text,
-  );
+  return renderSupervisionRows(
+    reports,
+    width,
+    {
+      ...options,
+      activeDescendants: activeStaffSnapshot(
+        reports,
+        options.status === "fresh",
+      ),
+    },
+    selectedLead,
+  ).map(({ text }) => text);
 }
 
 /** Bounded notification text; unlike TUI renderers it has no terminal width assumption. */
@@ -1998,6 +2050,7 @@ export function createSupervisionWidget(
   },
   getMaxRows: () => number = () => 8,
   getHeaderGitSummary?: () => GitChangeSummary | undefined,
+  getLocalActivity?: () => LocalHeaderActivity,
 ): {
   render(width: number): string[];
   handleMouse(event: {
@@ -2014,25 +2067,38 @@ export function createSupervisionWidget(
   return {
     render(width) {
       renderedWidth = width;
+      const status = getStatus();
+      const supervision = getLeads();
       const snapshot = ownedAgents?.getSnapshot();
+      const activeOwned =
+        !!snapshot &&
+        !snapshot.stale &&
+        !snapshot.unavailable &&
+        snapshot.agents.some((agent) =>
+          ["working", "starting", "settling"].includes(agent.state),
+        );
+      const activeDescendants =
+        activeStaffSnapshot(supervision, status === "fresh") || activeOwned;
       const showAgents =
         !!snapshot &&
         (snapshot.agents.length > 0 || snapshot.stale || snapshot.unavailable);
       const rows = renderSupervisionRows(
-        getLeads(),
+        supervision,
         width,
         {
-          status: getStatus(),
+          status,
           ordinaryCap: getMaxRows(),
           childCap: getMaxRows(),
           role,
           theme,
           hasFollowingGroup: showAgents,
+          localActivity: getLocalActivity?.() ?? "unknown",
+          activeDescendants,
         },
         undefined,
         getGitSummary,
       ).filter(({ text }, index) => index === 0 || text.length > 0);
-      if (role === "manager" && getStatus() === "fresh") {
+      if (role === "manager" && status === "fresh") {
         const git = getHeaderGitSummary?.();
         if (git && rows[0]) {
           const header = rows[0].text;
@@ -2386,13 +2452,13 @@ function safeDisplaySegment(value: string): string {
 function renderBreadcrumb(
   segments: BreadcrumbSegment[],
   width: number,
+  marker = "?",
 ): { text: string; hits: HitRegion[] } {
   if (width <= 0) return { text: "", hits: [] };
   const visible = segments
     .map((segment) => ({ ...segment, text: safeDisplaySegment(segment.text) }))
     .filter((segment) => segment.text);
   const current = visible.at(-1) ?? { text: "?" };
-  const marker = "●";
   if (width <= visibleWidth(marker))
     return { text: truncateToWidth(marker, width, ""), hits: [] };
   const prefix = `${marker} `;
@@ -4913,17 +4979,20 @@ export class StatusWidget {
   private hits: HitRegion[] = [];
   private getMaxRows: () => number;
   private getGitSummary?: () => GitChangeSummary | undefined;
+  private getLocalActivity: () => LocalHeaderActivity;
   constructor(
     invalidateUI?: () => void,
     theme?: any,
     onFocus?: (intent: FocusIntent) => void,
     getMaxRows: () => number = () => 8,
     getGitSummary?: () => GitChangeSummary | undefined,
+    getLocalActivity: () => LocalHeaderActivity = () => "unknown",
   ) {
     this.invalidateUI = invalidateUI;
     this.getMaxRows = getMaxRows;
     this.onFocus = onFocus;
     this.getGitSummary = getGitSummary;
+    this.getLocalActivity = getLocalActivity;
     this.theme = theme ?? {
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
@@ -4953,6 +5022,15 @@ export class StatusWidget {
   }
   render(width: number): string[] {
     const s = this.snapshot;
+    const local = this.getLocalActivity();
+    const marker = headerActivity(
+      local,
+      !s.stale &&
+        !s.unavailable &&
+        s.agents.some((agent) =>
+          ["working", "starting", "settling"].includes(agent.state),
+        ),
+    ).marker;
     this.renderedWidth = width;
     this.hits = [];
     const availableWidth = Math.max(0, width);
@@ -4980,7 +5058,8 @@ export class StatusWidget {
     const freshnessSuffixWidth = visibleWidth(freshnessSuffix);
     const breadcrumbSegments = s.breadcrumb ?? [{ text: "?" }];
     const fullIdentityWidth = visibleWidth(
-      renderBreadcrumb(breadcrumbSegments, Number.MAX_SAFE_INTEGER).text,
+      renderBreadcrumb(breadcrumbSegments, Number.MAX_SAFE_INTEGER, marker)
+        .text,
     );
     const reservedSuffixWidth =
       freshness && fullSuffixWidth + fullIdentityWidth <= availableWidth
@@ -4992,6 +5071,7 @@ export class StatusWidget {
     const renderedBreadcrumb = renderBreadcrumb(
       breadcrumbSegments,
       Math.max(0, availableWidth - reservedSuffixWidth),
+      marker,
     );
     const breadcrumb = renderedBreadcrumb.text;
     if (!s.stale && !s.unavailable) this.hits.push(...renderedBreadcrumb.hits);
@@ -5044,7 +5124,10 @@ export class StatusWidget {
       availableWidth
     )
       run = "";
-    const styledBreadcrumb = this.theme.fg("success", breadcrumb);
+    const markerColor = headerActivity(local, marker === "◉").color;
+    const styledBreadcrumb = breadcrumb.startsWith(marker)
+      ? `${this.theme.fg(markerColor, marker)}${this.theme.fg("muted", breadcrumb.slice(marker.length))}`
+      : breadcrumb;
     const styledExecution = shownExecution
       ? this.theme.fg("muted", shownExecution)
       : "";
@@ -5062,8 +5145,8 @@ export class StatusWidget {
       s.stale &&
       !s.unavailable &&
       !breadcrumb &&
-      visibleWidth("● stale") <= availableWidth
-        ? `${this.theme.fg("success", "●")} ${this.theme.fg("warning", "stale")}`
+      visibleWidth(`${marker} stale`) <= availableWidth
+        ? `${this.theme.fg(markerColor, marker)} ${this.theme.fg("warning", "stale")}`
         : builtHeader;
     let header = truncateToWidth(compactStaleHeader, availableWidth, "…");
     const observedGit =
@@ -5167,6 +5250,7 @@ export function createStatusWidget(
   onFocus?: (intent: FocusIntent) => void,
   getMaxRows?: () => number,
   getGitSummary?: () => GitChangeSummary | undefined,
+  getLocalActivity?: () => LocalHeaderActivity,
 ): StatusWidget {
   return new StatusWidget(
     invalidate,
@@ -5174,6 +5258,7 @@ export function createStatusWidget(
     onFocus,
     getMaxRows,
     getGitSummary,
+    getLocalActivity,
   );
 }
 export { Text, truncateToWidth, visibleWidth };

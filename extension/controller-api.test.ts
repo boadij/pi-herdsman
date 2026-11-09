@@ -456,6 +456,8 @@ test(
     };
     assert.equal(process.env.PI_HERDSMAN_AGENT_DEFINITION, undefined);
     ctx.hasUI = true;
+    let idle = true;
+    ctx.isIdle = () => idle;
     let statusWidget: InstanceType<typeof StatusWidget> | undefined;
     ctx.ui.setWidget = (_key: string, content: unknown) => {
       if (typeof content === "function")
@@ -485,8 +487,10 @@ test(
       });
       await pi.events.get("session_start")![0](undefined, ctx);
       await waitForStage(t, "initial managed Lead status", () =>
-        assert.match(statusWidget!.render(160)[0], /^● lead · managed/),
+        assert.match(statusWidget!.render(160)[0], /^○ lead · managed/),
       );
+      idle = false;
+      assert.match(statusWidget!.render(160)[0], /^● lead · managed/);
       const supervisorTool = pi.tools.find(
         (tool) => tool.name === "message_supervisor",
       )!;

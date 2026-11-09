@@ -5607,7 +5607,7 @@ test("delegating agents receive only their allowed definition roster", async () 
   registerExtension!(pi.pi as never);
   const context = fakeAgentContext(entries) as any;
   const sessionStartHandlers = pi.events.get("session_start") ?? [];
-  assert.equal(sessionStartHandlers.length, 1);
+  assert.equal(sessionStartHandlers.length, 2);
   await sessionStartHandlers[0](undefined, context);
   assert.ok(readAgentState(mailbox), "fresh managed agent was not initialized");
   const contextHandlers = pi.events.get("context") ?? [];
@@ -6174,7 +6174,7 @@ test("delegating agents do not receive Manager supervisor projections", async ()
   const context = fakeAgentContext(entries) as any;
   try {
     const sessionStartHandlers = pi.events.get("session_start") ?? [];
-    assert.equal(sessionStartHandlers.length, 1);
+    assert.equal(sessionStartHandlers.length, 2);
     await sessionStartHandlers[0](undefined, context);
     const event: any = {
       systemPromptOptions: { sections: {}, contextFiles: [] },
@@ -6228,7 +6228,7 @@ test("delegating roster discovery failure does not abort managed startup", async
   const context = fakeAgentContext(entries) as any;
   try {
     const sessionStartHandlers = pi.events.get("session_start") ?? [];
-    assert.equal(sessionStartHandlers.length, 1);
+    assert.equal(sessionStartHandlers.length, 2);
     await sessionStartHandlers[0](undefined, context);
     assert.ok(
       entries.some(

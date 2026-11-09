@@ -17374,7 +17374,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   runtime.registerWidget(ctx, "chief");
   await runtime.refresh(ctx);
   assert.deepEqual(widget.render(120), [
-    "● chief · 1 manager",
+    "? chief · 1 manager",
     "└─ ● project-manager · 1 compatible lead",
     "   └─ ● feat/nested",
   ]);
@@ -22820,7 +22820,7 @@ test("managed Lead sampler requires a verified assignment, caches its sample, an
   widget!.handleMouse({
     type: "click",
     button: "left",
-    x: visibleWidth("● lead · "),
+    x: visibleWidth("? lead · "),
     y: 0,
     width: 120,
   });
@@ -23061,7 +23061,7 @@ test("valid managed leaf agents receive identity-only TUI presentation", async (
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.ok(widget);
   assert.deepEqual(widget!.render(160), [
-    "● lead → agent:leaf-agent  [read, bash, ask_owner]",
+    "○ lead → agent:leaf-agent  [read, bash, ask_owner]",
   ]);
   assert.equal(
     widget!.handleMouse({
@@ -23180,7 +23180,7 @@ test("status session preparation drops the previous session snapshot", async (t)
   const nextContext = context();
   runtime.prepareSession(nextContext);
   runtime.start(nextContext);
-  assert.deepEqual(widgets[1]!.render(160), ["● ?  unavailable"]);
+  assert.deepEqual(widgets[1]!.render(160), ["? ?  unavailable"]);
   pending[1]!.resolve({
     agents: [{ label: "stale-agent", definition: "scout", state: "working" }],
     stale: false,
@@ -23188,11 +23188,11 @@ test("status session preparation drops the previous session snapshot", async (t)
     breadcrumb: [{ text: "lead" }, { text: "scout:stale-agent" }],
   });
   await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.deepEqual(widgets[1]!.render(160), ["● ?  unavailable"]);
+  assert.deepEqual(widgets[1]!.render(160), ["? ?  unavailable"]);
 
   pending[2]!.reject(new Error("new session refresh failed"));
   await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.deepEqual(widgets[1]!.render(160), ["● ?  unavailable"]);
+  assert.deepEqual(widgets[1]!.render(160), ["? ?  unavailable"]);
   assert.equal(
     pending.length,
     3,
@@ -23469,7 +23469,7 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
     await t.waitFor(() => assert.equal(widgets.length, 2));
 
     assert.equal(widgets.length, 2);
-    assert.equal(widgets[1].render(120)[0], "● lead  unavailable");
+    assert.equal(widgets[1].render(120)[0], "○ lead  unavailable");
     assert.equal(
       registrations,
       3,
@@ -23512,7 +23512,7 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
     for (const pending of pendingLists.splice(0, 2)) resolveInventory(pending);
     await Promise.resolve();
     await Promise.resolve();
-    assert.equal(widgets[1].render(120)[0], "● lead  unavailable");
+    assert.equal(widgets[1].render(120)[0], "○ lead  unavailable");
     const resolvePendingLists = () => {
       for (const pending of pendingLists.splice(0)) resolveInventory(pending);
     };
@@ -23534,7 +23534,7 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
     await pi.events.get("session_shutdown")?.[0]();
     assert.equal(activeTimers.size, 0);
     assert.equal(disposeCalls, 3, "the current widget is disposed on shutdown");
-    assert.equal(widgets[0].render(120)[0], "● lead  unavailable");
+    assert.equal(widgets[0].render(120)[0], "○ lead  unavailable");
   } finally {
     StatusWidget.prototype.dispose = originalDispose;
     globalThis.setInterval = originalSetInterval;
@@ -24023,7 +24023,7 @@ test("TUI status refresh consumes the coherent Herdr session snapshot", async (t
     "direct Herdr status polling must have a finite timeout",
   );
   const rendered = widget.render(160).join("\n");
-  assert.match(rendered, /● lead\s+● 1/);
+  assert.match(rendered, /◉ lead\s+● 1/);
   assert.match(rendered, /sleep-smoke-a/);
   assert.doesNotMatch(rendered, /\[read, bash, ask_owner\]/);
   const promptEvent = {
@@ -24167,7 +24167,7 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
   resolveInitial!({ stdout: envelope(), stderr: "", code: 0 });
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.ok(widget);
-  assert.match(widget.render(160).join("\n"), /● lead\s+\? 1/);
+  assert.match(widget.render(160).join("\n"), /○ lead\s+\? 1/);
 
   await t.waitFor(() => assert.ok(resolveReconciliation));
   const countBeforeReconciliation = listCount;
@@ -24181,7 +24181,7 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
   });
   await starting;
   await t.waitFor(() => assert.ok(resolveAfterReconciliation));
-  assert.match(widget.render(160).join("\n"), /● lead\s+\? 1/);
+  assert.match(widget.render(160).join("\n"), /○ lead\s+\? 1/);
   resolveAfterReconciliation!({
     stdout: JSON.stringify({
       id: 1,
@@ -24194,7 +24194,7 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
     assert.ok(listCount > countBeforeReconciliation, JSON.stringify(pi.calls));
     assert.ok(widget);
     const rendered = widget.render(160).join("\n");
-    assert.match(rendered, /● lead\s+× 1/);
+    assert.match(rendered, /○ lead\s+× 1/);
     assert.match(rendered, /fresh-widget-agent/);
   });
   await pi.events.get("session_shutdown")?.[0]();
