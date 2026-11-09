@@ -16798,6 +16798,38 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   runtime.stopPeriodic();
 });
 
+test("linked worktrees resolve the advancing primary checkout HEAD through main-worktree/HEAD", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "herdsman-main-worktree-head-"));
+  const primary = join(root, "primary");
+  const linked = join(root, "linked");
+  mkdirSync(primary);
+  const runGit = (args: string[], cwd: string) => {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  runGit(["init", "-b", "main"], primary);
+  runGit(["config", "user.name", "Main worktree test"], primary);
+  runGit(["config", "user.email", "main-worktree@example.invalid"], primary);
+  writeFileSync(join(primary, "file.txt"), "base\n");
+  runGit(["add", "file.txt"], primary);
+  runGit(["commit", "-m", "base"], primary);
+  runGit(["worktree", "add", "-b", "feature", linked], primary);
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  for (const content of ["base\n", "advanced\n"]) {
+    if (content !== "base\n") {
+      writeFileSync(join(primary, "file.txt"), content);
+      runGit(["add", "file.txt"], primary);
+      runGit(["commit", "-m", "advance primary"], primary);
+    }
+    assert.equal(
+      runGit(["rev-parse", "main-worktree/HEAD^{commit}"], linked),
+      runGit(["rev-parse", "HEAD^{commit}"], primary),
+    );
+  }
+});
+
 test("Lead resume repairs stale staff from its durable displaced loadout", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
@@ -21942,7 +21974,7 @@ test("Lead status child-row focus rechecks the exact Herdr session identity", as
   assert.ok(notices.some((message) => /Agent changed/u.test(message)));
 });
 
-test("managed Lead marker focuses its verified Manager pane", async (t) => {
+test("managed Lead sampler requires a verified assignment, caches its sample, and throttles refreshes", async (t) => {
   setLeadEnvironment();
   writeFileSync(
     join(PI_AGENTS_DIR, "mcp-runner.md"),
@@ -21953,8 +21985,34 @@ test("managed Lead marker focuses its verified Manager pane", async (t) => {
     `managed-marker-navigation-${randomUUID()}.sock`,
   );
   const assignedWorkspace = `assigned-${randomUUID()}`;
-  const repoKey = `repo-${randomUUID()}`;
-  const branch = `branch-${randomUUID()}`;
+  const gitRoot = mkdtempSync(join(tmpdir(), "managed-lead-git-sampler-"));
+  const primaryCheckout = join(gitRoot, "primary");
+  const assignedCheckout = join(gitRoot, "assigned");
+  mkdirSync(primaryCheckout);
+  const runGit = (args: string[], cwd: string) => {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  runGit(["init", "-b", "main"], primaryCheckout);
+  runGit(["config", "user.name", "Managed Lead sampler test"], primaryCheckout);
+  runGit(
+    ["config", "user.email", "managed-sampler@example.invalid"],
+    primaryCheckout,
+  );
+  writeFileSync(join(primaryCheckout, "tracked.txt"), "base\n");
+  runGit(["add", "tracked.txt"], primaryCheckout);
+  runGit(["commit", "-m", "base"], primaryCheckout);
+  runGit(
+    ["worktree", "add", "-b", "feature", assignedCheckout],
+    primaryCheckout,
+  );
+  writeFileSync(join(assignedCheckout, "tracked.txt"), "base\nchange\n");
+  const repoKey = resolve(
+    primaryCheckout,
+    runGit(["rev-parse", "--git-common-dir"], primaryCheckout),
+  );
+  const branch = "feature";
   process.env.HERDR_WORKSPACE_ID = assignedWorkspace;
   const assignment = {
     version: 2 as const,
@@ -21962,7 +22020,7 @@ test("managed Lead marker focuses its verified Manager pane", async (t) => {
     repoKey,
     branch,
     text: "assigned work",
-    checkoutPath: process.cwd(),
+    checkoutPath: assignedCheckout,
   };
   writeProjectAssignment(supervisionRuntime(), assignment);
   const managerId = randomUUID();
@@ -21996,6 +22054,16 @@ test("managed Lead marker focuses its verified Manager pane", async (t) => {
     },
   };
   const focused: string[] = [];
+  const gitCalls: string[][] = [];
+  const statusTicks: TimerHandler[] = [];
+  const originalSetInterval = globalThis.setInterval;
+  globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
+    if (delay === 10_000) statusTicks.push(callback);
+    return originalSetInterval(() => undefined, 60_000);
+  }) as typeof setInterval;
+  t.after(() => {
+    globalThis.setInterval = originalSetInterval;
+  });
   const executor = leadExec(
     "managed-marker-agent",
     "idle",
@@ -22003,6 +22071,18 @@ test("managed Lead marker focuses its verified Manager pane", async (t) => {
   );
   const pi = fakePi({
     exec: (command, args, options) => {
+      if (command === "git") {
+        gitCalls.push(args);
+        const result = spawnSync("git", args, {
+          cwd: assignedCheckout,
+          encoding: "utf8",
+        });
+        return {
+          stdout: result.stdout,
+          stderr: result.stderr,
+          code: result.status ?? 1,
+        };
+      }
       if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
         return {
           stdout: JSON.stringify({
@@ -22016,7 +22096,7 @@ test("managed Lead marker focuses its verified Manager pane", async (t) => {
               worktrees: [
                 {
                   open_workspace_id: assignedWorkspace,
-                  path: process.cwd(),
+                  path: assignedCheckout,
                   is_linked_worktree: true,
                 },
               ],
@@ -22053,7 +22133,7 @@ test("managed Lead marker focuses its verified Manager pane", async (t) => {
   const ctx = fakeContext() as any;
   ctx.mode = "tui";
   ctx.hasUI = true;
-  ctx.cwd = process.cwd();
+  ctx.cwd = assignedCheckout;
   let widget: StatusWidget | undefined;
   const notices: string[] = [];
   ctx.ui = {
@@ -22078,14 +22158,24 @@ test("managed Lead marker focuses its verified Manager pane", async (t) => {
       force: true,
     });
     delete process.env.HERDR_SOCKET_PATH;
+    rmSync(gitRoot, { recursive: true, force: true });
     setLeadEnvironment();
   });
   await pi.events.get("session_start")![0](undefined, ctx);
   await t.waitFor(() =>
-    assert.match(widget?.render(120).join("\n") ?? "", /managed/u),
+    assert.match(widget?.render(120)[0] ?? "", /· managed(?:\s|$)/u),
   );
   assert.ok(widget);
-  widget!.render(120);
+  await t.waitFor(() => assert.match(widget!.render(120)[0]!, /\+1 -0\*/u));
+  assert.equal(gitCalls.filter((args) => args[1] === "status").length, 1);
+  const probesAfterSample = gitCalls.length;
+  for (let i = 0; i < 3; i++) widget!.render(120);
+  assert.equal(
+    gitCalls.length,
+    probesAfterSample,
+    "rendering uses the cached sample",
+  );
+
   widget!.handleMouse({
     type: "click",
     button: "left",
@@ -22096,6 +22186,42 @@ test("managed Lead marker focuses its verified Manager pane", async (t) => {
   await t.waitFor(() =>
     assert.deepEqual(focused, [managerPaneId], notices.join(" | ")),
   );
+
+  const statusTick = statusTicks[0];
+  assert.equal(
+    typeof statusTick,
+    "function",
+    "standalone status reconciliation is active",
+  );
+  const snapshotCalls = () =>
+    pi.calls.filter((args) => args[0] === "api" && args[1] === "snapshot")
+      .length;
+  const previousSnapshotCalls = snapshotCalls();
+  (statusTick as () => void)();
+  await t.waitFor(() => assert.ok(snapshotCalls() > previousSnapshotCalls));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(
+    gitCalls.filter((args) => args[1] === "status").length,
+    1,
+    "a successful refresh within 30 seconds reuses the cached sample",
+  );
+
+  rmSync(projectAssignmentPath(supervisionRuntime(), repoKey, branch), {
+    force: true,
+  });
+  const unavailableSnapshotCalls = snapshotCalls();
+  (statusTick as () => void)();
+  await t.waitFor(() => assert.ok(snapshotCalls() > unavailableSnapshotCalls));
+  await t.waitFor(() =>
+    assert.match(widget!.render(120)[0]!, /managed · unavailable/u),
+  );
+  assert.doesNotMatch(widget!.render(120)[0]!, /\+1 -0\*/u);
+  assert.equal(
+    gitCalls.filter((args) => args[1] === "status").length,
+    1,
+    "an unavailable assignment clears telemetry without another Git probe",
+  );
+  widget!.render(120);
 });
 
 test("valid managed leaf agents receive identity-only TUI presentation", async (t) => {
@@ -22480,6 +22606,63 @@ test("restarting status runtime replaces and unreferences its timer", async (t) 
   assert.equal(timers.size, 1);
   assert.equal(timers.has(previous), false);
   assert.equal(unrefCalls, 2);
+});
+
+test("status Git observation hooks run only for fresh standalone-widget snapshots", async (t) => {
+  const { createAgentStatusRuntime } = await import("./agent-controller.ts");
+  const runtime = createAgentStatusRuntime();
+  let loadCount = 0;
+  let freshCount = 0;
+  let stopCount = 0;
+  runtime.configure({
+    loadSnapshot: async () => {
+      loadCount++;
+      if (loadCount === 2) throw new Error("status unavailable");
+      return {
+        agents: [],
+        stale: false,
+        unavailable: false,
+        execution: { kind: "managed", lifecycle: "assigned" },
+      };
+    },
+    pendingStartEntries: () => [],
+    hasPendingStart: () => false,
+    clearPendingStart: () => false,
+    runtimeForLabel: () => undefined,
+    ownToolsSnapshot: () => ({}),
+    onFreshStatus: () => freshCount++,
+    onWidgetStop: () => stopCount++,
+  });
+  const ctx = fakeContext() as any;
+  ctx.mode = "tui";
+  ctx.hasUI = true;
+  ctx.ui = {
+    setWidget: (_key: string, content: any) => {
+      if (typeof content === "function")
+        content(
+          { requestRender: () => undefined },
+          {
+            fg: (_color: string, value: string) => value,
+            bold: (value: string) => value,
+          },
+        );
+    },
+  };
+  t.after(() => runtime.shutdown());
+
+  runtime.prime(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(freshCount, 0, "priming is not a standalone widget observation");
+  runtime.start(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(freshCount, 1);
+  runtime.requestRefresh();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(freshCount, 1, "failed snapshots do not trigger Git sampling");
+  assert.equal(runtime.isWidgetActive(), true);
+  runtime.clear();
+  assert.equal(runtime.isWidgetActive(), false);
+  assert.ok(stopCount >= 1);
 });
 
 test("TUI status widget is registered as a Pi component factory", async (t) => {

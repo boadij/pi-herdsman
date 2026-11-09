@@ -180,6 +180,24 @@ released space. The branch remains the navigation target; its suffix is not
 clickable. Git indicators are advisory display values only and do not
 establish project status, authority, or integration readiness.
 
+### Managed Lead Git indicators
+
+The standalone status widget for an assigned managed Lead can show the same
+local PR-style comparison in its header. It is available only while the exact
+managed session has a currently verified assignment and the latest status
+snapshot is fresh and assigned. The suffix is right-aligned, advisory, and
+non-clickable; it appears only when the complete value fits without truncating
+the existing header. Dirty-only state is shown as `*`; a verified clean zero
+diff is `±0`, while an unavailable comparison has no suffix. Untracked changes
+make the checkout dirty but do not contribute numeric totals.
+
+Manager and managed Lead widgets share the same merge-base and net working-tree
+comparison semantics, but sample independently in their own processes. Their
+separate caches and schedules may therefore show temporarily different
+observations. Managed Lead sampling is triggered by the existing status
+reconciliation and has a minimum interval of 30 seconds; it adds no timer or
+filesystem watcher. Ordinary Leads and Agents do not receive these indicators.
+
 ## Installation
 
 The widget is installed only when the current session has a valid supported
