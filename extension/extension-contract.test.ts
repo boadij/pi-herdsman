@@ -172,6 +172,10 @@ function assertPortableToolSchema(
   assert.equal(tool.constrainedSampling, undefined, tool.name);
 }
 
+function emptyPromptSections(): Record<string, string> {
+  return {};
+}
+
 const REGISTERED_ROLE_TOOLS = [
   "list_agents",
   "delegate_agent",
@@ -2378,10 +2382,12 @@ test("active chief describes authoritative remote ask projection", async () => {
   assert.equal(beforeStart?.message, undefined);
   assert.deepEqual(installedIntervals, []);
   assert.ok(pi.calls.filter(isApiSnapshot).length > snapshotsBeforePreparation);
-  const contextCall = pi.sentMessageCalls.findLast(
-    ({ message }: any) =>
-      message?.customType === "pi-herdsman-supervision-context",
-  );
+  const contextCall = [...pi.sentMessageCalls]
+    .reverse()
+    .find(
+      ({ message }: any) =>
+        message?.customType === "pi-herdsman-supervision-context",
+    );
   assert.ok(contextCall);
   assert.deepEqual(contextCall.options, { triggerTurn: false });
   assert.equal((contextCall.message as any).display, false);
@@ -3036,7 +3042,10 @@ test("chief activation reports unresolved mailbox state instead of owned work", 
     await pi.events.get("session_start")![0](undefined, context);
     const ordinaryEvent = {
       systemPrompt: "base",
-      systemPromptOptions: { sections: {}, contextFiles: [] },
+      systemPromptOptions: {
+        sections: emptyPromptSections(),
+        contextFiles: [],
+      },
     };
     await pi.events.get("before_agent_start")![0](ordinaryEvent, context);
     assert.match(
@@ -3061,7 +3070,10 @@ test("chief activation reports unresolved mailbox state instead of owned work", 
     await command.handler("leave", context);
     const restoredEvent = {
       systemPrompt: "base",
-      systemPromptOptions: { sections: {}, contextFiles: [] },
+      systemPromptOptions: {
+        sections: emptyPromptSections(),
+        contextFiles: [],
+      },
     };
     await pi.events.get("before_agent_start")![0](restoredEvent, context);
     const restored =
@@ -3158,10 +3170,12 @@ test("a replacement chief never falls back to the previous session supervision",
     await pi.commandOptions.get("chief").handler("", context);
     const first = await beforeStart();
     assert.equal(first?.message, undefined);
-    let call = pi.sentMessageCalls.findLast(
-      ({ message }: any) =>
-        message?.customType === "pi-herdsman-supervision-context",
-    )!;
+    let call = [...pi.sentMessageCalls]
+      .reverse()
+      .find(
+        ({ message }: any) =>
+          message?.customType === "pi-herdsman-supervision-context",
+      )!;
     assert.deepEqual(call.options, { triggerTurn: false });
     assert.equal((call.message as any).display, false);
     assert.match(String((call.message as any).content), /status="fresh"/);
@@ -3171,10 +3185,12 @@ test("a replacement chief never falls back to the previous session supervision",
     await sessionStart(undefined, context);
     await pi.commandOptions.get("chief").handler("", context);
     assert.equal((await beforeStart())?.message, undefined);
-    call = pi.sentMessageCalls.findLast(
-      ({ message }: any) =>
-        message?.customType === "pi-herdsman-supervision-context",
-    )!;
+    call = [...pi.sentMessageCalls]
+      .reverse()
+      .find(
+        ({ message }: any) =>
+          message?.customType === "pi-herdsman-supervision-context",
+      )!;
     assert.equal((call.message as any).display, false);
     assert.match(String((call.message as any).content), /status="unavailable"/);
     assert.doesNotMatch(
@@ -3295,10 +3311,12 @@ test("an obsolete background supervision refresh cannot publish after chief tran
     await pi.commandOptions.get("chief").handler("", context);
     const first = await beforeStart();
     assert.equal(first?.message, undefined);
-    let call = pi.sentMessageCalls.findLast(
-      ({ message }: any) =>
-        message?.customType === "pi-herdsman-supervision-context",
-    )!;
+    let call = [...pi.sentMessageCalls]
+      .reverse()
+      .find(
+        ({ message }: any) =>
+          message?.customType === "pi-herdsman-supervision-context",
+      )!;
     assert.deepEqual(call.options, { triggerTurn: false });
     assert.equal((call.message as any).display, false);
     assert.match(String((call.message as any).content), /status="fresh"/);
@@ -3315,10 +3333,12 @@ test("an obsolete background supervision refresh cannot publish after chief tran
     releaseBlocked();
     await background;
     assert.equal((await beforeStart())?.message, undefined);
-    call = pi.sentMessageCalls.findLast(
-      ({ message }: any) =>
-        message?.customType === "pi-herdsman-supervision-context",
-    )!;
+    call = [...pi.sentMessageCalls]
+      .reverse()
+      .find(
+        ({ message }: any) =>
+          message?.customType === "pi-herdsman-supervision-context",
+      )!;
     assert.equal((call.message as any).display, false);
     assert.match(String((call.message as any).content), /status="unavailable"/);
     assert.doesNotMatch(
@@ -3929,7 +3949,7 @@ test("malformed persisted role fails closed without authoritative lead state", a
   await pi.events.get("session_start")![0](undefined, context);
   const promptEvent = {
     systemPrompt: "base",
-    systemPromptOptions: { sections: {}, contextFiles: [] },
+    systemPromptOptions: { sections: emptyPromptSections(), contextFiles: [] },
   };
   await pi.events.get("before_agent_start")![0](promptEvent, context);
   assert.equal(
@@ -3981,7 +4001,10 @@ test("unrestorable persisted Chief role selects the neutral charter", async () =
     await pi.events.get("session_start")![0](undefined, context);
     const promptEvent = {
       systemPrompt: "base",
-      systemPromptOptions: { sections: {}, contextFiles: [] },
+      systemPromptOptions: {
+        sections: emptyPromptSections(),
+        contextFiles: [],
+      },
     };
     await pi.events.get("before_agent_start")![0](promptEvent, context);
     assert.equal(
@@ -4029,7 +4052,10 @@ test("malformed Chief coordination emits its diagnostic and suspends the role", 
     await pi.events.get("session_start")![0](undefined, context);
     const promptEvent = {
       systemPrompt: "base",
-      systemPromptOptions: { sections: {}, contextFiles: [] },
+      systemPromptOptions: {
+        sections: emptyPromptSections(),
+        contextFiles: [],
+      },
     };
     await pi.events.get("before_agent_start")![0](promptEvent, context);
     assert.equal(
@@ -4343,7 +4369,10 @@ test("replaced Lead strategy keeps its protected charter and coordination tools"
     await pi.commandOptions.get("lead").handler("orchestrate", context);
     const event = {
       systemPrompt: "base",
-      systemPromptOptions: { sections: {}, contextFiles: [] },
+      systemPromptOptions: {
+        sections: emptyPromptSections(),
+        contextFiles: [],
+      },
     };
     await pi.events.get("before_agent_start")![0](event, context);
     const sections = event.systemPromptOptions.sections;
@@ -4449,7 +4478,7 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
         toolGuidelines: {},
         promptGuidelines: [],
         appendSystemPrompt: "",
-        sections: {},
+        sections: emptyPromptSections(),
         contextFiles: [],
         skills: [],
       } satisfies NormalizedBuildSystemPromptOptions,
@@ -4597,7 +4626,10 @@ test("managed Lead prompt keeps the managed charter without an active assignment
     );
     const event = {
       systemPrompt: "base",
-      systemPromptOptions: { sections: {}, contextFiles: [] },
+      systemPromptOptions: {
+        sections: emptyPromptSections(),
+        contextFiles: [],
+      },
     };
     await pi.events.get("before_agent_start")![0](event, context);
     const charter = event.systemPromptOptions.sections.pi_herdsman_role;
@@ -4980,7 +5012,10 @@ test("managed Lead prompt keeps the managed charter with an assigned session", a
     );
     const event = {
       systemPrompt: "base",
-      systemPromptOptions: { sections: {}, contextFiles: [] },
+      systemPromptOptions: {
+        sections: emptyPromptSections(),
+        contextFiles: [],
+      },
     };
     await pi.events.get("before_agent_start")![0](event, context);
     const charter = event.systemPromptOptions.sections.pi_herdsman_role;
@@ -5060,7 +5095,10 @@ test("managed Lead prompt remains managed after its assignment is replaced", asy
     assert.equal(result.isError, true, "retired identity cannot publish");
     const event = {
       systemPrompt: "base",
-      systemPromptOptions: { sections: {}, contextFiles: [] },
+      systemPromptOptions: {
+        sections: emptyPromptSections(),
+        contextFiles: [],
+      },
     };
     await pi.events.get("before_agent_start")![0](event, context);
     const charter = event.systemPromptOptions.sections.pi_herdsman_role;
@@ -5174,7 +5212,10 @@ test("Manager projection conflicts every duplicate checkout claimant in either o
     await pi.events.get("session_start")![0](undefined, context);
     const promptEvent = () => ({
       systemPrompt: "base",
-      systemPromptOptions: { sections: {}, contextFiles: [] },
+      systemPromptOptions: {
+        sections: emptyPromptSections(),
+        contextFiles: [],
+      },
     });
     const beforeRoleTransition = promptEvent();
     await pi.events.get("before_agent_start")![0](
@@ -5765,7 +5806,10 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
     await pi.events.get("session_start")![0](undefined, context);
     const promptEvent = () => ({
       systemPrompt: "base",
-      systemPromptOptions: { sections: {}, contextFiles: [] },
+      systemPromptOptions: {
+        sections: emptyPromptSections(),
+        contextFiles: [],
+      },
     });
     const beforeRoleTransition = promptEvent();
     await pi.events.get("before_agent_start")![0](
@@ -5787,7 +5831,10 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
     );
     const event = {
       systemPrompt: "base",
-      systemPromptOptions: { sections: {}, contextFiles: [] },
+      systemPromptOptions: {
+        sections: emptyPromptSections(),
+        contextFiles: [],
+      },
     };
     await pi.events.get("before_agent_start")![0](event, context);
     const prompt = event.systemPromptOptions.sections.pi_herdsman_role;
@@ -6215,10 +6262,12 @@ test("leaf agents and active Chiefs do not receive agent definition rosters", as
   assert.match(prompt?.systemPrompt ?? "", /Chief/);
   assert.doesNotMatch(prompt?.systemPrompt ?? "", /<agent_definitions>/);
   assert.equal(prompt?.message, undefined);
-  const contextCall = chief.sentMessageCalls.findLast(
-    ({ message }: any) =>
-      message?.customType === "pi-herdsman-supervision-context",
-  );
+  const contextCall = [...chief.sentMessageCalls]
+    .reverse()
+    .find(
+      ({ message }: any) =>
+        message?.customType === "pi-herdsman-supervision-context",
+    );
   assert.ok(contextCall);
   assert.deepEqual(contextCall.options, { triggerTurn: false });
   assert.equal((contextCall.message as any).display, false);
@@ -6263,10 +6312,12 @@ test("first failed chief supervision refresh is explicitly unavailable", async (
     context,
   );
   assert.equal(result?.message, undefined);
-  const contextCall = pi.sentMessageCalls.findLast(
-    ({ message }: any) =>
-      message?.customType === "pi-herdsman-supervision-context",
-  );
+  const contextCall = [...pi.sentMessageCalls]
+    .reverse()
+    .find(
+      ({ message }: any) =>
+        message?.customType === "pi-herdsman-supervision-context",
+    );
   assert.ok(contextCall);
   assert.deepEqual(contextCall.options, { triggerTurn: false });
   assert.equal((contextCall.message as any).display, false);

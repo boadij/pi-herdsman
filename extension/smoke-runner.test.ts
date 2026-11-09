@@ -1994,8 +1994,9 @@ test("failure artifact propagates only fixed cleanup substep categories", async 
     ctx,
     {
       removeFile: async () => {
-        const error = new Error("PRIVATE auth path");
-        error.code = "ENOENT";
+        const error = Object.assign(new Error("PRIVATE auth path"), {
+          code: "ENOENT",
+        });
         throw error;
       },
       herdrCommand: async () => {
@@ -3815,8 +3816,9 @@ test("Manager handoff cleanup owns the worktree before Lead readiness", async ()
   const result = await cleanup(paths, ctx.owned, cleanupCtx, {
     remove: async () => {},
     removeFile: async () => {
-      const error = new Error("missing auth link");
-      error.code = "ENOENT";
+      const error = Object.assign(new Error("missing auth link"), {
+        code: "ENOENT",
+      });
       throw error;
     },
     herdrCommand: async (args) => {
@@ -3826,8 +3828,7 @@ test("Manager handoff cleanup owns the worktree before Lead readiness", async ()
       return {};
     },
     runCommand: async () => {
-      const error = new Error("branch absent");
-      error.code = 1;
+      const error = Object.assign(new Error("branch absent"), { code: 1 });
       throw error;
     },
   });
@@ -3843,8 +3844,9 @@ test("Manager handoff cleanup owns the worktree before Lead readiness", async ()
     {
       remove: async () => {},
       removeFile: async () => {
-        const error = new Error("missing auth link");
-        error.code = "ENOENT";
+        const error = Object.assign(new Error("missing auth link"), {
+          code: "ENOENT",
+        });
         throw error;
       },
       herdrCommand: async () => ({ worktrees: [worktree] }),

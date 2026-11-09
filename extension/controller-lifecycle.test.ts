@@ -69,6 +69,27 @@ function projectMessageResult(
   };
 }
 
+type HerdRunTestEntry = {
+  customType: "pi-herdsman-herd-run";
+  data: Record<string, unknown>;
+};
+type HerdRunTestEntryWithReportId = HerdRunTestEntry & {
+  data: Record<string, unknown> & { reportId: string };
+};
+
+function isHerdRunEntry(entry: unknown): entry is HerdRunTestEntry {
+  return (
+    typeof entry === "object" &&
+    entry !== null &&
+    "customType" in entry &&
+    entry.customType === "pi-herdsman-herd-run" &&
+    "data" in entry &&
+    typeof entry.data === "object" &&
+    entry.data !== null &&
+    !Array.isArray(entry.data)
+  );
+}
+
 test("saved-session model selection respects native branch chronology and virtual models", async () => {
   const { resolveSavedSessionModelSelection } =
     await import("./agent-controller.ts");
@@ -4739,8 +4760,8 @@ test("unassigned Lead and Manager failure reports replay the exact Chief payload
         assert.ok(Number.isFinite(createdAt));
         assert.equal(
           pi.entries.find(
-            (entry: any) =>
-              entry.customType === "pi-herdsman-herd-run" &&
+            (entry): entry is HerdRunTestEntry =>
+              isHerdRunEntry(entry) &&
               entry.data?.phase === "report_pending" &&
               entry.data?.reportId === reportId,
           )?.data?.createdAt,
@@ -4769,7 +4790,8 @@ test("unassigned Lead and Manager failure reports replay the exact Chief payload
     herd.beforeSettle({ outcome: "error" });
     await herd.agentSettled(context, false);
     const reportId = pi.entries.find(
-      (entry: any) => entry.data?.phase === "report_pending",
+      (entry): entry is HerdRunTestEntry =>
+        isHerdRunEntry(entry) && entry.data.phase === "report_pending",
     )?.data?.reportId;
     for (let i = pi.entries.length - 1; i >= 0; i--) {
       if ((pi.entries[i] as any).data?.phase === "report_sent")
@@ -6160,7 +6182,10 @@ test("legacy herd-ID recovery failure receipt does not suppress later successful
   );
   let childActive = true;
   const messages: string[] = [];
-  const projectMessages = new Map([
+  const projectMessages = new Map<
+    string,
+    { text: string; kind: string | undefined }
+  >([
     [herdId, { text: "Earlier recovery failure", kind: "execution_failure" }],
   ]);
   const createRuntime = () =>
@@ -6224,12 +6249,14 @@ test("legacy herd-ID recovery failure receipt does not suppress later successful
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.deepEqual(messages, ["Herd run settled.\n\nNew verified summary"]);
   const successIntent = pi.entries.find(
-    (entry: any) =>
+    (entry): entry is HerdRunTestEntryWithReportId =>
+      isHerdRunEntry(entry) &&
       entry.data?.phase === "report_pending" &&
       (entry.data?.kind === "herd_settlement" ||
         entry.data?.kind === "successful_handoff" ||
         entry.data?.kind === undefined) &&
-      entry.data?.runReportId === herdId,
+      entry.data?.runReportId === herdId &&
+      typeof entry.data.reportId === "string",
   );
   assert.ok(successIntent);
   assert.notEqual(successIntent.data.reportId, herdId);
@@ -6350,8 +6377,10 @@ test("cancelled Lead report stays separate from later successful herd handoff", 
   );
   assert.equal(
     herdReportId,
-    pi.entries.find((entry: any) => entry.data?.phase === "started")?.data
-      ?.reportId,
+    pi.entries.find(
+      (entry): entry is HerdRunTestEntry =>
+        isHerdRunEntry(entry) && entry.data.phase === "started",
+    )?.data.reportId,
   );
   assert.notEqual(successful.data.reportId, cancellation.data.reportId);
   assert.equal(
@@ -7124,14 +7153,20 @@ test("legacy linked-only cancellation remains distinct from successful herd sett
   await herd.agentSettled(context, true);
 
   const started = pi.entries.find(
-    (entry: any) => entry.data?.phase === "started",
-  ) as any;
+    (entry): entry is HerdRunTestEntryWithReportId =>
+      isHerdRunEntry(entry) &&
+      entry.data.phase === "started" &&
+      typeof entry.data.reportId === "string",
+  );
+  assert.ok(started);
   const sent = pi.entries.find(
     (entry: any) => entry.data?.phase === "report_sent",
   ) as any;
   assert.equal(
-    pi.entries.find((entry: any) => entry.data?.phase === "report_pending")
-      ?.data.kind,
+    pi.entries.find(
+      (entry): entry is HerdRunTestEntry =>
+        isHerdRunEntry(entry) && entry.data.phase === "report_pending",
+    )?.data.kind,
     "execution_cancelled",
   );
   assert.equal(sent.data.runReportId, started.data.reportId);

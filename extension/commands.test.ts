@@ -2441,7 +2441,7 @@ test("Manager restoration does not claim a lease when identity changes during di
   let claims = 0;
   await resolveLeadControllerRole(state, fakeContext() as any, "manager", {
     identity: { paneId: "pane", tabId: "tab", workspaceId: "workspace" },
-    build: "test",
+    build: HERDSMAN_BUILD,
     localRepositoryScope: async () => {
       identityCurrent = false;
       return { isPrimary: true, repoKey: "repo" };
@@ -2494,7 +2494,7 @@ test("superseded Manager restoration releases its lease without replacing curren
       "lead",
       {
         identity: { paneId: "pane", tabId: "tab", workspaceId: "workspace" },
-        build: "test",
+        build: HERDSMAN_BUILD,
         localRepositoryScope: async () => ({
           isPrimary: true,
           repoKey: "repo",
@@ -2692,7 +2692,7 @@ test("persisted Chief restores the saved ordinary execution profile on exit", as
     );
     const promptEvent = {
       systemPrompt: "base",
-      systemPromptOptions: { sections: {} },
+      systemPromptOptions: { sections: {} as Record<string, string> },
     };
     await pi.events.get("before_agent_start")![0](promptEvent, context);
     assert.match(
@@ -3752,7 +3752,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     const leadPromptEvent = {
       systemPrompt: "base",
-      systemPromptOptions: { sections: {}, contextFiles: [] },
+      systemPromptOptions: {
+        sections: {} as Record<string, string>,
+        contextFiles: [],
+      },
     };
     const leadPrompt = await first.events.get("before_agent_start")![0](
       leadPromptEvent,
@@ -3847,7 +3850,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     const managerPromptEvent = {
       systemPrompt: "base",
-      systemPromptOptions: { sections: {}, contextFiles: [] },
+      systemPromptOptions: {
+        sections: {} as Record<string, string>,
+        contextFiles: [],
+      },
     };
     const managerPrompt = await first.events.get("before_agent_start")![0](
       managerPromptEvent,
@@ -23231,7 +23237,10 @@ test("TUI status refresh consumes the coherent Herdr session snapshot", async (t
   assert.doesNotMatch(rendered, /\[read, bash, ask_owner\]/);
   const promptEvent = {
     systemPrompt: "base",
-    systemPromptOptions: { sections: {}, contextFiles: [] },
+    systemPromptOptions: {
+      sections: {} as Record<string, string>,
+      contextFiles: [],
+    },
   };
   await pi.events.get("before_agent_start")![0](promptEvent, context);
   assert.match(
