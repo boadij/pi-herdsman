@@ -1729,6 +1729,7 @@ export function formatSupervisionContext(
     role?: "chief" | "manager";
     targets?: ReadonlyMap<string, string>;
     git?: {
+      managerSession?: { branch: string | null; head: string };
       manager?: { branch: string | null; head: string };
       assignments?: ReadonlyMap<
         string,
@@ -1800,6 +1801,13 @@ export function formatSupervisionContext(
   ];
   const sections: string[] = [];
   const gitLines = [
+    ...(options.git?.managerSession
+      ? [
+          "  manager_session:",
+          `    branch: ${supervisionValue(options.git.managerSession.branch ?? "detached")}`,
+          `    head: ${options.git.managerSession.head}`,
+        ]
+      : []),
     ...(options.git?.manager
       ? [
           "  manager_checkout:",

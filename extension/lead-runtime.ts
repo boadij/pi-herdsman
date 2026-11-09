@@ -6533,6 +6533,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         const targets = new Map<string, string>();
         let git:
           | {
+              managerSession?: { branch: string | null; head: string };
               manager?: { branch: string | null; head: string };
               assignments: Map<string, { branch: string | null; head: string }>;
               supervisedLeads: Map<
@@ -6567,6 +6568,19 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                 managerAuthority.repoKey,
               )
             ) {
+              const sessionRootResult = ctx.cwd
+                ? await host.pi.exec("git", ["rev-parse", "--show-toplevel"], {
+                    cwd: ctx.cwd,
+                    signal: ctx.signal,
+                    timeout: 3_000,
+                  })
+                : undefined;
+              const sessionRoot =
+                sessionRootResult?.code === 0 &&
+                !sessionRootResult.killed &&
+                !sessionRootResult.stderr?.trim()
+                  ? String(sessionRootResult.stdout ?? "").trim()
+                  : undefined;
               const result = await host.pi.exec(
                 "git",
                 ["worktree", "list", "--porcelain", "-z"],
@@ -6591,6 +6605,9 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                   : undefined;
               };
               const manager = observation(checkout);
+              const managerSession = sessionRoot
+                ? observation(sessionRoot)
+                : undefined;
               if (manager) {
                 const assignments = new Map<
                   string,
@@ -6617,7 +6634,12 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                     const observed = observation(workspaces[0]!.path);
                     if (observed) supervisedLeads.set(lead.lead, observed);
                   }
-                git = { manager, assignments, supervisedLeads };
+                git = {
+                  manager,
+                  ...(managerSession ? { managerSession } : {}),
+                  assignments,
+                  supervisedLeads,
+                };
               }
             }
           } catch {

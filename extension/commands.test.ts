@@ -15659,6 +15659,79 @@ test("Manager supervision discards Git context when its generation changes durin
   assert.equal(readLatest, false);
 });
 
+test("Manager supervision distinguishes its session checkout from the primary checkout", async (t) => {
+  const { createLeadSupervisionRuntime } = await import("./lead-runtime.ts");
+  const { formatSupervisionContext } = await import("./presentation.ts");
+  const root = mkdtempSync(join(tmpdir(), "manager-session-git-"));
+  const primary = join(root, "primary");
+  const session = join(root, "session");
+  mkdirSync(primary);
+  mkdirSync(session);
+  mkdirSync(join(primary, ".git"));
+  mkdirSync(join(session, ".git"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const repoKey = join(primary, ".git");
+  const state: any = {
+    chiefModeGeneration: 0,
+    sessionGeneration: 1,
+    roleSuspended: false,
+    managerLease: { descriptor: { repoKey, workspaceId: "manager" } },
+  };
+  const snapshot: any = {
+    managerCheckoutPath: primary,
+    work: [],
+    leads: [],
+  };
+  let context: string | undefined;
+  let inventoryScans = 0;
+  const runtime = createLeadSupervisionRuntime({
+    state,
+    activeRole: () => "manager",
+    isCurrentChief: () => false,
+    currentManager: async () => state.managerLease.descriptor,
+    herdrSessionSnapshot: async () => ({ agents: [] }),
+    managedAgentSnapshots: async () => ({ agents: [] }),
+    loadSnapshot: async () => snapshot,
+    presentationReports: () => [],
+    pi: {
+      exec: async (_command: string, args: string[], options: any) => {
+        if (args[0] === "rev-parse" && args[1] === "--show-toplevel")
+          return {
+            code: 0,
+            stdout: options.cwd === session ? session : primary,
+          };
+        if (args[0] === "rev-parse") return { code: 0, stdout: repoKey };
+        if (args[0] === "worktree") {
+          inventoryScans++;
+          return {
+            code: 0,
+            stdout:
+              [
+                `worktree ${primary}\0HEAD ${"a".repeat(40)}\0branch refs/heads/main\0`,
+                `worktree ${session}\0HEAD ${"b".repeat(40)}\0branch refs/heads/manager-task\0`,
+              ].join("\0") + "\0",
+          };
+        }
+        throw new Error(`Unexpected Git command: ${args.join(" ")}`);
+      },
+    },
+    formatContext: (_snapshot: unknown, options: any) => {
+      context = formatSupervisionContext(snapshot, options);
+      return context;
+    },
+    latestMessageText: async () => undefined,
+  } as any);
+  const ctx = fakeContext() as any;
+  ctx.cwd = session;
+  ctx.mode = "rpc";
+  await runtime.prepareMessage(ctx);
+  assert.equal(inventoryScans, 1);
+  assert.match(context!, /manager_checkout:[\s\S]*?branch: main/);
+  assert.match(context!, /manager_session:[\s\S]*?branch: manager-task/);
+  assert.match(context!, new RegExp("a".repeat(40)));
+  assert.match(context!, new RegExp("b".repeat(40)));
+});
+
 test("Manager exact reports enrich only the selected Lead while preserving fleet identities", async (t) => {
   const { createLeadSupervisionRuntime } = await import("./lead-runtime.ts");
   const repo = mkdtempSync(join(tmpdir(), "exact-report-"));

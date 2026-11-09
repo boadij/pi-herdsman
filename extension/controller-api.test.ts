@@ -5120,7 +5120,7 @@ async function runManagerStartupScenario(
           assert.ok(inventories.length >= 2);
           for (const inventory of inventories)
             assert.deepEqual(parseGitWorktreeInventory(inventory), [
-              { path: ctx.cwd, branch: "main" },
+              { path: ctx.cwd, head: "a".repeat(40), branch: "main" },
             ]);
           assert.deepEqual(assignments, []);
           assert.equal(
