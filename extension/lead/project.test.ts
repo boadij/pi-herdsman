@@ -22,6 +22,7 @@ const {
   createLeadProjectRuntime,
   isFreshLeadStartupAttestation,
   parseGitWorktreeInventory,
+  captureSenderEnvironment,
 } = await import("./project.ts");
 const { readProjectAssignment, writeProjectAssignment } =
   await import("../supervision.ts");
@@ -1680,8 +1681,8 @@ test("Git worktree porcelain inventory rejects incomplete or ambiguous records",
       `worktree ${root}\0HEAD ${hash}\0branch refs/heads/main\0\0worktree ${linked}\0HEAD ${hash}\0branch refs/heads/topic\0\0`,
     ),
     [
-      { path: root, branch: "main" },
-      { path: linked, branch: "topic" },
+      { path: root, head: hash, branch: "main" },
+      { path: linked, head: hash, branch: "topic" },
     ],
   );
   assert.equal(
@@ -1698,7 +1699,7 @@ test("Git worktree porcelain inventory rejects incomplete or ambiguous records",
     parseGitWorktreeInventory(
       `worktree ${linked}\0HEAD ${hash}\0future-attribute value\0branch refs/heads/topic\0locked active\0\0`,
     ),
-    [{ path: linked, branch: "topic", locked: true }],
+    [{ path: linked, head: hash, branch: "topic", locked: true }],
   );
   assert.equal(
     parseGitWorktreeInventory(
@@ -1710,16 +1711,56 @@ test("Git worktree porcelain inventory rejects incomplete or ambiguous records",
     parseGitWorktreeInventory(
       `worktree ${linked}\0HEAD ${hash}\0branch refs/heads/topic\0prunable missing\0\0`,
     ),
-    [{ path: linked, branch: "topic", prunable: true }],
+    [{ path: linked, head: hash, branch: "topic", prunable: true }],
   );
   assert.deepEqual(
     parseGitWorktreeInventory(`worktree ${linked}\0HEAD ${hash}\0detached\0\0`),
-    [{ path: linked, detached: true }],
+    [{ path: linked, head: hash, detached: true }],
   );
   assert.deepEqual(
     parseGitWorktreeInventory(
       `worktree ${linked}\0HEAD ${hash}\0detached\0prunable gitdir file points to non-existent location\0\0`,
     ),
-    [{ path: linked, detached: true, prunable: true }],
+    [{ path: linked, head: hash, detached: true, prunable: true }],
+  );
+});
+
+test("sender environment capture keeps cwd on Git failures and accepts only a unique worktree", async () => {
+  const root = join(tmpdir(), `capture-${randomUUID()}`);
+  const cwd = join(root, "nested");
+  mkdirSync(cwd, { recursive: true });
+  const hash = "a".repeat(40);
+  const ctx = { cwd, signal: undefined } as any;
+  const calls: string[] = [];
+  const pi = {
+    exec: async (_bin: string, args: string[]) => {
+      calls.push(args.join(" "));
+      return args[0] === "rev-parse"
+        ? { code: 0, stdout: `${root}\n`, stderr: "" }
+        : {
+            code: 0,
+            stdout: `worktree ${root}\0HEAD ${hash}\0branch refs/heads/topic\0\0`,
+            stderr: "",
+          };
+    },
+  } as any;
+  assert.deepEqual(await captureSenderEnvironment(pi, ctx), {
+    cwd,
+    git: { worktreeRoot: root, branch: "topic", head: hash },
+  });
+  assert.deepEqual(calls, [
+    "rev-parse --show-toplevel",
+    "worktree list --porcelain -z",
+  ]);
+  assert.deepEqual(
+    await captureSenderEnvironment(
+      { exec: async () => ({ code: 1, stderr: "not git" }) } as any,
+      ctx,
+    ),
+    { cwd },
+  );
+  assert.equal(
+    await captureSenderEnvironment(pi, { ...ctx, cwd: "x" }),
+    undefined,
   );
 });

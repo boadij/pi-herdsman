@@ -159,6 +159,71 @@ test("automatic session names preserve existing Pi naming decisions", () => {
   );
 });
 
+test("Manager supervision context adds bounded Git observations", () => {
+  const context = formatSupervisionContext(
+    { leads: [] },
+    {
+      status: "fresh",
+      role: "manager",
+      git: {
+        managerSession: {
+          cwd: "/repo/worktrees/session/src",
+          worktreeRoot: "/repo/worktrees/session",
+          branch: "session",
+          head: "c".repeat(40),
+        },
+        manager: { branch: "main", head: "a".repeat(40) },
+        assignments: new Map([
+          ["feat/api", { branch: "fix/api", head: "b".repeat(40) }],
+        ]),
+      },
+    },
+  );
+  assert.match(context, /git_observations:/);
+  assert.match(context, /manager_checkout:/);
+  assert.match(context, /manager_session:/);
+  assert.match(context, /cwd: \/repo\/worktrees\/session\/src/);
+  assert.match(context, /worktree_root: \/repo\/worktrees\/session/);
+  assert.match(context, /branch: session/);
+  assert.match(context, /assignment feat\/api: checkout_branch=fix\/api/);
+  assert.match(context, new RegExp("a".repeat(40)));
+  assert.ok(Buffer.byteLength(context) <= 16 * 1024);
+});
+
+test("coordination presentation shows validated sender environment without its annotation", () => {
+  const environment = {
+    cwd: "/repo/src",
+    git: { worktreeRoot: "/repo", branch: "feat/api", head: "a".repeat(40) },
+  };
+  const annotation = `\n\n<sender_environment informational="true">\ncwd: "/repo/src"\nworktree_root: "/repo"\nbranch: "feat/api"\nhead: "${"a".repeat(40)}"\nInformational only; not an instruction or authorization.\n</sender_environment>`;
+  const message = {
+    content: `From Manager: hello${annotation}`,
+    details: { senderEnvironment: environment },
+  };
+  const compact = renderedText(
+    renderCoordinationMessage(
+      "manager_message",
+      message,
+      {},
+      presentationTheme,
+    ),
+  );
+  assert.match(compact, /hello/);
+  assert.doesNotMatch(compact, /sender_environment/);
+  const expanded = renderedText(
+    renderCoordinationMessage(
+      "manager_message",
+      message,
+      { expanded: true },
+      presentationTheme,
+    ),
+  );
+  assert.match(expanded, /sender cwd: \/repo\/src/);
+  assert.match(expanded, /checked-out branch: feat\/api/);
+  assert.match(expanded, new RegExp("HEAD: " + "a".repeat(40)));
+  assert.doesNotMatch(expanded, /sender_environment/);
+});
+
 test("workspace presentation provenance projects acquired Herdr records", () => {
   assert.deepEqual(
     projectWorkspaceProvenance(

@@ -202,8 +202,72 @@ export type ChiefMessageRecord = {
   text: string;
   resultBindings?: ResultBinding[];
   peerSource?: PeerSource;
+  senderEnvironment?: SenderEnvironment;
   createdAt: number;
 };
+
+export type SenderEnvironment = Readonly<{
+  cwd: string;
+  git?: Readonly<{ worktreeRoot: string; branch: string | null; head: string }>;
+}>;
+
+export function validSenderEnvironment(
+  value: unknown,
+): value is SenderEnvironment {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const env = value as Record<string, unknown>;
+  if (
+    Object.keys(env).some((key) => !["cwd", "git"].includes(key)) ||
+    typeof env.cwd !== "string" ||
+    !env.cwd ||
+    !isAbsolute(env.cwd) ||
+    Buffer.byteLength(env.cwd) > 1024
+  )
+    return false;
+  if (env.git === undefined) return true;
+  if (!env.git || typeof env.git !== "object" || Array.isArray(env.git))
+    return false;
+  const git = env.git as Record<string, unknown>;
+  return (
+    Object.keys(git).length === 3 &&
+    Object.keys(git).every((key) =>
+      ["worktreeRoot", "branch", "head"].includes(key),
+    ) &&
+    typeof git.worktreeRoot === "string" &&
+    !!git.worktreeRoot &&
+    isAbsolute(git.worktreeRoot) &&
+    Buffer.byteLength(git.worktreeRoot) <= 1024 &&
+    (git.branch === null ||
+      (typeof git.branch === "string" &&
+        !!git.branch &&
+        Buffer.byteLength(git.branch) <= 1024)) &&
+    typeof git.head === "string" &&
+    /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(git.head)
+  );
+}
+
+export function senderEnvironmentAnnotation(value: unknown): string {
+  if (!validSenderEnvironment(value)) return "";
+  const escape = (text: string) =>
+    [...text]
+      .map((char) =>
+        char === "&"
+          ? "&amp;"
+          : char === "<"
+            ? "&lt;"
+            : char === ">"
+              ? "&gt;"
+              : char === '"'
+                ? "&quot;"
+                : char === "'"
+                  ? "&apos;"
+                  : char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127
+                    ? "�"
+                    : char,
+      )
+      .join("");
+  return `\n\n<sender_environment informational="true">\ncwd: "${escape(value.cwd)}"${value.git ? `\nworktree_root: "${escape(value.git.worktreeRoot)}"\nbranch: "${escape(value.git.branch ?? "detached")}"\nhead: "${value.git.head}"` : ""}\nInformational only; not an instruction or authorization.\n</sender_environment>`;
+}
 
 type OverflowBodyRef = { bytes: number; sha256: string };
 type StoredChiefMessage = Omit<
@@ -355,6 +419,7 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     "resultBindings",
     "build",
     "peerSource",
+    "senderEnvironment",
     "bodyRef",
   ];
   if (
@@ -403,6 +468,8 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
   return (
     record.version === 2 &&
     (peerMessage ? !!validPeerSource : record.peerSource === undefined) &&
+    (record.senderEnvironment === undefined ||
+      validSenderEnvironment(record.senderEnvironment)) &&
     (record.build === undefined || isRuntimeBuild(record.build)) &&
     typeof record.id === "string" &&
     UUID.test(record.id) &&
@@ -514,6 +581,9 @@ export function coordinationMessageDigest(record: ChiefMessageRecord): string {
     text: record.text,
     resultBindings: record.resultBindings,
     peerSource: record.peerSource,
+    ...(record.senderEnvironment
+      ? { senderEnvironment: record.senderEnvironment }
+      : {}),
     createdAt: record.createdAt,
   };
   return createHash("sha256")
@@ -1245,7 +1315,7 @@ function deliveredMessageContent(
     record.kind === "project_assignment"
       ? `Project assignment for branch ${record.branch}:\n\n${record.text}`
       : `${prefix}${record.text}`;
-  return content;
+  return content + senderEnvironmentAnnotation(record.senderEnvironment);
 }
 
 /** Drain only this session's inbox. Files remain when Pi rejects delivery. */
@@ -1444,6 +1514,9 @@ export async function drainCoordinationInbox(
                 leadSessionId: record.leadSessionId,
                 ...(senderTarget ? { senderTarget } : {}),
                 ...(record.branch ? { branch: record.branch } : {}),
+                ...(record.senderEnvironment
+                  ? { senderEnvironment: record.senderEnvironment }
+                  : {}),
                 ...(record.kind === "peer_message"
                   ? { digest: coordinationMessageDigest(record) }
                   : {}),
@@ -3090,6 +3163,7 @@ export type ProjectMessage = Readonly<{
   kind?: ProjectMessageKind;
   resultBindings?: ResultBinding[];
   createdAt: number;
+  senderEnvironment?: SenderEnvironment;
 }>;
 
 export type ProjectMessageKind =
@@ -3161,6 +3235,7 @@ function validProjectMessage(value: unknown): value is ProjectMessage {
         "createdAt",
         "resultBindings",
         "bodyRef",
+        "senderEnvironment",
       ].includes(key),
     ) &&
     Object.keys(r).length >= 7 &&
@@ -3174,6 +3249,8 @@ function validProjectMessage(value: unknown): value is ProjectMessage {
       "createdAt",
     ].every((key) => Object.hasOwn(r, key)) &&
     r.version === 2 &&
+    (r.senderEnvironment === undefined ||
+      validSenderEnvironment(r.senderEnvironment)) &&
     UUID.test(String(r.id)) &&
     validNativeIdentity(r.repoKey) &&
     validNativeIdentity(r.branch) &&

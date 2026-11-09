@@ -117,6 +117,7 @@ import {
   retainedProjectMessageRecord,
   managerHandoffRetainedRecord,
   managerHandoffDeliveredEntry,
+  matchesProjectMessageContent,
   managerHandoffCanReenter,
   managerHandoffLeadPidContinues,
   managerHandoffAssignmentReady,
@@ -8584,6 +8585,26 @@ test("retained project message selection ignores stale and wrong-scope records",
   );
 });
 
+test("project message content accepts legacy or only the generated annotation suffix", () => {
+  const expected = "Original message body";
+  const annotation =
+    '\n\n<sender_environment informational="true">\ncwd: "/work/repo"\nworktree_root: "/work/repo"\nbranch: "feature/test"\nhead: "0123456789abcdef0123456789abcdef01234567"\nInformational only; not an instruction or authorization.\n</sender_environment>';
+  assert.equal(matchesProjectMessageContent(expected, expected), true);
+  assert.equal(
+    matchesProjectMessageContent(expected + annotation, expected),
+    true,
+  );
+  for (const changed of [
+    `Changed body${annotation}`,
+    `${expected}\n\n<sender_environment informational="false">\ncwd: "/work/repo"\nInformational only; not an instruction or authorization.\n</sender_environment>`,
+    `${expected}${annotation.replace('head: "0123456789abcdef0123456789abcdef01234567"', "head: 0123456789abcdef0123456789abcdef01234567")}`,
+    `${expected}${annotation.replace('head: "0123456789abcdef0123456789abcdef01234567"', 'head: "not-a-commit"')}`,
+    `${expected}${annotation}\nextra`,
+    `${expected}${annotation}${annotation}`,
+  ])
+    assert.equal(matchesProjectMessageContent(changed, expected), false);
+});
+
 test("manager handoff requires exact repository, assignment, sender, id, and content", () => {
   const valid = {
     id: "message-id",
@@ -8641,6 +8662,23 @@ test("manager handoff requires exact repository, assignment, sender, id, and con
       "HANDOFF",
     ),
     record,
+  );
+  const annotatedRecord = {
+    ...record,
+    content:
+      record.content +
+      '\n\n<sender_environment informational="true">\ncwd: "/work/repo"\nInformational only; not an instruction or authorization.\n</sender_environment>',
+  };
+  assert.deepEqual(
+    managerHandoffDeliveredEntry(
+      JSON.stringify(annotatedRecord),
+      "repo",
+      "feature/one",
+      "lead-session",
+      "message-id",
+      "HANDOFF",
+    ),
+    annotatedRecord,
   );
   assert.equal(
     managerHandoffDeliveredEntry(
@@ -8758,10 +8796,38 @@ test("manager handoff faux decision waits for exact readiness after assignment",
     ).text,
     /MANAGER_HANDOFF_READY_RECEIVED/,
   );
+  const annotatedReady = {
+    ...ready,
+    content:
+      ready.content +
+      '\n\n<sender_environment informational="true">\ncwd: "/work/repo"\nInformational only; not an instruction or authorization.\n</sender_environment>',
+  };
+  assert.match(
+    firstTextContent(
+      decide("manager-handoff", {
+        messages: [...assigned, annotatedReady],
+      }),
+    ).text,
+    /MANAGER_HANDOFF_READY_RECEIVED/,
+  );
   assert.match(
     firstTextContent(
       decide("manager-handoff", {
         messages: [...assigned, { ...ready, content: "MANAGER_HANDOFF_READY" }],
+      }),
+    ).text,
+    /Waiting for the exact assigned Lead readiness/,
+  );
+  assert.match(
+    firstTextContent(
+      decide("manager-handoff", {
+        messages: [
+          ...assigned,
+          {
+            ...annotatedReady,
+            content: `${ready.content}\n\n<sender_environment informational="true">broken</sender_environment>`,
+          },
+        ],
       }),
     ).text,
     /Waiting for the exact assigned Lead readiness/,
@@ -9494,6 +9560,18 @@ test("Manager READY answer follows delivered message even on a separate followUp
       prematureFinish: false,
     },
   );
+  const annotatedEntries = entries.map((entry) =>
+    entry.id === "receipt"
+      ? {
+          ...entry,
+          content: `${entry.content}\n\n<sender_environment informational="true">\ncwd: "/work/repo"\nInformational only; not an instruction or authorization.\n</sender_environment>`,
+        }
+      : entry,
+  );
+  assert.equal(
+    managerReadyAnswer(contents(annotatedEntries), branch, lead).receipt,
+    true,
+  );
   const noPrematureAnswer = entries.filter((entry) => entry.id !== "premature");
   assert.deepEqual(
     managerReadyAnswer(contents(noPrematureAnswer.slice(0, 3)), branch, lead),
@@ -9574,8 +9652,32 @@ test("Manager READY timeout diagnostics recognize exact project-message receipts
     },
     content: `Lead → Manager for assignment ${branch} from lead lead-id:\n\nMANAGER_RECOVERY_READY`,
   };
+  const annotatedReceipt = {
+    ...receipt,
+    content:
+      receipt.content +
+      '\n\n<sender_environment informational="true">\ncwd: "/work/repo"\nInformational only; not an instruction or authorization.\n</sender_environment>',
+  };
   for (const [entry, expected] of [
     [receipt, true],
+    [annotatedReceipt, true],
+    [
+      {
+        ...annotatedReceipt,
+        content: `${annotatedReceipt.content}\nextra`,
+      },
+      false,
+    ],
+    [
+      {
+        ...annotatedReceipt,
+        content: annotatedReceipt.content.replace(
+          "MANAGER_RECOVERY_READY",
+          "CHANGED",
+        ),
+      },
+      false,
+    ],
     [{ ...receipt, details: { ...receipt.details, branch: "other" } }, false],
     [{ ...receipt, details: { fromSessionId: "wrong-lead" } }, false],
     [{ ...receipt, details: undefined }, false],

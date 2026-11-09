@@ -2,6 +2,7 @@ import {
   createLeadProjectRuntime,
   gitPathStatus,
   parseGitWorktreeInventory,
+  captureSenderEnvironment,
   type LeadProjectHost,
 } from "./lead/project.ts";
 import {
@@ -6548,6 +6549,135 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         if (!isCurrent()) return;
         const contextStatus = status(ctx);
         const targets = new Map<string, string>();
+        let git:
+          | {
+              managerSession?: {
+                cwd: string;
+                worktreeRoot: string;
+                branch: string | null;
+                head: string;
+              };
+              manager?: { branch: string | null; head: string };
+              assignments: Map<string, { branch: string | null; head: string }>;
+              supervisedLeads: Map<
+                string,
+                { branch: string | null; head: string }
+              >;
+            }
+          | undefined;
+        if (
+          host.activeRole() === "manager" &&
+          contextStatus === "fresh" &&
+          snapshot &&
+          "managerCheckoutPath" in snapshot &&
+          snapshot.managerCheckoutPath &&
+          "work" in snapshot
+        ) {
+          try {
+            const checkout = snapshot.managerCheckoutPath;
+            const common = await host.pi.exec(
+              "git",
+              ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+              { cwd: checkout, signal: ctx.signal, timeout: 3_000 },
+            );
+            const managerAuthority = await host.currentManager(ctx);
+            if (
+              common.code === 0 &&
+              !common.killed &&
+              !common.stderr?.trim() &&
+              managerAuthority &&
+              sameDirectory(
+                String(common.stdout ?? "").trim(),
+                managerAuthority.repoKey,
+              )
+            ) {
+              const sessionRootResult = ctx.cwd
+                ? await host.pi.exec("git", ["rev-parse", "--show-toplevel"], {
+                    cwd: ctx.cwd,
+                    signal: ctx.signal,
+                    timeout: 3_000,
+                  })
+                : undefined;
+              const sessionRoot =
+                sessionRootResult?.code === 0 &&
+                !sessionRootResult.killed &&
+                !sessionRootResult.stderr?.trim()
+                  ? String(sessionRootResult.stdout ?? "").trim()
+                  : undefined;
+              const result = await host.pi.exec(
+                "git",
+                ["worktree", "list", "--porcelain", "-z"],
+                { cwd: checkout, signal: ctx.signal, timeout: 3_000 },
+              );
+              const inventory =
+                result.code === 0 && !result.killed && !result.stderr?.trim()
+                  ? parseGitWorktreeInventory(String(result.stdout ?? ""))
+                  : undefined;
+              const observation = (path: string) => {
+                const matches =
+                  inventory?.filter(
+                    (entry) =>
+                      !entry.prunable && sameDirectory(entry.path, path),
+                  ) ?? [];
+                const entry = matches.length === 1 ? matches[0] : undefined;
+                return entry?.head && (entry.detached || entry.branch)
+                  ? {
+                      branch: entry.detached ? null : entry.branch!,
+                      head: entry.head,
+                    }
+                  : undefined;
+              };
+              const manager = observation(checkout);
+              const managerSessionObservation = sessionRoot
+                ? observation(sessionRoot)
+                : undefined;
+              const managerSession =
+                sessionRoot && managerSessionObservation
+                  ? {
+                      cwd: ctx.cwd,
+                      worktreeRoot: sessionRoot,
+                      ...managerSessionObservation,
+                    }
+                  : undefined;
+              if (manager) {
+                const assignments = new Map<
+                  string,
+                  { branch: string | null; head: string }
+                >();
+                const supervisedLeads = new Map<
+                  string,
+                  { branch: string | null; head: string }
+                >();
+                for (const work of snapshot.work ?? [])
+                  if (work.checkoutPath) {
+                    const observed = observation(work.checkoutPath);
+                    if (observed) assignments.set(work.branch, observed);
+                  }
+                if ("openWorkspaces" in snapshot)
+                  for (const lead of snapshot.leads ?? []) {
+                    if (lead.relationship !== "supervised") continue;
+                    const workspaces =
+                      snapshot.openWorkspaces?.filter(
+                        (workspace) =>
+                          workspace.workspaceId === lead.workspaceId,
+                      ) ?? [];
+                    if (workspaces.length !== 1) continue;
+                    const observed = observation(workspaces[0]!.path);
+                    if (observed) supervisedLeads.set(lead.lead, observed);
+                  }
+                git = {
+                  manager,
+                  ...(managerSession ? { managerSession } : {}),
+                  assignments,
+                  supervisedLeads,
+                };
+              }
+            }
+          } catch {
+            /* Optional Git observations never affect supervision. */
+          }
+        }
+        if (!isCurrent()) return;
         const candidates: {
           role: "lead" | "manager";
           session: string;
@@ -6577,6 +6707,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             status: contextStatus,
             role: host.activeRole() === "manager" ? "manager" : "chief",
             targets,
+            ...(git ? { git } : {}),
           },
         );
         for (const candidate of candidates)
@@ -9394,6 +9525,7 @@ export function createLeadRoleTransitions(
     kind?: ProjectMessage["kind"],
     signal?: AbortSignal,
   ): Promise<ProjectMessage | undefined> => {
+    const senderEnvironment = await captureSenderEnvironment(host.pi, ctx);
     const sessionId = ctx.sessionManager.getSessionId();
     const runtime = host.supervisionRuntime();
     const current = host.readProjectAssignment(
@@ -9419,6 +9551,7 @@ export function createLeadRoleTransitions(
           fromSessionId: sessionId,
           text: candidate,
           ...(kind ? { kind } : {}),
+          ...(senderEnvironment ? { senderEnvironment } : {}),
           ...(resultBindings.length
             ? { resultBindings: [...resultBindings] }
             : {}),
@@ -9433,6 +9566,7 @@ export function createLeadRoleTransitions(
       fromSessionId: sessionId,
       text: prepared.text,
       ...(kind ? { kind } : {}),
+      ...(senderEnvironment ? { senderEnvironment } : {}),
       ...(prepared.resultBindings.length
         ? { resultBindings: prepared.resultBindings }
         : {}),

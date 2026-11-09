@@ -28,6 +28,9 @@ import {
 import { fileURLToPath } from "node:url";
 import { parseArgs, promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
+import { matchesProjectMessageContent } from "./smoke-faux.mjs";
+
+export { matchesProjectMessageContent };
 import {
   ProjectTrustStore,
   SessionManager,
@@ -1249,8 +1252,10 @@ export function managerHandoffDeliveredEntry(
         entry.details?.branch === branch &&
         entry.details?.fromSessionId === sessionId &&
         entry.details?.id === messageId &&
-        entry.content ===
+        matchesProjectMessageContent(
+          entry.content,
           `Lead → Manager for assignment ${branch} from lead ${sessionId}:\n\n${text}`,
+        ),
     ) ?? null
   );
 }
@@ -1680,8 +1685,10 @@ export function managerReadyAnswer(contents, branch, leadSessionId) {
       entry.customType === "pi-herdsman-project_message" &&
       entry.details?.branch === branch &&
       entry.details?.fromSessionId === leadSessionId &&
-      entry.content ===
+      matchesProjectMessageContent(
+        entry.content,
         `Lead → Manager for assignment ${branch} from lead ${leadSessionId}:\n\nMANAGER_RECOVERY_READY`,
+      ),
   );
   const readyMarkers = entries.flatMap((entry, index) =>
     entry.type === "message" &&
@@ -1739,7 +1746,7 @@ export function managerReadyEntryEvidence(contents, branch, leadSessionId) {
       entry.customType === "pi-herdsman-project_message" &&
       entry.details?.branch === branch &&
       entry.details?.fromSessionId === leadSessionId &&
-      entry.content === receiptText
+      matchesProjectMessageContent(entry.content, receiptText)
     )
       receipts.push(index);
     if (
@@ -5269,8 +5276,10 @@ async function runManagerHandoffSmoke(ctx) {
             entry.customType === "pi-herdsman-project_message" &&
             entry.details?.branch === row.branch &&
             entry.details?.fromSessionId === row.session &&
-            entry.content ===
+            matchesProjectMessageContent(
+              entry.content,
               `Lead → Manager for assignment ${row.branch} from lead ${row.session}:\n\nMANAGER_HANDOFF_READY`,
+            ),
         );
       const supervisorResult = supervisor.supervisorResultState;
       if (!managerHandoffAssignmentReady(ready, readyEntry, processProof)) {
