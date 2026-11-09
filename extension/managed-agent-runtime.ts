@@ -52,6 +52,7 @@ import {
   statusBreadcrumb,
   createAgentController,
   createAgentStatusRuntime,
+  observeLocalHeaderActivity,
   hasPendingDirectChildWork,
   allDirectChildrenAskBlocked,
   hasUndeliveredDirectChildWork,
@@ -1177,6 +1178,9 @@ export function createManagedAgentLeafStatus(options: {
     intent: FocusIntent,
     isCurrent: () => boolean,
   ): Promise<void>;
+  getLocalActivity?(
+    ctx: ExtensionContext,
+  ): import("./presentation.ts").LocalHeaderActivity;
 }) {
   let widget: ReturnType<typeof createStatusWidget> | undefined;
   let statusWidgetMaxRows = DEFAULT_STATUS_WIDGET_MAX_ROWS;
@@ -1262,6 +1266,9 @@ export function createManagedAgentLeafStatus(options: {
   };
   return {
     reset,
+    invalidate() {
+      widget?.invalidate();
+    },
     captureOwnTools(tools: string[] | undefined) {
       ownTools = tools;
     },
@@ -1301,6 +1308,8 @@ export function createManagedAgentLeafStatus(options: {
               });
           },
           () => statusWidgetMaxRows,
+          undefined,
+          () => options.getLocalActivity?.(ctx) ?? "unknown",
         );
         next.setSnapshot({
           agents: [],
@@ -2640,6 +2649,10 @@ export function registerManagedAgentRuntime(
     getAgentDefinitions(ctx: ExtensionContext): Promise<AgentDefinition[]>;
   },
 ): void {
+  let leafStatus: ReturnType<typeof createManagedAgentLeafStatus> | undefined;
+  let getLocalActivity: (
+    ctx: ExtensionContext,
+  ) => import("./presentation.ts").LocalHeaderActivity = () => "unknown";
   pi.on("tool_call", (event: any) => {
     if (event.toolName !== "bash" && event.toolName !== "powershell") return;
     const tool = pi
@@ -2687,6 +2700,7 @@ export function registerManagedAgentRuntime(
       depth: agentDepth,
     };
     options.statusRuntime.configure({
+      getLocalActivity,
       pendingStartEntries: () => controller.pendingStartEntries(),
       hasPendingStart: (label) => controller.hasPendingStart(label),
       clearPendingStart: (label, expected) =>
@@ -2837,7 +2851,7 @@ export function registerManagedAgentRuntime(
   });
   const execution = createManagedAgentExecutionState();
   const metadataPublisher = createManagedAgentMetadataPublisher(pi);
-  const leafStatus = createManagedAgentLeafStatus({
+  leafStatus = createManagedAgentLeafStatus({
     snapshot: (ctx, signal) =>
       managedAgentSnapshots(
         pi,
@@ -2852,6 +2866,7 @@ export function registerManagedAgentRuntime(
     identity: (ctx) => managedAgentEnvironmentIdentity(ctx, options.build),
     sameIdentity: sameManagedAgentIdentity,
     signal: () => metadataPublisher.signal,
+    getLocalActivity,
     focusTarget: async (ctx, intent, isCurrent) => {
       if (intent.kind !== "session")
         throw new Error("Manager navigation is unavailable from an Agent.");
@@ -3294,6 +3309,10 @@ export function registerManagedAgentRuntime(
     hasActiveAssignment: () => !!execution.assignment?.activeRequestId,
     reportConfigError: (ctx, error) =>
       options.appendError(ctx, "pi_herdsman_config_error", error),
+  });
+  getLocalActivity = observeLocalHeaderActivity(pi, () => {
+    options.statusRuntime.invalidateWidget();
+    leafStatus?.invalidate();
   });
 }
 

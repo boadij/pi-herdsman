@@ -59,6 +59,55 @@ import {
 import { worktreeGroupScope } from "./herdr.ts";
 import support from "./support.ts";
 
+test("local header activity follows Pi lifecycle and session-scoped prompts", async () => {
+  const { observeLocalHeaderActivity } = await import("./agent-controller.ts");
+  const handlers = new Map<string, (...args: any[]) => void>();
+  const pi = {
+    on: (event: string, handler: (...args: any[]) => void) =>
+      handlers.set(event, handler),
+  };
+  let session = "session-a";
+  let idle = true;
+  let invalidations = 0;
+  const ctx = {
+    isIdle: () => idle,
+    sessionManager: { getSessionId: () => session },
+  } as any;
+  const activity = observeLocalHeaderActivity(pi as any, () => invalidations++);
+  assert.equal(activity(ctx), "idle");
+  idle = false;
+  handlers.get("agent_start")!();
+  assert.equal(activity(ctx), "working");
+  handlers.get("ui_prompt_start")!({}, ctx);
+  assert.equal(activity(ctx), "blocked");
+  handlers.get("agent_end")?.({}, ctx);
+  assert.equal(activity(ctx), "blocked");
+  handlers.get("ui_prompt_end")!({}, ctx);
+  assert.equal(activity(ctx), "working");
+  idle = true;
+  handlers.get("agent_settled")!();
+  assert.equal(activity(ctx), "idle");
+  handlers.get("ui_prompt_start")!({}, ctx);
+  assert.equal(activity(ctx), "idle");
+  handlers.get("ui_prompt_end")!({}, ctx);
+  idle = false;
+  handlers.get("ui_prompt_start")!({}, ctx);
+  session = "session-b";
+  assert.equal(activity(ctx), "working");
+  handlers.get("session_start")!({}, ctx);
+  assert.equal(activity(ctx), "working");
+  assert.equal(
+    activity({
+      ...ctx,
+      isIdle: () => {
+        throw new Error("unavailable");
+      },
+    }),
+    "unknown",
+  );
+  assert.ok(invalidations >= 6);
+});
+
 function projectMessageResult(
   text = "Published project message",
 ): ProjectMessage {

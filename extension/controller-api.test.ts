@@ -485,7 +485,7 @@ test(
       });
       await pi.events.get("session_start")![0](undefined, ctx);
       await waitForStage(t, "initial managed Lead status", () =>
-        assert.match(statusWidget!.render(160)[0], /^● lead · managed/),
+        assert.match(statusWidget!.render(160)[0], /^\? lead · managed/),
       );
       const supervisorTool = pi.tools.find(
         (tool) => tool.name === "message_supervisor",

@@ -83,6 +83,7 @@ import {
   resolveSavedSessionModelSelection,
   buildAgentStatusSnapshot,
   createAgentStatusRuntime,
+  observeLocalHeaderActivity,
   type AgentControllerOptions,
   type AgentStatusSnapshotHost,
   type PendingStart,
@@ -648,6 +649,10 @@ type LeadInboxHost = LeadInboxBaseHost & {
 
 type LeadSupervisionHost = {
   activeRole(): SessionRole;
+  getLocalActivity?(
+    ctx: ExtensionContext,
+  ): import("./presentation.ts").LocalHeaderActivity;
+  onActivityChange?(invalidate: () => void): void;
   build: RuntimeBuild;
   appendDurableError(
     pi: ExtensionAPI,
@@ -1737,6 +1742,10 @@ export function registerLeadRuntime(
   options: LeadRuntimeOptions,
 ) {
   const statusRuntime = createAgentStatusRuntime();
+  let invalidateSupervisionWidget = () => {};
+  let getLocalActivity: (
+    ctx: ExtensionContext,
+  ) => import("./presentation.ts").LocalHeaderActivity = () => "unknown";
   const leadRuntime = options.leadRuntime ?? createLeadRuntimeState();
   const leadToolState =
     options.leadToolState ??
@@ -2135,6 +2144,10 @@ export function registerLeadRuntime(
     state: leadRuntime,
     activeRole: () => activeLeadRole(leadRuntime),
     pi,
+    getLocalActivity,
+    onActivityChange: (invalidate: () => void) => {
+      invalidateSupervisionWidget = invalidate;
+    },
     isCurrentChief: (ctx: ExtensionContext) =>
       leadRuntime.chiefMode === "active" &&
       !!leadRuntime.chiefLease &&
@@ -3462,6 +3475,7 @@ export function registerLeadRuntime(
     leadGitSampling = sampling;
   };
   statusRuntime.configure({
+    getLocalActivity,
     ...options.statusSnapshotHost,
     pendingStartEntries: () => controller.pendingStartEntries(),
     hasPendingStart: (label: string) => controller.hasPendingStart(label),
@@ -4517,6 +4531,10 @@ export function registerLeadRuntime(
   pi.on("session_shutdown", (_event: unknown, ctx: ExtensionContext) => {
     inheritedProjection = undefined;
     return shutdown.shutdown(ctx);
+  });
+  getLocalActivity = observeLocalHeaderActivity(pi, () => {
+    statusRuntime.invalidateWidget();
+    invalidateSupervisionWidget();
   });
   return {
     roleTransitions,
@@ -6595,6 +6613,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         widgetFocusInFlight = false;
         ctx.ui.setWidget("pi-herdsman-staff", (tui: any, theme: any) => {
           renderWidget = () => tui.requestRender();
+          host.onActivityChange?.(() => renderWidget?.());
           return createSupervisionWidget(
             () => snapshot,
             () => status(ctx),
@@ -6710,6 +6729,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                 ? cached.summary
                 : undefined;
             },
+            () => host.getLocalActivity?.(ctx) ?? "unknown",
           );
         });
       } catch {
