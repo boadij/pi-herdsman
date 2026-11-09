@@ -24,4 +24,6 @@ export function waitForContinuationObservation(
   signal?: AbortSignal,
 ): Promise<void>;
 
-export default function install(pi: ExtensionAPI): void;
+export default function install(
+  pi: Pick<ExtensionAPI, "on" | "registerProvider">,
+): void;
