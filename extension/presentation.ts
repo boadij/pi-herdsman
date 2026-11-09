@@ -2929,6 +2929,9 @@ export function formatToolModelResult(
       ? [`Assignment request: ${v.assignment_request_id}`]
       : []),
     ...(action === "reply" && value(v.ask_id) ? [`Ask: ${v.ask_id}`] : []),
+    ...(value(v.history_warning)
+      ? [`History warning: ${value(v.history_warning)}`]
+      : []),
     ...((action === "delegate" || action === "continue") &&
     v.evidence &&
     typeof v.evidence === "object"

@@ -1370,7 +1370,8 @@ type ClosedAssignmentProof = {
   pane_id: string;
   workspace_id: string;
 };
-const STOP_CLOSURE_ENTRY = "pi-herdsman-agent-closed-assignment";
+export const STOP_CLOSURE_ENTRY = "pi-herdsman-agent-closed-assignment";
+const ACCEPTED_ASSIGNMENT_ENTRY = "pi-herdsman-agent-accepted-assignment";
 
 export function acceptedCloseProof(
   entries: readonly unknown[],
@@ -1498,9 +1499,143 @@ function closedAssignmentReceipt(
           latestAccepted.requestId === proof.request_id,
       )
     : [];
-  if (!matches.length || matches.length !== 1) return undefined;
-  const { proof } = matches[0]!;
-  return proof;
+  if (!matches.length) return undefined;
+  const proofs: Record<string, unknown>[] = [];
+  for (const { proof } of matches)
+    if (!proofs.some((candidate) => isDeepStrictEqual(candidate, proof)))
+      proofs.push(proof);
+  return proofs.length === 1 ? proofs[0] : undefined;
+}
+
+type AcceptedAssignmentEvidence = {
+  index: number;
+  action: "delegate" | "continue";
+  ownerSessionId: string;
+  sessionId: string;
+  sessionPath: string;
+  requestId: string;
+  agent: string;
+  definition: string;
+};
+
+function acceptedAssignmentEvidence(
+  entries: readonly unknown[],
+  ownerSessionId: string,
+  unavailable?: () => void,
+): AcceptedAssignmentEvidence[] {
+  const parsed = entries.flatMap((entry, index) => {
+    let details: any;
+    let action: string | undefined;
+    let legacyResult = false;
+    if (
+      entry &&
+      typeof entry === "object" &&
+      "type" in entry &&
+      entry.type === "custom" &&
+      "customType" in entry &&
+      entry.customType === ACCEPTED_ASSIGNMENT_ENTRY
+    ) {
+      const data = (entry as any).data;
+      const fields = [
+        "version",
+        "action",
+        "owner_session_id",
+        "session_id",
+        "session_path",
+        "request_id",
+        "agent",
+        "definition",
+      ];
+      if (
+        !data ||
+        typeof data !== "object" ||
+        Array.isArray(data) ||
+        data.version !== 1 ||
+        Object.keys(data).length !== fields.length ||
+        !fields.every((field) => Object.hasOwn(data, field))
+      )
+        return [];
+      details = data;
+      action = data.action;
+    } else if (
+      entry &&
+      typeof entry === "object" &&
+      "type" in entry &&
+      entry.type === "message" &&
+      "message" in entry
+    ) {
+      const message = (entry as any).message;
+      legacyResult = true;
+      if (
+        message?.role !== "toolResult" ||
+        message.isError === true ||
+        message.details?.ok !== true
+      )
+        return [];
+      const actions: Record<string, "delegate" | "continue"> = {
+        delegate_agent: "delegate",
+        agent_delegate: "delegate",
+        continue_agent: "continue",
+        agent_continue: "continue",
+      };
+      action = actions[message.toolName];
+      details = message.details;
+    } else return [];
+    if (
+      (action !== "delegate" && action !== "continue") ||
+      !validId(details?.owner_session_id) ||
+      !validId(details?.session_id) ||
+      !validId(details?.request_id) ||
+      typeof details?.session_path !== "string" ||
+      typeof details?.agent !== "string" ||
+      !details.agent.trim() ||
+      typeof details?.definition !== "string" ||
+      !details.definition.trim()
+    ) {
+      if (legacyResult && details?.owner_session_id === ownerSessionId)
+        unavailable?.();
+      return [];
+    }
+    const assignmentAction = action as "delegate" | "continue";
+    try {
+      return [
+        {
+          index,
+          action: assignmentAction,
+          ownerSessionId: details.owner_session_id,
+          sessionId: details.session_id,
+          sessionPath: canonicalSessionPath(details.session_path),
+          requestId: details.request_id,
+          agent: details.agent,
+          definition: details.definition,
+        },
+      ];
+    } catch {
+      if (legacyResult && details.owner_session_id === ownerSessionId)
+        unavailable?.();
+      return [];
+    }
+  });
+  const byRequest = new Map<string, AcceptedAssignmentEvidence[]>();
+  for (const item of parsed)
+    byRequest.set(item.requestId, [
+      ...(byRequest.get(item.requestId) ?? []),
+      item,
+    ]);
+  return [...byRequest.values()]
+    .flatMap((items) => {
+      const identities = new Set(
+        items.map(({ index: _index, ...identity }) => JSON.stringify(identity)),
+      );
+      if (identities.size !== 1) return [];
+      return [
+        items.reduce((earliest, item) =>
+          item.index < earliest.index ? item : earliest,
+        ),
+      ];
+    })
+    .filter((receipt) => receipt.ownerSessionId === ownerSessionId)
+    .sort((a, b) => a.index - b.index);
 }
 
 function acceptedAssignmentReceipts(
@@ -1508,44 +1643,21 @@ function acceptedAssignmentReceipts(
   ownerSessionId: string,
   child: OwnedAssignmentSession,
 ): { index: number; requestId: string }[] {
-  return entries.flatMap((entry, index) => {
-    if (
-      !entry ||
-      typeof entry !== "object" ||
-      !("type" in entry) ||
-      entry.type !== "message" ||
-      !("message" in entry)
+  let path: string;
+  try {
+    path = canonicalSessionPath(child.path);
+  } catch {
+    return [];
+  }
+  return acceptedAssignmentEvidence(entries, ownerSessionId)
+    .filter(
+      (receipt) =>
+        receipt.sessionId === child.id &&
+        receipt.sessionPath === path &&
+        receipt.agent === child.label &&
+        receipt.definition === child.definition,
     )
-      return [];
-    const message = entry.message as any;
-    const details = message?.details;
-    if (
-      message?.role !== "toolResult" ||
-      ![
-        "delegate_agent",
-        "continue_agent",
-        "agent_delegate",
-        "agent_continue",
-      ].includes(message.toolName) ||
-      message.isError === true ||
-      details?.ok !== true ||
-      details.owner_session_id !== ownerSessionId ||
-      details.session_id !== child.id ||
-      details.agent !== child.label ||
-      details.definition !== child.definition ||
-      typeof details.session_path !== "string" ||
-      !validId(details.request_id)
-    )
-      return [];
-    try {
-      return canonicalSessionPath(details.session_path) ===
-        canonicalSessionPath(child.path)
-        ? [{ index, requestId: details.request_id }]
-        : [];
-    } catch {
-      return [];
-    }
-  });
+    .map(({ index, requestId }) => ({ index, requestId }));
 }
 
 function closedAssignmentChildren(
@@ -2426,70 +2538,6 @@ function ownedAssignmentResult(
   };
 }
 
-function ownedAssignmentToolResult(
-  entry: unknown,
-  ownerSessionId: string,
-  unavailable: () => void,
-): OwnedAssignmentSession | undefined {
-  if (
-    !entry ||
-    typeof entry !== "object" ||
-    !("type" in entry) ||
-    entry.type !== "message" ||
-    !("message" in entry)
-  )
-    return undefined;
-  const message = entry.message;
-  if (
-    !message ||
-    typeof message !== "object" ||
-    !("role" in message) ||
-    message.role !== "toolResult" ||
-    !("toolName" in message) ||
-    (message.toolName !== "delegate_agent" &&
-      message.toolName !== "continue_agent" &&
-      message.toolName !== "agent_delegate" &&
-      message.toolName !== "agent_continue") ||
-    ("isError" in message && message.isError === true) ||
-    !("details" in message)
-  )
-    return undefined;
-  const details = message.details;
-  if (
-    !details ||
-    typeof details !== "object" ||
-    Array.isArray(details) ||
-    !("ok" in details) ||
-    details.ok !== true ||
-    !("owner_session_id" in details) ||
-    details.owner_session_id !== ownerSessionId
-  )
-    return undefined;
-  if (
-    !("session_id" in details) ||
-    typeof details.session_id !== "string" ||
-    !validId(details.session_id) ||
-    !("session_path" in details) ||
-    typeof details.session_path !== "string" ||
-    !details.session_path.trim() ||
-    !("agent" in details) ||
-    typeof details.agent !== "string" ||
-    !details.agent.trim() ||
-    !("definition" in details) ||
-    typeof details.definition !== "string" ||
-    !details.definition.trim()
-  ) {
-    unavailable();
-    return undefined;
-  }
-  return {
-    id: details.session_id,
-    path: details.session_path,
-    label: details.agent,
-    definition: details.definition,
-  };
-}
-
 export function ownedAssignmentChildren(
   entries: readonly unknown[],
   ownerSessionId: string,
@@ -2497,14 +2545,23 @@ export function ownedAssignmentChildren(
   unavailable?: () => void,
 ): OwnedAssignmentSession[] {
   const children = new Map<string, OwnedAssignmentSession>();
+  if (includeReceipts) {
+    for (const receipt of acceptedAssignmentEvidence(
+      entries,
+      ownerSessionId,
+      unavailable,
+    )) {
+      const child = {
+        id: receipt.sessionId,
+        path: receipt.sessionPath,
+        definition: receipt.definition,
+        label: receipt.agent,
+      };
+      children.set(`${child.id}\0${child.path}`, child);
+    }
+  }
   for (const entry of entries) {
-    const child =
-      (includeReceipts
-        ? ownedAssignmentToolResult(entry, ownerSessionId, () =>
-            unavailable?.(),
-          )
-        : undefined) ??
-      ownedAssignmentResult(entry, ownerSessionId, unavailable);
+    const child = ownedAssignmentResult(entry, ownerSessionId, unavailable);
     if (!child) continue;
     try {
       const path = canonicalSessionPath(child.path);
@@ -9161,6 +9218,24 @@ export function createAgentController(
             },
           );
           accepted = true;
+          let historyWarning: string | undefined;
+          try {
+            if (ctx.sessionManager.getSessionId() !== runtime.ownerSessionId)
+              throw new Error("Owner session changed");
+            pi.appendEntry(ACCEPTED_ASSIGNMENT_ENTRY, {
+              version: 1,
+              action: p.action,
+              owner_session_id: runtime.ownerSessionId,
+              session_id: runtime.piSessionId,
+              session_path: runtime.piSessionFile,
+              request_id: requestId,
+              agent: label,
+              definition: agentDefinition,
+            });
+          } catch {
+            historyWarning =
+              "Assignment accepted, but its history receipt could not be saved. Historical continuation may be unavailable.";
+          }
           options.onChanged();
           const inlineNames = new Set(
             (assignmentInput?.attachments ?? [])
@@ -9194,6 +9269,7 @@ export function createAgentController(
             session_path: runtime.piSessionFile,
             request_id: requestId,
             evidence: evidenceReceipt,
+            ...(historyWarning ? { history_warning: historyWarning } : {}),
           };
         } catch (caught) {
           if (historicalMailboxPreflightFailed) throw caught;
@@ -9559,6 +9635,23 @@ export function createAgentController(
           p = raw as Params;
           presentationAction = p.action;
           const value = await action(ctx, p, signal);
+          if (
+            p.action === "stop" &&
+            value.ok === true &&
+            value.closed_assignment &&
+            value.cleanup_error === undefined &&
+            value.cleanup_errors === undefined
+          ) {
+            try {
+              pi.appendEntry(STOP_CLOSURE_ENTRY, {
+                version: 1,
+                proof: value.closed_assignment,
+              });
+            } catch {
+              value.history_warning =
+                "Agent stopped, but its clean-stop receipt could not be saved.";
+            }
+          }
           options.onChanged();
           if (
             controllerScope.kind === "root" &&
@@ -9684,7 +9777,7 @@ export function createAgentController(
       ...agentTool,
       name: "delegate_agent",
       label: "delegate agent",
-      exposure: "model-only",
+      exposure: "direct",
       description:
         "Start one fresh bounded assignment. Choose the most focused eligible Agent definition capable of completing the full task. Use a general-purpose definition when broader capabilities are needed or no focused definition fits.",
       parameters: agentDelegateParameters,
@@ -9713,7 +9806,7 @@ export function createAgentController(
       ...agentTool,
       name: "continue_agent",
       label: "continue agent",
-      exposure: "model-only",
+      exposure: "direct",
       description:
         "Start one bounded assignment from an eligible historical managed-Agent Pi session selected by a directly owned result ref, exact path, or UUID. Retired sessions cannot be continued while context retirement is enabled.",
       parameters: agentContinueParameters,

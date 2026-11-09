@@ -42,6 +42,7 @@ test("historical Agent assignment tool results still reconstruct ownership", () 
             owner_session_id: "33333333-3333-4333-8333-333333333333",
             session_id: sessionId,
             session_path: sessionPath,
+            request_id: `44444444-4444-4444-8444-44444444444${index}`,
             agent: `child-${index}`,
             definition: "scout",
           },
