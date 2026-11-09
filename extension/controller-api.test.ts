@@ -137,6 +137,27 @@ test("accepted assignment history normalizes legacy and custom receipts and reje
       definition: "scout",
     },
   ]);
+  const laterPath = join(
+    testTmpRoot,
+    `accepted-history-later-${request}.jsonl`,
+  );
+  writeFileSync(laterPath, "{}", "utf8");
+  const laterCustom = {
+    ...custom,
+    data: {
+      ...custom.data,
+      session_id: randomUUID(),
+      session_path: laterPath,
+      request_id: randomUUID(),
+    },
+  };
+  assert.deepEqual(
+    ownedAssignmentChildren([custom, laterCustom, direct], owner, true).map(
+      ({ id }) => id,
+    ),
+    [session, laterCustom.data.session_id],
+    "an identical later observation must not move the first acceptance behind a newer assignment",
+  );
   assert.deepEqual(
     ownedAssignmentChildren(
       [custom, { ...custom, data: { ...custom.data, definition: "reviewer" } }],
@@ -161,6 +182,7 @@ test("accepted assignment history normalizes legacy and custom receipts and reje
   );
   assert.deepEqual(ownedAssignmentChildren([custom], owner, false), []);
   rmSync(path, { force: true });
+  rmSync(laterPath, { force: true });
 });
 const {
   listPendingRetirements,
