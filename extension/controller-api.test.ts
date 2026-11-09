@@ -90,7 +90,10 @@ import support, {
   testTmpRoot,
 } from "./support.ts";
 const { readUnacknowledgedRequest } = await import("./mailbox.ts");
-const { visibleAgentCapabilities } = await import("./agent-controller.ts");
+const {
+  visibleAgentCapabilities,
+  resolveAssignmentSession: resolveOwnedAssignmentSession,
+} = await import("./agent-controller.ts");
 const {
   listPendingRetirements,
   retireProjectAssignment,
@@ -162,6 +165,15 @@ function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
   });
   return fixture;
 }
+const assertNoSystemPromptMessage = (result: unknown) => {
+  const message =
+    result !== null && typeof result === "object" && "message" in result
+      ? result.message
+      : undefined;
+  assert.equal(message, undefined);
+};
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 const { updateConfig } = await import("./config.ts");
 const { parseGitWorktreeInventory } = await import("./lead/project.ts");
 const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
@@ -186,7 +198,13 @@ const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
 const ownershipResult = (
   child: string,
   owner = LEAD_SESSION_ID,
-  options: { path?: string; label?: string; definition?: string } = {},
+  options: {
+    path?: string;
+    label?: string;
+    definition?: string;
+    workspaceId?: string;
+    paneId?: string;
+  } = {},
 ) => ({
   type: "custom_message",
   customType: "pi-herdsman-agent-result",
@@ -200,6 +218,8 @@ const ownershipResult = (
     requestId: randomUUID(),
     agentLabel: options.label ?? "agent",
     agentDefinition: options.definition ?? "agent",
+    ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
+    ...(options.paneId ? { paneId: options.paneId } : {}),
     status: "completed",
   },
 });
@@ -343,7 +363,7 @@ test(
     };
     assert.equal(process.env.PI_HERDSMAN_AGENT_DEFINITION, undefined);
     ctx.hasUI = true;
-    let statusWidget: StatusWidget | undefined;
+    let statusWidget: InstanceType<typeof StatusWidget> | undefined;
     ctx.ui.setWidget = (_key: string, content: unknown) => {
       if (typeof content === "function")
         statusWidget = (content as any)(
@@ -1557,14 +1577,15 @@ test("project Lead observes Manager availability across turnover without exposin
       ctx,
     );
   const latestState = () =>
-    branch.findLast(
-      (entry) => entry.customType === "pi-herdsman-supervisor-state",
-    );
+    branch
+      .slice()
+      .reverse()
+      .find((entry) => entry.customType === "pi-herdsman-supervisor-state");
   try {
     await pi.events.get("session_start")![0](undefined, ctx);
     const sentBefore = pi.sentMessageCalls.length;
     const availableResult = await observe();
-    assert.equal(availableResult?.message, undefined);
+    assertNoSystemPromptMessage(availableResult);
     assert.equal(pi.sentMessageCalls.length, sentBefore + 1);
     assert.deepEqual(pi.sentMessageCalls.at(-1)!.options, {
       triggerTurn: false,
@@ -1575,7 +1596,7 @@ test("project Lead observes Manager availability across turnover without exposin
     assert.match(available.content, /availability: available/);
     assert.doesNotMatch(available.content, new RegExp(managerId));
     const duplicateCount = pi.sentMessageCalls.length;
-    assert.equal((await observe())?.message, undefined);
+    assertNoSystemPromptMessage(await observe());
     assert.equal(pi.sentMessageCalls.length, duplicateCount);
 
     writeLeadCoordinationState(runtime, {
@@ -1585,7 +1606,7 @@ test("project Lead observes Manager availability across turnover without exposin
       piSessionId: managerId,
       updatedAt: Date.now(),
     });
-    assert.equal((await observe())?.message, undefined);
+    assertNoSystemPromptMessage(await observe());
     const unknown = latestState();
     assert.match(unknown.content, /supervisor: manager/);
     assert.match(unknown.content, /availability: unknown/);
@@ -1620,7 +1641,7 @@ test("project Lead observes Manager availability across turnover without exposin
 
     manager.release();
     agents.splice(1, 1);
-    assert.equal((await observe())?.message, undefined);
+    assertNoSystemPromptMessage(await observe());
     const unavailable = latestState();
     assert.match(unavailable.content, /supervisor: manager/);
     assert.match(unavailable.content, /availability: unavailable/);
@@ -1669,7 +1690,7 @@ test("project Lead observes Manager availability across turnover without exposin
       piSessionId: replacementId,
       updatedAt: Date.now(),
     });
-    assert.equal((await observe())?.message, undefined);
+    assertNoSystemPromptMessage(await observe());
     const replacementState = latestState();
     assert.match(replacementState.content, /availability: available/);
     assert.doesNotMatch(replacementState.content, new RegExp(replacementId));
@@ -1877,7 +1898,7 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
         ctx,
       );
     const chiefStateResult = await observe();
-    assert.equal(chiefStateResult?.message, undefined);
+    assertNoSystemPromptMessage(chiefStateResult);
     const supervisorMessage = pi.tools.find(
       (tool) => tool.name === "message_supervisor",
     )!;
@@ -1905,7 +1926,7 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
     assert.match(chiefState.content, /supervisor: chief/);
     assert.match(chiefState.content, /availability: available/);
     const duplicateCount = pi.sentMessageCalls.length;
-    assert.equal((await observe())?.message, undefined);
+    assertNoSystemPromptMessage(await observe());
     assert.equal(pi.sentMessageCalls.length, duplicateCount);
     chief.release();
     chief = claimChiefLease({
@@ -1957,7 +1978,7 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
       }),
     );
     chiefDiscoveryFailure = true;
-    assert.equal((await observe())?.message, undefined);
+    assertNoSystemPromptMessage(await observe());
     const unverifiedChief = branch.at(-1);
     assert.match(unverifiedChief.content, /supervisor: unverified/);
     assert.match(unverifiedChief.content, /availability: unknown/);
@@ -1979,7 +2000,7 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
     chiefDiscoveryFailure = false;
     writeFileSync(runtime.descriptor, "invalid Chief descriptor");
     const unreadableCount = pi.sentMessageCalls.length;
-    assert.equal((await observe())?.message, undefined);
+    assertNoSystemPromptMessage(await observe());
     assert.equal(pi.sentMessageCalls.length, unreadableCount);
     assert.equal(
       branch.filter(
@@ -2002,7 +2023,7 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
       /Unable to verify Chief descriptor/,
     );
     chief.release();
-    assert.equal((await observe())?.message, undefined);
+    assertNoSystemPromptMessage(await observe());
     const noSupervisor = branch.at(-1);
     assert.match(noSupervisor.content, /supervisor: none/);
     assert.match(noSupervisor.content, /availability: unavailable/);
@@ -2020,7 +2041,7 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
     );
     assert.equal(noSupervisorResult.details.error.category, "target_not_found");
     observationFailure = true;
-    assert.equal((await observe())?.message, undefined);
+    assertNoSystemPromptMessage(await observe());
     const unverified = branch.at(-1);
     assert.match(unverified.content, /supervisor: unverified/);
     assert.match(unverified.content, /availability: unknown/);
@@ -2338,10 +2359,13 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
       ),
     );
     const delivered = pi.sent.find(
-      (message: any) =>
+      (message) =>
+        isRecord(message) &&
         message.customType === "pi-herdsman-lead_message" &&
-        String(message.content).includes("review-evidence-478"),
+        typeof message.content === "string" &&
+        message.content.includes("review-evidence-478"),
     );
+    assert.ok(isRecord(delivered) && typeof delivered.content === "string");
     assert.ok(delivered.content.includes(completeEvidence));
     const { coordinatorTarget, resolveCoordinatorTarget } =
       await import("./coordinator-target.ts");
@@ -2358,7 +2382,7 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
       sessionId: senderId,
     });
     assert.deepEqual(
-      {
+      isRecord(delivered.details) && {
         fromSessionId: delivered.details.fromSessionId,
         toSessionId: delivered.details.toSessionId,
         toRole: delivered.details.toRole,
@@ -2616,11 +2640,11 @@ for (const reachable of [true, false]) {
         await waitForStage(t, "live project-message delivery", () =>
           assert.equal(projectDeliveries(liveRecord.id).length, 1),
         );
+        const liveDelivery = projectDeliveries(liveRecord.id)[0];
         assert.ok(
-          String(projectDeliveries(liveRecord.id)[0]?.content).includes(
-            liveRecord.text,
-          ),
+          isRecord(liveDelivery) && typeof liveDelivery.content === "string",
         );
+        assert.ok(liveDelivery.content.includes(liveRecord.text));
         assert.equal(projectDeliveries(wrongAssignmentRecord.id).length, 0);
         assert.deepEqual(
           listProjectMessages(
@@ -2873,10 +2897,13 @@ for (const reachable of [true, false]) {
           await waitForStage(
             t,
             "Managed Lead message delivery to Manager",
-            () =>
+            () => {
+              const delivery = projectDeliveries(result.details.id)[0];
               assert.ok(
-                projectDeliveries(result.details.id)[0]?.content.includes(plan),
-              ),
+                isRecord(delivery) && typeof delivery.content === "string",
+              );
+              assert.ok(delivery.content.includes(plan));
+            },
           );
           const originalCwd = leadCtx.cwd;
           leadCtx.cwd = join(tmpdir(), `${leadId}-other-checkout`);
@@ -3304,7 +3331,8 @@ for (const scenario of [
         );
       }
       const delivered = pi.sent.filter(
-        (message: any) =>
+        (message): message is Record<string, unknown> =>
+          isRecord(message) &&
           message.customType === "pi-herdsman-project_assignment",
       );
       assert.equal(
@@ -3312,8 +3340,13 @@ for (const scenario of [
         scenario.moved || scenario.mismatchedPath ? 0 : 1,
       );
       if (!scenario.moved && !scenario.mismatchedPath) {
-        assert.equal(delivered[0].details.id, sessionId);
-        assert.equal(delivered[0].details.branch, assignment.branch);
+        const assignmentDelivery = delivered[0];
+        assert.ok(
+          isRecord(assignmentDelivery.details) &&
+            typeof assignmentDelivery.content === "string",
+        );
+        assert.equal(assignmentDelivery.details.id, sessionId);
+        assert.equal(assignmentDelivery.details.branch, assignment.branch);
         if (scenario.presentationThrows) {
           const diagnostics = diagnosticOutput
             .filter((line) =>
@@ -3348,17 +3381,19 @@ for (const scenario of [
               .map((entry: any) => entry.name),
             [`Lead · ${assignment.branch}`],
           );
-        assert.ok(delivered[0].content.includes(assignment.branch));
-        assert.ok(delivered[0].content.includes(assignment.text));
-        assert.ok(Buffer.byteLength(delivered[0].content, "utf8") > 8 * 1024);
+        assert.ok(assignmentDelivery.content.includes(assignment.branch));
+        assert.ok(assignmentDelivery.content.includes(assignment.text));
         assert.ok(
-          delivered[0].content.includes(`${"evidence\n".repeat(4096)}`),
+          Buffer.byteLength(assignmentDelivery.content, "utf8") > 8 * 1024,
+        );
+        assert.ok(
+          assignmentDelivery.content.includes(`${"evidence\n".repeat(4096)}`),
         );
         assert.match(
-          delivered[0].content,
+          assignmentDelivery.content,
           /automatically hands every completed\s+direct-work response to the Manager role/,
         );
-        assert.equal(delivered[0].content.includes(sessionId), false);
+        assert.equal(assignmentDelivery.content.includes(sessionId), false);
         assert.ok(
           entries.some(
             (entry: any) =>
@@ -3756,6 +3791,7 @@ async function runManagerStartupScenario(
     | "reconcile-conflicting-provenance"
     | "reconcile-aliased-provenance"
     | "reconcile-assignment-lock"
+    | "reconcile-changed-branch"
     | "verified-absence-resume"
     | "delegate-reconciles-absent-assignment"
     | "close-resume"
@@ -3913,7 +3949,7 @@ async function runManagerStartupScenario(
   const exec = async (
     command: string,
     args: string[],
-    options?: { cwd?: string },
+    options?: { cwd?: string; timeout?: number; signal?: AbortSignal },
   ) => {
     if (command === "git") {
       if (args[0] === "rev-parse" && args.includes("--show-toplevel"))
@@ -4799,6 +4835,11 @@ async function runManagerStartupScenario(
   });
   let releaseAssignmentLock: (() => void) | undefined;
   let contentionHolder: ReturnType<typeof spawn> | undefined;
+  const releaseContentionHolder = () => {
+    const holder = contentionHolder;
+    contentionHolder = undefined;
+    holder?.stdin?.end("release");
+  };
   try {
     const activeBranch: any[] = pi.entries;
     const ctx = fakeContext(pi.entries, activeBranch) as any;
@@ -5316,11 +5357,7 @@ async function runManagerStartupScenario(
                 ? { branch: "smoke/recover" }
                 : {}),
               ...(mode === "concurrent" ? { branch: "smoke/concurrent" } : {}),
-              ...(mode === "invalid-topology"
-                ? { branch: "smoke/vanished" }
-                : activeMode
-                  ? { branch: "smoke/recover" }
-                  : {}),
+              ...(activeMode ? { branch: "smoke/recover" } : {}),
             },
         undefined,
         undefined,
@@ -6313,8 +6350,7 @@ async function runManagerStartupScenario(
           "active-missing",
           "active-missing-no-session",
           "active-missing-legacy",
-          "active-missing-ambiguous",
-        ].includes(mode) && mode !== "active-missing-ambiguous"
+        ].includes(mode)
           ? mode === "active-missing-legacy"
             ? 2
             : 1
@@ -6832,7 +6868,8 @@ async function runManagerStartupScenario(
       mode === "staff-message-mismatch" ||
       mode === "staff-message-contention" ||
       mode === "staff-message-contention-replaced" ||
-      mode === "staff-message-assignment-replaced"
+      mode === "staff-message-assignment-replaced" ||
+      mode === "staff-message-timeout"
     ) {
       const state = readLeadCoordinationState(
         supervisionRuntime(),
@@ -7188,7 +7225,7 @@ async function runManagerStartupScenario(
                     "retained handoff completed before contention",
                   );
                 },
-                (error) => {
+                (error: unknown) => {
                   throw error;
                 },
               ),
@@ -7197,12 +7234,12 @@ async function runManagerStartupScenario(
       if (mode === "staff-message-timeout") {
         const failure = await retainedPromise.then(
           () => undefined,
-          (error) => error,
+          (error: unknown) => error,
         );
-        contentionHolder!.stdin!.end("release");
+        releaseContentionHolder();
         assert.ok(
           failure instanceof Error &&
-            /Required evidence was retained, but the staff handoff failed: Project assignment authority is in progress/.test(
+            /^Project assignment authority is in progress$/.test(
               failure.message,
             ),
           `expected authority timeout rejection, received ${String(failure)}`,
@@ -7255,7 +7292,7 @@ async function runManagerStartupScenario(
           ),
           JSON.stringify(replacement),
         );
-        contentionHolder!.stdin!.end("release");
+        releaseContentionHolder();
         await assert.rejects(retainedPromise);
         assert.deepEqual(
           listProjectAssignments(supervisionRuntime(), repoKey).find(
@@ -7291,7 +7328,7 @@ async function runManagerStartupScenario(
           descriptorPath,
           JSON.stringify({ ...descriptor, leaseId: randomUUID() }),
         );
-        contentionHolder!.stdin!.end("release");
+        releaseContentionHolder();
         let rejected = false;
         try {
           await retainedPromise;
@@ -7321,7 +7358,7 @@ async function runManagerStartupScenario(
           1,
           "message must not publish while another process owns assignment authority",
         );
-        contentionHolder.stdin!.end("release");
+        releaseContentionHolder();
       }
       if (mode === "staff-message-timeout") return;
       const retained = await retainedPromise;
@@ -7487,7 +7524,7 @@ async function runManagerStartupScenario(
       join(realFs.realpathSync(tmpdir()), basename(childPath)),
       null,
     );
-    contentionHolder?.stdin?.end("release");
+    releaseContentionHolder();
     for (const state of ownedTree) {
       resetAgentMailbox(agentMailboxPath(state.workspaceId, state.agentLabel));
       if (mode === "close-tree" || mode === "close-tree-failure") {
@@ -8556,16 +8593,18 @@ test("parent list hides disabled allowed definitions", async () => {
     realFs.writeFileSync(join(PI_AGENTS_DIR, name), content, "utf8");
   const state = managedState("listing-parent");
   const activeRequestId = randomUUID();
+  const childSessionFile = join(testTmpRoot, "disabled-child.jsonl");
   const child = {
     ...managedState("disabled-child-agent", activeRequestId, {
       ...recoveryIdentity("disabled-child-agent"),
       piSessionId: "11111111-1111-4111-8111-111111111111",
+      piSessionFile: childSessionFile,
     }),
     ownerSessionId: state.piSessionId,
   };
   nativeSessions.set(child.piSessionId, {
     id: child.piSessionId,
-    path: child.piSessionFile,
+    path: childSessionFile,
     cwd: child.cwd,
     entries: [
       {
@@ -9662,7 +9701,7 @@ test("owned continuation requires a matching persisted child edge", () => {
     session.entries.push({
       type: "custom",
       customType: "pi-herdsman-agent-context-retired",
-      data: { sessionId: id },
+      data: { sessionId: id, definition: "agent", label: "agent" },
     });
     updateConfig("contextRetirement", true);
     try {
@@ -9877,7 +9916,12 @@ test("nested continuation proof stays on the nested owner's active branch", () =
     cwd: testTmpRoot,
     entries: [childIdentity],
   };
-  const parent = {
+  const parent: {
+    id: string;
+    path: string;
+    cwd: string;
+    entries: unknown[];
+  } = {
     id: parentId,
     path: parentPath,
     cwd: testTmpRoot,
@@ -10021,11 +10065,14 @@ test("scoped historical continuation rejects conflicting terminal provenance but
       localEvidence: [],
     },
   };
-  const terminal = ownershipResult(id, LEAD_SESSION_ID, { path, label });
+  const terminal = ownershipResult(id, LEAD_SESSION_ID, {
+    path,
+    label,
+    workspaceId: WORKSPACE,
+    paneId: "agent-pane",
+  });
   terminal.details.requestId = requestId;
   terminal.details.runId = runId;
-  terminal.details.workspaceId = WORKSPACE;
-  terminal.details.paneId = "agent-pane";
   const mailbox = agentMailboxPath(WORKSPACE, label);
   const unrelatedMailbox = agentMailboxPath(
     WORKSPACE,
@@ -10237,13 +10284,17 @@ test("scoped historical continuation rejects conflicting accepted evidence marke
       localEvidence: [],
     },
   };
-  const terminal = ownershipResult(id, LEAD_SESSION_ID, { path, label });
-  Object.assign(terminal.details, {
-    requestId,
-    runId,
+  const terminal = ownershipResult(id, LEAD_SESSION_ID, {
+    path,
+    label,
     workspaceId: WORKSPACE,
     paneId: "agent-pane",
   });
+  Object.assign(terminal.details, {
+    requestId,
+    runId,
+  });
+  const conflictingEvidence = structuredClone(evidence);
   const session = {
     id,
     path,
@@ -10255,7 +10306,7 @@ test("scoped historical continuation rejects conflicting accepted evidence marke
         data: { sessionId: id, definition: "agent", label },
       },
       evidence,
-      structuredClone(evidence),
+      conflictingEvidence,
     ],
   };
   nativeSessions.clear();
@@ -10263,7 +10314,7 @@ test("scoped historical continuation rejects conflicting accepted evidence marke
   realFs.writeFileSync(path, "{}", "utf8");
   const mailbox = agentMailboxPath(WORKSPACE, label);
   try {
-    session.entries[2]!.data.evidenceAssignmentId = randomUUID();
+    conflictingEvidence.data.evidenceAssignmentId = randomUUID();
     assert.throws(
       () => resolveAssignmentSession(fakeContext([terminal]) as any, id),
       /conflicting accepted evidence metadata/,
@@ -10299,7 +10350,12 @@ test("scoped historical continuation rejects residual mailbox after state remova
       localEvidence: [],
     },
   };
-  const terminal = ownershipResult(id, LEAD_SESSION_ID, { path, label });
+  const terminal = ownershipResult(id, LEAD_SESSION_ID, {
+    path,
+    label,
+    workspaceId: WORKSPACE,
+    paneId: "historical-pane",
+  });
   Object.assign(terminal.details, {
     requestId,
     runId,
@@ -10385,13 +10441,10 @@ test("scoped continuation revalidates terminal provenance immediately before adm
   const terminal = ownershipResult(id, LEAD_SESSION_ID, {
     path,
     label,
-  });
-  Object.assign(terminal.details, {
-    requestId,
-    runId,
     workspaceId: WORKSPACE,
     paneId: "historical-pane",
   });
+  Object.assign(terminal.details, { requestId, runId });
   const ownerEntries: unknown[] = [terminal];
   realFs.writeFileSync(path, "{}", "utf8");
   nativeSessions.set(id, {
@@ -10884,7 +10937,7 @@ test("context retirement rejects managed session continuation only when enabled"
     const otherProjectContext = { ...context, cwd: "/tmp/project-b" };
     assert.throws(
       () =>
-        resolveAssignmentSession(otherProjectContext, session.path, {
+        resolveOwnedAssignmentSession(otherProjectContext, session.path, {
           isContextRetired: () => true,
           contextRetirementForSession: () => undefined,
         }),
@@ -10894,7 +10947,7 @@ test("context retirement rejects managed session continuation only when enabled"
     let policyReads = 0;
     try {
       assert.deepEqual(
-        resolveAssignmentSession(otherProjectContext, session.path, {
+        resolveOwnedAssignmentSession(otherProjectContext, session.path, {
           isContextRetired: () => false,
           contextRetirementForSession: () => {
             policyReads++;
@@ -11859,6 +11912,7 @@ test("historical continuation re-parenting preserves every valid ownership path"
     assert.equal((await request(leadEntries)).details.ok, true);
     parentEntries.pop();
     const childEntries = nativeSessions.get(childId)!.entries;
+    assert.ok(childEntries);
     childEntries.push(
       ownershipResult(parentId, childId, { path: parentPath, label: "parent" }),
     );
@@ -12286,7 +12340,10 @@ test("assignment retains its request when acknowledgement never arrives", async 
     },
   });
   registerExtensionForTest!(pi.pi as never, {
-    afterRequestPublished: () => controller.abort(),
+    afterRequestPublished: (): undefined => {
+      controller.abort();
+      return undefined;
+    },
   });
   await pi.events.get("session_start")![0](undefined, fakeContext());
   const result = await agentTool(pi, "delegate").execute(
@@ -12400,7 +12457,7 @@ test("registered lead exposes only explicit live controls", async () => {
   writeAgentState(mailbox, managedState(label, REQUEST_ID, identity));
   const steerFile = join(testTmpRoot, `${label}-update.md`);
   realFs.writeFileSync(steerFile, "steer evidence");
-  let steerSubmitted: RequestRecord | undefined;
+  const submittedSteer: { request?: RequestRecord } = {};
   const accepting = fakePi({
     activeTools: [],
     allTools: () => accepting.tools,
@@ -12410,7 +12467,7 @@ test("registered lead exposes only explicit live controls", async () => {
       identity.piSessionId,
       (requestMailbox, marker) => {
         const requestId = marker.slice("__PI_HERDSMAN_AGENT_V5__:".length);
-        steerSubmitted = readRequest(requestMailbox, requestId);
+        submittedSteer.request = readRequest(requestMailbox, requestId);
         const current = readAgentState(requestMailbox)!;
         writeAgentState(requestMailbox, {
           ...current,
@@ -12471,7 +12528,7 @@ test("registered lead exposes only explicit live controls", async () => {
     context,
   );
   assert.equal(rejectedSteer.details.error.category, "incompatible_build");
-  assert.equal(steerSubmitted, undefined);
+  assert.deepEqual(submittedSteer, {});
   assert.ok(
     accepting.tools.some((candidate) => candidate.name === "stop_agent"),
   );
@@ -12493,9 +12550,9 @@ test("registered lead exposes only explicit live controls", async () => {
   assert.equal(steer.details.assignment_request_id, REQUEST_ID);
   assert.equal(steer.details.presentation_agent_definition, "agent");
   assert.equal(steer.details.truncated, false);
-  assert.equal(steerSubmitted?.kind, "steer");
-  assert.match(steerSubmitted?.text ?? "", /steer evidence/);
-  assert.equal(steerSubmitted?.requestId, steer.details.request_id);
+  assert.equal(submittedSteer.request?.kind, "steer");
+  assert.match(submittedSteer.request?.text ?? "", /steer evidence/);
+  assert.equal(submittedSteer.request?.requestId, steer.details.request_id);
 
   const oversizedRequestId = randomUUID();
   const oversizedResult = resultPath(oversizedRequestId);
@@ -13337,7 +13394,7 @@ test("lead steers a parent waiting for direct-child work without interrupting it
     );
     assert.equal(interruptWhileAsked.details.ok, false);
     assert.equal(interruptWhileAsked.details.error.category, "agent_busy");
-    removeAsk(parentMailbox, ownerAskId);
+    removeAsk(parentMailbox);
     writeAgentState(parentMailbox, parent);
 
     writeAgentState(parentMailbox, {
@@ -13563,14 +13620,15 @@ test("acknowledgement state-write failures retain requests for durable retry", (
   for (const [index, scenario] of cases.entries()) {
     const label = `ack-retry-${index}`;
     const mailbox = setAgentEnvironment(label);
-    const activeRequestId = scenario.activeRequestId;
+    const activeRequestId =
+      "activeRequestId" in scenario ? scenario.activeRequestId : randomUUID();
     writeAgentState(mailbox, managedState(label, activeRequestId));
     const agent = fakePi();
     registerExtension!(agent.pi as never);
     const context = fakeAgentContext();
     (context as any).isIdle = () => scenario.isIdle;
     agent.events.get("session_start")![0](undefined, context);
-    if (scenario.deliveryFailure)
+    if ("deliveryFailure" in scenario && scenario.deliveryFailure)
       agent.pi.sendUserMessage = () => {
         throw new Error("injected steer delivery failure");
       };
@@ -13606,10 +13664,16 @@ test("acknowledgement state-write failures retain requests for durable retry", (
         : { action: "handled" },
     );
     const acknowledged = readAgentState(mailbox)?.lastAck;
+    assert.ok(acknowledged);
     assert.equal(acknowledged?.requestId, request.requestId, scenario.name);
     assert.equal(acknowledged?.accepted, scenario.expected.accepted);
-    assert.equal(acknowledged?.code, scenario.expected.code);
-    assert.equal(acknowledged?.message, scenario.expected.message);
+    if (scenario.expected.accepted) {
+      assert.equal("code" in acknowledged, false);
+      assert.equal("message" in acknowledged, false);
+    } else {
+      assert.equal(acknowledged?.code, scenario.expected.code);
+      assert.equal(acknowledged?.message, scenario.expected.message);
+    }
     if (scenario.expected.accepted)
       assert.ok(readRequest(mailbox, request.requestId));
     else assert.equal(readRequest(mailbox, request.requestId), undefined);
@@ -13857,6 +13921,35 @@ test("list agents schema rejects unknown fields", () => {
 });
 
 test("transcript projects persisted agent evidence without Herdr terminal reads", async () => {
+  type TranscriptFixtureEntry =
+    | {
+        type: "custom_message";
+        customType: string;
+        content: string;
+        display: boolean;
+      }
+    | {
+        type: "context_edit";
+        targetId: string;
+        replacement: { content: unknown } | null;
+      }
+    | {
+        type: "message";
+        message:
+          | {
+              role: "system" | "user" | "assistant";
+              content: unknown;
+              stopReason?: string;
+            }
+          | {
+              role: "toolResult";
+              toolName: string;
+              toolCallId: string;
+              content: unknown;
+              isError: boolean;
+              timestamp: number;
+            };
+      };
   setLeadEnvironment();
   const label = "transcript-agent";
   const identity = {
@@ -13867,7 +13960,11 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
   resetAgentMailbox(mailbox);
   realFs.rmSync(identity.piSessionFile, { force: true });
   writeAgentState(mailbox, managedState(label, REQUEST_ID, identity));
-  const session = {
+  const session: {
+    id: string;
+    path: string;
+    contextEntries: TranscriptFixtureEntry[];
+  } = {
     id: identity.piSessionId,
     path: identity.piSessionFile,
     contextEntries: [
@@ -13905,7 +14002,7 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
           stopReason: "toolUse",
         },
       },
-    ],
+    ] satisfies TranscriptFixtureEntry[],
   };
   const writeSession = (): void => {
     const entries = session.contextEntries.map((entry, index) => ({
@@ -14032,7 +14129,7 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
         targetId: "entry-1",
         replacement: null,
       },
-    ];
+    ] satisfies TranscriptFixtureEntry[];
     writeSession();
     const edited = await agentTool(pi, "transcript").execute(
       "id",
@@ -14055,11 +14152,13 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
         message: {
           role: "toolResult",
           toolName: "read",
+          toolCallId: "call-read",
+          timestamp: Date.now(),
           isError: false,
           content: [{ type: "text", text: "tool completed" }],
         },
       },
-    ];
+    ] satisfies TranscriptFixtureEntry[];
     writeSession();
     const completed = await agentTool(pi, "transcript").execute(
       "id",
@@ -14089,6 +14188,8 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
         message: {
           role: "toolResult",
           toolName: "bash",
+          toolCallId: "call-bash",
+          timestamp: Date.now(),
           isError: false,
           content: [{ type: "text", text: hugeToolResult }],
         },
@@ -14100,7 +14201,7 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
           content: [{ type: "text", text: "after large tool evidence" }],
         },
       },
-    ];
+    ] satisfies TranscriptFixtureEntry[];
     writeSession();
     const boundedTool = await agentTool(pi, "transcript").execute(
       "id",
