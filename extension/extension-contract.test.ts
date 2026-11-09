@@ -2245,8 +2245,8 @@ test("active chief describes authoritative remote ask projection", async () => {
   const installedIntervals: number[] = [];
   globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
     installedIntervals.push(delay ?? 0);
-    return {} as ReturnType<typeof setInterval>;
-  }) as typeof setInterval;
+    return {} as unknown as ReturnType<typeof setInterval>;
+  }) as unknown as typeof setInterval;
   const restoreSetInterval = () => {
     globalThis.setInterval = originalSetInterval;
   };
@@ -2469,8 +2469,8 @@ test("idle Chief supervision reconciles at the 10s cadence, not UI redraw ticks"
   const originalSetInterval = globalThis.setInterval;
   globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
     callbacks.set(delay ?? 0, callback);
-    return {} as ReturnType<typeof setInterval>;
-  }) as typeof setInterval;
+    return {} as unknown as ReturnType<typeof setInterval>;
+  }) as unknown as typeof setInterval;
   t.after(() => {
     globalThis.setInterval = originalSetInterval;
     pi.events.get("session_shutdown")?.[0]();
@@ -7323,7 +7323,9 @@ test("delegating managed agents refresh their status widget after controller cha
   };
   const originalSetInterval = globalThis.setInterval;
   globalThis.setInterval = (() =>
-    ({}) as ReturnType<typeof setInterval>) as typeof setInterval;
+    ({}) as unknown as ReturnType<
+      typeof setInterval
+    >) as unknown as typeof setInterval;
   t.after(() => {
     globalThis.setInterval = originalSetInterval;
     pi.events.get("session_shutdown")?.[0]();
@@ -7435,7 +7437,7 @@ test("presentation event bursts coalesce to one controller snapshot refresh", as
   const originalSetTimeout = globalThis.setTimeout;
   const originalSetInterval = globalThis.setInterval;
   let presentationTimer: TimerHandler | undefined;
-  globalThis.setInterval = (() => ({})) as typeof setInterval;
+  globalThis.setInterval = (() => ({})) as unknown as typeof setInterval;
   t.after(async () => {
     globalThis.setTimeout = originalSetTimeout;
     globalThis.setInterval = originalSetInterval;
@@ -7638,8 +7640,8 @@ for (const delegationEnabled of [false, true]) {
       let refreshTimer: TimerHandler | undefined;
       globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
         if (delay === 10_000) refreshTimer = callback;
-        return {} as ReturnType<typeof setInterval>;
-      }) as typeof setInterval;
+        return {} as unknown as ReturnType<typeof setInterval>;
+      }) as unknown as typeof setInterval;
       t.after(() => {
         globalThis.setInterval = originalSetInterval;
         sessionManager.open = originalOpen;
