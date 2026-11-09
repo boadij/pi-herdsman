@@ -76,6 +76,10 @@ const tuiMenuKeybindings = {
     })[key] === data,
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 test("Manager Required evidence route removes persisted evidence and cancellation preserves it", async (t) => {
   const { createLeadSupervisionRuntime } = await import("./lead-runtime.ts");
   setLeadEnvironment();
@@ -2139,7 +2143,9 @@ test("ordinary Leads deliver peer messages across non-Git sockets", async (t) =>
       ...(index === 1
         ? {
             entries: recipientEntries,
-            sendMessage: (message: unknown) => recipientEntries.push(message),
+            sendMessage: (message: unknown) => {
+              recipientEntries.push(message);
+            },
           }
         : {}),
     });
@@ -2299,7 +2305,9 @@ test("Manager peer messages deliver to a live Manager without changing its role"
                   : respond({}),
       ...(recipient
         ? {
-            sendMessage: (message: unknown) => recipientEntries.push(message),
+            sendMessage: (message: unknown) => {
+              recipientEntries.push(message);
+            },
           }
         : {}),
     });
@@ -3285,8 +3293,14 @@ test("active Manager supervision refreshes serialize and coalesce concurrent req
     stderr: "",
     code: 0,
   });
-  const release = Promise.withResolvers<void>();
-  const gatedSnapshotStarted = Promise.withResolvers<void>();
+  let resolveRelease!: () => void;
+  const release = new Promise<void>((resolve) => {
+    resolveRelease = resolve;
+  });
+  let resolveGatedSnapshotStarted!: () => void;
+  const gatedSnapshotStarted = new Promise<void>((resolve) => {
+    resolveGatedSnapshotStarted = resolve;
+  });
   let snapshots = 0;
   let active = 0;
   let maxActive = 0;
@@ -3319,8 +3333,8 @@ test("active Manager supervision refreshes serialize and coalesce concurrent req
         active++;
         maxActive = Math.max(maxActive, active);
         if (gateRefresh && snapshots === refreshSnapshotBase + 1) {
-          gatedSnapshotStarted.resolve();
-          await release.promise;
+          resolveGatedSnapshotStarted();
+          await release;
         }
         active--;
         return respond({ snapshot: { agents: [], panes: [], workspaces: [] } });
@@ -3332,7 +3346,7 @@ test("active Manager supervision refreshes serialize and coalesce concurrent req
   context.mode = "rpc";
   registerExtension!(pi.pi as never);
   t.after(async () => {
-    release.resolve();
+    resolveRelease();
     await pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_TAB_ID;
@@ -3357,7 +3371,7 @@ test("active Manager supervision refreshes serialize and coalesce concurrent req
   };
   promptEvents.push(firstEvent);
   const firstCaller = beforeStart(firstEvent, context);
-  await gatedSnapshotStarted.promise;
+  await gatedSnapshotStarted;
   const callers = Array.from({ length: 4 }, () => {
     const event = {
       systemPrompt: "base",
@@ -3366,7 +3380,7 @@ test("active Manager supervision refreshes serialize and coalesce concurrent req
     promptEvents.push(event);
     return beforeStart(event, context);
   });
-  release.resolve();
+  resolveRelease();
   const results = await Promise.all([firstCaller, ...callers]);
   assert.ok(
     results.every((result, index) => {
@@ -3747,7 +3761,15 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     assert.deepEqual(first.pi.getActiveTools(), ["read", ...leadTools]);
     assert.equal(first.pi.getActiveTools().includes("message_staff"), false);
     assert.equal(
-      first.pi.getAllTools().some((tool) => tool.name === "delegate_work"),
+      first.pi
+        .getAllTools()
+        .some(
+          (tool) =>
+            typeof tool === "object" &&
+            tool !== null &&
+            "name" in tool &&
+            tool.name === "delegate_work",
+        ),
       true,
     );
     const leadPromptEvent = {
@@ -3798,7 +3820,15 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       staffMessage,
     );
     assert.equal(
-      first.pi.getAllTools().some((tool) => tool.name === "delegate_work"),
+      first.pi
+        .getAllTools()
+        .some(
+          (tool) =>
+            typeof tool === "object" &&
+            tool !== null &&
+            "name" in tool &&
+            tool.name === "delegate_work",
+        ),
       true,
     );
     assert.equal(first.pi.getActiveTools().includes("delegate_agent"), false);
@@ -3859,7 +3889,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       managerPromptEvent,
       ctx1,
     );
-    assert.equal(managerPrompt, undefined);
+    assert.equal(
+      isRecord(managerPrompt) ? managerPrompt.message : undefined,
+      undefined,
+    );
     assert.match(
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
       /You are the verified Manager[\s\S]*Project execution belongs to assigned Leads and their Agent trees[\s\S]*Supervision is event-driven[\s\S]*Coordinate assigned project work through Leads[\s\S]*Leave technical investigation, implementation, review, validation, and\s+integration to that Lead and its Agents rather than doing or delegating\s+the work yourself/i,
@@ -3903,11 +3936,14 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
         .pi_herdsman_lead_execution,
       undefined,
     );
-    assert.equal(managerPrompt?.message, undefined);
-    const managerContext = first.sentMessageCalls.findLast(
-      ({ message }: any) =>
-        message?.customType === "pi-herdsman-supervision-context",
-    );
+    assert.equal(managerPrompt, undefined);
+    const managerContext = first.sentMessageCalls
+      .slice()
+      .reverse()
+      .find(
+        ({ message }: any) =>
+          message?.customType === "pi-herdsman-supervision-context",
+      );
     assert.ok(managerContext);
     assert.deepEqual(managerContext.options, { triggerTurn: false });
     assert.deepEqual(
@@ -3982,12 +4018,14 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       peerLeadLockPath(peerRuntime(), leadPeerSession),
     );
     const leadPeer = {
-      version: 1 as const,
+      version: 2 as const,
       role: "lead" as const,
+      sessionKind: "ordinary" as const,
       piSessionId: leadPeerSession,
       workspaceId: "unrelated",
       paneId: "lead-pane",
       tabId: "lead-tab",
+      socket: join(tmpdir(), `${leadPeerSession}.sock`),
       claim: peerLease.claim,
       updatedAt: Date.now(),
     };
@@ -4153,9 +4191,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     assert.deepEqual(first.pi.getActiveTools(), activeManagerTools);
     await first.commandOptions.get("manager").handler("leave", ctx1);
-    const leadMetadata = metadataReports.findLast((args) =>
-      args.includes("pi_herdsman_name=current lead name"),
-    );
+    const leadMetadata = metadataReports
+      .slice()
+      .reverse()
+      .find((args) => args.includes("pi_herdsman_name=current lead name"));
     const titleIndex = leadMetadata?.indexOf("--title") ?? -1;
     const nameTokenIndex =
       leadMetadata?.indexOf("pi_herdsman_name=current lead name") ?? -1;
@@ -4719,7 +4758,15 @@ test("restored Manager registers supervision tools and restores Manager tools", 
         entry.data.sessionId = sessionId;
     await pi.events.get("session_start")![0](undefined, context);
     assert.deepEqual(pi.pi.getActiveTools(), managerTools);
-    assert.ok(pi.tools.some((tool) => tool.name === "delegate_work"));
+    assert.ok(
+      pi.tools.some(
+        (tool) =>
+          typeof tool === "object" &&
+          tool !== null &&
+          "name" in tool &&
+          tool.name === "delegate_work",
+      ),
+    );
     assert.equal(pi.pi.getActiveTools().includes("delegate_agent"), false);
     assert.equal(
       pi.calls.some((args) => args[0] === "agent" && args[1] === "list"),
@@ -4727,16 +4774,26 @@ test("restored Manager registers supervision tools and restores Manager tools", 
     );
     assert.equal(
       pi.entries
-        .filter((entry: any) => entry.customType === "pi-herdsman-role")
-        .at(-1).data.role,
+        .filter(
+          (
+            entry: unknown,
+          ): entry is { customType: unknown; data: Record<string, unknown> } =>
+            isRecord(entry) &&
+            entry.customType === "pi-herdsman-role" &&
+            isRecord(entry.data),
+        )
+        .at(-1)?.data.role,
       "manager",
     );
-    const managerMetadata = pi.calls.findLast(
-      (args) =>
-        args[0] === "pane" &&
-        args[1] === "report-metadata" &&
-        args.includes("pi_herdsman_role=manager"),
-    );
+    const managerMetadata = pi.calls
+      .slice()
+      .reverse()
+      .find(
+        (args) =>
+          args[0] === "pane" &&
+          args[1] === "report-metadata" &&
+          args.includes("pi_herdsman_role=manager"),
+      );
     assert.ok(managerMetadata);
     for (const token of [
       "pi_herdsman_name",
@@ -5095,7 +5152,10 @@ function managerBootstrapHarness(
       ...(result.error
         ? {
             spawnError: {
-              code: result.error.code,
+              code:
+                "code" in result.error && typeof result.error.code === "string"
+                  ? result.error.code
+                  : undefined,
               message: result.error.message,
             },
           }
@@ -9894,11 +9954,17 @@ async function managerDelegateAssignmentTest(
       { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
       ctx,
     );
-    assert.equal(contextProjection?.message, undefined);
-    const contextMessage = pi.sentMessageCalls.findLast(
-      ({ message }: any) =>
-        message?.customType === "pi-herdsman-supervision-context",
+    assert.equal(
+      isRecord(contextProjection) ? contextProjection.message : undefined,
+      undefined,
     );
+    const contextMessage = pi.sentMessageCalls
+      .slice()
+      .reverse()
+      .find(
+        ({ message }: any) =>
+          message?.customType === "pi-herdsman-supervision-context",
+      );
     assert.match(
       String((contextMessage?.message as any)?.content),
       new RegExp(
@@ -10171,7 +10237,7 @@ async function managerDelegateAssignmentTest(
       await waitForStage("failed scope lookup recorded", () =>
         assert.ok(
           lead.callResults.some(
-            ({ args, succeeded }) =>
+            ({ args, succeeded }: { args: string[]; succeeded: boolean }) =>
               args[0] === "worktree" && args[1] === "list" && !succeeded,
           ),
         ),
@@ -10214,15 +10280,19 @@ async function managerDelegateAssignmentTest(
       await waitForStage("managed label restored after scope recovery", () =>
         assert.equal(tabLabels.get("child-tab"), "Managed Lead"),
       );
-      const message = await lead.tools
-        .find((tool) => tool.name === "message_supervisor")!
-        .execute(
-          "message",
-          { message: "Ready for review" },
-          undefined,
-          undefined,
-          leadCtx,
-        );
+      const messageTool: unknown = lead.tools.find(
+        (tool: unknown) => isRecord(tool) && tool.name === "message_supervisor",
+      );
+      assert.ok(
+        isRecord(messageTool) && typeof messageTool.execute === "function",
+      );
+      const message = await messageTool.execute(
+        "message",
+        { message: "Ready for review" },
+        undefined,
+        undefined,
+        leadCtx,
+      );
       assert.match(
         JSON.stringify(message),
         /Project message saved for Manager/,
@@ -10555,6 +10625,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
     workspace_id: incompatibleWorkspace,
     pane_id: "incompatible-manager-pane",
     tab_id: "incompatible-manager-tab",
+    cwd: "/tmp",
   };
   const incompatibleManagerLease = claimManagerLease({
     build: OTHER_HERDSMAN_BUILD,
@@ -10583,6 +10654,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
     workspace_id: incompatibleWorkspace,
     pane_id: "nested-incompatible-manager-lead-pane",
     tab_id: "nested-incompatible-manager-lead-tab",
+    cwd: "/tmp",
   };
   writeLeadCoordinationState(supervisionRuntime(), {
     version: 1,
@@ -10602,6 +10674,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
     workspace_id: WORKSPACE,
     pane_id: "incompatible-compatible-manager-child-pane",
     tab_id: "incompatible-compatible-manager-child-tab",
+    cwd: "/tmp",
   };
   writeLeadCoordinationState(supervisionRuntime(), {
     version: 1,
@@ -10728,6 +10801,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
       workspace_id: WORKSPACE,
       pane_id: `many-compatible-${index}`,
       tab_id: `many-compatible-${index}`,
+      cwd: "/tmp",
     };
   });
   let revokeOrdinaryDuringRead = false;
@@ -11095,24 +11169,32 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
         return originalOpen.apply(sessionManager, args);
       };
       let chiefPrompt;
+      const chiefPromptEvent = {
+        systemPrompt: "base",
+        systemPromptOptions: { contextFiles: [] },
+      };
       try {
         chiefPrompt = await chief.events.get("before_agent_start")![0](
-          { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
+          chiefPromptEvent,
           chiefCtx,
         );
       } finally {
         sessionManager.open = originalOpen;
       }
       assert.equal(openCalls, 0);
-      assert.equal(chiefPrompt?.message, undefined);
+      assert.ok(isRecord(chiefPrompt));
+      assert.ok(typeof chiefPrompt.systemPrompt === "string");
       assert.match(
-        chiefPrompt?.systemPrompt ?? "",
+        chiefPrompt.systemPrompt,
         /When eligible same-role direct reports need technical coordination,[\s\S]*communicate directly rather than relaying their messages/,
       );
-      const contextMessage = chief.sentMessageCalls.findLast(
-        ({ message }: any) =>
-          message?.customType === "pi-herdsman-supervision-context",
-      );
+      const contextMessage = chief.sentMessageCalls
+        .slice()
+        .reverse()
+        .find(
+          ({ message }: any) =>
+            message?.customType === "pi-herdsman-supervision-context",
+        );
       assert.ok(
         JSON.stringify(contextMessage?.message).includes(
           coordinatorTarget("manager", LEAD_SESSION_ID),
@@ -11269,10 +11351,13 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
         { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
         chiefCtx,
       );
-      const nestedOnlyContext = chief.sentMessageCalls.findLast(
-        ({ message }: any) =>
-          message?.customType === "pi-herdsman-supervision-context",
-      );
+      const nestedOnlyContext = chief.sentMessageCalls
+        .slice()
+        .reverse()
+        .find(
+          ({ message }: any) =>
+            message?.customType === "pi-herdsman-supervision-context",
+        );
       assert.match(
         JSON.stringify(nestedOnlyContext?.message),
         /incompatible_staff_observations: 1/,
@@ -11689,9 +11774,11 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
         managerCtx,
       );
     useLeadIdentity();
+    const currentLead = lead;
+    assert.ok(currentLead);
     await t.waitFor(() =>
       assert.ok(
-        lead!.sent.some(
+        currentLead.sent.some(
           (message: any) =>
             message?.customType === "pi-herdsman-manager_message" &&
             message?.details?.id === managerMessage.details.id &&
@@ -11733,7 +11820,7 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     useLeadIdentity();
     await t.waitFor(() =>
       assert.equal(
-        lead.sentMessageCalls.filter(
+        currentLead.sentMessageCalls.filter(
           ({ message }: any) =>
             message?.customType === "pi-herdsman-manager_message" &&
             message?.details?.toSessionId === leadSession,
@@ -11742,11 +11829,14 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
       ),
     );
     assert.deepEqual(
-      lead.sentMessageCalls.findLast(
-        ({ message }: any) =>
-          message?.customType === "pi-herdsman-manager_message" &&
-          message?.details?.toSessionId === leadSession,
-      )?.options,
+      lead.sentMessageCalls
+        .slice()
+        .reverse()
+        .find(
+          ({ message }: any) =>
+            message?.customType === "pi-herdsman-manager_message" &&
+            message?.details?.toSessionId === leadSession,
+        )?.options,
       { deliverAs: "steer", triggerTurn: true },
       "an idle ordinary Lead receives a Manager message that starts a turn",
     );
@@ -13993,9 +14083,17 @@ test("Chief activation rollback fails closed when its restrictive projection fai
   ]);
   const savedRole = [...entries]
     .reverse()
-    .find((entry: any) => entry.customType === "pi-herdsman-role");
-  assert.equal(savedRole?.data.role, "lead");
-  assert.deepEqual(savedRole?.data.leadTools, ["read", "bash"]);
+    .find(
+      (
+        entry: unknown,
+      ): entry is { customType: unknown; data: Record<string, unknown> } =>
+        isRecord(entry) &&
+        entry.customType === "pi-herdsman-role" &&
+        isRecord(entry.data),
+    );
+  assert.ok(savedRole && isRecord(savedRole.data));
+  assert.equal(savedRole.data.role, "lead");
+  assert.deepEqual(savedRole.data.leadTools, ["read", "bash"]);
   assert.ok(
     entries.some(
       (entry: any) =>
@@ -14220,9 +14318,11 @@ test("selecting a historical Chief branch activates its lease and staff tools", 
     assert.equal(
       sessionLeadRoleState(
         entries,
-        (entries as any[]).findLast(
-          (entry: any) => entry.customType === "pi-herdsman-role",
-        )?.data.sessionId ?? LEAD_SESSION_ID,
+        (entries as any[])
+          .slice()
+          .reverse()
+          .find((entry: any) => entry.customType === "pi-herdsman-role")?.data
+          .sessionId ?? LEAD_SESSION_ID,
       )?.role,
       "chief",
     );
@@ -14339,7 +14439,14 @@ test("manual chief leave completes lead cleanup when tool restoration fails", as
   );
   assert.deepEqual(
     entries
-      .filter((entry: any) => entry.customType === "pi-herdsman-role")
+      .filter(
+        (
+          entry: unknown,
+        ): entry is { customType: unknown; data: Record<string, unknown> } =>
+          isRecord(entry) &&
+          entry.customType === "pi-herdsman-role" &&
+          isRecord(entry.data),
+      )
       .at(-1)?.data,
     { sessionId: LEAD_SESSION_ID, role: "lead", leadTools: ["read", "bash"] },
   );
@@ -14688,19 +14795,15 @@ test("Chief profile drives the turn-start tools, prompt, and tool-call guard", a
       systemPromptOptions: { contextFiles: [] },
     };
     const prompt = await pi.events.get("before_agent_start")![0](event, ctx);
+    assert.ok(isRecord(prompt));
+    assert.ok(typeof prompt.systemPrompt === "string");
+    assert.match(prompt.systemPrompt, /verified workspace-neutral Chief/);
     assert.match(
-      prompt?.systemPrompt ?? "",
-      /verified workspace-neutral Chief/,
-    );
-    assert.match(
-      prompt?.systemPrompt ?? "",
+      prompt.systemPrompt,
       /Each unresolved unit of work has one executor/,
     );
-    assert.match(
-      prompt?.systemPrompt ?? "",
-      /A proven lost Agent remains unresolved/,
-    );
-    assert.match(prompt?.systemPrompt ?? "", /Configured chief body/);
+    assert.match(prompt.systemPrompt, /A proven lost Agent remains unresolved/);
+    assert.match(prompt.systemPrompt, /Configured chief body/);
     assert.ok(pi.pi.getActiveTools().includes("read"));
     assert.ok(pi.pi.getActiveTools().includes("list_staff"));
     for (const name of ["list_agents", "reply_agent", "stop_agent"])
@@ -14757,7 +14860,9 @@ test("Chief profile drives the turn-start tools, prompt, and tool-call guard", a
       event,
       ctx,
     );
-    assert.match(afterInvalid?.systemPrompt ?? "", /Configured chief body/);
+    assert.ok(isRecord(afterInvalid));
+    assert.ok(typeof afterInvalid.systemPrompt === "string");
+    assert.match(afterInvalid.systemPrompt, /Configured chief body/);
 
     writeFileSync(
       overridePath,
@@ -19189,7 +19294,7 @@ test("Running selects duplicate TUI labels by stable value and revalidates ident
         tuiMenuKeybindings,
         resolve,
       );
-      const lines = () => component.render(200);
+      const lines = (): string[] => component.render(200);
       const call = customCall++;
       if (call === 0 || call === 3) {
         selectTuiItem(component, "Agents");
@@ -19409,7 +19514,7 @@ test("Definitions contextual help distinguishes managed Lead and Agent launches 
         tuiMenuKeybindings,
         resolve,
       );
-      const lines = () => component.render(200);
+      const lines = (): string[] => component.render(200);
       const moveTo = (target: string) => {
         for (let attempts = 0; attempts < 20; attempts++) {
           if (
@@ -20734,6 +20839,7 @@ test("Lead stop does not let the Lead continue a nested descendant directly", as
     assert.match(stopSummary(pi), /✓ pi-herdsman-parent/);
     assert.equal(pi.sentMessageCalls.length, 1);
     assert.deepEqual(pi.sentMessageCalls[0]?.options, { triggerTurn: false });
+    assert.ok(isRecord(pi.sentMessageCalls[0]?.message));
     assert.equal(pi.sentMessageCalls[0]?.message.display, true);
     assert.equal(
       pi.sentMessageCalls[0]?.message.content,
@@ -22510,22 +22616,26 @@ test("restarting status runtime replaces and unreferences its timer", async (t) 
   const { createAgentStatusRuntime } = await import("./agent-controller.ts");
   const originalSetInterval = globalThis.setInterval;
   const originalClearInterval = globalThis.clearInterval;
-  const timers = new Set<ReturnType<typeof setInterval>>();
+  const timers = new Set<NodeJS.Timeout>();
   let unrefCalls = 0;
-  globalThis.setInterval = ((callback: TimerHandler) => {
-    const timer = originalSetInterval(callback, 60_000);
-    const unref = timer.unref.bind(timer);
-    timer.unref = () => {
-      unrefCalls++;
-      return unref();
-    };
-    timers.add(timer);
-    return timer;
-  }) as typeof setInterval;
-  globalThis.clearInterval = ((timer) => {
-    timers.delete(timer);
-    originalClearInterval(timer);
-  }) as typeof clearInterval;
+  Object.defineProperty(globalThis, "setInterval", {
+    value: (callback: () => void) => {
+      const timer = originalSetInterval(callback, 60_000);
+      const unref = timer.unref.bind(timer);
+      timer.unref = () => {
+        unrefCalls++;
+        return unref();
+      };
+      timers.add(timer);
+      return timer;
+    },
+  });
+  Object.defineProperty(globalThis, "clearInterval", {
+    value: (timer: NodeJS.Timeout | undefined) => {
+      if (timer) timers.delete(timer);
+      originalClearInterval(timer);
+    },
+  });
   const runtime = createAgentStatusRuntime();
   runtime.configure({
     loadSnapshot: async () => ({
@@ -22621,15 +22731,19 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
     disposeCalls++;
     originalDispose.call(this);
   };
-  globalThis.setInterval = ((callback: TimerHandler) => {
-    const timer = originalSetInterval(callback, 60_000);
-    activeTimers.add(timer);
-    return timer;
-  }) as typeof setInterval;
-  globalThis.clearInterval = ((timer) => {
-    activeTimers.delete(timer);
-    originalClearInterval(timer);
-  }) as typeof clearInterval;
+  Object.defineProperty(globalThis, "setInterval", {
+    value: (callback: () => void) => {
+      const timer = originalSetInterval(callback, 60_000);
+      activeTimers.add(timer);
+      return timer;
+    },
+  });
+  Object.defineProperty(globalThis, "clearInterval", {
+    value: (timer: NodeJS.Timeout | undefined) => {
+      if (timer) activeTimers.delete(timer);
+      originalClearInterval(timer);
+    },
+  });
   try {
     const pi = fakePi({
       exec: (command, args, options) => {
@@ -23098,14 +23212,16 @@ test("TUI status refresh consumes the coherent Herdr session snapshot", async (t
   resetAgentMailbox(mailbox);
   writeAgentState(mailbox, managedState(label, REQUEST_ID, identity));
   const calls: string[][] = [];
-  let refreshTimer: TimerHandler | undefined;
+  let refreshTimer: (() => void) | undefined;
   const intervalDelays: number[] = [];
   const originalSetInterval = globalThis.setInterval;
-  globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
-    refreshTimer = callback;
-    if (delay !== undefined) intervalDelays.push(delay);
-    return {} as ReturnType<typeof setInterval>;
-  }) as typeof setInterval;
+  Object.defineProperty(globalThis, "setInterval", {
+    value: (callback: () => void, delay?: number) => {
+      refreshTimer = callback;
+      if (delay !== undefined) intervalDelays.push(delay);
+      return originalSetInterval(callback, delay);
+    },
+  });
   const herdrAgent = {
     agent: "pi",
     name: herdrAlias("sleep-smoke-a"),
