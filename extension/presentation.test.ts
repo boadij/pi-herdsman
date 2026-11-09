@@ -3775,6 +3775,83 @@ test("Status widget renders complete execution metadata without changing ownersh
   assert.match(widget.render(160)[1]!, /└─ .*implementer/);
 });
 
+test("managed Lead Git summaries are right-aligned, fresh-only, and inert", (t) => {
+  const focused: unknown[] = [];
+  let reads = 0;
+  let summary: {
+    dirty: boolean;
+    additions?: number;
+    deletions?: number;
+    changedFiles?: number;
+  } = { dirty: true, additions: 8, deletions: 2, changedFiles: 1 };
+  const widget = new StatusWidget(
+    undefined,
+    undefined,
+    (intent) => focused.push(intent),
+    undefined,
+    () => {
+      reads++;
+      return summary;
+    },
+  );
+  t.after(() => widget.dispose());
+  const snapshot = {
+    agents: [],
+    stale: false,
+    unavailable: false,
+    breadcrumb: [{ text: "lead" }],
+    execution: { kind: "managed" as const, lifecycle: "assigned" as const },
+  };
+  widget.setSnapshot(snapshot);
+  const header = widget.render(64)[0]!;
+  assert.ok(header.endsWith("+8 -2*"));
+  assert.equal(header.length, 64);
+  const suffixX = header.indexOf("+8 -2*");
+  assert.equal(
+    widget.handleMouse({
+      type: "click",
+      button: "left",
+      width: 64,
+      x: suffixX,
+      y: 0,
+    }),
+    undefined,
+  );
+  assert.deepEqual(focused, []);
+  assert.equal(
+    widget.handleMouse({
+      type: "click",
+      button: "left",
+      width: 64,
+      x: header.indexOf("managed"),
+      y: 0,
+    })?.handled,
+    true,
+  );
+  assert.equal(reads, 1);
+
+  widget.setSnapshot({ ...snapshot, stale: true });
+  assert.doesNotMatch(widget.render(64)[0]!, /\+8 -2\*/);
+  assert.equal(reads, 1);
+  widget.setSnapshot({
+    ...snapshot,
+    execution: { kind: "managed", lifecycle: "unavailable" },
+  });
+  assert.doesNotMatch(widget.render(64)[0]!, /\+8 -2\*/);
+  assert.equal(reads, 1);
+  widget.setSnapshot(snapshot);
+  assert.doesNotMatch(widget.render(12)[0]!, /\+8 -2\*/);
+  assert.ok(visibleWidth(widget.render(12)[0]!) <= 12);
+  for (const [value, suffix] of [
+    [{ dirty: false, additions: 0, deletions: 0, changedFiles: 2 }, "2f"],
+    [{ dirty: false, additions: 0, deletions: 0, changedFiles: 0 }, "±0"],
+    [{ dirty: true }, "*"],
+  ] as const) {
+    summary = value;
+    assert.ok(widget.render(64)[0]!.endsWith(suffix));
+  }
+});
+
 test("Status widget keeps execution metadata ahead of elapsed time when narrow", (t) => {
   const widget = new StatusWidget();
   t.after(() => widget.dispose());

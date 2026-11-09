@@ -337,6 +337,10 @@ export function createAgentStatusRuntime() {
           intent: FocusIntent,
           isCurrent: () => boolean,
         ): Promise<void>;
+        getGitSummary?():
+          import("./presentation.ts").GitChangeSummary | undefined;
+        onFreshStatus?(ctx: ExtensionContext, snapshot: StatusSnapshot): void;
+        onWidgetStop?(): void;
       }
     | undefined;
   let statusWidget: ReturnType<typeof createStatusWidget> | undefined;
@@ -448,6 +452,13 @@ export function createAgentStatusRuntime() {
       lastValidStatus = snapshot;
       reconcilePendingStarts(snapshot);
       publishStatus(snapshot);
+      if (statusWidget) {
+        try {
+          configured.onFreshStatus?.(ctx, snapshot);
+        } catch {
+          // Optional observations must not turn a successful status refresh into a failure.
+        }
+      }
       syncNewAgentWatch(ctx, generation);
     } catch {
       if (generation === statusGeneration && ctx === statusContext)
@@ -520,6 +531,11 @@ export function createAgentStatusRuntime() {
     void refresh(ctx, generation);
   };
   const removeWidget = (): void => {
+    try {
+      options?.onWidgetStop?.();
+    } catch {
+      // Optional observation cleanup must not affect widget lifecycle.
+    }
     if (statusWidget) {
       statusContext?.ui.setWidget("pi-herdsman", undefined);
       statusWidget.dispose();
@@ -539,6 +555,8 @@ export function createAgentStatusRuntime() {
         void refresh(statusContext, statusGeneration);
     },
     getSnapshot: () => presentedStatus,
+    invalidateWidget: () => statusWidget?.invalidate(),
+    isWidgetActive: () => !!statusWidget,
     startObserver: (ctx: ExtensionContext, onChange: () => void) => {
       if (ctx.mode !== "tui" || !ctx.hasUI) return;
       const primed = statusPrimed && ctx === statusContext;
@@ -575,6 +593,7 @@ export function createAgentStatusRuntime() {
           ? statusGeneration
           : ++statusGeneration;
       clearTimer();
+      removeWidget();
       statusContext = ctx;
       ctx.ui.setWidget("pi-herdsman", (tui: any, theme: any) => {
         let widget: ReturnType<typeof createStatusWidget>;
@@ -610,11 +629,19 @@ export function createAgentStatusRuntime() {
               });
           },
           () => statusWidgetMaxRows,
+          () => options?.getGitSummary?.(),
         );
         widget.setSnapshot(widgetSnapshot(presentedStatus, true));
         if (generation === statusGeneration && ctx === statusContext) {
           statusWidget = widget;
           statusWidgetGeneration = generation;
+          if (primed) {
+            try {
+              options?.onFreshStatus?.(ctx, lastValidStatus);
+            } catch {
+              // Optional observations must not affect widget installation.
+            }
+          }
         } else widget.dispose();
         return widget;
       });
@@ -628,9 +655,7 @@ export function createAgentStatusRuntime() {
     clear: () => {
       ++statusGeneration;
       clearTimer();
-      if (statusContext) statusContext.ui.setWidget("pi-herdsman", undefined);
-      statusWidget?.dispose();
-      statusWidget = undefined;
+      removeWidget();
       requestActive = false;
       focusInFlight = false;
       statusPrimed = false;
@@ -667,10 +692,10 @@ export function createAgentStatusRuntime() {
     shutdown: () => {
       ++statusGeneration;
       clearTimer();
+      removeWidget();
       statusRefresh = false;
       statusInFlight = false;
       focusInFlight = false;
-      removeWidget();
       statusWidgetGeneration = 0;
       statusContext = undefined;
       requestActive = false;
