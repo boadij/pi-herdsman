@@ -323,7 +323,7 @@ deletes the Git branch or Pi conversation.
 
 Manager only. Use the assignment branch to select work, then integrate the
 actual named source branch at its verified checkout into the verified primary
-branch using fast-forward-only Git:
+branch using fast-forward Git or an explicitly authorized clean divergent merge:
 
 ```json
 { "branch": "feat/example", "expected_head": "<full commit SHA>" }
@@ -334,11 +334,12 @@ validation; the actual source branch must still point to it and may differ from
 the assignment handle. This operation is separately controlled by the Manager
 local-merge policy (see
 [Configuration](configuration.md#manager-local-merge)). It does not fetch,
-push, create a merge commit, or delete the Git branch. Divergence returns
-`needs_update` with the observed target revision; this means the source branch
-must incorporate the target, not necessarily that Git found a content conflict.
-The Lead remains responsible for resolving changes and validating the updated
-branch before the Manager accepts a new revision.
+push, or delete the Git branch. Clean divergent histories may create a verified
+two-parent merge commit only with explicit authorization. Actual conflicts
+return `needs_update` before stopping the Lead or mutating either checkout;
+preflight unavailable on older Git returns `blocked`. Git success does not
+prove tests or semantic acceptance; obtain required combined validation before
+acceptance.
 
 The structured result reports `status`, `integrated`, `checkout_removed`, and
 `assignment_retired` independently. `needs_update` leaves both checkouts

@@ -78,9 +78,10 @@ direct-delegation allowlist.
 
 Project implementation, technical conflict repair, and validation belong to
 assigned Leads and their Agent trees. The Manager owns
-project-level integration decisions and may use `integrate_branch` to fast-forward
+project-level integration decisions and may use `integrate_branch` to integrate
 an accepted assigned branch into the verified primary branch when local-merge
-permission is enabled. Manager's Git integration does not grant ownership of
+permission is enabled. Divergent merge commits require explicit authorization
+and clean Git preflight; they do not establish semantic validation. Manager's Git integration does not grant ownership of
 the Lead's Agents or transfer responsibility for technical validation. The
 Successful integration normally triggers guarded removal of that exact source
 checkout and retirement of its assignment. A `cleanup_pending` result reports

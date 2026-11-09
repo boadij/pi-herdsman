@@ -114,12 +114,11 @@ timing, and a level that lives longer than 10 seconds would be shown either way.
 acceptance scenario; it is deliberately not part of the GitHub validation
 workflow or any default/every-PR smoke loop. It uses real Pi, Herdsman tool
 registration, Herdr, and an isolated local repository with no remote. The
-assigned managed Lead uses Pi's real `bash` tool to commit source work, then
-incorporates an independent target-side commit, validates the reconciled
-checkout, and reports the exact final SHA. The scenario verifies actual
-Manager `integrate_branch` calls/results: divergence returns `needs_update`
-without changing either checkout; retrying the accepted reconciled SHA
-fast-forwards verified `main` to exactly that SHA. Before generic teardown it
+assigned managed Lead uses Pi's real `bash` tool to commit source work. The
+primary checkout then receives an independent target-side commit, making the
+histories diverge without a content conflict. The scenario verifies actual
+Manager `integrate_branch` calls/results: conflict-free divergent branches
+produce a verified two-parent merge. Before generic teardown it
 checks that the exact source worktree is gone, its active assignment record is
 retired, its Lead workspace is absent, and the primary `main` worktree remains.
 Only model decisions are scripted; Git, Pi tools, Herdsman, and Herdr behavior

@@ -44,9 +44,17 @@ export type HerdsmanConfig = {
   inlineAttachmentLimitBytes: number;
   mailboxPayloadLimitBytes: number;
   worktreeRemovalPreapprovedRepos: string[];
-  managerMergeEnabled: boolean;
-  managerMergeOverrides: Record<string, boolean>;
+  managerMergeEnabled: ManagerMergeSetting;
+  managerMergeOverrides: Record<string, ManagerMergeSetting>;
 };
+
+export type ManagerMergeSetting = boolean | "divergent";
+
+export function validManagerMergeSetting(
+  value: unknown,
+): value is ManagerMergeSetting {
+  return typeof value === "boolean" || value === "divergent";
+}
 
 export const DEFAULT_CONFIG: HerdsmanConfig = {
   statusWidgetMaxRows: DEFAULT_STATUS_WIDGET_MAX_ROWS,
@@ -130,14 +138,14 @@ function containsControlCharacter(value: string): boolean {
 
 function validManagerMergeOverrides(
   value: unknown,
-): value is Record<string, boolean> {
+): value is Record<string, ManagerMergeSetting> {
   return (
     !!value &&
     typeof value === "object" &&
     !Array.isArray(value) &&
     Object.entries(value).every(
       ([repoKey, enabled]) =>
-        validRepoIdentity(repoKey) && typeof enabled === "boolean",
+        validRepoIdentity(repoKey) && validManagerMergeSetting(enabled),
     )
   );
 }
@@ -197,7 +205,7 @@ function parseRawConfig(content: string): Partial<HerdsmanConfig> {
       record.managerGitBootstrapWithoutConfirmation;
   }
   if ("managerMergeEnabled" in record) {
-    if (typeof record.managerMergeEnabled !== "boolean")
+    if (!validManagerMergeSetting(record.managerMergeEnabled))
       throw new Error("Invalid Pi Herdsman config field managerMergeEnabled");
     result.managerMergeEnabled = record.managerMergeEnabled;
   }
@@ -238,6 +246,7 @@ export function isWorktreeRemovalPreapproved(repoKey: string): boolean {
 
 export type EffectiveMergePolicy = {
   enabled: boolean;
+  allowDivergence: boolean;
   source: "global" | "repository";
 };
 
@@ -248,21 +257,28 @@ export function effectiveMergePolicy(
   if (!validRepoIdentity(repoKey))
     throw new Error("A verified repository identity is required");
   const override = config.managerMergeOverrides[repoKey];
-  return !Object.hasOwn(config.managerMergeOverrides, repoKey)
-    ? { enabled: config.managerMergeEnabled, source: "global" }
-    : { enabled: override, source: "repository" };
+  const setting = !Object.hasOwn(config.managerMergeOverrides, repoKey)
+    ? config.managerMergeEnabled
+    : override;
+  return {
+    enabled: setting !== false,
+    allowDivergence: setting === "divergent",
+    source: Object.hasOwn(config.managerMergeOverrides, repoKey)
+      ? "repository"
+      : "global",
+  };
 }
 
 export function setManagerMergeOverride(
   repoKey: string,
-  enabled: boolean | undefined,
+  enabled: ManagerMergeSetting | undefined,
 ): void {
   if (
     !validRepoIdentity(repoKey) ||
-    (enabled !== undefined && typeof enabled !== "boolean")
+    (enabled !== undefined && !validManagerMergeSetting(enabled))
   )
     throw new Error(
-      "A verified repository identity and optional boolean policy are required",
+      "A verified repository identity and optional merge policy are required",
     );
   const path = herdsmanConfigPath();
   const release = claimProcessLock(`${path}.lock`, {
@@ -564,7 +580,7 @@ export function updateConfig<K extends ConfigKey>(
         throw new Error(
           "Invalid Pi Herdsman config field managerGitBootstrapWithoutConfirmation",
         );
-      if (key === "managerMergeEnabled" && typeof value !== "boolean")
+      if (key === "managerMergeEnabled" && !validManagerMergeSetting(value))
         throw new Error("Invalid Pi Herdsman config field managerMergeEnabled");
       if (key === "managerMergeOverrides" && !validManagerMergeOverrides(value))
         throw new Error(

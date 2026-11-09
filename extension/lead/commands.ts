@@ -1024,8 +1024,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             {
               value: "manager-merge",
               label: "Manager local merge",
-              description: `Global ${config.managerMergeEnabled ? "on" : "off"}`,
-              help: "Allow the Manager to fast-forward accepted local project branches and automatically clean up integrated source worktrees.",
+              description: `Global ${config.managerMergeEnabled === "divergent" ? "conflict-free merges" : config.managerMergeEnabled ? "fast-forward only" : "off"}`,
+              help: "Choose whether Managers may integrate accepted local branches only by fast-forward or also by clean divergent merge, with guarded cleanup.",
             },
             {
               value: "status-widget-rows",
@@ -1182,17 +1182,44 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             `Global ${key === "contextRetirement" ? "context retirement" : key === "autoActivateManager" ? "Manager auto-start" : "Manager Git setup confirmation skip"}: ${enabled ? "on" : "off"}`,
           );
         } else if (selected === "manager-merge") {
-          const enabled = !host.readConfig().managerMergeEnabled;
-          if (enabled) {
+          const current = host.readConfig().managerMergeEnabled;
+          const choice = await host.selectMenu(
+            ctx,
+            "Global Manager local merge",
+            [
+              { value: "off", label: "Off" },
+              { value: "fast-forward", label: "Fast-forward only" },
+              { value: "divergent", label: "Conflict-free merges" },
+            ],
+            current === false
+              ? "off"
+              : current === true
+                ? "fast-forward"
+                : "divergent",
+          );
+          if (!choice) continue;
+          const setting =
+            choice === "off"
+              ? false
+              : choice === "fast-forward"
+                ? true
+                : "divergent";
+          if (
+            setting !== false &&
+            (current === false ||
+              (setting === "divergent" && current !== "divergent"))
+          ) {
             const confirm = await ctx.ui.input(
-              "Enable Manager local merge? This authorizes fast-forward integration and automatic cleanup of successfully integrated source worktrees. Type enable to confirm.",
+              setting === "divergent"
+                ? "Enable conflict-free divergent Manager merges? Git may create a new merge commit, and successful integration can automatically remove the exact source worktree. Type enable to confirm."
+                : "Enable fast-forward Manager integration and automatic cleanup of successfully integrated source worktrees. Type enable to confirm.",
               undefined,
             );
             if (confirm !== "enable") continue;
           }
-          host.updateConfig("managerMergeEnabled", enabled);
+          host.updateConfig("managerMergeEnabled", setting);
           ctx.ui.notify(
-            `Global Manager local merge: ${enabled ? "on" : "off"}`,
+            `Global Manager local merge: ${setting === "divergent" ? "conflict-free merges" : setting ? "fast-forward only" : "off"}`,
           );
         }
       }
@@ -1222,6 +1249,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           | {
               repoKey: string;
               enabled: boolean;
+              allowDivergence: boolean;
               source: "global" | "repository";
             }
           | undefined;
@@ -1274,8 +1302,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             ? [
                 {
                   value: "merge-permission",
-                  label: `Manager local merge · ${mergePolicy.enabled ? "on" : "off"} (${mergePolicy.source})`,
-                  help: `Controls local fast-forward integration and automatic cleanup for verified repository ${mergePolicy.repoKey}.`,
+                  label: `Manager local merge · ${!mergePolicy.enabled ? "off" : mergePolicy.allowDivergence ? "conflict-free merges" : "fast-forward only"} (${mergePolicy.source})`,
+                  help: `Controls local integration and guarded cleanup for verified repository ${mergePolicy.repoKey}.`,
                 },
               ]
             : []),
@@ -1324,25 +1352,40 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             [
               {
                 value: "inherit",
-                label: `Inherit global (${global ? "on" : "off"})`,
+                label: `Inherit global (${global === "divergent" ? "conflict-free merges" : global ? "fast-forward only" : "off"})`,
               },
-              { value: "on", label: "On for this project" },
-              { value: "off", label: "Off for this project" },
+              { value: "off", label: "Off" },
+              { value: "fast-forward", label: "Fast-forward only" },
+              { value: "divergent", label: "Conflict-free merges" },
             ],
             current.source === "global"
               ? "inherit"
-              : current.enabled
-                ? "on"
-                : "off",
+              : !current.enabled
+                ? "off"
+                : current.allowDivergence
+                  ? "divergent"
+                  : "fast-forward",
           );
           if (!choice) continue;
-          const enabled = choice === "inherit" ? undefined : choice === "on";
+          const enabled =
+            choice === "inherit"
+              ? undefined
+              : choice === "off"
+                ? false
+                : choice === "fast-forward"
+                  ? true
+                  : "divergent";
           if (
-            enabled === true &&
-            !(current.enabled && current.source === "repository")
+            enabled !== undefined &&
+            enabled !== false &&
+            (current.source !== "repository" ||
+              !current.enabled ||
+              (enabled === "divergent" && !current.allowDivergence))
           ) {
             const confirm = await ctx.ui.input(
-              "Enabling Manager local merge allows automatic cleanup of successfully integrated source worktrees. Type enable to confirm.",
+              enabled === "divergent"
+                ? "Enable conflict-free divergent Manager merges? Git may create a new merge commit, and successful integration can automatically remove the exact source worktree. Type enable to confirm."
+                : "Enable fast-forward Manager integration and automatic cleanup of successfully integrated source worktrees. Type enable to confirm.",
               undefined,
             );
             if (confirm !== "enable") continue;
@@ -1354,7 +1397,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             );
           setManagerMergeOverride(mergePolicy.repoKey, enabled);
           ctx.ui.notify(
-            `Manager local merge ${enabled === undefined ? "inherits global" : enabled ? "enabled" : "disabled"} for ${mergePolicy.repoKey}.`,
+            `Manager local merge ${enabled === undefined ? "inherits global" : enabled === "divergent" ? "allows conflict-free merges" : enabled ? "allows fast-forward only" : "disabled"} for ${mergePolicy.repoKey}.`,
           );
           continue;
         }

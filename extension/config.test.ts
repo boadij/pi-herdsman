@@ -164,40 +164,72 @@ test("Manager merge policy defaults off and repository overrides inherit, set, a
   assert.deepEqual(readConfig().managerMergeOverrides, {});
   assert.deepEqual(effectiveMergePolicy(readConfig(), "/repo-a"), {
     enabled: false,
+    allowDivergence: false,
     source: "global",
   });
 
   updateConfig("managerMergeEnabled", true);
   assert.deepEqual(effectiveMergePolicy(readConfig(), "/repo-a"), {
     enabled: true,
+    allowDivergence: false,
     source: "global",
   });
   setManagerMergeOverride("/repo-a", false);
   assert.deepEqual(effectiveMergePolicy(readConfig(), "/repo-a"), {
     enabled: false,
+    allowDivergence: false,
     source: "repository",
   });
   assert.deepEqual(effectiveMergePolicy(readConfig(), "/repo-b"), {
     enabled: true,
+    allowDivergence: false,
     source: "global",
   });
   setManagerMergeOverride("/repo-a", true);
   assert.deepEqual(effectiveMergePolicy(readConfig(), "/repo-a"), {
     enabled: true,
+    allowDivergence: false,
     source: "repository",
   });
   setManagerMergeOverride("/repo-a", undefined);
   assert.deepEqual(effectiveMergePolicy(readConfig(), "/repo-a"), {
     enabled: true,
+    allowDivergence: false,
     source: "global",
   });
   assert.deepEqual(readConfig().worktreeRemovalPreapprovedRepos, []);
 });
 
-test("Manager merge policy strictly validates booleans and repository keys", () => {
+test("Manager merge policy supports explicit divergent grants and strictly validates values", () => {
+  updateConfig("managerMergeEnabled", "divergent");
+  assert.deepEqual(effectiveMergePolicy(readConfig(), "/repo-a"), {
+    enabled: true,
+    allowDivergence: true,
+    source: "global",
+  });
+  setManagerMergeOverride("/repo-a", "divergent");
+  assert.deepEqual(effectiveMergePolicy(readConfig(), "/repo-a"), {
+    enabled: true,
+    allowDivergence: true,
+    source: "repository",
+  });
+  setManagerMergeOverride("/repo-a", false);
+  assert.deepEqual(effectiveMergePolicy(readConfig(), "/repo-a"), {
+    enabled: false,
+    allowDivergence: false,
+    source: "repository",
+  });
+  setManagerMergeOverride("/repo-a", undefined);
+  assert.deepEqual(effectiveMergePolicy(readConfig(), "/repo-a"), {
+    enabled: true,
+    allowDivergence: true,
+    source: "global",
+  });
   realFs.mkdirSync(herdsmanDataRoot(), { recursive: true });
   for (const value of [
     { managerMergeEnabled: "true" },
+    { managerMergeEnabled: {} },
+    { managerMergeEnabled: [] },
     { managerMergeOverrides: [] },
     { managerMergeOverrides: { "/repo-a": "true" } },
     { managerMergeOverrides: { " /repo-a": true } },
