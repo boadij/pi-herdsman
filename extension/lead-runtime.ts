@@ -2144,7 +2144,7 @@ export function registerLeadRuntime(
     state: leadRuntime,
     activeRole: () => activeLeadRole(leadRuntime),
     pi,
-    getLocalActivity,
+    getLocalActivity: (ctx) => getLocalActivity(ctx),
     onActivityChange: (invalidate: () => void) => {
       invalidateSupervisionWidget = invalidate;
     },
@@ -3475,7 +3475,7 @@ export function registerLeadRuntime(
     leadGitSampling = sampling;
   };
   statusRuntime.configure({
-    getLocalActivity,
+    getLocalActivity: (ctx) => getLocalActivity(ctx),
     ...options.statusSnapshotHost,
     pendingStartEntries: () => controller.pendingStartEntries(),
     hasPendingStart: (label: string) => controller.hasPendingStart(label),

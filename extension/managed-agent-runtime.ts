@@ -2700,7 +2700,7 @@ export function registerManagedAgentRuntime(
       depth: agentDepth,
     };
     options.statusRuntime.configure({
-      getLocalActivity,
+      getLocalActivity: (ctx) => getLocalActivity(ctx),
       pendingStartEntries: () => controller.pendingStartEntries(),
       hasPendingStart: (label) => controller.hasPendingStart(label),
       clearPendingStart: (label, expected) =>
@@ -2866,7 +2866,7 @@ export function registerManagedAgentRuntime(
     identity: (ctx) => managedAgentEnvironmentIdentity(ctx, options.build),
     sameIdentity: sameManagedAgentIdentity,
     signal: () => metadataPublisher.signal,
-    getLocalActivity,
+    getLocalActivity: (ctx) => getLocalActivity(ctx),
     focusTarget: async (ctx, intent, isCurrent) => {
       if (intent.kind !== "session")
         throw new Error("Manager navigation is unavailable from an Agent.");
