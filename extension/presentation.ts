@@ -1729,7 +1729,12 @@ export function formatSupervisionContext(
     role?: "chief" | "manager";
     targets?: ReadonlyMap<string, string>;
     git?: {
-      managerSession?: { branch: string | null; head: string };
+      managerSession?: {
+        cwd: string;
+        worktreeRoot: string;
+        branch: string | null;
+        head: string;
+      };
       manager?: { branch: string | null; head: string };
       assignments?: ReadonlyMap<
         string,
@@ -1804,6 +1809,8 @@ export function formatSupervisionContext(
     ...(options.git?.managerSession
       ? [
           "  manager_session:",
+          `    cwd: ${supervisionValue(options.git.managerSession.cwd)}`,
+          `    worktree_root: ${supervisionValue(options.git.managerSession.worktreeRoot)}`,
           `    branch: ${supervisionValue(options.git.managerSession.branch ?? "detached")}`,
           `    head: ${options.git.managerSession.head}`,
         ]

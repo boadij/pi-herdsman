@@ -6533,7 +6533,12 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         const targets = new Map<string, string>();
         let git:
           | {
-              managerSession?: { branch: string | null; head: string };
+              managerSession?: {
+                cwd: string;
+                worktreeRoot: string;
+                branch: string | null;
+                head: string;
+              };
               manager?: { branch: string | null; head: string };
               assignments: Map<string, { branch: string | null; head: string }>;
               supervisedLeads: Map<
@@ -6605,9 +6610,17 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                   : undefined;
               };
               const manager = observation(checkout);
-              const managerSession = sessionRoot
+              const managerSessionObservation = sessionRoot
                 ? observation(sessionRoot)
                 : undefined;
+              const managerSession =
+                sessionRoot && managerSessionObservation
+                  ? {
+                      cwd: ctx.cwd,
+                      worktreeRoot: sessionRoot,
+                      ...managerSessionObservation,
+                    }
+                  : undefined;
               if (manager) {
                 const assignments = new Map<
                   string,

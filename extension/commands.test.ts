@@ -16104,8 +16104,10 @@ test("Manager supervision distinguishes its session checkout from the primary ch
   const root = mkdtempSync(join(tmpdir(), "manager-session-git-"));
   const primary = join(root, "primary");
   const session = join(root, "session");
+  const sessionCwd = join(session, "src");
   mkdirSync(primary);
   mkdirSync(session);
+  mkdirSync(sessionCwd);
   mkdirSync(join(primary, ".git"));
   mkdirSync(join(session, ".git"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -16137,7 +16139,7 @@ test("Manager supervision distinguishes its session checkout from the primary ch
         if (args[0] === "rev-parse" && args[1] === "--show-toplevel")
           return {
             code: 0,
-            stdout: options.cwd === session ? session : primary,
+            stdout: options.cwd === sessionCwd ? session : primary,
           };
         if (args[0] === "rev-parse") return { code: 0, stdout: repoKey };
         if (args[0] === "worktree") {
@@ -16161,12 +16163,16 @@ test("Manager supervision distinguishes its session checkout from the primary ch
     latestMessageText: async () => undefined,
   } as any);
   const ctx = fakeContext() as any;
-  ctx.cwd = session;
+  ctx.cwd = sessionCwd;
   ctx.mode = "rpc";
   await runtime.prepareMessage(ctx);
   assert.equal(inventoryScans, 1);
   assert.match(context!, /manager_checkout:[\s\S]*?branch: main/);
   assert.match(context!, /manager_session:[\s\S]*?branch: manager-task/);
+  assert.ok(context!.includes(`cwd: ${sessionCwd}`));
+  assert.ok(context!.includes(`worktree_root: ${session}`));
+  assert.notEqual(sessionCwd, primary);
+  assert.notEqual(session, primary);
   assert.match(context!, new RegExp("a".repeat(40)));
   assert.match(context!, new RegExp("b".repeat(40)));
 });

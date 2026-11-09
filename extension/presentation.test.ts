@@ -166,7 +166,12 @@ test("Manager supervision context adds bounded Git observations", () => {
       status: "fresh",
       role: "manager",
       git: {
-        managerSession: { branch: "session", head: "c".repeat(40) },
+        managerSession: {
+          cwd: "/repo/worktrees/session/src",
+          worktreeRoot: "/repo/worktrees/session",
+          branch: "session",
+          head: "c".repeat(40),
+        },
         manager: { branch: "main", head: "a".repeat(40) },
         assignments: new Map([
           ["feat/api", { branch: "fix/api", head: "b".repeat(40) }],
@@ -177,6 +182,8 @@ test("Manager supervision context adds bounded Git observations", () => {
   assert.match(context, /git_observations:/);
   assert.match(context, /manager_checkout:/);
   assert.match(context, /manager_session:/);
+  assert.match(context, /cwd: \/repo\/worktrees\/session\/src/);
+  assert.match(context, /worktree_root: \/repo\/worktrees\/session/);
   assert.match(context, /branch: session/);
   assert.match(context, /assignment feat\/api: checkout_branch=fix\/api/);
   assert.match(context, new RegExp("a".repeat(40)));
