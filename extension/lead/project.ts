@@ -2515,6 +2515,61 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         return false;
       throw new Error("Git ancestry could not be verified");
     };
+    const verifyPreviouslyIntegratedMerges = async (head: string) => {
+      const history = await runGit(targetPath, [
+        "log",
+        "--format=%H %P",
+        "--min-parents=2",
+        "--ancestry-path",
+        `${expectedHead}..${head}`,
+      ]);
+      if (history.code !== 0 || history.killed || history.stderr?.trim())
+        return false;
+      for (const line of String(history.stdout ?? "")
+        .trim()
+        .split("\n")) {
+        if (!line) continue;
+        const [mergeHead, ...parents] = line.split(/\s+/);
+        if (
+          !mergeHead ||
+          !/^[0-9a-f]{40,64}$/i.test(mergeHead) ||
+          parents.length < 2 ||
+          parents.some((parent) => !/^[0-9a-f]{40,64}$/i.test(parent))
+        )
+          return false;
+        const firstParent = parents[0]!;
+        if (await ancestry(expectedHead, firstParent)) continue;
+        const includesAcceptedSource = await Promise.all(
+          parents.slice(1).map((parent) => ancestry(expectedHead, parent)),
+        );
+        if (!includesAcceptedSource.some(Boolean)) continue;
+        if (parents.length !== 2) return false;
+        const secondParent = parents[1]!;
+        const [preview, actualTree] = await Promise.all([
+          runGit(targetPath, [
+            "merge-tree",
+            "--write-tree",
+            firstParent,
+            secondParent,
+          ]),
+          runGit(targetPath, ["rev-parse", `${mergeHead}^{tree}`]),
+        ]);
+        const expectedTree = String(preview.stdout ?? "").trim();
+        const observedTree = String(actualTree.stdout ?? "").trim();
+        if (
+          preview.code !== 0 ||
+          preview.killed ||
+          preview.stderr?.trim() ||
+          actualTree.code !== 0 ||
+          actualTree.killed ||
+          actualTree.stderr?.trim() ||
+          !/^[0-9a-f]{40,64}$/i.test(expectedTree) ||
+          observedTree !== expectedTree
+        )
+          return false;
+      }
+      return true;
+    };
     const initiallyIntegrated = await ancestry(expectedHead, targetHead);
     const initiallyFastForwardable = initiallyIntegrated
       ? false
@@ -2593,13 +2648,24 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                     "rev-parse",
                     "HEAD",
                   ]);
-                  if (await ancestry(expectedHead, preStopTarget))
+                  if (await ancestry(expectedHead, preStopTarget)) {
+                    if (
+                      !(await verifyPreviouslyIntegratedMerges(preStopTarget))
+                    )
+                      return {
+                        kind: "blocked",
+                        targetHead: preStopTarget,
+                        targetBranch,
+                        integrated: true,
+                        reason: "already_integrated_divergent_merge_unverified",
+                      };
                     return {
                       kind: "integrated",
                       targetHead: preStopTarget,
                       targetBranch,
                       alreadyIntegrated: true as const,
                     };
+                  }
                   const preStopFastForward = await ancestry(
                     preStopTarget,
                     expectedHead,
@@ -2767,13 +2833,24 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                     throw new Error(
                       "Primary target branch changed before integration",
                     );
-                  if (await ancestry(expectedHead, currentTarget))
+                  if (await ancestry(expectedHead, currentTarget)) {
+                    if (
+                      !(await verifyPreviouslyIntegratedMerges(currentTarget))
+                    )
+                      return {
+                        kind: "blocked",
+                        targetHead: currentTarget,
+                        targetBranch,
+                        integrated: true,
+                        reason: "already_integrated_divergent_merge_unverified",
+                      };
                     return {
                       kind: "integrated",
                       targetHead: currentTarget,
                       targetBranch,
                       alreadyIntegrated: true as const,
                     };
+                  }
                   if (
                     !(await ancestry(currentTarget, expectedHead)) &&
                     !permission().allowDivergence

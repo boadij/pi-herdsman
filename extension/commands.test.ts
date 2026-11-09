@@ -6626,6 +6626,7 @@ async function managerRemovalFixture(
     mergeTree?: string;
     divergentHead?: string;
     divergentTree?: string;
+    integratedMergeLog?: string;
     targetAdvanceOnPreview?: string;
     wrongMergeParents?: boolean;
     sourceHead?: string;
@@ -6888,7 +6889,16 @@ async function managerRemovalFixture(
               : `${"1".repeat(40)} ${"2".repeat(40)}\n`,
             stderr: "",
           };
-        if (args[0] === "rev-parse" && args[1] === "HEAD^{tree}")
+        if (args[0] === "log" && args[1] === "--format=%H %P")
+          return {
+            code: 0,
+            stdout: options.integratedMergeLog ?? "",
+            stderr: "",
+          };
+        if (
+          args[0] === "rev-parse" &&
+          (args[1] === "HEAD^{tree}" || args[1]?.endsWith("^{tree}"))
+        )
           return {
             code: 0,
             stdout: `${options.divergentTree ?? "6".repeat(40)}\n`,
@@ -7621,6 +7631,60 @@ test("Manager divergent permission revocation after preview blocks mutation", as
   assert.notEqual(result.details.status, "complete");
   assert.deepEqual(fixture.gitMutations, []);
   assert.deepEqual(fixture.removals, []);
+});
+
+test("retry of an unverified divergent merge cannot finalize by source ancestry alone", async (t) => {
+  const acceptedHead = "2".repeat(40);
+  const firstParent = "1".repeat(40);
+  const mergeHead = "5".repeat(40);
+  const fixture = await managerRemovalFixture(t, {
+    allowDivergence: true,
+    targetHead: firstParent,
+    divergentHead: mergeHead,
+    divergentTree: "9".repeat(40),
+    integratedMergeLog: `${mergeHead} ${firstParent} ${acceptedHead}\n`,
+    integratedTargetCodes: [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0],
+  });
+  const integrate = () =>
+    fixture.runtime.executeStaff(
+      "merge",
+      {
+        action: "merge",
+        branch: "feat/remove-test",
+        expected_head: acceptedHead,
+      },
+      undefined,
+      undefined,
+      fixture.ctx,
+    );
+
+  const first = await integrate();
+  assert.equal(first.details.status, "blocked");
+  assert.equal(first.details.reason, "divergent_merge_verification_failed");
+  assert.deepEqual(fixture.gitMutations, [
+    [
+      "merge",
+      "--no-ff",
+      "--no-edit",
+      "-s",
+      "ort",
+      "--no-autostash",
+      "--no-overwrite-ignore",
+      acceptedHead,
+    ],
+  ]);
+  assert.deepEqual(fixture.removals, []);
+
+  const retry = await integrate();
+  assert.equal(retry.details.status, "blocked");
+  assert.equal(
+    retry.details.reason,
+    "already_integrated_divergent_merge_unverified",
+  );
+  assert.equal(fixture.gitMutations.length, 1);
+  assert.deepEqual(fixture.removals, []);
+  assert.ok(fixture.assignment());
+  assert.ok(existsSync(fixture.checkoutPath));
 });
 
 test("Manager merge permits exactly its verified target occupant", async (t) => {
