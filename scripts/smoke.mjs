@@ -3946,7 +3946,8 @@ async function startCandidate(ctx) {
       env: nestedControlEnv(process.env, ctx.paths, ctx.sessionName),
     },
   );
-  await waitForEvidence(
+  const simulatedCore = ctx.scenario === "core" && ctx.simulated;
+  const started = await waitForEvidence(
     ctx,
     "candidate-start",
     async () => {
@@ -3975,9 +3976,15 @@ async function startCandidate(ctx) {
         ctx.coreCandidateStartRecords = sanitizedProcessRecords(
           inspection.records,
         );
+      const root =
+        matches.length === 1 &&
+        Number.isSafeInteger(matches[0].pid) &&
+        matches[0].pid > 0
+          ? { paneId, pid: matches[0].pid }
+          : null;
       return {
-        done: matches.length > 0,
-        value: paneId,
+        done: simulatedCore ? !!root : matches.length > 0,
+        value: simulatedCore ? root : paneId,
         progress: {
           pids: matches
             .map((proc) => proc.pid)
@@ -3991,6 +3998,7 @@ async function startCandidate(ctx) {
     },
     { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS },
   );
+  if (simulatedCore) ctx.coreRootProcess = started;
   return paneId;
 }
 
@@ -4246,6 +4254,7 @@ export function coreObservationReady({
   assistantResult,
   paneCount,
   rootProcess,
+  rootSessionId,
   simulated,
   provenance = [],
   sessionIds = new Set(),
@@ -4253,6 +4262,13 @@ export function coreObservationReady({
 }) {
   if (!assistantResult || paneCount < 2 || !rootProcess) return false;
   if (!simulated) return true;
+  if (!rootSessionId || !sessionIds.has(rootSessionId)) return false;
+  const rootRows = provenance.filter((row) => row.sessionId === rootSessionId);
+  if (!rootRows.length) return false;
+  requireSmokeEvidence(
+    rootRows.length === 1 && rootRows[0].pid === rootProcess.pid,
+    "core root provenance conflicts with verified startup identity",
+  );
   return (
     sessionIds.size > 0 &&
     [...sessionIds].every((sessionId) => {
@@ -7247,42 +7263,44 @@ async function runCoreSmoke(ctx) {
       }
       if (inspection.verified.length)
         ctx.lastVerified = "agent_process_observed";
-      const rootInfo = await tryNestedCommand(ctx, [
-        "pane",
-        "process-info",
-        "--pane",
-        ctx.rootPaneId,
-      ]);
-      if (!rootInfo.ok) throw observationFailure(rootInfo.error);
-      const rootMatches = candidateProcess(
-        rootInfo.value,
-        ctx.candidateExtension,
-        ctx.herdrStateExtension,
-      );
-      try {
-        const rootInspection = await inspectPaneProcesses(
-          [ctx.rootPaneId],
-          null,
-          async () => rootInfo.value,
+      if (!ctx.simulated) {
+        const rootInfo = await tryNestedCommand(ctx, [
+          "pane",
+          "process-info",
+          "--pane",
+          ctx.rootPaneId,
+        ]);
+        if (!rootInfo.ok) throw observationFailure(rootInfo.error);
+        const rootMatches = candidateProcess(
+          rootInfo.value,
           ctx.candidateExtension,
           ctx.herdrStateExtension,
-          "core-gate",
         );
-        ctx.coreGateRootObservation = {
-          matchCount: rootMatches.length,
-          processRecords: sanitizedProcessRecords(rootInspection.records),
-        };
-      } catch {
-        ctx.coreGateRootObservation = {
-          matchCount: rootMatches.length,
-          processRecords: null,
-        };
+        try {
+          const rootInspection = await inspectPaneProcesses(
+            [ctx.rootPaneId],
+            null,
+            async () => rootInfo.value,
+            ctx.candidateExtension,
+            ctx.herdrStateExtension,
+            "core-gate",
+          );
+          ctx.coreGateRootObservation = {
+            matchCount: rootMatches.length,
+            processRecords: sanitizedProcessRecords(rootInspection.records),
+          };
+        } catch {
+          ctx.coreGateRootObservation = {
+            matchCount: rootMatches.length,
+            processRecords: null,
+          };
+        }
+        if (rootMatches.length === 1)
+          ctx.coreRootProcess = {
+            paneId: ctx.rootPaneId,
+            pid: rootMatches[0].pid,
+          };
       }
-      if (rootMatches.length === 1)
-        ctx.coreRootProcess = {
-          paneId: ctx.rootPaneId,
-          pid: rootMatches[0].pid,
-        };
       ctx.coreProcessEvidence = [...observed.values()].slice(-40);
       ctx.coreProcessDiagnostics = inspection.records.slice(0, 40);
       const session = await rootSessionSnapshot(ctx);
@@ -7315,6 +7333,7 @@ async function runCoreSmoke(ctx) {
         assistantResult: !!ctx.assistantResult,
         paneCount,
         rootProcess: ctx.coreRootProcess,
+        rootSessionId: ctx.coreRootSessionId,
         simulated: ctx.simulated,
         ...provenanceObservation,
         observedPids,
@@ -7420,7 +7439,11 @@ async function runCoreSmoke(ctx) {
         `expected one provenance row for ${sessionId}`,
       );
       const record = matches[0];
-      const pane = observedProcesses.find(({ processes }) =>
+      const candidates =
+        sessionId === rootId
+          ? observedProcesses.slice(0, 1)
+          : observedProcesses.slice(1);
+      const pane = candidates.find(({ processes }) =>
         processes.some((process) => process.pid === record.pid),
       );
       requireSmokeEvidence(
