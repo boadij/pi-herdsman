@@ -69,6 +69,15 @@ Do not optimize for diagnostic counts, coverage percentages, or line counts.
 Do not add abstractions, suppressions, or tooling merely to satisfy an analyzer.
 If no worthwhile improvement is demonstrated, make no change.
 
+When discovering a material issue during work:
+
+- Verify the finding and check for existing reports.
+- Report available reproduction steps, expected and observed behavior, impact,
+  evidence, and whether it blocks the current task.
+- Record a new issue when follow-up is needed; do not create speculative or
+  duplicate reports.
+- Include the tracking reference when one exists.
+
 For occasional repository-wide investigations, use the
 [simplification-audit skill](.agents/skills/simplification-audit/SKILL.md).
 
@@ -217,16 +226,6 @@ formatting/validation; see [Smoke testing](docs/development/smoke-testing.md).
 - Table-drive variants of one invariant.
 - Keep separate test files only for source boundaries or required process/module-mock isolation.
 - Add no dependency or fixture abstraction when `node:test` and a few lines suffice.
-
-## Backlog
-
-- The ignored `.backlog/` repository exists only in the main worktree.
-  Run Backlog CLI reads and writes from the worktree where `.backlog/` exists;
-  do not copy, synchronize, or manually edit it in another worktree.
-- For each newly verified material issue, search first, then record the exact
-  reproduction, expected and observed behavior, impact, and evidence through
-  the CLI. Do not file speculative or duplicate issues; report the task ID,
-  impact, and whether it blocks the current work.
 
 ## Validation
 
