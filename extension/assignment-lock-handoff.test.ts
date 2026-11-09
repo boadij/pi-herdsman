@@ -89,7 +89,9 @@ test("startup hands one held assignment-lock claim through task publication", as
   });
   const context = support.fakeContext();
   support.registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, context);
+  const sessionStart = pi.events.get("session_start")?.[0];
+  assert.ok(sessionStart, "session_start handler was not registered");
+  await sessionStart(undefined, context);
   try {
     const resultPromise = pi.tools
       .find((tool) => tool.name === "delegate_agent")!
@@ -111,7 +113,9 @@ test("startup hands one held assignment-lock claim through task publication", as
     assert.throws(() =>
       realLock.claimProcessLock(realLock.assignmentLockPath(startup.mailbox)),
     );
-    releaseChildLock();
+    const release = releaseChildLock;
+    assert.ok(release, "child lock release was not captured");
+    release();
     releaseChildLock = undefined;
 
     const result = await resultPromise;

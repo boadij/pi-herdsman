@@ -783,7 +783,7 @@ test("peer worker failures wait for running siblings and clean up after propagat
       assert.doesNotMatch(message, /\/private\/path|secret-capability/);
       return true;
     });
-    terminateSibling();
+    terminateSibling?.();
     const outcomes = await Promise.allSettled(workers);
     assert.equal(outcomes[1]?.status, "rejected");
     assert.match(

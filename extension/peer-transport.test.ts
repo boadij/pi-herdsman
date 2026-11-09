@@ -258,7 +258,7 @@ test("ordinary Lead retry requires complete snapshot and exact ordinary Lead rol
   const status = { dataRoot: outbound.dataRoot, id, digest, status: "absent" };
   const peer = {
     role: "lead",
-    sessionKind: "ordinary",
+    sessionKind: "ordinary" as const,
     piSessionId: recipient,
     claim: { id: generation },
   };

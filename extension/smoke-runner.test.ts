@@ -3,6 +3,15 @@ import test from "node:test";
 import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import type {
+  Api,
+  AssistantMessage,
+  Message,
+  Provider,
+  TextContent,
+  ToolCall,
+} from "@earendil-works/pi-ai";
+import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 import {
   decide as decideSmokeFaux,
   managerHandoffSupervisorToolAvailable,
@@ -163,6 +172,430 @@ import {
   assertDescendantVisibility,
 } from "../scripts/smoke.mjs";
 
+function assertErrorWithCode(
+  error: unknown,
+): asserts error is Error & { code: unknown } {
+  assert.ok(error instanceof Error);
+  assert.ok("code" in error);
+}
+
+function assertSmokeError(
+  error: unknown,
+): asserts error is Error & { code: unknown; smoke: Record<string, unknown> } {
+  assertErrorWithCode(error);
+  assert.ok("smoke" in error);
+  assert.ok(isRecord(error.smoke));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasOnlyKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): boolean {
+  return Object.keys(value).every((key) => keys.includes(key));
+}
+
+function isJsonValue(value: unknown): boolean {
+  if (value === null || typeof value === "string" || typeof value === "boolean")
+    return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  return (
+    isRecord(value) &&
+    Object.getPrototypeOf(value) === Object.prototype &&
+    Object.getOwnPropertySymbols(value).length === 0 &&
+    Object.values(value).every(isJsonValue)
+  );
+}
+
+function isTextContent(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["type", "text", "textSignature"]) &&
+    value.type === "text" &&
+    typeof value.text === "string" &&
+    (value.textSignature === undefined ||
+      typeof value.textSignature === "string")
+  );
+}
+
+function isImageContent(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["type", "data", "mimeType"]) &&
+    value.type === "image" &&
+    typeof value.data === "string" &&
+    typeof value.mimeType === "string"
+  );
+}
+
+function isAssistantContent(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (value.type === "text") return isTextContent(value);
+  if (value.type === "thinking")
+    return (
+      hasOnlyKeys(value, [
+        "type",
+        "thinking",
+        "thinkingSignature",
+        "redacted",
+      ]) &&
+      typeof value.thinking === "string" &&
+      (value.thinkingSignature === undefined ||
+        typeof value.thinkingSignature === "string") &&
+      (value.redacted === undefined || typeof value.redacted === "boolean")
+    );
+  return (
+    value.type === "toolCall" &&
+    hasOnlyKeys(value, [
+      "type",
+      "id",
+      "name",
+      "arguments",
+      "thoughtSignature",
+      "namespace",
+      "argumentsError",
+    ]) &&
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    isRecord(value.arguments) &&
+    isJsonValue(value.arguments) &&
+    (value.thoughtSignature === undefined ||
+      typeof value.thoughtSignature === "string") &&
+    (value.namespace === undefined || typeof value.namespace === "string") &&
+    (value.argumentsError === undefined ||
+      typeof value.argumentsError === "string")
+  );
+}
+
+function isUsage(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const cost = value.cost;
+  if (!isRecord(cost)) return false;
+  const numericFields = [
+    "input",
+    "output",
+    "cacheRead",
+    "cacheWrite",
+    "totalTokens",
+  ];
+  return (
+    numericFields.every((field) => typeof value[field] === "number") &&
+    ["input", "output", "cacheRead", "cacheWrite", "total"].every(
+      (field) => typeof cost[field] === "number",
+    ) &&
+    (cost.totalFromProvider === undefined ||
+      typeof cost.totalFromProvider === "boolean") &&
+    (value.cacheWrite1h === undefined ||
+      typeof value.cacheWrite1h === "number") &&
+    (value.reasoning === undefined || typeof value.reasoning === "number")
+  );
+}
+
+function isSessionMessage(value: unknown): value is Message {
+  if (!isRecord(value) || typeof value.role !== "string") return false;
+  if (value.role === "system")
+    return (
+      hasOnlyKeys(value, [
+        "role",
+        "content",
+        "sections",
+        "toolsAdded",
+        "toolsRemoved",
+        "timestamp",
+      ]) &&
+      (typeof value.content === "string" ||
+        (Array.isArray(value.content) && value.content.every(isTextContent))) &&
+      (value.sections === undefined ||
+        (isRecord(value.sections) &&
+          Object.values(value.sections).every(
+            (section) => section === null || typeof section === "string",
+          ))) &&
+      (value.toolsAdded === undefined ||
+        (Array.isArray(value.toolsAdded) &&
+          value.toolsAdded.every(
+            (tool: unknown) =>
+              isRecord(tool) &&
+              typeof tool.name === "string" &&
+              typeof tool.description === "string" &&
+              isRecord(tool.parameters),
+          ))) &&
+      (value.toolsRemoved === undefined ||
+        (Array.isArray(value.toolsRemoved) &&
+          value.toolsRemoved.every(
+            (tool: unknown) => isRecord(tool) && typeof tool.name === "string",
+          ))) &&
+      typeof value.timestamp === "number"
+    );
+  if (value.role === "user")
+    return (
+      hasOnlyKeys(value, ["role", "content", "timestamp"]) &&
+      typeof value.timestamp === "number" &&
+      (typeof value.content === "string" ||
+        (Array.isArray(value.content) &&
+          value.content.every(
+            (part: unknown) => isTextContent(part) || isImageContent(part),
+          )))
+    );
+  if (value.role === "assistant")
+    return (
+      hasOnlyKeys(value, [
+        "role",
+        "content",
+        "api",
+        "provider",
+        "model",
+        "usage",
+        "stopReason",
+        "timestamp",
+        "responseModel",
+        "responseId",
+        "providerThinkingLevel",
+        "thinkingLevel",
+        "diagnostics",
+        "deferred",
+        "errorMessage",
+        "rawStopReason",
+        "endTurn",
+        "durationMs",
+      ]) &&
+      Array.isArray(value.content) &&
+      value.content.every((part: unknown) => isAssistantContent(part)) &&
+      typeof value.api === "string" &&
+      typeof value.provider === "string" &&
+      typeof value.model === "string" &&
+      isUsage(value.usage) &&
+      (value.responseModel === undefined ||
+        typeof value.responseModel === "string") &&
+      (value.responseId === undefined ||
+        typeof value.responseId === "string") &&
+      (value.providerThinkingLevel === undefined ||
+        typeof value.providerThinkingLevel === "string") &&
+      (value.thinkingLevel === undefined ||
+        (typeof value.thinkingLevel === "string" &&
+          ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
+            value.thinkingLevel,
+          ))) &&
+      (value.diagnostics === undefined ||
+        (Array.isArray(value.diagnostics) &&
+          value.diagnostics.every((diagnostic: unknown) => {
+            if (
+              !isRecord(diagnostic) ||
+              typeof diagnostic.type !== "string" ||
+              typeof diagnostic.timestamp !== "number"
+            )
+              return false;
+            if (
+              diagnostic.details !== undefined &&
+              !isJsonValue(diagnostic.details)
+            )
+              return false;
+            if (diagnostic.error === undefined) return true;
+            const error = diagnostic.error;
+            return (
+              isRecord(error) &&
+              typeof error.message === "string" &&
+              (error.name === undefined || typeof error.name === "string") &&
+              (error.stack === undefined || typeof error.stack === "string") &&
+              (error.code === undefined ||
+                typeof error.code === "string" ||
+                typeof error.code === "number")
+            );
+          }))) &&
+      (value.deferred === undefined ||
+        (isRecord(value.deferred) &&
+          typeof value.deferred.provider === "string" &&
+          typeof value.deferred.modelId === "string" &&
+          typeof value.deferred.api === "string" &&
+          typeof value.deferred.id === "string" &&
+          (value.deferred.expiresAt === undefined ||
+            typeof value.deferred.expiresAt === "number") &&
+          (value.deferred.pollAfterMs === undefined ||
+            typeof value.deferred.pollAfterMs === "number") &&
+          (value.deferred.data === undefined ||
+            isJsonValue(value.deferred.data)))) &&
+      (value.errorMessage === undefined ||
+        typeof value.errorMessage === "string") &&
+      (value.rawStopReason === undefined ||
+        typeof value.rawStopReason === "string") &&
+      (value.endTurn === undefined || typeof value.endTurn === "boolean") &&
+      (value.durationMs === undefined ||
+        typeof value.durationMs === "number") &&
+      typeof value.stopReason === "string" &&
+      [
+        "pending",
+        "stop",
+        "length",
+        "toolUse",
+        "error",
+        "aborted",
+        "deferred",
+      ].includes(value.stopReason) &&
+      typeof value.timestamp === "number" &&
+      (value.usage === undefined || isUsage(value.usage))
+    );
+  if (value.role === "toolResult")
+    return (
+      hasOnlyKeys(value, [
+        "role",
+        "toolName",
+        "toolCallId",
+        "isError",
+        "content",
+        "timestamp",
+        "details",
+        "usage",
+        "nestedCalls",
+        "durationMs",
+      ]) &&
+      typeof value.toolName === "string" &&
+      typeof value.toolCallId === "string" &&
+      typeof value.isError === "boolean" &&
+      Array.isArray(value.content) &&
+      value.content.every(
+        (part: unknown) => isTextContent(part) || isImageContent(part),
+      ) &&
+      typeof value.timestamp === "number" &&
+      (value.details === undefined || isJsonValue(value.details)) &&
+      (value.usage === undefined || isUsage(value.usage)) &&
+      (value.durationMs === undefined ||
+        typeof value.durationMs === "number") &&
+      (value.nestedCalls === undefined ||
+        (isRecord(value.nestedCalls) &&
+          hasOnlyKeys(value.nestedCalls, ["calls", "complete"]) &&
+          typeof value.nestedCalls.complete === "boolean" &&
+          Array.isArray(value.nestedCalls.calls) &&
+          value.nestedCalls.calls.every(
+            (call: unknown) =>
+              isRecord(call) &&
+              hasOnlyKeys(call, [
+                "id",
+                "name",
+                "arguments",
+                "argumentsBytes",
+                "status",
+                "durationMs",
+                "error",
+              ]) &&
+              typeof call.id === "string" &&
+              typeof call.name === "string" &&
+              typeof call.status === "string" &&
+              ["ok", "error", "unfinished"].includes(call.status) &&
+              (call.arguments === undefined ||
+                (isRecord(call.arguments) && isJsonValue(call.arguments))) &&
+              (call.argumentsBytes === undefined ||
+                typeof call.argumentsBytes === "number") &&
+              (call.durationMs === undefined ||
+                typeof call.durationMs === "number") &&
+              (call.error === undefined || typeof call.error === "string"),
+          )))
+    );
+  return false;
+}
+
+test("smoke error assertion rejects array metadata", () => {
+  const error = Object.assign(new Error("failure"), {
+    code: "SMOKE_TEST",
+    smoke: [],
+  });
+  assert.throws(() => assertSmokeError(error));
+});
+
+test("session message guard accepts persisted Pi system messages", () => {
+  assert.equal(
+    isSessionMessage({
+      role: "system",
+      content: "Persisted instructions",
+      sections: { task: "Do the work" },
+      toolsAdded: [
+        { name: "test", description: "A test tool", parameters: {} },
+      ],
+      toolsRemoved: [{ name: "old-test" }],
+      timestamp: 1,
+    }),
+    true,
+  );
+});
+
+test("session message guard rejects malformed tool-result fields and extras", () => {
+  const toolResult = {
+    role: "toolResult",
+    toolCallId: "call-1",
+    toolName: "test",
+    isError: false,
+    content: [],
+    timestamp: 1,
+  };
+  assert.equal(isSessionMessage(toolResult), true);
+  assert.equal(
+    isSessionMessage({ ...toolResult, details: { ok: undefined } }),
+    false,
+  );
+  assert.equal(isSessionMessage({ ...toolResult, usage: "bad" }), false);
+  assert.equal(
+    isSessionMessage({
+      ...toolResult,
+      nestedCalls: {
+        complete: true,
+        calls: [{ id: "call-2", name: "test", status: { toString: "ok" } }],
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    isSessionMessage({
+      ...toolResult,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+          totalFromProvider: "false",
+        },
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    isSessionMessage({
+      ...toolResult,
+      nestedCalls: {
+        complete: true,
+        calls: [
+          { id: "1", name: "x", status: "ok", arguments: { x: () => {} } },
+        ],
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    isSessionMessage({ ...toolResult, unexpected: "unchecked" }),
+    false,
+  );
+  assert.equal(
+    isSessionMessage({
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "1", name: "x", arguments: { x: undefined } },
+      ],
+      api: "test",
+      provider: "test",
+      model: "test",
+    }),
+    false,
+  );
+});
+
 test("preflight uses worktree Pi instead of a conflicting PATH executable", async () => {
   const dir = await mkdtemp(join(tmpdir(), "smoke-path-"));
   const originalPath = process.env.PATH;
@@ -216,7 +649,18 @@ test("core observation retains meaningful evidence after empty or placeholder sa
 });
 
 test("manager bootstrap failure projection distinguishes delegation boundaries safely", () => {
-  const cases = [
+  const cases: [
+    string,
+    {
+      delegateCalls: number;
+      expectedBranchDelegateCalls: number;
+      resultState: string;
+      correlatedChild?: boolean;
+      childSessionSaved?: boolean;
+      linkedWorktreeObserved?: boolean;
+    },
+    string,
+  ][] = [
     [
       "no call",
       {
@@ -311,7 +755,7 @@ test("manager bootstrap wrong-branch success remains absent in diagnostics", () 
       },
     },
   ]
-    .map(JSON.stringify)
+    .map((entry) => JSON.stringify(entry))
     .join("\n");
   const state = managerBootstrapDelegationState(contents, "smoke/expected");
   assert.deepEqual(state, {
@@ -460,6 +904,7 @@ test("failure projections retain prior core and current candidate process observ
     "STALLED",
     "PASS",
   );
+  assert.ok(core.coreObservation);
   assert.deepEqual(core.coreObservation.processRecords, []);
   assert.deepEqual(core.coreObservation.lastNonemptyObservation, {
     elapsedMs: 123,
@@ -491,6 +936,7 @@ test("failure projections retain prior core and current candidate process observ
     "STALLED",
     "PASS",
   );
+  assert.ok(candidate.candidateStartObservation);
   assert.deepEqual(candidate.candidateStartObservation.processRecords, [
     record,
   ]);
@@ -501,7 +947,7 @@ test("failure projections retain prior core and current candidate process observ
     [Number.MAX_VALUE, Number.MAX_SAFE_INTEGER],
     ["123", null],
   ]) {
-    const projected = sanitizedFailureEvidence(
+    const projectedEvidence = sanitizedFailureEvidence(
       {
         scenario: "core",
         coreLastNonemptyObservation: {
@@ -512,16 +958,27 @@ test("failure projections retain prior core and current candidate process observ
       { error: { smoke: { stage: "core-delegation" } } },
       "STALLED",
       "PASS",
-    ).coreObservation.lastNonemptyObservation;
+    );
+    assert.ok(projectedEvidence.coreObservation);
+    const projected = projectedEvidence.coreObservation.lastNonemptyObservation;
+    assert.ok(projected);
     assert.equal(projected.elapsedMs, expected);
-    assert.equal(projected.processRecords[0].parentPid, null);
+    assert.ok(projected.processRecords);
+    const firstProcess = projected.processRecords[0];
+    assert.ok(firstProcess);
+    assert.equal(firstProcess.parentPid, null);
     assert.doesNotMatch(JSON.stringify(projected), /PRIVATE/);
   }
 });
 
 test("manager bootstrap run reference resolves to its exact retained artifact", async () => {
-  const evidence = { scenario: "manager-bootstrap", safe: true };
+  const evidence: Record<string, unknown> & {
+    scenario: string;
+    safe: boolean;
+    runReference?: string;
+  } = { scenario: "manager-bootstrap", safe: true };
   const artifact = await preserveFailureEvidence(evidence);
+  assert.ok(evidence.runReference);
   const reference = `${evidence.runReference}/result.json`;
   assert.match(reference, /^pi-herdsman-smoke-evidence-[^/]+\/result\.json$/);
   assert.equal(isAbsolute(reference), false);
@@ -542,16 +999,17 @@ test("manager bootstrap run reference resolves to its exact retained artifact", 
 
 test("scenario failure reporting uses an exact relative run reference", async () => {
   const evidence = { scenario: "test", outcome: "FAIL" };
-  const ctx = {};
-  const errors = [];
+  const ctx: Record<string, unknown> & { failureArtifact?: string } = {};
+  const errors: string[] = [];
   const originalError = console.error;
   console.error = (message) => errors.push(String(message));
-  let artifact;
+  let artifact: string | null = null;
   try {
     artifact = await retainScenarioFailureEvidence(ctx, evidence);
   } finally {
     console.error = originalError;
   }
+  assert.ok(artifact);
   const expected = `${basename(dirname(artifact))}/result.json`;
   try {
     assert.equal(ctx.failureArtifact, artifact);
@@ -603,18 +1061,22 @@ test("consumer receives only the finalized failure artifact through process outp
     env: { SECRET_SENTINEL: "SENSITIVE_SECRET_SENTINEL" },
   };
   const artifact = await preserveFailureEvidence(evidence);
-  const output = [];
+  const output: string[] = [];
   try {
     assert.equal(
-      await reportFinalFailureEvidence(artifact, (line) => output.push(line)),
+      await reportFinalFailureEvidence(artifact, (line: string) =>
+        output.push(line),
+      ),
       false,
     );
-    assert.deepEqual(output, []);
+    assert.deepEqual([...output], []);
 
     evidence.cleanup = "PASS";
     await preserveFailureEvidence(evidence, artifact);
     assert.equal(
-      await reportFinalFailureEvidence(artifact, (line) => output.push(line)),
+      await reportFinalFailureEvidence(artifact, (line: string) =>
+        output.push(line),
+      ),
       true,
     );
 
@@ -668,7 +1130,7 @@ test("consumer receives only the finalized failure artifact through process outp
 
 test("evidence write failure reporting omits raw filesystem paths", () => {
   const sentinel = "/private/fixture/smoke/result.json";
-  const errors = [];
+  const errors: string[] = [];
   const originalError = console.error;
   console.error = (message) => errors.push(String(message));
   try {
@@ -698,8 +1160,8 @@ test("evidence write failure reporting omits raw filesystem paths", () => {
 
 test("scenario failure evidence save catch reports code without its path", async () => {
   const sentinel = "/private/fixture/smoke/result.json";
-  const ctx = {};
-  const errors = [];
+  const ctx: Record<string, unknown> & { evidenceSaveFailed?: boolean } = {};
+  const errors: string[] = [];
   const originalError = console.error;
   console.error = (message) => errors.push(String(message));
   let result;
@@ -731,8 +1193,11 @@ test("scenario failure evidence save catch reports code without its path", async
 test("cleanup evidence retry records and reports a recovered artifact", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-herdsman-cleanup-retry-"));
   const artifact = join(root, "result.json");
-  const ctx = {};
-  const errors = [];
+  const ctx: Record<string, unknown> & {
+    failureArtifact?: string;
+    evidenceSaveFailed?: boolean;
+  } = {};
+  const errors: string[] = [];
   const originalError = console.error;
   console.error = (message) => errors.push(String(message));
   try {
@@ -765,13 +1230,16 @@ test("cleanup evidence retry records and reports a recovered artifact", async ()
 });
 
 test("cleanup retry artifact is delivered after its initial save failed", async () => {
-  const ctx = {};
+  const ctx: Record<string, unknown> & {
+    failureArtifact?: string;
+    evidenceSaveFailed?: boolean;
+  } = {};
   const evidence = {
     scenario: "manager-bootstrap",
     outcome: "SCENARIO_FAIL",
     cleanup: "PASS",
   };
-  const output = [];
+  const output: string[] = [];
   const originalError = console.error;
   console.error = () => {};
   try {
@@ -807,8 +1275,11 @@ test("cleanup retry artifact is delivered after its initial save failed", async 
 
 test("cleanup evidence retry failure reports sanitized error without undefined reference", async () => {
   const sentinel = "/private/fixture/smoke/result.json";
-  const ctx = {};
-  const errors = [];
+  const ctx: Record<string, unknown> & {
+    failureArtifact?: string;
+    evidenceSaveFailed?: boolean;
+  } = {};
+  const errors: string[] = [];
   const originalError = console.error;
   console.error = (message) => errors.push(String(message));
   try {
@@ -924,7 +1395,7 @@ test("root delegation diagnostics correlate results and exclude private data", (
     details: { ok: true },
     content: "PRIVATE_PATH",
   };
-  const project = (messages) =>
+  const project = (messages: unknown[]) =>
     rootDelegationDiagnostics(
       messages
         .map((message) => JSON.stringify({ type: "message", message }))
@@ -952,7 +1423,7 @@ test("root delegation diagnostics correlate results and exclude private data", (
     ],
     [[call, { ...result, isError: undefined }], "unknown"],
     [[call, result, call], "pending"],
-  ]) {
+  ] as [unknown[], string][]) {
     const projected = project(messages);
     assert.equal(projected.matchingResult, expected);
     assert.equal(projected.delegationCallObserved, expected !== "absent");
@@ -995,6 +1466,8 @@ test("root delegation diagnostics correlate results and exclude private data", (
   assert.throws(
     () => assertNoFailedAgentDelegation(failed),
     (error) =>
+      error instanceof Error &&
+      "code" in error &&
       error.code === "SMOKE_DELEGATION_FAILED" &&
       error.message === "delegate_agent failed (agent_busy)" &&
       !error.message.includes("PRIVATE"),
@@ -1070,7 +1543,10 @@ test("continuation failure diagnostics retain sanitized root delegation state", 
       },
     },
   );
-  assert.equal(evidence.diagnostics.rootDelegation.matchingResult, "absent");
+  const rootDelegation = evidence.diagnostics?.rootDelegation;
+  assert.ok(rootDelegation && typeof rootDelegation === "object");
+  assert.ok("matchingResult" in rootDelegation);
+  assert.equal(rootDelegation.matchingResult, "absent");
   const artifact = await preserveFailureEvidence(evidence);
   try {
     const saved = JSON.parse(await readFile(artifact, "utf8"));
@@ -1220,6 +1696,7 @@ test("core failure diagnostics correlate accepted delegation without exposing id
         failureEvidence.coreDelegation,
         projection.coreDelegation,
       );
+      assert.ok(failureEvidence.diagnostics);
       assert.deepEqual(
         failureEvidence.diagnostics.coreDelegation,
         projection.coreDelegation,
@@ -1258,7 +1735,12 @@ test("core failure diagnostics distinguish nested result publication from delive
   ]);
   const requestId = "00000000-0000-4000-8000-000000000002";
   const intermediateRequestId = "00000000-0000-4000-8000-000000000003";
-  const entries = (owner, label, child, request) => [
+  const entries = (
+    owner: string,
+    label: string,
+    child: string,
+    request: string,
+  ): Record<string, unknown>[] => [
     { type: "session", id: owner },
     {
       type: "message",
@@ -1415,6 +1897,7 @@ test("core failure diagnostics distinguish nested result publication from delive
           }),
         },
       );
+      assert.ok(projection.coreDelegation);
       assert.deepEqual(projection.coreDelegation.implementerToScout, {
         delegation: "accepted",
         session: "observed",
@@ -1679,7 +2162,7 @@ test("core failure diagnostics distinguish nested result publication from delive
       },
     );
     const nextSessionPath = join(piSessions, "next.jsonl");
-    const writeNextSession = (artifactContent, responseText) =>
+    const writeNextSession = (artifactContent: string, responseText: string) =>
       writeFile(
         nextSessionPath,
         [
@@ -1688,7 +2171,7 @@ test("core failure diagnostics distinguish nested result publication from delive
             type: "message",
             message: {
               role: "user",
-              content: `<file name="${scoutRef}" bytes="${Buffer.byteLength(artifactContent)}">\n${artifactContent}\n</file>\n\nTask: PRIVATE_NEXT_TASK`,
+              content: `<file name="${scoutRef}" bytes="${Buffer.byteLength(String(artifactContent))}">\n${artifactContent}\n</file>\n\nTask: PRIVATE_NEXT_TASK`,
             },
           },
           {
@@ -1755,6 +2238,7 @@ test("core failure diagnostics distinguish nested result publication from delive
         }),
       });
     const handoffProjection = await collectHandoffProjection();
+    assert.ok(handoffProjection.coreHandoff);
     const corePrompt = initialPromptForScenario("core", {
       expectedPackage: "pi-herdsman@0.25.1",
     });
@@ -1927,9 +2411,10 @@ test("core failure diagnostics distinguish nested result publication from delive
         JSON.stringify({ name: "pi-herdsman", version: "0.25.2" }),
         { name: "pi-herdsman", version: "0.25.1" },
       ],
-    ]) {
+    ] as [string, string, { name: string | null; version: string | null }][]) {
       await writeNextSession(artifactContent, responseText);
       const projection = await collectHandoffProjection();
+      assert.ok(projection.coreHandoff);
       assert.equal(
         projection.coreHandoff.nextAgent.artifact.responseMatchesArtifact,
         false,
@@ -1987,15 +2472,24 @@ test("failure result projection allowlists only bounded nonsensitive fields", ()
 });
 
 test("failure artifact propagates only fixed cleanup substep categories", async () => {
-  const ctx = { scenario: "manager-handoff", simulated: true };
+  const ctx: {
+    scenario: string;
+    simulated: boolean;
+    cleanupFailureCategories: string[];
+  } = {
+    scenario: "manager-handoff",
+    simulated: true,
+    cleanupFailureCategories: [],
+  };
   const cleanupError = await cleanup(
     { root: "/PRIVATE/root", authLink: "/PRIVATE/auth" },
     { hostTabId: "PRIVATE_TAB" },
     ctx,
     {
       removeFile: async () => {
-        const error = new Error("PRIVATE auth path");
-        error.code = "ENOENT";
+        const error = Object.assign(new Error("PRIVATE auth path"), {
+          code: "ENOENT",
+        });
         throw error;
       },
       herdrCommand: async () => {
@@ -2107,6 +2601,7 @@ test("terminal failure stall artifact retains only allowlisted report progress",
     "SCENARIO_FAIL",
     "PASS",
   );
+  assert.ok(incomplete.terminalFailureProgress);
   assert.deepEqual(
     Object.fromEntries(
       Object.entries(incomplete.terminalFailureProgress).filter(([key]) =>
@@ -2149,6 +2644,7 @@ test("terminal failure stall artifact retains only allowlisted report progress",
     "SCENARIO_FAIL",
     "PASS",
   );
+  assert.ok(pendingWithoutAttempt.terminalFailureProgress);
   assert.equal(
     pendingWithoutAttempt.terminalFailureProgress.reportPending,
     "observed",
@@ -2178,7 +2674,16 @@ test("failure artifact retains allowlisted parent routing identity across cleanu
     xdgConfig: "/tmp/phs-owned/xdg-config",
     xdgState: "/tmp/phs-owned/xdg-state",
   };
-  const ctx = {
+  const ctx: Record<string, unknown> & {
+    parentCleanupDiagnostics?: {
+      stop?: unknown;
+      stderr?: unknown;
+      environment?: Record<string, unknown>;
+      namedServer: Record<string, unknown>;
+      cleanupErrorCode?: unknown;
+      child: Record<string, unknown>;
+    };
+  } = {
     scenario: "core",
     simulated: true,
     paths,
@@ -2342,7 +2847,7 @@ test("smoke verifies the isolated Herdr server", () => {
     },
   };
 
-  const verify = (server) =>
+  const verify = (server: Partial<typeof status.server>) =>
     requireNestedHerdrServer(
       { ...status, server: { ...status.server, ...server } },
       "smoke-test",
@@ -2689,7 +3194,7 @@ test("root pane command removes inherited managed identity before Pi only", asyn
     piAgent: "/smoke/pi-agent",
     piSessions: "/smoke/pi-sessions",
   };
-  const identity = {
+  const identity: Record<string, string> = {
     PI_HERDSMAN_MAILBOX: "/synthetic/mailbox",
     PI_HERDSMAN_RUN_ID: "synthetic-run",
     PI_HERDSMAN_OWNER_SESSION_ID: "synthetic-owner",
@@ -2731,8 +3236,8 @@ test("root pane command removes inherited managed identity before Pi only", asyn
     paths,
     sessionName: "smoke-root",
   };
-  let paneArgs;
-  let paneOptions;
+  let paneArgs: string[] | undefined;
+  let paneOptions: Record<string, unknown> | undefined;
   await submitPaneCommand(
     ctx,
     "w1:p1",
@@ -2743,10 +3248,24 @@ test("root pane command removes inherited managed identity before Pi only", asyn
       return { stdout: "", stderr: "", pid: 123 };
     },
   );
+  assert.ok(paneOptions);
+  const paneEnv = paneOptions.env;
+  assert.ok(paneEnv && typeof paneEnv === "object");
+  assert.ok("HERDR_CONFIG_PATH" in paneEnv);
+  assert.ok("PI_CODING_AGENT_DIR" in paneEnv);
+  assert.ok("PI_CODING_AGENT_SESSION_DIR" in paneEnv);
   assert.deepEqual(paneArgs, ["pane", "run", "w1:p1", expectedCommand]);
 
-  const base = { ...identity, HERDR_ENV: "1", KEEP_ME: "yes" };
-  const descendantEnv = nestedControlEnv(base, paths, "smoke-child");
+  const base: Record<string, string | undefined> = {
+    ...identity,
+    HERDR_ENV: "1",
+    KEEP_ME: "yes",
+  };
+  const descendantEnv: Record<string, string | undefined> = nestedControlEnv(
+    base,
+    paths,
+    "smoke-child",
+  );
   assert.deepEqual(descendantEnv, {
     ...identity,
     HERDR_ENV: "1",
@@ -2758,11 +3277,15 @@ test("root pane command removes inherited managed identity before Pi only", asyn
     KEEP_ME: "yes",
     HERDR_SESSION: "smoke-child",
   });
-  assert.equal(paneOptions.env.HERDR_CONFIG_PATH, paths.herdrConfig);
-  assert.equal(paneOptions.env.PI_CODING_AGENT_DIR, paths.piAgent);
-  assert.equal(paneOptions.env.PI_CODING_AGENT_SESSION_DIR, paths.piSessions);
-  for (const [key, value] of Object.entries(identity))
-    assert.equal(descendantEnv[key], value);
+  assert.equal(paneEnv.HERDR_CONFIG_PATH, paths.herdrConfig);
+  assert.equal(paneEnv.PI_CODING_AGENT_DIR, paths.piAgent);
+  assert.equal(paneEnv.PI_CODING_AGENT_SESSION_DIR, paths.piSessions);
+  for (const [key, value] of Object.entries(identity)) {
+    const observed: string | undefined = Object.entries(descendantEnv).find(
+      ([envKey]) => envKey === key,
+    )?.[1];
+    assert.equal(observed, value);
+  }
   assert.deepEqual(base, { ...identity, HERDR_ENV: "1", KEEP_ME: "yes" });
 });
 
@@ -2896,7 +3419,7 @@ test("simulated Agent failure decision requires the exact correlated failed hand
     content:
       "Agent result · agent=smoke-terminal-agent · definition=smoke-failure-agent · session=child-session · status=failed\n\nDelegation status: failed",
   };
-  const decideWith = (delivered) =>
+  const decideWith = (delivered: { role: string; content: string }) =>
     decide("agent-terminal-failure", {
       messages: [
         { role: "user", content: "SMOKE_AGENT_FAILURE" },
@@ -2906,14 +3429,16 @@ test("simulated Agent failure decision requires the exact correlated failed hand
       ],
     });
   assert.match(
-    decideWith(handoff).content[0].text,
+    firstTextContent(decideWith(handoff)).text,
     /SMOKE_AGENT_FAILURE_DELIVERED/,
   );
   assert.match(
-    decideWith({
-      ...handoff,
-      content: handoff.content.replace("child-session", "wrong-session"),
-    }).content[0].text,
+    firstTextContent(
+      decideWith({
+        ...handoff,
+        content: handoff.content.replace("child-session", "wrong-session"),
+      }),
+    ).text,
     /Waiting for the exact Agent failure/,
   );
 });
@@ -3067,7 +3592,7 @@ test("manager-handoff faux Lead only calls offered message_supervisor tool", () 
   });
   assert.equal(available.content[0]?.type, "toolCall");
   assert.equal(
-    available.content[0]?.type === "toolCall" && available.content[0].name,
+    available.content[0]?.type === "toolCall" && firstToolCall(available).name,
     "message_supervisor",
   );
 
@@ -3251,25 +3776,58 @@ test("Manager assignment diagnostics are bounded and reject a mismatched branch 
 
 test("manager handoff failure artifact preserves early-poll defaults and safe timing", async () => {
   const sessionDir = await mkdtemp(join(tmpdir(), "pi-herdsman-smoke-parser-"));
-  const diagnose = async (contents) => {
+  const diagnose = async (contents: string) => {
     const manager = SessionManager.create(process.cwd(), sessionDir);
     for (const line of contents.split(/\r?\n/u).filter(Boolean)) {
-      const entry = JSON.parse(line);
-      if (entry.type === "message") manager.appendMessage(entry.message);
+      const entry: unknown = JSON.parse(line);
+      if (
+        entry &&
+        typeof entry === "object" &&
+        "type" in entry &&
+        entry.type === "message" &&
+        "message" in entry &&
+        isSessionMessage(entry.message)
+      )
+        manager.appendMessage(entry.message);
     }
     if (!manager.getLeafId())
-      manager.appendMessage({ role: "user", content: "fixture" });
+      manager.appendMessage({
+        role: "user",
+        content: [{ type: "text", text: "fixture" }],
+        timestamp: 0,
+      });
+    const sessionFile = manager.getSessionFile();
+    assert.ok(sessionFile);
     return supervisorMessageDiagnostics(
-      manager.getSessionFile(),
+      sessionFile,
       manager.getSessionId(),
       "MANAGER_HANDOFF_READY",
     );
+  };
+  const assistantMessageMetadata: Pick<
+    AssistantMessage,
+    "api" | "provider" | "model" | "usage" | "stopReason" | "timestamp"
+  > = {
+    api: "openai-completions",
+    provider: "openai",
+    model: "smoke-test",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "toolUse",
+    timestamp: 0,
   };
   const contents = [
     {
       type: "message",
       message: {
         role: "assistant",
+        ...assistantMessageMetadata,
         content: [
           {
             type: "toolCall",
@@ -3298,7 +3856,8 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
             cause: "PRIVATE_CAUSE",
           },
         },
-        content: "PRIVATE_RESULT_BODY",
+        content: [{ type: "text", text: "PRIVATE_RESULT_BODY" }],
+        timestamp: 0,
       },
     },
   ]
@@ -3331,16 +3890,23 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
   assert.throws(
     () => assertNoFailedManagerHandoff(failedProgress),
     (error) => {
+      assert.ok(error instanceof Error);
+      assert.ok("code" in error);
+      assert.ok("smoke" in error);
+      const smoke = error.smoke;
+      assert.ok(smoke && typeof smoke === "object");
+      assert.ok("stage" in smoke && "lastProgress" in smoke);
       assert.equal(error.code, "SMOKE_SUPERVISOR_FAILED");
       assert.equal(error.message, "message_supervisor failed");
-      assert.equal(error.smoke.stage, "manager-handoff-assignment");
-      assert.deepEqual(error.smoke.lastProgress, failedProgress);
+      assert.equal(smoke.stage, "manager-handoff-assignment");
+      assert.deepEqual(smoke.lastProgress, failedProgress);
       const artifact = sanitizedFailureEvidence(
         { scenario: "manager-handoff", simulated: true },
         { error },
         "SCENARIO_FAIL",
         "PASS",
       );
+      assert.ok(artifact.managerHandoffProgress);
       assert.equal(
         artifact.managerHandoffProgress.supervisorResultState,
         "error",
@@ -3393,7 +3959,6 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
       '"branchStatus":"operation_error_returned"',
       '"branchStatus":"non_operation_error_throw"',
     ),
-    "MANAGER_HANDOFF_READY",
   );
   assert.equal(
     unsupportedBranchStatus.supervisorHandlerBranchStatus,
@@ -3433,7 +3998,6 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     contents
       .replace('"isError":true', '"isError":false')
       .replace('"PRIVATE_RESULT_BODY"', '"sent"'),
-    "MANAGER_HANDOFF_READY",
   );
   assert.deepEqual(successfulSupervisor, {
     supervisorSessionHeaderMatches: true,
@@ -3484,6 +4048,7 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     "SCENARIO_FAIL",
     "PASS",
   );
+  assert.ok(earlyEvidence.managerHandoffProgress);
   assert.equal(
     earlyEvidence.managerHandoffProgress.supervisorCallObserved,
     false,
@@ -3594,10 +4159,33 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
 test("manager readiness correlates one active-branch call with its following result", async () => {
   const sessionDir = await mkdtemp(join(tmpdir(), "pi-herdsman-smoke-branch-"));
   try {
+    const assistantMessageMetadata: Pick<
+      AssistantMessage,
+      "api" | "provider" | "model" | "usage" | "stopReason" | "timestamp"
+    > = {
+      api: "openai-completions",
+      provider: "openai",
+      model: "smoke-test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "toolUse",
+      timestamp: 0,
+    };
     const source = SessionManager.create(process.cwd(), sessionDir);
-    const root = source.appendMessage({ role: "user", content: "root" });
+    const root = source.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "root" }],
+      timestamp: 0,
+    });
     source.appendMessage({
       role: "assistant",
+      ...assistantMessageMetadata,
       content: [
         {
           type: "toolCall",
@@ -3615,11 +4203,13 @@ test("manager readiness correlates one active-branch call with its following res
       toolName: "message_supervisor",
       toolCallId: "FOREIGN_CALL_ID",
       isError: false,
-      content: "PRIVATE_SUCCESS_BODY",
+      content: [{ type: "text", text: "PRIVATE_SUCCESS_BODY" }],
+      timestamp: 0,
     });
     source.branch(root);
     source.appendMessage({
       role: "assistant",
+      ...assistantMessageMetadata,
       content: [
         {
           type: "toolCall",
@@ -3634,15 +4224,20 @@ test("manager readiness correlates one active-branch call with its following res
       toolName: "message_supervisor",
       toolCallId: "OLD_BRANCH_CALL_ID",
       isError: false,
+      content: [],
+      timestamp: 0,
     });
 
+    const sourceSessionFile = source.getSessionFile();
+    assert.ok(sourceSessionFile);
     const fork = SessionManager.forkFrom(
-      source.getSessionFile(),
+      sourceSessionFile,
       process.cwd(),
       sessionDir,
     );
     fork.appendMessage({
       role: "assistant",
+      ...assistantMessageMetadata,
       content: [
         {
           type: "toolCall",
@@ -3666,11 +4261,14 @@ test("manager readiness correlates one active-branch call with its following res
           message: "PRIVATE_ERROR_TEXT",
         },
       },
-      content: "PRIVATE_RESULT_BODY",
+      content: [{ type: "text", text: "PRIVATE_RESULT_BODY" }],
+      timestamp: 0,
     });
 
+    const forkSessionFile = fork.getSessionFile();
+    assert.ok(forkSessionFile);
     const diagnostics = supervisorMessageDiagnostics(
-      fork.getSessionFile(),
+      forkSessionFile,
       fork.getSessionId(),
       "MANAGER_HANDOFF_READY",
     );
@@ -3689,7 +4287,7 @@ test("manager readiness correlates one active-branch call with its following res
       /FOREIGN_CALL_ID|OLD_BRANCH_CALL_ID|LATEST_CALL_ID|PRIVATE_ARGS|PRIVATE_SUCCESS_BODY|UNLISTED_PRIVATE_CATEGORY|PRIVATE_ERROR_TEXT|PRIVATE_RESULT_BODY/u,
     );
     const mismatchedHeader = supervisorMessageDiagnostics(
-      fork.getSessionFile(),
+      forkSessionFile,
       "WRONG_EXPECTED_SESSION_ID",
       "MANAGER_HANDOFF_READY",
     );
@@ -3727,8 +4325,10 @@ test("manager readiness rejects preceding, duplicate, and ambiguous tool evidenc
   const diagnose = async (messages: unknown[]) => {
     const session = SessionManager.create(process.cwd(), sessionDir);
     for (const message of messages) session.appendMessage(message as any);
+    const sessionFile = session.getSessionFile();
+    assert.ok(sessionFile);
     return supervisorMessageDiagnostics(
-      session.getSessionFile(),
+      sessionFile,
       session.getSessionId(),
       "MANAGER_HANDOFF_READY",
     );
@@ -3781,7 +4381,13 @@ test("manager readiness rejects preceding, duplicate, and ambiguous tool evidenc
 
 test("Manager handoff cleanup owns the worktree before Lead readiness", async () => {
   const branch = "herdsman/smoke-manager-handoff-test";
-  const ctx = { owned: { managerBranch: branch } };
+  const ctx: {
+    owned: {
+      managerBranch: string;
+      managerWorktreePath?: string;
+      managerWorkspaceId?: string;
+    };
+  } = { owned: { managerBranch: branch } };
   const worktree = {
     branch,
     path: "/smoke/manager-handoff",
@@ -3807,7 +4413,7 @@ test("Manager handoff cleanup owns the worktree before Lead readiness", async ()
     () => captureManagerHandoffWorktree(ctx, [worktree], branch, "wrong"),
     /does not match exact worktree/,
   );
-  const removals = [];
+  const removals: string[][] = [];
   const paths = { root: "/smoke", authLink: "/smoke/auth" };
   const cleanupCtx = {
     rootWorkspaceId: "root-workspace",
@@ -3817,8 +4423,9 @@ test("Manager handoff cleanup owns the worktree before Lead readiness", async ()
   const result = await cleanup(paths, ctx.owned, cleanupCtx, {
     remove: async () => {},
     removeFile: async () => {
-      const error = new Error("missing auth link");
-      error.code = "ENOENT";
+      const error = Object.assign(new Error("missing auth link"), {
+        code: "ENOENT",
+      });
       throw error;
     },
     herdrCommand: async (args) => {
@@ -3828,8 +4435,7 @@ test("Manager handoff cleanup owns the worktree before Lead readiness", async ()
       return {};
     },
     runCommand: async () => {
-      const error = new Error("branch absent");
-      error.code = 1;
+      const error = Object.assign(new Error("branch absent"), { code: 1 });
       throw error;
     },
   });
@@ -3845,8 +4451,9 @@ test("Manager handoff cleanup owns the worktree before Lead readiness", async ()
     {
       remove: async () => {},
       removeFile: async () => {
-        const error = new Error("missing auth link");
-        error.code = "ENOENT";
+        const error = Object.assign(new Error("missing auth link"), {
+          code: "ENOENT",
+        });
         throw error;
       },
       herdrCommand: async () => ({ worktrees: [worktree] }),
@@ -3857,7 +4464,13 @@ test("Manager handoff cleanup owns the worktree before Lead readiness", async ()
 
 test("Manager handoff retries incomplete exact worktree identity and fails closed", async () => {
   const branch = "herdsman/smoke-manager-handoff-retry";
-  const ctx = { owned: { managerBranch: branch } };
+  const ctx: {
+    owned: {
+      managerBranch: string;
+      managerWorktreePath?: string;
+      managerWorkspaceId?: string;
+    };
+  } = { owned: { managerBranch: branch } };
   const incomplete = { branch };
   const complete = {
     branch,
@@ -3881,6 +4494,7 @@ test("Manager handoff retries incomplete exact worktree identity and fails close
           }),
         };
       } catch (error) {
+        assertErrorWithCode(error);
         if (error.code !== "SMOKE_OBSERVATION") throw error;
         return {
           done: false,
@@ -3911,7 +4525,10 @@ test("Manager handoff retries incomplete exact worktree identity and fails close
           [incompleteIdentity],
           branch,
         ),
-      (error) => error.code === "SMOKE_OBSERVATION",
+      (error) => {
+        assertErrorWithCode(error);
+        return error.code === "SMOKE_OBSERVATION";
+      },
     );
   }
 
@@ -3939,6 +4556,7 @@ test("Manager handoff retries incomplete exact worktree identity and fails close
         try {
           captureManagerHandoffWorktree(persistent, [incomplete], branch);
         } catch (error) {
+          assertErrorWithCode(error);
           if (error.code !== "SMOKE_OBSERVATION") throw error;
           return {
             done: false,
@@ -3953,21 +4571,23 @@ test("Manager handoff retries incomplete exact worktree identity and fails close
       { timeoutMs: 1000, stallMs: 15, pollMs: 1 },
     ),
     (error) => {
+      assertSmokeError(error);
       assert.equal(error.code, "SMOKE_STALLED");
-      assert.equal(
-        error.smoke.lastProgress.worktreeIdentityState,
-        "incomplete",
+      const lastProgress = error.smoke.lastProgress;
+      assert.ok(lastProgress && typeof lastProgress === "object");
+      assert.ok(
+        "worktreeIdentityState" in lastProgress &&
+          "errorCategory" in lastProgress,
       );
-      assert.equal(
-        error.smoke.lastProgress.errorCategory,
-        "worktree_identity_incomplete",
-      );
+      assert.equal(lastProgress.worktreeIdentityState, "incomplete");
+      assert.equal(lastProgress.errorCategory, "worktree_identity_incomplete");
       const artifact = sanitizedFailureEvidence(
         { scenario: "manager-handoff", simulated: true },
         { error },
         "SCENARIO_FAIL",
         "FAIL",
       );
+      assert.ok(artifact.managerHandoffProgress);
       assert.equal(
         artifact.managerHandoffProgress.worktreeIdentityState,
         "incomplete",
@@ -4054,6 +4674,7 @@ test("Manager handoff readiness waits for verified Lead process provenance", asy
       { timeoutMs: 200, stallMs: 20, pollMs: 1 },
     ),
     (error) => {
+      assertSmokeError(error);
       assert.equal(error.code, "SMOKE_STALLED");
       assert.equal(error.smoke.stage, "manager-handoff-assignment");
       assert.ok(observations > 1);
@@ -4067,8 +4688,16 @@ test("Agent failure observation resolves the managed Pi session identity", async
     agent_session: { kind: "id", value: "herdr-agent-id" },
     pane_id: "w1:p2",
   };
-  const resolveSessionId = async (_ctx, agent) =>
-    agent.agent_session?.value === "herdr-agent-id" ? "child-session" : null;
+  const resolveSessionId = async (_ctx: unknown, agent: unknown) =>
+    agent &&
+    typeof agent === "object" &&
+    "agent_session" in agent &&
+    agent.agent_session &&
+    typeof agent.agent_session === "object" &&
+    "value" in agent.agent_session &&
+    agent.agent_session.value === "herdr-agent-id"
+      ? "child-session"
+      : null;
   assert.deepEqual(
     await agentsForPiSession({}, [child], "child-session", resolveSessionId),
     [child],
@@ -4135,31 +4764,24 @@ test("manager-recovery timeout is bounded and scoped to its ready handshake", ()
 });
 
 test("simulated Manager decision only delegates the exact requested project work", () => {
-  const answer = decide("terminal-failure", {
-    messages: [
-      {
-        role: "user",
-        content:
-          'Use delegate_work exactly once. Set branch to exactly herdsman/smoke-test, task to exactly "Wait for the report.", and omit base and files.',
-      },
-    ],
-  });
+  const request = {
+    role: "user",
+    content:
+      'Use delegate_work exactly once. Set branch to exactly herdsman/smoke-test, task to exactly "Wait for the report.", and omit base and files.',
+  };
+  const answer = decide("terminal-failure", { messages: [request] });
   assert.equal(answer.stopReason, "toolUse");
-  assert.equal(answer.content[0].name, "delegate_work");
-  assert.deepEqual(answer.content[0].arguments, {
+  assert.equal(firstToolCall(answer).name, "delegate_work");
+  assert.deepEqual(firstToolCall(answer).arguments, {
     branch: "herdsman/smoke-test",
     task: "Wait for the report.",
   });
+  const invalidRequest = {
+    role: "user",
+    content: "Remove worktree herdsman/branch",
+  };
   assert.throws(
-    () =>
-      decide("terminal-failure", {
-        messages: [
-          {
-            role: "user",
-            content: "Remove worktree herdsman/branch",
-          },
-        ],
-      }),
+    () => decide("terminal-failure", { messages: [invalidRequest] }),
     /Unexpected terminal-failure transcript/,
   );
 });
@@ -4195,8 +4817,8 @@ test("federation Manager starts its branch after an earlier completed managed as
   const answer = decide("federated-peer-b", { messages });
 
   assert.equal(answer.stopReason, "toolUse");
-  assert.equal(answer.content[0].name, "delegate_work");
-  assert.equal(answer.content[0].arguments.branch, branch);
+  assert.equal(firstToolCall(answer).name, "delegate_work");
+  assert.equal(firstToolCall(answer).arguments.branch, branch);
 });
 
 test("federation Lead correlates discovery and sends only within the current turn", () => {
@@ -4244,9 +4866,12 @@ test("federation Lead correlates discovery and sends only within the current tur
       messages: [...history, { role: "user", content }],
     });
 
-  assert.equal(discover("PEER_E2E_A_DISCOVER").content[0].name, "list_peers");
   assert.equal(
-    discover("PEER_E2E_A_LEAD_SEND result:researcher#1").content[0].name,
+    firstToolCall(discover("PEER_E2E_A_DISCOVER")).name,
+    "list_peers",
+  );
+  assert.equal(
+    firstToolCall(discover("PEER_E2E_A_LEAD_SEND result:researcher#1")).name,
     "list_peers",
   );
 
@@ -4277,8 +4902,8 @@ test("federation Lead correlates discovery and sends only within the current tur
       listedResult,
     ],
   });
-  assert.equal(send.content[0].name, "message_peer");
-  assert.equal(send.content[0].arguments.target, "new-target");
+  assert.equal(firstToolCall(send).name, "message_peer");
+  assert.equal(firstToolCall(send).arguments.target, "new-target");
 });
 
 test("federation Lead handles inbound request after its capture prompt and imported binding", () => {
@@ -4287,11 +4912,13 @@ test("federation Lead handles inbound request after its capture prompt and impor
   const messages = [
     { role: "user", content: "PEER_E2E_B_CAPTURE_SESSION" },
     {
+      role: "user",
       type: "custom_message",
       customType: "pi-herdsman-peer_message",
       content: `Peer message from ${origin}: PEER_E2E_LEAD_REQUEST; result:researcher#1\n\nForwardable received files:\nartifact: ${canonical}`,
     },
     {
+      role: "system",
       type: "custom",
       customType: "pi-herdsman-result-ref",
       data: { ref: "result:researcher#1", canonicalRef: canonical },
@@ -4301,9 +4928,9 @@ test("federation Lead handles inbound request after its capture prompt and impor
   const answer = decide("federated-peer-b", { messages });
 
   assert.equal(answer.stopReason, "toolUse");
-  assert.equal(answer.content[0].name, "read");
+  assert.equal(firstToolCall(answer).name, "read");
   assert.equal(
-    answer.content[0].arguments.path,
+    firstToolCall(answer).arguments.path,
     join(
       process.env.PI_CODING_AGENT_DIR!,
       "pi-herdsman",
@@ -4317,13 +4944,14 @@ test("federation Lead handles inbound request after its capture prompt and impor
       message.type !== "custom" ||
       message.customType !== "pi-herdsman-result-ref",
   );
-  const contextBindingAnswer = decide("federated-peer-b", {
+  const contextBinding = {
     messages: providerProjection,
     peerImportedBindingVisible: true,
-  });
-  assert.equal(contextBindingAnswer.content[0].name, "read");
+  };
+  const contextBindingAnswer = decide("federated-peer-b", contextBinding);
+  assert.equal(firstToolCall(contextBindingAnswer).name, "read");
   assert.equal(
-    contextBindingAnswer.content[0].arguments.path,
+    firstToolCall(contextBindingAnswer).arguments.path,
     join(
       process.env.PI_CODING_AGENT_DIR!,
       "pi-herdsman",
@@ -4375,7 +5003,10 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     result("delegate_agent"),
   ];
   const pendingRoot = decide("core", { messages: rootStarted });
-  assert.doesNotMatch(pendingRoot.content[0].text, /PI_HERDSMAN_SMOKE_OK/);
+  assert.doesNotMatch(
+    firstTextContent(pendingRoot).text,
+    /PI_HERDSMAN_SMOKE_OK/,
+  );
   const managerRoleRoot = rootStarted.map((message, index) =>
     index === 0
       ? {
@@ -4400,9 +5031,11 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     "implementer-session",
     `Forwardable result evidence: ${scoutRef}\n\n{"name":"pi-herdsman","version":"0.25.1"}`,
   );
-  const nextAssignment = decide("core", {
-    messages: [...rootStarted, implementerDelivery],
-  }).content[0];
+  const nextAssignment = firstToolCall(
+    decide("core", {
+      messages: [...rootStarted, implementerDelivery],
+    }),
+  );
   assert.equal(nextAssignment.name, "delegate_agent");
   assert.deepEqual(nextAssignment.arguments.files, [scoutRef]);
   const nextTask = {
@@ -4410,7 +5043,7 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     content: `<file name="${scoutRef}" bytes="49">\n{"name":"pi-herdsman","version":"0.25.1"}\n</file>\n\nTask:\nSMOKE_CORE_NEXT_AGENT: verify ${scoutRef}`,
   };
   assert.deepEqual(
-    JSON.parse(decide("core", { messages: [nextTask] }).content[0].text),
+    JSON.parse(firstTextContent(decide("core", { messages: [nextTask] })).text),
     { name: "pi-herdsman", version: "0.25.1" },
   );
   const rootAfterNext = [
@@ -4421,7 +5054,7 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     delivered("smoke-core-next", "next-session"),
   ];
   assert.equal(
-    decide("core", { messages: rootAfterNext }).content[0].text,
+    firstTextContent(decide("core", { messages: rootAfterNext })).text,
     "PI_HERDSMAN_SMOKE_OK pi-herdsman@0.25.1",
   );
 
@@ -4430,12 +5063,14 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     content:
       '<file name="evidence:work-assignment#1" bytes="41">\nSMOKE_CORE_IMPLEMENTER: delegate one scout.\n</file>\n\nTask:\nSMOKE_CORE_SCOUT: read package.json\n\nThe owner work assignment supplied as evidence is context only; follow your current Task and do not expand its scope.',
   };
+  const wrongTask = {
+    role: "user",
+    content: "SMOKE_CORE_SCOUT: read package.json",
+  };
   assert.throws(
     () =>
       decide("core", {
-        messages: [
-          { role: "user", content: "SMOKE_CORE_SCOUT: read package.json" },
-        ],
+        messages: [wrongTask],
       }),
     /Scout did not receive its owner's task as contextual evidence/,
   );
@@ -4453,7 +5088,7 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     },
   ];
   assert.deepEqual(
-    JSON.parse(decide("core", { messages: scoutRead }).content[0].text),
+    JSON.parse(firstTextContent(decide("core", { messages: scoutRead })).text),
     { name: "pi-herdsman", version: "0.25.1" },
   );
   const nestedPackage = [
@@ -4471,28 +5106,31 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
       scoutRef,
     ),
   ];
-  const attachCall = decide("core", { messages: nestedPackage }).content[0];
+  const attachCall = firstToolCall(decide("core", { messages: nestedPackage }));
   assert.equal(attachCall.name, "attach_handoff");
   assert.deepEqual(attachCall.arguments, { files: [scoutRef] });
   assert.deepEqual(
     JSON.parse(
-      decide("core", {
-        messages: [
-          ...nestedPackage,
-          call("attach_handoff", attachCall.arguments, "attach-1"),
-          result("attach_handoff", "attach-1"),
-        ],
-      }).content[0].text,
+      firstTextContent(
+        decide("core", {
+          messages: [
+            ...nestedPackage,
+            call("attach_handoff", attachCall.arguments, "attach-1"),
+            result("attach_handoff", "attach-1"),
+          ],
+        }),
+      ).text,
     ),
     { name: "pi-herdsman", version: "0.25.1" },
   );
+  const wrongReadResult = { ...scoutRead[2], toolCallId: "wrong" };
   assert.throws(
     () =>
       decide("core", {
         messages: [
           scoutTask,
           call("read", { path: "other.json" }, "wrong"),
-          { ...scoutRead[2], toolCallId: "wrong" },
+          wrongReadResult,
         ],
       }),
     /Package read result missing|Unexpected core transcript/,
@@ -4509,20 +5147,23 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     result("delegate_agent"),
   ];
   assert.doesNotMatch(
-    decide("continuation", { messages: continuationStarted }).content[0].text,
+    firstTextContent(decide("continuation", { messages: continuationStarted }))
+      .text,
     /PI_HERDSMAN_CONTINUATION_FIRST/,
   );
   assert.equal(
-    decide("continuation", {
-      messages: [
-        ...continuationStarted,
-        delivered(
-          "smoke-continuation-implementer",
-          "child-session",
-          "pi-herdsman CONTINUATION_FIRST_DONE",
-        ),
-      ],
-    }).content[0].text,
+    firstTextContent(
+      decide("continuation", {
+        messages: [
+          ...continuationStarted,
+          delivered(
+            "smoke-continuation-implementer",
+            "child-session",
+            "pi-herdsman CONTINUATION_FIRST_DONE",
+          ),
+        ],
+      }),
+    ).text,
     "PI_HERDSMAN_CONTINUATION_FIRST",
   );
 
@@ -4539,11 +5180,11 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     { role: "user", content: followup },
   ];
   const continueCall = decide("continuation", { messages: beforeContinue });
-  assert.equal(continueCall.content[0].name, "continue_agent");
-  assert.equal(continueCall.content[0].arguments.session, savedPath);
+  assert.equal(firstToolCall(continueCall).name, "continue_agent");
+  assert.equal(firstToolCall(continueCall).arguments.session, savedPath);
   const continued = [
     ...beforeContinue,
-    call("continue_agent", continueCall.content[0].arguments, "continue-1"),
+    call("continue_agent", firstToolCall(continueCall).arguments, "continue-1"),
     result("continue_agent", "continue-1", { session_id: "saved-id" }),
     delivered(
       "smoke-continuation-implementer",
@@ -4552,16 +5193,18 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     ),
   ];
   assert.equal(
-    decide("continuation", { messages: continued }).content[0].text,
+    firstTextContent(decide("continuation", { messages: continued })).text,
     "pi-herdsman PI_HERDSMAN_CONTINUATION_SECOND",
   );
   assert.doesNotMatch(
-    decide("continuation", {
-      messages: [
-        ...continued,
-        { role: "user", content: "delegation guidance" },
-      ],
-    }).content[0].text,
+    firstTextContent(
+      decide("continuation", {
+        messages: [
+          ...continued,
+          { role: "user", content: "delegation guidance" },
+        ],
+      }),
+    ).text,
     /PI_HERDSMAN_CONTINUATION_SECOND/,
   );
 
@@ -4582,7 +5225,9 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
       ],
     },
   ];
-  const evidenceCall = decide("continuation", { messages: resumed }).content[0];
+  const evidenceCall = firstToolCall(
+    decide("continuation", { messages: resumed }),
+  );
   assert.equal(evidenceCall.name, "read_evidence");
   assert.deepEqual(evidenceCall.arguments, {
     ref: "evidence:work-assignment#1",
@@ -4609,7 +5254,8 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     /Continued task could not read its prior work assignment/,
   );
   assert.equal(
-    decide("continuation", { messages: resumedWithEvidence }).content[0].text,
+    firstTextContent(decide("continuation", { messages: resumedWithEvidence }))
+      .text,
     "pi-herdsman PI_HERDSMAN_CONTINUATION_SECOND",
   );
 });
@@ -4650,7 +5296,7 @@ test("supervisor-agent accepts only its current-format completed result", () => 
     messages: [prompt, call, delegated, completed],
   });
   assert.equal(
-    accept.content[0].text,
+    firstTextContent(accept).text,
     "PI_HERDSMAN_SUPERVISOR_AGENT_DELIVERED",
   );
   const unrelated = decideSmokeFaux("supervisor-agent", {
@@ -4668,7 +5314,7 @@ test("supervisor-agent accepts only its current-format completed result", () => 
     ],
   });
   assert.match(
-    unrelated.content[0].text,
+    firstTextContent(unrelated).text,
     /Waiting for the completed Agent result/,
   );
 });
@@ -4758,22 +5404,19 @@ test("crash-recovery probes an advertised waiting-parent steer and requires reje
     },
   ];
   const steer = decideSmokeFaux("agent-crash-root", { messages });
-  assert.equal(steer.content[0].name, "steer_agent");
-  const steerCallId = steer.content[0].id;
+  assert.equal(firstToolCall(steer).name, "steer_agent");
+  const steerCallId = firstToolCall(steer).id;
+  const steerResult = {
+    role: "toolResult",
+    toolName: "steer_agent",
+    toolCallId: steerCallId,
+    isError: false,
+    details: { ok: false, error: { category: "agent_busy" } },
+  };
   const stopped = decideSmokeFaux("agent-crash-root", {
-    messages: [
-      ...messages,
-      steer,
-      {
-        role: "toolResult",
-        toolName: "steer_agent",
-        toolCallId: steerCallId,
-        isError: false,
-        details: { ok: false, error: { category: "agent_busy" } },
-      },
-    ],
+    messages: [...messages, steer, steerResult],
   });
-  assert.equal(stopped.content[0].name, "stop_agent");
+  assert.equal(firstToolCall(stopped).name, "stop_agent");
 });
 
 test("crash-recovery accepts only the resumed target's marked completion", () => {
@@ -4845,7 +5488,7 @@ test("crash-recovery accepts only the resumed target's marked completion", () =>
     ],
   });
   assert.match(
-    unrelated.content[0].text,
+    firstTextContent(unrelated).text,
     /Waiting for the continued exact session result/,
   );
   const resumed = decideSmokeFaux("agent-crash-root", {
@@ -4858,7 +5501,10 @@ test("crash-recovery accepts only the resumed target's marked completion", () =>
       },
     ],
   });
-  assert.equal(resumed.content[0].text, "PI_HERDSMAN_CRASH_RECOVERY_CONTINUED");
+  assert.equal(
+    firstTextContent(resumed).text,
+    "PI_HERDSMAN_CRASH_RECOVERY_CONTINUED",
+  );
 });
 
 test("installed faux provider requeues decisions and emits its terminal failure through native error events", async () => {
@@ -4874,39 +5520,56 @@ test("installed faux provider requeues decisions and emits its terminal failure 
     "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
   );
   try {
-    let provider;
+    let registeredProvider: Provider<Api> | undefined;
     const handlers = new Map();
     installFaux({
       registerProvider(value) {
-        provider = value;
+        if (typeof value !== "string") registeredProvider = value;
       },
-      on(event, handler) {
+      on(event: string, handler: unknown) {
         handlers.set(event, handler);
+        return () => handlers.delete(event);
       },
     });
+    assert.ok(registeredProvider);
+    const provider = registeredProvider;
     handlers.get("session_start")?.(
       {},
       {
         sessionManager: { getSessionId: () => "faux-test-session" },
       },
     );
-    const model = (id: string) =>
-      provider.getModels().find((item: any) => item.id === id);
+    const model = (id: string) => {
+      const match = provider.getModels().find((item) => item.id === id);
+      assert.ok(match);
+      return match;
+    };
     const context = (
       prompt: string,
       sections = {},
       systemPrompt = "You are an ordinary Lead for this Pi session.",
-    ) => ({
-      messages: [
-        {
-          role: "system",
-          content: systemPrompt,
-          sections,
-          timestamp: Date.now(),
-        },
-        { role: "user", content: [{ type: "text", text: prompt }] },
-      ],
-    });
+    ) => {
+      const normalized = normalizeContext({
+        messages: [
+          {
+            role: "system",
+            content: systemPrompt,
+            timestamp: Date.now(),
+          },
+          {
+            role: "user",
+            content: [{ type: "text", text: prompt }],
+            timestamp: Date.now(),
+          },
+        ],
+      });
+      return {
+        ...normalized,
+        messages: normalized.messages.map((message, index) =>
+          index === 0 ? { ...message, sections } : message,
+        ),
+      };
+    };
     const collect = async (stream: AsyncIterable<any>) => {
       const events = [];
       for await (const event of stream) events.push(event);
@@ -5320,10 +5983,17 @@ test("evidence wait returns completion and distinguishes stalls from deadlines",
       }),
       { timeoutMs: 1000, stallMs: 15, pollMs: 2 },
     ),
-    (error) =>
-      error.code === "SMOKE_STALLED" &&
-      error.smoke.stage === "stuck" &&
-      error.smoke.lastEvidence.pane === "p1",
+    (error) => {
+      assertSmokeError(error);
+      const lastEvidence = error.smoke.lastEvidence;
+      assert.ok(lastEvidence && typeof lastEvidence === "object");
+      assert.ok("stage" in error.smoke && "pane" in lastEvidence);
+      return (
+        error.code === "SMOKE_STALLED" &&
+        error.smoke.stage === "stuck" &&
+        lastEvidence.pane === "p1"
+      );
+    },
   );
   await assert.rejects(
     waitForEvidence(
@@ -5332,7 +6002,10 @@ test("evidence wait returns completion and distinguishes stalls from deadlines",
       async () => ({ done: false, progress: { count: 1 } }),
       { timeoutMs: 12, stallMs: 1000, pollMs: 2 },
     ),
-    (error) => error.code === "SMOKE_TIMEOUT",
+    (error) => {
+      assertErrorWithCode(error);
+      return error.code === "SMOKE_TIMEOUT";
+    },
   );
   const invariant = new Error("invalid identity");
   await assert.rejects(
@@ -5356,7 +6029,10 @@ test("evidence wait returns completion and distinguishes stalls from deadlines",
       },
       { timeoutMs: 5, stallMs: 100 },
     ),
-    (error) => error.code === "SMOKE_TIMEOUT",
+    (error) => {
+      assertErrorWithCode(error);
+      return error.code === "SMOKE_TIMEOUT";
+    },
   );
 });
 
@@ -5415,7 +6091,7 @@ test("continuation first-generation stalls if completed child retires before obs
   const answer = decide("continuation", {
     messages: [{ role: "user", content: prompt }, call, result, delivered],
   });
-  assert.equal(answer.content[0].text, "PI_HERDSMAN_CONTINUATION_FIRST");
+  assert.equal(firstTextContent(answer).text, "PI_HERDSMAN_CONTINUATION_FIRST");
   const root = {
     contents: [
       {
@@ -5468,7 +6144,7 @@ test("continuation first-generation stalls if completed child retires before obs
     async () => '{"name":"pi-herdsman"}',
     join,
     waitForEvidence,
-    async (_ctx, args) => {
+    async (_ctx: unknown, args: string[]) => {
       assert.deepEqual(args, ["agent", "list"]);
       order.push("empty_child_poll");
       if (++polls === 2) t.mock.timers.setTime(120_001);
@@ -5485,6 +6161,7 @@ test("continuation first-generation stalls if completed child retires before obs
   await assert.rejects(
     run({ repoRoot: ".", rootPaneId: "fixture-root", initialPrompt: prompt }),
     (error) => {
+      assertSmokeError(error);
       assert.equal(error.code, "SMOKE_STALLED");
       assert.equal(error.smoke.stage, "continuation-first-generation");
       assert.deepEqual(error.smoke.lastProgress, {
@@ -5554,7 +6231,15 @@ test("simulated continuation releases completion only after full live evidence",
     )(
       async () => '{"name":"pi-herdsman"}',
       join,
-      async (_ctx, stage, inspect) => {
+      async (
+        _ctx: unknown,
+        stage: string,
+        inspect: () => Promise<{
+          done: boolean;
+          value?: unknown;
+          observationError?: string;
+        }>,
+      ) => {
         assert.equal(stage, "continuation-first-generation");
         for (inspection = 0; inspection < 3; inspection++) {
           const observed = await inspect();
@@ -5571,7 +6256,7 @@ test("simulated continuation releases completion only after full live evidence",
         assert.equal(completed, true);
         throw stop;
       },
-      async (_ctx, args) => ({
+      async (_ctx: unknown, args: string[]) => ({
         ok: true,
         value: args[0] === "agent" ? { agents: [{ pane_id: "child" }] } : {},
       }),
@@ -5658,7 +6343,7 @@ test("continuation root prompt waits for a session-backed idle or done Agent", a
       "CONTROL_STALL_MS",
       `return (${implementation});`,
     )(waitForEvidence, undefined, undefined, 1_000);
-    const list = async (_ctx, args) => {
+    const list = async (_ctx: unknown, args: string[]) => {
       assert.deepEqual(args, ["agent", "list"]);
       polls++;
       const agents =
@@ -5677,7 +6362,7 @@ test("continuation root prompt waits for a session-backed idle or done Agent", a
             ];
       return { ok: true, value: { agents } };
     };
-    const prompt = async (_ctx, args) => {
+    const prompt = async (_ctx: unknown, args: string[]) => {
       assert.ok(polls >= 4, "prompt must follow the readiness poll");
       assert.deepEqual(args, ["agent", "prompt", "w1:p1", "same prompt"]);
       prompted = true;
@@ -5719,7 +6404,10 @@ test("evidence progress changes reset inactivity, identical evidence and read er
       },
       { timeoutMs: 100, stallMs: 20, pollMs: 1 },
     ),
-    (error) => error.code === "SMOKE_STALLED",
+    (error) => {
+      assertErrorWithCode(error);
+      return error.code === "SMOKE_STALLED";
+    },
   );
   let errorCall = 0;
   await assert.rejects(
@@ -5732,9 +6420,13 @@ test("evidence progress changes reset inactivity, identical evidence and read er
       },
       { timeoutMs: 100, stallMs: 20, pollMs: 1 },
     ),
-    (error) =>
-      error.code === "SMOKE_STALLED" &&
-      error.smoke.lastObservationError === "temporary read failure",
+    (error) => {
+      assertSmokeError(error);
+      return (
+        error.code === "SMOKE_STALLED" &&
+        error.smoke.lastObservationError === "temporary read failure"
+      );
+    },
   );
 });
 
@@ -5800,9 +6492,10 @@ test("smoke model override wins without reading Git config", async () => {
 test("smoke model falls back to effective Git config", async () => {
   const model = await resolveSmokeModel(
     undefined,
-    async (file, args, options) => {
+    async (file: string, args: string[], options?: { cwd?: string }) => {
       assert.equal(file, "git");
       assert.deepEqual(args, ["config", "--get", "pi-herdsman.smoke-model"]);
+      assert.ok(options);
       assert.ok(options.cwd);
       return { stdout: "provider/model:xhigh\n", stderr: "", pid: 1 };
     },
@@ -5854,7 +6547,7 @@ test("smoke auth resolves credentials from the configured model", async () => {
     piSessions: "/smoke/pi-sessions",
     authLink: "/smoke/pi-agent/auth.json",
   };
-  const calls = [];
+  const calls: [string, string[], unknown?][] = [];
   const mechanism = await preparePi(
     paths,
     "provider/model:high",
@@ -5925,7 +6618,7 @@ test("continuation requires configured faux extension and provider evidence for 
 });
 
 test("continuation provider evidence wait polls until the second-generation request is recorded", async () => {
-  const ctx = {};
+  const ctx: { stage?: string } = {};
   const sessionId = "saved-session";
   const pid = 202;
   const provenance = [{ sessionId, pid: 101, model: "continuation" }];
@@ -5983,7 +6676,7 @@ test("active-stop preflights startup and verifies interactive stop cleanup", asy
     "active-stop must preserve manager continuation source-extraction boundary",
   );
   const body = source.slice(active, next);
-  const markerIndex = (pattern) => body.search(pattern);
+  const markerIndex = (pattern: RegExp) => body.search(pattern);
   const rootReady = markerIndex(/"active-stop-root-ready"/);
   const agentReady = markerIndex(/"active-stop-agent-ready"/);
   const agentReadiness = body.slice(
@@ -6611,6 +7304,7 @@ test("core observation waits for every persisted session PID or fails closed", a
     { timeoutMs: 1000, stallMs: 500, pollMs: 1 },
   );
   assert.equal(observations, 2);
+  assert.ok(observedPids instanceof Set);
   assert.ok(observedPids.has(202));
 
   await assert.rejects(
@@ -6752,7 +7446,7 @@ test("core Pi provenance matches the core model and role-specific roster", () =>
       "root-pane",
       [{ pid: 41 }],
       "core",
-      expectations.get("root"),
+      expectations.get("root") ?? assert.fail("missing root expectation"),
       "1.2.0",
     ),
     { paneId: "root-pane", pid: 41, sessionId: "root", piVersion: "1.2.0" },
@@ -6764,7 +7458,7 @@ test("core Pi provenance matches the core model and role-specific roster", () =>
       "agent-pane",
       [{ pid: 42 }],
       "core",
-      expectations.get("child"),
+      expectations.get("child") ?? assert.fail("missing child expectation"),
       "1.2.0",
     ),
     { paneId: "agent-pane", pid: 42, sessionId: "child", piVersion: "1.2.0" },
@@ -6777,7 +7471,7 @@ test("core Pi provenance matches the core model and role-specific roster", () =>
         "root-pane",
         [{ pid: 41 }],
         "terminal-error",
-        expectations.get("root"),
+        expectations.get("root") ?? assert.fail("missing root expectation"),
         "1.2.0",
       ),
     /'core'/,
@@ -6853,7 +7547,9 @@ test("provenance uses retained foreground PID evidence when a pane later disappe
         },
       ],
       "child",
-      retained[0].paneId,
+      typeof retained[0].paneId === "string"
+        ? retained[0].paneId
+        : assert.fail("expected a verified pane id"),
       retained[0].processes,
       "core",
       false,
@@ -6865,7 +7561,7 @@ test("provenance uses retained foreground PID evidence when a pane later disappe
 
 test("descendant cleanup requires verified PIDs to be absent after pane closure", () => {
   const prior = new Map([[52, { paneId: "agent-pane", pid: 52 }]]);
-  const disappeared = { verified: [], paneIds: [], unresolved: [] };
+  const disappeared = { verified: new Map(), paneIds: [], unresolved: [] };
   assert.equal(
     descendantCleanupStatus(disappeared, prior, () => true).done,
     false,
@@ -6892,7 +7588,10 @@ test("descendant cleanup requires verified PIDs to be absent after pane closure"
 });
 
 test("parent shutdown requires both owned child exit and named server stopped evidence", async () => {
-  const successParent = { server: {} };
+  const successParent: {
+    server: { exitCode?: number | null; signalCode?: string | null };
+    exit?: { code: number };
+  } = { server: {} };
   const success = await verifyParentShutdown(successParent, {
     stop: async () => {},
     waitForExit: async () => {
@@ -6902,8 +7601,10 @@ test("parent shutdown requires both owned child exit and named server stopped ev
   });
   assert.deepEqual(success, []);
 
-  const exitCodeDiagnostics = {};
-  const exitCodeParent = { server: {} };
+  const exitCodeDiagnostics: { child?: Record<string, unknown> } = {};
+  const exitCodeParent: {
+    server: { exitCode?: number | null; signalCode?: string | null };
+  } = { server: {} };
   const exitedByCode = await verifyParentShutdown(
     exitCodeParent,
     {
@@ -6916,10 +7617,13 @@ test("parent shutdown requires both owned child exit and named server stopped ev
     exitCodeDiagnostics,
   );
   assert.deepEqual(exitedByCode, []);
+  assert.ok(exitCodeDiagnostics.child);
   assert.equal(exitCodeDiagnostics.child.exitObservedAfterStop, false);
   assert.equal(exitCodeDiagnostics.child.exitCode, 0);
 
-  const runningParent = { server: {} };
+  const runningParent: {
+    server: { exitCode?: number | null; signalCode?: string | null };
+  } = { server: {} };
   const serverStillRunningWithTerminalChild = await verifyParentShutdown(
     runningParent,
     {
@@ -6935,7 +7639,9 @@ test("parent shutdown requires both owned child exit and named server stopped ev
     /named Herdr server stop not verified/,
   );
 
-  const signalParent = { server: {} };
+  const signalParent: {
+    server: { exitCode?: number | null; signalCode?: string | null };
+  } = { server: {} };
   const exitedBySignal = await verifyParentShutdown(signalParent, {
     stop: async () => {},
     waitForExit: async () => {
@@ -6984,7 +7690,13 @@ test("cleanup artifact records false child signal results", async () => {
       },
     },
   };
-  const ctx = {
+  const ctx: Record<string, unknown> & {
+    parentCleanupDiagnostics?: {
+      namedServer: Record<string, unknown>;
+      cleanupErrorCode?: unknown;
+      child: Record<string, unknown>;
+    };
+  } = {
     scenario: "core",
     simulated: true,
     paths: { root },
@@ -7007,18 +7719,17 @@ test("cleanup artifact records false child signal results", async () => {
   );
 
   assert.match(cleanupError ?? "", /owned child did not exit/);
-  assert.equal(ctx.parentCleanupDiagnostics.namedServer.running, false);
+  const cleanupDiagnostics = ctx.parentCleanupDiagnostics;
+  assert.ok(cleanupDiagnostics);
+  assert.equal(cleanupDiagnostics.namedServer.running, false);
   assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
   assert.equal(
-    ctx.parentCleanupDiagnostics.cleanupErrorCode,
+    cleanupDiagnostics.cleanupErrorCode,
     "PARENT_SHUTDOWN_UNVERIFIED",
   );
-  assert.equal(
-    ctx.parentCleanupDiagnostics.child.exitObservedAfterSigkill,
-    false,
-  );
-  assert.equal(ctx.parentCleanupDiagnostics.child.exitCode, null);
-  assert.equal(ctx.parentCleanupDiagnostics.child.signalCode, null);
+  assert.equal(cleanupDiagnostics.child.exitObservedAfterSigkill, false);
+  assert.equal(cleanupDiagnostics.child.exitCode, null);
+  assert.equal(cleanupDiagnostics.child.signalCode, null);
   const evidence = sanitizedFailureEvidence(ctx, {}, "CLEANUP_FAIL", "FAIL");
   const artifactPath = await preserveFailureEvidence(evidence);
   const persisted = await readFile(artifactPath, "utf8");
@@ -7047,7 +7758,9 @@ test("cleanup does not SIGKILL when owned child exits after SIGTERM", async () =
       },
     },
   };
-  const ctx = {
+  const ctx: Record<string, unknown> & {
+    parentCleanupDiagnostics?: { child: Record<string, unknown> };
+  } = {
     scenario: "core",
     simulated: true,
     paths: { root },
@@ -7069,8 +7782,10 @@ test("cleanup does not SIGKILL when owned child exits after SIGTERM", async () =
     },
   );
   assert.deepEqual(signals, ["SIGTERM"]);
-  assert.equal(ctx.parentCleanupDiagnostics.child.waitAfterSigterm, "exited");
-  assert.equal("sigkillSent" in ctx.parentCleanupDiagnostics.child, false);
+  const cleanupDiagnostics = ctx.parentCleanupDiagnostics;
+  assert.ok(cleanupDiagnostics);
+  assert.equal(cleanupDiagnostics.child.waitAfterSigterm, "exited");
+  assert.equal("sigkillSent" in cleanupDiagnostics.child, false);
   await rm(root, { recursive: true, force: true });
 });
 
@@ -7150,7 +7865,13 @@ test("cleanup closes and verifies the owned parent through Herdr contracts", asy
     XDG_CONFIG_HOME: "/tmp/isolated/config",
     XDG_STATE_HOME: "/tmp/isolated/state",
   };
-  const parent = {
+  const parent: {
+    name: string;
+    env: typeof parentEnv;
+    workspaceId: string;
+    server: typeof server;
+    exit?: { code: number };
+  } = {
     name: "phs-owned",
     env: parentEnv,
     workspaceId: "w-owned",
@@ -7412,7 +8133,7 @@ test("manager-recovery detects review assistant response completion after messag
       },
     },
   ];
-  const session = (messages) => ({
+  const session = (messages: unknown[]) => ({
     contents: messages.map((entry) => JSON.stringify(entry)).join("\n"),
   });
 
@@ -7623,14 +8344,17 @@ test("manager-recovery selects the resume result descended from its exact prompt
     staffActionResults(contents, "resume_work", "resume", recoveryPrompt),
     [{ ok: true, action: "resume", session: "lead" }],
   );
-  assert.equal(
-    assistantResultForSession(
-      { contents },
-      recoveryPrompt,
-      "PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED",
-    )?.id,
-    "recovery-answer",
+  const recoveryResult = assistantResultForSession(
+    { contents },
+    recoveryPrompt,
+    "PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED",
   );
+  assert.ok(
+    recoveryResult &&
+      typeof recoveryResult === "object" &&
+      "id" in recoveryResult,
+  );
+  assert.equal(recoveryResult.id, "recovery-answer");
 });
 
 test("delegate project results retain only valid successful delegation payloads in order", () => {
@@ -7708,14 +8432,19 @@ test("failed project delegation is correlated, sanitized, and preserves topology
       ...fields,
     },
   });
-  const transcript = (...entries) => entries.map(JSON.stringify).join("\n");
+  const transcript = (...entries: unknown[]) =>
+    entries.map((entry) => JSON.stringify(entry)).join("\n");
   const failed = transcript(call, result());
 
   assert.throws(
     () => assertNoFailedProjectDelegation(failed, branch),
-    (error) =>
-      error.code === "SMOKE_DELEGATION_FAILED" &&
-      error.message === "delegate_work failed (assignment_lock_occupied)",
+    (error) => {
+      assertErrorWithCode(error);
+      return (
+        error.code === "SMOKE_DELEGATION_FAILED" &&
+        error.message === "delegate_work failed (assignment_lock_occupied)"
+      );
+    },
   );
   assert.doesNotThrow(() =>
     assertNoFailedProjectDelegation(failed, "smoke/other"),
@@ -7755,13 +8484,20 @@ test("failed project delegation is correlated, sanitized, and preserves topology
         ),
         branch,
       ),
-    (error) =>
-      error.code === "SMOKE_DELEGATION_FAILED" &&
-      error.message === "delegate_work failed (tool_error)" &&
-      !error.message.includes("PRIVATE_TOKEN"),
+    (error) => {
+      assertErrorWithCode(error);
+      return (
+        error.code === "SMOKE_DELEGATION_FAILED" &&
+        error.message === "delegate_work failed (tool_error)" &&
+        !error.message.includes("PRIVATE_TOKEN")
+      );
+    },
   );
 
-  const ctx = { rootWorkspaceId: "workspace", owned: {} };
+  const ctx: {
+    rootWorkspaceId: string;
+    owned: { managerWorktreePath?: string; managerWorkspaceId?: string };
+  } = { rootWorkspaceId: "workspace", owned: {} };
   const worktree = {
     branch,
     path: "/smoke/expected",
@@ -7775,7 +8511,10 @@ test("failed project delegation is correlated, sanitized, and preserves topology
       async () => [],
       async () => ({ worktrees: [worktree] }),
     ),
-    (error) => error.code === "SMOKE_DELEGATION_FAILED",
+    (error) => {
+      assertErrorWithCode(error);
+      return error.code === "SMOKE_DELEGATION_FAILED";
+    },
   );
   assert.equal(ctx.owned.managerWorktreePath, worktree.path);
   assert.equal(ctx.owned.managerWorkspaceId, worktree.open_workspace_id);
@@ -8000,12 +8739,12 @@ test("manager handoff faux decision waits for exact readiness after assignment",
     content: "Session: lead-session\nWorkspace: workspace",
   };
   assert.equal(
-    decide("manager-handoff", { messages: [prompt] }).content[0].type,
+    firstToolCall(decide("manager-handoff", { messages: [prompt] })).type,
     "toolCall",
   );
   const assigned = [prompt, call, result];
   assert.match(
-    decide("manager-handoff", { messages: assigned }).content[0].text,
+    firstTextContent(decide("manager-handoff", { messages: assigned })).text,
     /Waiting for the exact assigned Lead readiness/,
   );
   const ready = {
@@ -8014,14 +8753,17 @@ test("manager handoff faux decision waits for exact readiness after assignment",
       "Lead → Manager for assignment smoke/branch from lead lead-session:\n\nMANAGER_HANDOFF_READY",
   };
   assert.match(
-    decide("manager-handoff", { messages: [...assigned, ready] }).content[0]
-      .text,
+    firstTextContent(
+      decide("manager-handoff", { messages: [...assigned, ready] }),
+    ).text,
     /MANAGER_HANDOFF_READY_RECEIVED/,
   );
   assert.match(
-    decide("manager-handoff", {
-      messages: [...assigned, { ...ready, content: "MANAGER_HANDOFF_READY" }],
-    }).content[0].text,
+    firstTextContent(
+      decide("manager-handoff", {
+        messages: [...assigned, { ...ready, content: "MANAGER_HANDOFF_READY" }],
+      }),
+    ).text,
     /Waiting for the exact assigned Lead readiness/,
   );
 });
@@ -8126,7 +8868,7 @@ test("Manager cleanup selects the recreated workspace only for exact branch and 
 
 test("collectDiagnostics reads the host pane through the parent Herdr environment", async () => {
   const parentEnv = { HERDR_SESSION: "parent-session" };
-  const calls = [];
+  const calls: [string, string[], unknown?][] = [];
   let projection;
   const originalError = console.error;
   console.error = () => {};
@@ -8141,8 +8883,12 @@ test("collectDiagnostics reads the host pane through the parent Herdr environmen
       { hostPaneId: "host-pane" },
       null,
       {
-        execute: async (...args) => {
-          calls.push(args);
+        execute: async (
+          file: string,
+          args: string[],
+          options?: Record<string, unknown>,
+        ) => {
+          calls.push([file, args, options]);
           return { stdout: "host output" };
         },
         observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
@@ -8179,7 +8925,9 @@ test("collectDiagnostics reads the host pane through the parent Herdr environmen
 
 test("diagnostic collection failure preserves sanitized primary failure evidence", async () => {
   const secondaryException = "PRIVATE secondary diagnostic exception";
-  const ctx = {
+  const ctx: Record<string, unknown> & {
+    parentCleanupDiagnostics?: { child: Record<string, unknown> };
+  } = {
     scenario: "supervisor-agent",
     simulated: true,
     stage: "supervisor-agent-verification",
@@ -8278,7 +9026,15 @@ test("collectDiagnostics projects supervisor-agent evidence without private sess
 });
 
 test("terminal-failure assignment polling captures topology before assignment succeeds", async () => {
-  const ctx = {
+  const ctx: {
+    rootWorkspaceId: string;
+    owned: {
+      managerBranch: string;
+      managerWorktreePath?: string;
+      managerWorkspaceId?: string;
+      managerWorktreeRetirementRequested?: boolean;
+    };
+  } = {
     rootWorkspaceId: "parent-workspace",
     owned: { managerBranch: "herdsman/smoke-terminal-failure" },
   };
@@ -8287,14 +9043,14 @@ test("terminal-failure assignment polling captures topology before assignment su
     path: "/smoke/terminal-failure",
     open_workspace_id: "workspace-2",
   };
-  const calls = [];
+  const calls: [unknown, string[]][] = [];
   const result = await terminalFailureAssignmentPoll(
     ctx,
     worktree.branch,
     async () => null,
     async () => [],
-    async (...args) => {
-      calls.push(args);
+    async (callCtx: unknown, args: string[]) => {
+      calls.push([callCtx, args]);
       return { worktrees: [worktree] };
     },
   );
@@ -8355,7 +9111,7 @@ test("terminal-failure retains the assigned Lead PID while its pane is live", as
   assert.deepEqual(staffDelegateResults(contents), [
     { ok: true, action: "delegate", branch, session: "lead-session" },
   ]);
-  const calls = [];
+  const calls: string[][] = [];
   const ctx = {
     rootWorkspaceId: "workspace",
     candidateExtension: "/candidate.js",
@@ -8404,7 +9160,15 @@ test("terminal-failure retains the assigned Lead PID while its pane is live", as
 });
 
 test("terminal-failure assignment polling preserves the first workspace identity", async () => {
-  const ctx = {
+  const ctx: {
+    rootWorkspaceId: string;
+    owned: {
+      managerBranch: string;
+      managerWorktreePath?: string;
+      managerWorkspaceId?: string;
+      managerWorktreeRetirementRequested?: boolean;
+    };
+  } = {
     rootWorkspaceId: "parent-workspace",
     owned: { managerBranch: "herdsman/smoke-terminal-failure" },
   };
@@ -8454,9 +9218,12 @@ test("terminal-failure assignment polling preserves the first workspace identity
 test("Manager smoke creates a fresh Git primary without pre-opening a worktree", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-herdsman-manager-smoke-"));
   try {
-    const calls = [];
-    const checkout = await prepareManagerRepository({ root }, async (...args) =>
-      calls.push(args),
+    const calls: [string, string[], unknown?][] = [];
+    const checkout = await prepareManagerRepository(
+      { root },
+      async (file: string, args: string[], options?: { cwd?: string }) => {
+        calls.push([file, args, options]);
+      },
     );
     assert.equal(checkout, join(root, "project"));
     assert.deepEqual(
@@ -8517,7 +9284,7 @@ test("Manager smoke assignment namespace comes only from the topology repo key",
     },
     worktrees: [],
   };
-  const validate = (value) =>
+  const validate = (value: unknown) =>
     assertManagerFreshPrimary("w1", checkout, { workspace_id: "w1" }, value);
   assert.equal(validate(topology), "canonical-repo");
   for (const repo_key of [undefined, "", null, 1])
@@ -8528,13 +9295,20 @@ test("Manager smoke assignment namespace comes only from the topology repo key",
 });
 
 test("smoke branch cleanup treats only a proven absent local branch as already clean", async () => {
-  const calls = [];
+  const calls: [string, string[], unknown?][] = [];
   const absent = Object.assign(new Error("not found"), { code: 1 });
   assert.equal(
-    await deleteBranchIfPresent("herdsman/smoke-exact", async (...args) => {
-      calls.push(args);
-      throw absent;
-    }),
+    await deleteBranchIfPresent(
+      "herdsman/smoke-exact",
+      async (
+        file: string,
+        args: string[],
+        options?: Record<string, unknown>,
+      ) => {
+        calls.push([file, args, options]);
+        throw absent;
+      },
+    ),
     false,
   );
   assert.equal(calls.length, 1);
@@ -8547,10 +9321,17 @@ test("smoke branch cleanup treats only a proven absent local branch as already c
 
   calls.length = 0;
   assert.equal(
-    await deleteBranchIfPresent("herdsman/smoke-exact", async (...args) => {
-      calls.push(args);
-      return { stdout: "", stderr: "", pid: 1 };
-    }),
+    await deleteBranchIfPresent(
+      "herdsman/smoke-exact",
+      async (
+        file: string,
+        args: string[],
+        options?: Record<string, unknown>,
+      ) => {
+        calls.push([file, args, options]);
+        return { stdout: "", stderr: "", pid: 1 };
+      },
+    ),
     true,
   );
   assert.deepEqual(
@@ -8689,8 +9470,10 @@ test("Manager READY answer follows delivered message even on a separate followUp
       },
     },
   ];
-  const contents = (items) =>
-    items.map((entry) => JSON.stringify(entry)).join("\n");
+  const contents = (items: Record<string, unknown>[]) =>
+    items
+      .map((entry: Record<string, unknown>) => JSON.stringify(entry))
+      .join("\n");
   assert.deepEqual(
     managerReadyAnswer(contents(entries.slice(0, 3)), branch, lead),
     {
@@ -8722,16 +9505,28 @@ test("Manager READY answer follows delivered message even on a separate followUp
       prematureFinish: false,
     },
   );
-  assert.equal(
-    managerReadyAnswer(contents(noPrematureAnswer), branch, lead).answer?.id,
-    "answer",
+  const completeAnswer = managerReadyAnswer(
+    contents(noPrematureAnswer),
+    branch,
+    lead,
+  ).answer;
+  assert.ok(
+    completeAnswer &&
+      typeof completeAnswer === "object" &&
+      "id" in completeAnswer,
   );
+  assert.equal(completeAnswer.id, "answer");
   const missingReceipt = managerReadyAnswer(
     contents(noPrematureAnswer.filter((entry) => entry.id !== "receipt")),
     branch,
     lead,
   );
-  assert.equal(missingReceipt.answer?.id, "answer");
+  assert.ok(
+    missingReceipt.answer &&
+      typeof missingReceipt.answer === "object" &&
+      "id" in missingReceipt.answer,
+  );
+  assert.equal(missingReceipt.answer.id, "answer");
   assert.equal(missingReceipt.answerAfterReceipt, null);
   assert.equal(
     managerReadyAnswer(contents(entries), branch, lead).prematureReady,
@@ -8931,48 +9726,48 @@ test("chief-tree requires a persisted post-Chief turn and targets the pre-Chief 
   );
 
   const noPostChiefTurn = contents.split("\n").slice(0, 3).join("\n");
-  assert.match(
-    chiefTreeBranchPlan(
-      noPostChiefTurn,
-      "startup prompt",
-      "PI_HERDSMAN_CHIEF_TREE_STARTUP",
-      "post-Chief prompt",
-      "PI_HERDSMAN_CHIEF_TREE_POST_CHIEF",
-    ).error,
-    /one completed Chief turn/,
+  const noPostChiefPlan = chiefTreeBranchPlan(
+    noPostChiefTurn,
+    "startup prompt",
+    "PI_HERDSMAN_CHIEF_TREE_STARTUP",
+    "post-Chief prompt",
+    "PI_HERDSMAN_CHIEF_TREE_POST_CHIEF",
   );
+  assert.ok("error" in noPostChiefPlan);
+  assert.ok(typeof noPostChiefPlan.error === "string");
+  assert.match(noPostChiefPlan.error, /one completed Chief turn/);
   const extraTurn = `${contents}\n${JSON.stringify({
     type: "message",
     id: "unexpected-answer",
     parentId: "chief-answer",
     message: { role: "assistant", stopReason: "stop", content: "" },
   })}`;
-  assert.match(
-    chiefTreeBranchPlan(
-      extraTurn,
-      "startup prompt",
-      "PI_HERDSMAN_CHIEF_TREE_STARTUP",
-      "post-Chief prompt",
-      "PI_HERDSMAN_CHIEF_TREE_POST_CHIEF",
-    ).error,
-    /unexpected completed model turn/,
+  const extraTurnPlan = chiefTreeBranchPlan(
+    extraTurn,
+    "startup prompt",
+    "PI_HERDSMAN_CHIEF_TREE_STARTUP",
+    "post-Chief prompt",
+    "PI_HERDSMAN_CHIEF_TREE_POST_CHIEF",
   );
+  assert.ok("error" in extraTurnPlan);
+  assert.ok(typeof extraTurnPlan.error === "string");
+  assert.match(extraTurnPlan.error, /unexpected completed model turn/);
   const extraPrompt = `${contents}\n${JSON.stringify({
     type: "message",
     id: "unexpected-user",
     parentId: "chief-answer",
     message: { role: "user", content: "unrequested prompt" },
   })}`;
-  assert.match(
-    chiefTreeBranchPlan(
-      extraPrompt,
-      "startup prompt",
-      "PI_HERDSMAN_CHIEF_TREE_STARTUP",
-      "post-Chief prompt",
-      "PI_HERDSMAN_CHIEF_TREE_POST_CHIEF",
-    ).error,
-    /unexpected user prompt/,
+  const extraPromptPlan = chiefTreeBranchPlan(
+    extraPrompt,
+    "startup prompt",
+    "PI_HERDSMAN_CHIEF_TREE_STARTUP",
+    "post-Chief prompt",
+    "PI_HERDSMAN_CHIEF_TREE_POST_CHIEF",
   );
+  assert.ok("error" in extraPromptPlan);
+  assert.ok(typeof extraPromptPlan.error === "string");
+  assert.match(extraPromptPlan.error, /unexpected user prompt/);
 });
 
 test("chief-tree selector locates the unique selected preview and reads the visible footer count", () => {
@@ -9037,12 +9832,15 @@ test("nested pane input returns raw Herdr output and targets the exact isolated 
   const result = await nestedPaneInput(
     ctx,
     ["pane", "send-text", "w1:p2", "/chief"],
-    async (file, args, options) => {
+    async (file: string, args: string[], options?: Record<string, unknown>) => {
       assert.equal(file, "herdr");
       assert.deepEqual(args, ["pane", "send-text", "w1:p2", "/chief"]);
-      assert.equal(options.env.HERDR_SESSION, ctx.sessionName);
-      assert.equal(options.env.HERDR_SOCKET_PATH, undefined);
-      assert.equal(options.env.HERDR_WORKSPACE_ID, undefined);
+      assert.ok(options && options.env && typeof options.env === "object");
+      const env = options.env;
+      assert.ok("HERDR_SESSION" in env);
+      assert.equal(env.HERDR_SESSION, ctx.sessionName);
+      assert.equal("HERDR_SOCKET_PATH" in env, false);
+      assert.equal("HERDR_WORKSPACE_ID" in env, false);
       return rawOutput;
     },
   );
@@ -9065,7 +9863,7 @@ test("nested pane text reads bounded Herdr stdout without JSON parsing", async (
     ctx,
     "w1:p2",
     "visible",
-    async (file, args, options) => {
+    async (file: string, args: string[], options?: Record<string, unknown>) => {
       assert.equal(file, "herdr");
       assert.deepEqual(args, [
         "pane",
@@ -9076,6 +9874,8 @@ test("nested pane text reads bounded Herdr stdout without JSON parsing", async (
         "--lines",
         "120",
       ]);
+      assert.ok(options && options.env && typeof options.env === "object");
+      assert.ok("HERDR_SESSION" in options.env);
       assert.equal(options.env.HERDR_SESSION, ctx.sessionName);
       return { stdout: screen, stderr: "", pid: 123 };
     },
@@ -9094,7 +9894,7 @@ test("pane commands use one atomic pane run", async () => {
     },
     sessionName: "pi-herdsman-smoke-test",
   };
-  const calls = [];
+  const calls: string[][] = [];
   for (const command of ["/manager leave", "/chief"])
     await submitPaneCommand(ctx, "w1:p2", command, async (file, args) => {
       calls.push(args);
@@ -9160,22 +9960,23 @@ test("Chief tree probe is opt-in, last in root extension order, and validates th
   assert.notDeepEqual(snapshots.get("chief"), snapshots.get("lead"));
   assert.deepEqual(snapshots.get("tree"), snapshots.get("chief"));
   assert.deepEqual(
-    parseToolSnapshots(
-      '{"label":"lead","tools":[]}\n{"label":"lead","tools":[]}',
-    ).get("lead"),
+    (() => {
+      const leadTools = parseToolSnapshots(
+        '{"label":"lead","tools":[]}\n{"label":"lead","tools":[]}',
+      ).get("lead");
+      assert.ok(leadTools);
+      return leadTools;
+    })(),
     [],
   );
 });
 
 test("Chief tree snapshots accept identical duplicate events but reject conflicts", () => {
-  assert.deepEqual(
-    [
-      ...parseToolSnapshots(
-        '{"label":"tree","tools":["a"]}\n{"label":"tree","tools":["a"]}',
-      ).get("tree"),
-    ],
-    ["a"],
-  );
+  const treeTools = parseToolSnapshots(
+    '{"label":"tree","tools":["a"]}\n{"label":"tree","tools":["a"]}',
+  ).get("tree");
+  assert.ok(treeTools);
+  assert.deepEqual([...treeTools], ["a"]);
   assert.throws(
     () =>
       parseToolSnapshots(
@@ -9254,15 +10055,16 @@ test("core requires the prompt-correlated root assistant marker, not root status
     .map((entry) => JSON.stringify(entry))
     .join("\n");
 
-  for (const status of ["idle", "done"])
-    assert.equal(
-      assistantResultForSession({ status, contents: "" }, prompt, marker),
-      null,
-    );
-  assert.equal(
-    assistantResultForSession({ contents }, prompt, marker)?.id,
-    "answer",
-  );
+  for (const status of ["idle", "done"]) {
+    const session: { contents: string; status: string } = {
+      contents: "",
+      status,
+    };
+    assert.equal(assistantResultForSession(session, prompt, marker), null);
+  }
+  const answer = assistantResultForSession({ contents }, prompt, marker);
+  assert.ok(answer && typeof answer === "object" && "id" in answer);
+  assert.equal(answer.id, "answer");
 });
 
 test("continuation accepts a prefixed marker only in the stopped response descended from its exact prompt", () => {
@@ -9310,9 +10112,10 @@ test("continuation accepts a prefixed marker only in the stopped response descen
     .join("\n");
 
   assert.deepEqual(
-    continuationResultsForPrompt(contents, prompt, marker).map(
-      (entry) => entry.id,
-    ),
+    continuationResultsForPrompt(contents, prompt, marker).map((entry) => {
+      assert.ok(entry && typeof entry === "object" && "id" in entry);
+      return entry.id;
+    }),
     ["response"],
   );
   assert.equal(assistantResultForSession({ contents }, prompt, marker), null);
@@ -9341,7 +10144,7 @@ test("core counts distinct non-root pane/PID processes with both extension paths
       { pane_id: "unrelated-pane" },
     ],
   });
-  const response = {
+  const response: Record<string, unknown> = {
     "child-pane": {
       process_info: {
         foreground_processes: [
@@ -9737,8 +10540,20 @@ const deepMessages = (task: string, withTool: boolean) => [
   },
   { role: "user" as const, content: task, timestamp: 2 },
 ];
-const firstToolCall = (message: any) =>
-  message.content.find((part: any) => part.type === "toolCall");
+const firstToolCall = (message: AssistantMessage): ToolCall => {
+  const call = message.content.find(
+    (part): part is ToolCall => part.type === "toolCall",
+  );
+  assert.ok(call);
+  return call;
+};
+const firstTextContent = (message: AssistantMessage): TextContent => {
+  const text = message.content.find(
+    (part): part is TextContent => part.type === "text",
+  );
+  assert.ok(text);
+  return text;
+};
 
 test("deep-chain faux requires delegation below the limit and a leaf at it", () => {
   const level2 = deepMessages("SMOKE_DEEP_LEVEL_2: go", true);
@@ -9761,27 +10576,33 @@ test("deep-chain faux requires delegation below the limit and a leaf at it", () 
   assert.equal(firstToolCall(ask).name, "ask_owner");
   assert.equal(firstToolCall(ask).arguments.question, "SMOKE_DEEP_QUESTION");
   // The depth-3 owner answers the leaf's delivered question.
+  const depthThreeCall = {
+    role: "assistant",
+    content: [
+      {
+        type: "toolCall",
+        id: "d",
+        name: "delegate_agent",
+        arguments: { label: "smoke-deep-4" },
+      },
+    ],
+  };
+  const depthThreeResult = {
+    role: "toolResult",
+    toolName: "delegate_agent",
+    toolCallId: "d",
+    content: [],
+  };
+  const ownerQuestion = {
+    role: "user",
+    content: "Agent smoke-deep-4 asks: SMOKE_DEEP_QUESTION",
+  };
   const reply = decideSmokeFaux("deep-chain", {
     messages: [
       ...deepMessages("SMOKE_DEEP_LEVEL_3: go", true),
-      {
-        role: "assistant" as const,
-        content: [
-          {
-            type: "toolCall",
-            id: "d",
-            name: "delegate_agent",
-            arguments: { label: "smoke-deep-4" },
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolName: "delegate_agent",
-        toolCallId: "d",
-        content: [],
-      },
-      { role: "user", content: "Agent smoke-deep-4 asks: SMOKE_DEEP_QUESTION" },
+      depthThreeCall,
+      depthThreeResult,
+      ownerQuestion,
     ],
   });
   assert.equal(firstToolCall(reply).name, "reply_agent");

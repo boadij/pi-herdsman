@@ -187,10 +187,9 @@ test("interrupted completion delivery retry reuses its published semantic refere
       "root-session-a",
     );
     assert.deepEqual(retriedDelivery, interruptedDelivery);
-    assert.equal(
-      resolveScopedResult(retriedDelivery.ref)?.canonicalRef,
-      canonical,
-    );
+    const resolved = resolveScopedResult(retriedDelivery.ref);
+    assert.ok(resolved && typeof resolved === "object");
+    assert.equal(resolved.canonicalRef, canonical);
   } finally {
     rmSync(directory, { recursive: true, force: true });
     rmSync(resultPath(canonical.slice("result:".length)), { force: true });
@@ -286,7 +285,9 @@ test("legacy snapshot records remain valid and upgrade without changing provenan
       readRequiredEvidenceSnapshot(assignmentId, upgraded),
       "plan\n",
     );
-    assert.equal(upgradeRequiredEvidence(legacy).ref, upgraded.ref);
+    const upgradedAgain = upgradeRequiredEvidence(legacy);
+    assert.ok(!("result" in upgradedAgain));
+    assert.equal(upgradedAgain.ref, upgraded.ref);
   } finally {
     rmSync(requiredEvidenceDirectory(assignmentId), {
       recursive: true,

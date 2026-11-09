@@ -35,6 +35,7 @@ import {
   supervisionRuntime,
   peerLeadLockPath,
   removePeerLeadRecord,
+  type ChiefMessageRecord,
 } from "../extension/supervision.ts";
 import {
   listPeerCorrespondences,
@@ -84,12 +85,11 @@ test("bridge recovers after process death at both durable acceptance cut points"
       { cut: "pending-marker-durable", consumed: false, retargetCrash: true },
       { cut: "pending-marker-durable", consumed: false, replacement: true },
     ] as const;
-    for (const {
-      cut,
-      consumed,
-      replacement = false,
-      retargetCrash = false,
-    } of scenarios) {
+    for (const scenario of scenarios) {
+      const { cut, consumed } = scenario;
+      const replacement = "replacement" in scenario && scenario.replacement;
+      const retargetCrash =
+        "retargetCrash" in scenario && scenario.retargetCrash;
       const messageId = id();
       const withAttachments = cut === "inbox-publication-durable";
       const binding = { ref: "result:scout#1", canonicalRef: `result:${id()}` };
@@ -298,7 +298,9 @@ test("bridge recovers after process death at both durable acceptance cut points"
           isAuthorized: () => true,
           isDelivered: () =>
             coordinationMessageDelivered(acceptedRecord, sessionId, history),
-          sendMessage: () => submitted++,
+          sendMessage: () => {
+            submitted++;
+          },
           accepted: (delivered) => writePeerDeliveryReceipt(runtime, delivered),
         });
         assert.equal(submitted, 0);
@@ -795,7 +797,7 @@ test("bridge accepts a directly addressed ordinary Lead and rejects role-transit
       updatedAt: Date.now(),
     };
     writePeerLeadRecord(runtime, lead);
-    const record = {
+    const record: ChiefMessageRecord = {
       version: 2 as const,
       build: lead.build,
       id: id(),
@@ -805,7 +807,7 @@ test("bridge accepts a directly addressed ordinary Lead and rejects role-transit
       toSessionId: sessionId,
       leadSessionId: sessionId,
       text: "ordinary Lead acceptance",
-      peerSource: { role: "lead" as const, remoteOrdinary: true as const },
+      peerSource: { role: "lead", remoteOrdinary: true },
       createdAt: Date.now(),
     };
     const correspondence: PeerCorrespondence = {

@@ -13,6 +13,7 @@ import {
   visibleAgentCapabilities,
   visibleAgentSnapshots,
 } from "./agent-controller.ts";
+import type { ManagedAgentSnapshot } from "./agent-controller.ts";
 import { writeAsk, writeResult } from "./mailbox.ts";
 import type { ManagedAgentState, RequestRecord } from "./mailbox.ts";
 import { persistRequiredEvidenceSnapshot } from "./storage.ts";
@@ -542,10 +543,16 @@ chain.forEach((state, index) => {
 });
 const snapshotOf = (states: ManagedAgentState[]) => ({
   agents: states.map((state) => ({
+    listed: state,
     state,
-    presence: { kind: "live" },
-  })) as any[],
-  mailboxes: states.map((state) => ({ state })) as any[],
+    agentDefinition: "",
+    lifecycleState: "working",
+    presence: { kind: "live", agent: state },
+  })) satisfies ManagedAgentSnapshot[],
+  mailboxes: states.map((state) => ({ path: "", state })),
+  stateIssues: [],
+  liveAgents: [],
+  rootOwners: [],
 });
 
 test("a controller sees only its direct children, the root sees the whole chain", () => {
