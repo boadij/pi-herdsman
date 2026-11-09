@@ -233,7 +233,8 @@ test("stop Lead observes liveness after waiting for project-work serialization",
     ) => operation(),
     stopOwnedAgentsForSession: async () => ({ complete: true, closures: [] }),
     stopProjectLeadPane: async () => {},
-    stopProjectLead: (...args: any[]) => runtime.stop(...args),
+    stopProjectLead: (...args: Parameters<typeof runtime.stop>) =>
+      runtime.stop(...args),
   } as any);
 
   const stopping = runtime.executeStaff(
@@ -334,7 +335,7 @@ test("staff handoff reports failure after required evidence retention commits", 
     piSessionId: randomUUID(),
   };
   const assignment = {
-    version: 2,
+    version: 2 as const,
     id: session,
     repoKey: manager.repoKey,
     branch: "feature/assigned",
@@ -345,7 +346,8 @@ test("staff handoff reports failure after required evidence retention commits", 
     "proof.md",
     "retained proof",
   );
-  let currentAssignment = assignment;
+  let currentAssignment: import("../supervision.ts").ProjectAssignment =
+    assignment;
   let evidenceCalls = 0;
   const runtime = createLeadProjectRuntime({
     pi,
@@ -654,12 +656,14 @@ test("delegation copies retained evidence under the destination and rejects stal
     retained: source,
   });
   await assert.rejects(accepted.activate(), new RegExp(lifecycleStop));
-  const copy = accepted.published.requiredEvidence.find(
+  const published = accepted.published;
+  assert.ok(published?.requiredEvidence);
+  const copy = published.requiredEvidence.find(
     (entry: any) => entry.name === source.name,
   );
   assert.ok(copy);
   assert.ok(!("result" in copy));
-  assert.equal(copy.sourceAssignmentId, accepted.published.id);
+  assert.equal(copy.sourceAssignmentId, published.id);
   assert.notEqual(copy.ref, source.ref);
   assert.equal(
     readRequiredEvidenceSnapshot(copy.sourceAssignmentId, copy),
@@ -814,7 +818,7 @@ test("Manager required-evidence removal is exact, assignment-scoped, and fail-cl
       },
     ],
   };
-  let current = assignment;
+  let current: import("../supervision.ts").ProjectAssignment = assignment;
   let leaseId = "lease-1";
   let role = "manager";
   let changeRoleUnderLock = false;
@@ -890,9 +894,6 @@ test("Manager required-evidence removal is exact, assignment-scoped, and fail-cl
   assert.equal(inheritedEvidence.sourceAssignmentId, "parent-assignment");
 
   // Cancel means the UI does not invoke the removal callback.
-  const confirmation = "cancel";
-  if (confirmation === "confirm")
-    await runtime.removeRequiredEvidence(assignment.branch, "local-a", ctx);
   assert.deepEqual(
     current.requiredEvidence?.map((item) => item.id),
     ["local-a", "local-b", "inherited"],
@@ -934,11 +935,15 @@ test("Manager required-evidence removal is exact, assignment-scoped, and fail-cl
   current = {
     ...inspected,
     id: "replacement-assignment",
-    requiredEvidence: inspected.requiredEvidence?.map((entry) =>
-      entry.id === "local-a"
-        ? { ...entry, sourceAssignmentId: "replacement-assignment" }
-        : entry,
-    ),
+    ...(inspected.requiredEvidence
+      ? {
+          requiredEvidence: inspected.requiredEvidence.map((entry) =>
+            entry.id === "local-a"
+              ? { ...entry, sourceAssignmentId: "replacement-assignment" }
+              : entry,
+          ),
+        }
+      : {}),
   };
   // A confirmation applies to the exact assignment shown, not a replacement
   // that happens to reuse the same branch and evidence ID.
@@ -987,7 +992,11 @@ test("new project worktree creation gets an extended Herdr timeout", async () =>
     leaseId: randomUUID(),
     piSessionId: randomUUID(),
   };
-  const calls: { args: string[]; options: any }[] = [];
+  const calls: {
+    args: string[];
+    options: Parameters<typeof import("../herdr.ts").runHerdr>[3];
+  }[] = [];
+  const observedCalls = () => calls;
   const lockKeys: string[] = [];
   const signal = new AbortController().signal;
   const runtime = createLeadProjectRuntime({
@@ -1063,7 +1072,7 @@ test("new project worktree creation gets an extended Herdr timeout", async () =>
     ],
   ] as const) {
     await assert.rejects(
-      runtime.activateProjectLead(params, {} as any, signal),
+      Reflect.apply(runtime.activateProjectLead, runtime, [params, {}, signal]),
       expected,
     );
   }
@@ -1079,14 +1088,14 @@ test("new project worktree creation gets an extended Herdr timeout", async () =>
     /stop after observing create options/,
   );
   assert.deepEqual(
-    calls.map(({ args }) => args.slice(0, 2)),
+    observedCalls().map(({ args }) => args.slice(0, 2)),
     [
       ["worktree", "list"],
       ["worktree", "create"],
     ],
   );
-  assert.deepEqual(calls[0]?.options, { signal });
-  assert.deepEqual(calls[1]?.options, { signal, timeout: 180_000 });
+  assert.deepEqual(observedCalls()[0]?.options, { signal });
+  assert.deepEqual(observedCalls()[1]?.options, { signal, timeout: 180_000 });
 });
 
 test("resume revalidates checkout placement after async preparation", async () => {
