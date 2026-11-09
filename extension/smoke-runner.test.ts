@@ -3,6 +3,7 @@ import test from "node:test";
 import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
   decide as decideSmokeFaux,
   managerHandoffSupervisorToolAvailable,
@@ -216,7 +217,18 @@ test("core observation retains meaningful evidence after empty or placeholder sa
 });
 
 test("manager bootstrap failure projection distinguishes delegation boundaries safely", () => {
-  const cases = [
+  const cases: [
+    string,
+    {
+      delegateCalls: number;
+      expectedBranchDelegateCalls: number;
+      resultState: string;
+      correlatedChild?: boolean;
+      childSessionSaved?: boolean;
+      linkedWorktreeObserved?: boolean;
+    },
+    string,
+  ][] = [
     [
       "no call",
       {
@@ -311,7 +323,7 @@ test("manager bootstrap wrong-branch success remains absent in diagnostics", () 
       },
     },
   ]
-    .map(JSON.stringify)
+    .map((entry) => JSON.stringify(entry))
     .join("\n");
   const state = managerBootstrapDelegationState(contents, "smoke/expected");
   assert.deepEqual(state, {
@@ -3252,25 +3264,48 @@ test("Manager assignment diagnostics are bounded and reject a mismatched branch 
 
 test("manager handoff failure artifact preserves early-poll defaults and safe timing", async () => {
   const sessionDir = await mkdtemp(join(tmpdir(), "pi-herdsman-smoke-parser-"));
-  const diagnose = async (contents) => {
+  const diagnose = async (contents: string) => {
     const manager = SessionManager.create(process.cwd(), sessionDir);
     for (const line of contents.split(/\r?\n/u).filter(Boolean)) {
       const entry = JSON.parse(line);
       if (entry.type === "message") manager.appendMessage(entry.message);
     }
     if (!manager.getLeafId())
-      manager.appendMessage({ role: "user", content: "fixture" });
+      manager.appendMessage({
+        role: "user",
+        content: [{ type: "text", text: "fixture" }],
+        timestamp: 0,
+      });
     return supervisorMessageDiagnostics(
       manager.getSessionFile(),
       manager.getSessionId(),
       "MANAGER_HANDOFF_READY",
     );
   };
+  const assistantMessageMetadata: Pick<
+    AssistantMessage,
+    "api" | "provider" | "model" | "usage" | "stopReason" | "timestamp"
+  > = {
+    api: "openai-completions",
+    provider: "openai",
+    model: "smoke-test",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "toolUse",
+    timestamp: 0,
+  };
   const contents = [
     {
       type: "message",
       message: {
         role: "assistant",
+        ...assistantMessageMetadata,
         content: [
           {
             type: "toolCall",
@@ -3299,7 +3334,8 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
             cause: "PRIVATE_CAUSE",
           },
         },
-        content: "PRIVATE_RESULT_BODY",
+        content: [{ type: "text", text: "PRIVATE_RESULT_BODY" }],
+        timestamp: 0,
       },
     },
   ]
@@ -3593,10 +3629,33 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
 test("manager readiness correlates one active-branch call with its following result", async () => {
   const sessionDir = await mkdtemp(join(tmpdir(), "pi-herdsman-smoke-branch-"));
   try {
+    const assistantMessageMetadata: Pick<
+      AssistantMessage,
+      "api" | "provider" | "model" | "usage" | "stopReason" | "timestamp"
+    > = {
+      api: "openai-completions",
+      provider: "openai",
+      model: "smoke-test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "toolUse",
+      timestamp: 0,
+    };
     const source = SessionManager.create(process.cwd(), sessionDir);
-    const root = source.appendMessage({ role: "user", content: "root" });
+    const root = source.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "root" }],
+      timestamp: 0,
+    });
     source.appendMessage({
       role: "assistant",
+      ...assistantMessageMetadata,
       content: [
         {
           type: "toolCall",
@@ -3614,11 +3673,13 @@ test("manager readiness correlates one active-branch call with its following res
       toolName: "message_supervisor",
       toolCallId: "FOREIGN_CALL_ID",
       isError: false,
-      content: "PRIVATE_SUCCESS_BODY",
+      content: [{ type: "text", text: "PRIVATE_SUCCESS_BODY" }],
+      timestamp: 0,
     });
     source.branch(root);
     source.appendMessage({
       role: "assistant",
+      ...assistantMessageMetadata,
       content: [
         {
           type: "toolCall",
@@ -3633,15 +3694,20 @@ test("manager readiness correlates one active-branch call with its following res
       toolName: "message_supervisor",
       toolCallId: "OLD_BRANCH_CALL_ID",
       isError: false,
+      content: [],
+      timestamp: 0,
     });
 
+    const sessionFile = source.getSessionFile();
+    assert.ok(sessionFile);
     const fork = SessionManager.forkFrom(
-      source.getSessionFile(),
+      sessionFile,
       process.cwd(),
       sessionDir,
     );
     fork.appendMessage({
       role: "assistant",
+      ...assistantMessageMetadata,
       content: [
         {
           type: "toolCall",
@@ -3665,7 +3731,8 @@ test("manager readiness correlates one active-branch call with its following res
           message: "PRIVATE_ERROR_TEXT",
         },
       },
-      content: "PRIVATE_RESULT_BODY",
+      content: [{ type: "text", text: "PRIVATE_RESULT_BODY" }],
+      timestamp: 0,
     });
 
     const diagnostics = supervisorMessageDiagnostics(
@@ -7673,7 +7740,8 @@ test("failed project delegation is correlated, sanitized, and preserves topology
       ...fields,
     },
   });
-  const transcript = (...entries) => entries.map(JSON.stringify).join("\n");
+  const transcript = (...entries: unknown[]) =>
+    entries.map((entry) => JSON.stringify(entry)).join("\n");
   const failed = transcript(call, result());
 
   assert.throws(
