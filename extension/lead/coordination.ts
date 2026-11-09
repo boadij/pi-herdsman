@@ -4,6 +4,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
+  captureSenderEnvironment,
   hasManagerEvidenceSelectors,
   type ManagerEvidence,
 } from "./project.ts";
@@ -18,9 +19,11 @@ import type {
   PeerLeadRecord,
   WorkspaceProvenance,
   SessionRole,
+  SenderEnvironment,
 } from "../supervision.ts";
 import {
   projectMessageEnvelope,
+  senderEnvironmentAnnotation,
   leadSupervisorState as resolveLeadSupervisorState,
   COORDINATION_INBOX_SCAN_LIMIT,
   listPendingRetirements,
@@ -859,6 +862,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     createdAt = Date.now(),
     resultBindings: readonly ResultBinding[] = [],
     verifyEvidence?: () => void,
+    capturedEnvironment?: SenderEnvironment | null,
   ): Promise<ChiefMessageRecord> => {
     if (
       controllerScope?.kind !== "root" ||
@@ -941,6 +945,10 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       "peer_message",
       `peer ${target.piSessionId}`,
     );
+    const senderEnvironment =
+      capturedEnvironment === undefined
+        ? await captureSenderEnvironment(host.pi, ctx)
+        : capturedEnvironment;
     const record: ChiefMessageRecord = {
       version: 2,
       build: HERDSMAN_BUILD,
@@ -952,6 +960,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       leadSessionId: sender.piSessionId,
       peerSource: senderContext,
       text,
+      ...(senderEnvironment ? { senderEnvironment } : {}),
       ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
       createdAt,
     };
@@ -1021,6 +1030,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     expectedSupervisor?: { piSessionId: string; leaseId: string },
     resultBindings: readonly ResultBinding[] = [],
     verifyEvidence?: () => void,
+    capturedEnvironment?: SenderEnvironment | null,
   ): Promise<ChiefMessageRecord> => {
     assertCurrentLeadCoordination(ctx);
     if (
@@ -1041,6 +1051,10 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     const leadSessionId = ctx.sessionManager.getSessionId();
     if (chief.piSessionId === leadSessionId)
       throw new Error("Supervisor target is invalid");
+    const senderEnvironment =
+      capturedEnvironment === undefined
+        ? await captureSenderEnvironment(host.pi, ctx)
+        : capturedEnvironment;
     const record: ChiefMessageRecord = {
       version: 2,
       build: HERDSMAN_BUILD,
@@ -1051,6 +1065,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       toSessionId: chief.piSessionId,
       leadSessionId,
       text,
+      ...(senderEnvironment ? { senderEnvironment } : {}),
       ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
       createdAt,
     };
@@ -1321,6 +1336,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       const evidenceScope = hasManagerEvidenceSelectors(params.files ?? [])
         ? await host.managerEvidence?.(ctx, params.files ?? [])
         : undefined;
+      const senderEnvironment = await captureSenderEnvironment(host.pi, ctx);
       const prepared = await prepareCoordinationInput(
         ctx,
         params.message,
@@ -1343,6 +1359,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           toSessionId: chief.piSessionId,
           leadSessionId: ctx.sessionManager.getSessionId(),
           text: candidate,
+          ...(senderEnvironment ? { senderEnvironment } : {}),
           ...(resultBindings.length
             ? { resultBindings: [...resultBindings] }
             : {}),
@@ -1360,6 +1377,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           undefined,
           prepared.resultBindings,
           evidenceScope?.verify,
+          senderEnvironment ?? null,
         );
       };
       if (evidenceScope) await evidenceScope.revalidate(queue);
@@ -2279,6 +2297,9 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     const evidenceScope = hasManagerEvidenceSelectors(params.files ?? [])
       ? await host.managerEvidence?.(ctx, params.files ?? [])
       : undefined;
+    const senderEnvironment = remoteRoute
+      ? null
+      : await captureSenderEnvironment(host.pi, ctx);
     const prepared = await prepareCoordinationInput(
       ctx,
       params.message,
@@ -2305,6 +2326,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             ? { role: "lead", remoteOrdinary: true }
             : submissionSource,
         text: candidate,
+        ...(senderEnvironment ? { senderEnvironment } : {}),
         ...(resultBindings.length
           ? { resultBindings: [...resultBindings] }
           : {}),
@@ -2572,6 +2594,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         createdAt,
         prepared.resultBindings,
         evidenceScope?.verify,
+        senderEnvironment,
       );
     };
     if (evidenceScope) await evidenceScope.revalidate(queue);
@@ -2831,7 +2854,9 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
                 message.kind,
                 message.branch,
                 message.fromSessionId,
-              ) + message.text,
+              ) +
+              message.text +
+              senderEnvironmentAnnotation(message.senderEnvironment),
             display: true,
             details: {
               id: message.id,
@@ -2839,6 +2864,9 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
               branch: message.branch,
               fromSessionId: message.fromSessionId,
               kind: message.kind,
+              ...(message.senderEnvironment
+                ? { senderEnvironment: message.senderEnvironment }
+                : {}),
             },
           },
           backlog && !actionableFailure

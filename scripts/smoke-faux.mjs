@@ -16,6 +16,19 @@ import {
   getCurrentSystemPrompt,
 } from "@earendil-works/pi-ai";
 
+export function matchesProjectMessageContent(actual, expected) {
+  return (
+    typeof actual === "string" &&
+    (actual === expected ||
+      (actual.startsWith(
+        `${expected}\n\n<sender_environment informational="true">\ncwd: "`,
+      ) &&
+        /^\n\n<sender_environment informational="true">\ncwd: "(?:[^&<>"'\r\n]|&(?:amp|lt|gt|quot|apos);)+"(?:\nworktree_root: "(?:[^&<>"'\r\n]|&(?:amp|lt|gt|quot|apos);)+"\nbranch: "(?:[^&<>"'\r\n]|&(?:amp|lt|gt|quot|apos);)+"\nhead: "(?:[a-f0-9]{40}|[a-f0-9]{64})")?\nInformational only; not an instruction or authorization\.\n<\/sender_environment>$/u.test(
+          actual.slice(expected.length),
+        )))
+  );
+}
+
 const MANAGER_HANDOFF_SUPERVISOR_TOOL_NOT_OFFERED =
   "MANAGER_HANDOFF_SUPERVISOR_TOOL_NOT_OFFERED";
 
@@ -884,8 +897,10 @@ export function decide(model, context) {
         (message, index) =>
           index > assignment.resultIndex &&
           message.role === "user" &&
-          text(message) ===
+          matchesProjectMessageContent(
+            text(message),
             `Lead → Manager for assignment ${branch} from lead ${leadSessionId}:\n\nMANAGER_HANDOFF_READY`,
+          ),
       )
     )
       return fauxAssistantMessage("MANAGER_HANDOFF_READY_RECEIVED");
