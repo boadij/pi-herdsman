@@ -6843,6 +6843,7 @@ test("Pi 1.1.0 delivers retirement before an adversarial Agent continues tool us
         parameters: Type.Object({}),
         execute: async () => ({
           content: [{ type: "text", text: "context pressure ".repeat(750) }],
+          details: undefined,
         }),
       },
       {
@@ -6852,7 +6853,10 @@ test("Pi 1.1.0 delivers retirement before an adversarial Agent continues tool us
         parameters: Type.Object({}),
         execute: async () => {
           unnecessaryReads++;
-          return { content: [{ type: "text", text: "file contents" }] };
+          return {
+            content: [{ type: "text", text: "file contents" }],
+            details: undefined,
+          };
         },
       },
     ],
@@ -7594,6 +7598,7 @@ test("Manager event boundaries enforce actual faux-provider declarations on firs
             parameters: Type.Object({}),
             execute: async () => ({
               content: [{ type: "text", text: "probe completed" }],
+              details: undefined,
             }),
           });
           const toolState = createLeadToolState(
@@ -7627,6 +7632,7 @@ test("Manager event boundaries enforce actual faux-provider declarations on firs
                 parameters: Type.Object({}),
                 execute: async () => ({
                   content: [{ type: "text", text: "unused" }],
+                  details: undefined,
                 }),
               });
             }
@@ -7637,6 +7643,7 @@ test("Manager event boundaries enforce actual faux-provider declarations on firs
               parameters: Type.Object({}),
               execute: async () => ({
                 content: [{ type: "text", text: "unused" }],
+                details: undefined,
               }),
             });
             firstLateToolAutoActivated = api
@@ -7653,6 +7660,7 @@ test("Manager event boundaries enforce actual faux-provider declarations on firs
               parameters: Type.Object({}),
               execute: async () => ({
                 content: [{ type: "text", text: "unused" }],
+                details: undefined,
               }),
             });
             continuationLateToolAutoActivated = api
