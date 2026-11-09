@@ -305,6 +305,7 @@ type LeadRoleTransitionHost = LeadTransitionHost & {
   captureInheritedTools?(): void;
   inheritedProjection?():
     { mode: LeadExecutionMode; excluded: readonly string[] } | undefined;
+  isManagedSession?(): boolean;
   setInheritedProjection?(
     projection:
       { mode: LeadExecutionMode; excluded: readonly string[] } | undefined,
@@ -1478,6 +1479,13 @@ export function createLeadAgentEventRuntime(host: {
         sections.pi_herdsman_role = host.roleCharter(ctx);
         return;
       }
+      try {
+        if (host.currentLeadAllowedTools?.() !== undefined)
+          host.reconcileRoleTools?.();
+      } catch (error) {
+        host.setActiveTools([]);
+        throw error;
+      }
       const activeLead = host.isActiveLead() && !host.isRoleSuspended();
       const supervisorStateMessage = activeLead
         ? await host.prepareLeadSupervisorStateMessage(ctx)
@@ -2406,19 +2414,35 @@ export function registerLeadRuntime(
       return restrictLeadAgentTools(tools, policy, leadRuntime.leadContext);
     };
     if (!sessionKind) return [];
-    if (sessionKind.kind === "managed" && managedLifecycle !== "assigned")
-      return leadRuntime.leadContext
+    const managedRecoveryTools = () =>
+      leadRuntime.leadContext
         ? ownedAgentManagementTools(leadRuntime.leadContext)
         : [];
-    if (leadExecutionPending)
-      return restrict(leadToolState.normalizeLeadTools([]));
-    if (sessionKind.kind === "managed")
+    if (sessionKind.kind === "managed") {
+      if (
+        managedLifecycle !== "assigned" ||
+        leadRuntime.roleSuspended ||
+        leadRuntime.chiefMode === "suspended" ||
+        leadExecutionPending ||
+        !leadExecution?.valid ||
+        !leadExecution.managed
+      )
+        return managedRecoveryTools();
+      const definition = leadExecution.definition;
+      const managedBaseline =
+        definition.frontmatter.noTools === true &&
+        definition.frontmatter.tools === undefined
+          ? []
+          : baseline;
       return restrict(
         leadToolState.appendRegisteredTools(
-          leadToolState.normalizeLeadTools(baseline),
+          leadToolState.projectLeadTools(managedBaseline, definition),
           ["read_evidence"],
         ),
       );
+    }
+    if (leadExecutionPending)
+      return restrict(leadToolState.normalizeLeadTools([]));
     if (!leadExecution)
       return restrict(leadToolState.normalizeLeadTools(baseline));
     if (!leadExecution.valid)
@@ -2448,6 +2472,7 @@ export function registerLeadRuntime(
   > = { kind: "root" };
   const roleTransitionServices = {
     ...roleHost,
+    isManagedSession: () => sessionKind?.kind === "managed",
     prepareSupervisoryProfile,
     commitSupervisoryProfile,
     currentSupervisoryProfile,
@@ -3939,15 +3964,38 @@ export function registerLeadRuntime(
   };
   const agentEvents = createLeadAgentEventRuntime({
     ...options.agentEventOptions,
-    currentLeadAllowedTools: () =>
-      activeLeadRole(leadRuntime) === "lead" &&
-      !leadRuntime.roleSuspended &&
-      leadExecution &&
-      !leadExecution.managed &&
-      (!leadExecution.valid ||
-        leadExecution.definition.frontmatter.tools !== undefined)
+    currentLeadAllowedTools: () => {
+      if (sessionKind?.kind === "managed") {
+        if (
+          managedLifecycle !== "assigned" ||
+          leadExecutionPending ||
+          leadRuntime.roleSuspended ||
+          leadRuntime.chiefMode === "suspended" ||
+          !leadExecution?.valid ||
+          !leadExecution.managed
+        )
+          return executionTools();
+        const policy = leadExecution.definition.frontmatter;
+        return policy.tools !== undefined ||
+          (policy.excludeTools?.length ?? 0) > 0 ||
+          policy.noTools === true
+          ? executionTools()
+          : undefined;
+      }
+      if (
+        activeLeadRole(leadRuntime) !== "lead" ||
+        leadRuntime.roleSuspended ||
+        !leadExecution ||
+        leadExecution.managed
+      )
+        return undefined;
+      if (!leadExecution.valid) return executionTools();
+      const policy = leadExecution.definition.frontmatter;
+      return policy.tools !== undefined ||
+        (policy.excludeTools?.length ?? 0) > 0
         ? executionTools()
-        : undefined,
+        : undefined;
+    },
     executionPrompt: () =>
       leadExecution && !leadExecution.managed && leadExecution.valid
         ? leadExecution.definition.body
@@ -10589,6 +10637,10 @@ export function createLeadRoleTransitions(
     }
     if (state.roleSuspended || state.chiefMode === "suspended") {
       host.setInheritedProjection?.(undefined);
+      if (host.isManagedSession?.()) {
+        host.pi.setActiveTools(host.executionTools?.() ?? []);
+        return;
+      }
       const baseline = host.normalizeBaseTools(
         host.getLeadTools() ?? host.pi.getActiveTools(),
       );

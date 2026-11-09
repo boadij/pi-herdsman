@@ -4932,6 +4932,12 @@ test("managed Lead prompt keeps the managed charter with an assigned session", a
     checkoutPath: resolve("/tmp"),
   });
   const pi = fakePi({
+    activeTools: ["bash"],
+    allTools: [
+      ...REGISTERED_ROLE_TOOLS,
+      { name: "codemode" },
+      { name: "bash" },
+    ],
     exec: (_command, args) =>
       args[0] === "worktree" && args[1] === "list"
         ? {
@@ -4968,6 +4974,25 @@ test("managed Lead prompt keeps the managed charter with an assigned session", a
   };
   try {
     await pi.events.get("session_start")![0](undefined, context);
+    assert.ok(pi.pi.getActiveTools().includes("codemode"));
+    assert.ok(!pi.pi.getActiveTools().includes("bash"));
+    const toolCall = pi.events.get("tool_call")![0];
+    assert.equal(toolCall({ toolName: "codemode" }, context), undefined);
+    assert.ok(toolCall({ toolName: "bash" }, context)?.block);
+    assert.ok(
+      toolCall({ toolName: "bash", parentToolCallId: "nested-call" }, context)
+        ?.block,
+    );
+    pi.pi.setActiveTools(["bash", "codemode"]);
+    await pi.events.get("session_start")![0](undefined, context);
+    const beforeAgentStart = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await pi.events.get("before_agent_start")![0](beforeAgentStart, context);
+    assert.ok(pi.pi.getActiveTools().includes("codemode"));
+    assert.ok(!pi.pi.getActiveTools().includes("bash"));
+    assert.ok(toolCall({ toolName: "bash" }, context)?.block);
     const listed = await pi.tools
       .find((tool) => tool.name === "list_agents")!
       .execute("list", {}, undefined, undefined, context);
