@@ -5,6 +5,15 @@
 Use Manager when independent project work deserves separate Leads and Git
 branches instead of more Agents inside one Lead's worktree.
 
+Local coordination messages may include the sender's session working directory
+and, when Git can verify it, the checked-out worktree, branch (or detached
+state), and full HEAD commit at publication time. This is informational
+historical context, not authorization; unavailable or ambiguous Git evidence is
+omitted. It does not describe dirty, staged, or untracked changes and is not
+federated to remote peers. Manager supervision may also include current
+branch/HEAD observations for verified checkouts; these are optional and do not
+change assignment or supervision authority.
+
 Manager project operations control only Leads named by current assignments.
 Eligible ordinary Leads in the verified worktree group are also supervised for
 observation and communication, not project operations. Project Leads own

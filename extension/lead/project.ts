@@ -11,6 +11,7 @@ import type {
   SessionRole,
   SupervisionSnapshot,
   UnverifiedLead,
+  SenderEnvironment,
 } from "../supervision.ts";
 import {
   projectTaskSummary,
@@ -3029,6 +3030,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         : undefined;
     const id =
       operation.action === "resume" ? currentAssignment!.id : operation.id;
+    let resumeSenderEnvironment: SenderEnvironment | undefined;
     const resumeRecord = (
       text: string,
       resultBindings: readonly import("../storage.ts").ResultBinding[],
@@ -3044,6 +3046,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       leadSessionId: id,
       branch: currentAssignment!.branch,
       text,
+      ...(resumeSenderEnvironment
+        ? { senderEnvironment: resumeSenderEnvironment }
+        : {}),
       ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
       createdAt,
     });
@@ -3052,6 +3057,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     let resumeEvidenceScope: Awaited<ReturnType<ManagerEvidence>> | undefined;
     const prepareResumeHandoff = async () => {
       if (operation.action !== "resume") return;
+      resumeSenderEnvironment = await captureSenderEnvironment(host.pi, ctx);
       resumeMessageId ??= randomUUID();
       try {
         const handoff = await prepareStaffHandoffEvidence(
@@ -3123,6 +3129,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               leadSessionId: id,
               branch: currentAssignment!.branch,
               text: "Project assignment ready.",
+              ...(resumeSenderEnvironment
+                ? { senderEnvironment: resumeSenderEnvironment }
+                : {}),
               createdAt,
             });
         };
@@ -4022,7 +4031,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         `Lead ${assignment.id}`,
       );
       assignment = await bindLeadSessionFile(assignment, lead, signal);
-      if (operation.action !== "resume")
+      if (operation.action !== "resume") {
+        const senderEnvironment = await captureSenderEnvironment(host.pi, ctx);
         writeChiefMessage({
           version: 2,
           build: HERDSMAN_BUILD,
@@ -4034,8 +4044,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           leadSessionId,
           branch: assignment.branch,
           text: "Project assignment ready.",
+          ...(senderEnvironment ? { senderEnvironment } : {}),
           createdAt: Date.now(),
         });
+      }
       let rediscovered: any;
       while (Date.now() < deadline) {
         const exact = (await liveLead(ctx, assignment.id)).filter(
@@ -4868,6 +4880,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw error;
     }
     try {
+      const senderEnvironment =
+        activeRole() === "manager"
+          ? await captureSenderEnvironment(host.pi, ctx)
+          : undefined;
       const prepared = await prepareCoordinationInput(
         ctx,
         params.message,
@@ -4885,6 +4901,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           leadSessionId: reportSession(lead),
           ...(initialAssignment ? { branch: initialAssignment.branch } : {}),
           text: candidate,
+          ...(senderEnvironment ? { senderEnvironment } : {}),
           ...(resultBindings.length
             ? { resultBindings: [...resultBindings] }
             : {}),
@@ -4947,6 +4964,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         leadSessionId: reportSession(lead),
         ...(initialAssignment ? { branch: initialAssignment.branch } : {}),
         text: prepared.text,
+        ...(senderEnvironment ? { senderEnvironment } : {}),
         ...(prepared.resultBindings.length
           ? { resultBindings: prepared.resultBindings }
           : {}),
@@ -5414,6 +5432,7 @@ export function gitPathStatus(path: string): "present" | "absent" | "unknown" {
 export function parseGitWorktreeInventory(output: string):
   | {
       path: string;
+      head?: string;
       branch?: string;
       detached?: boolean;
       locked?: boolean;
@@ -5436,6 +5455,7 @@ export function parseGitWorktreeInventory(output: string):
   if (!records.length) return undefined;
   const worktrees: {
     path: string;
+    head?: string;
     branch?: string;
     detached?: boolean;
     locked?: boolean;
@@ -5491,6 +5511,7 @@ export function parseGitWorktreeInventory(output: string):
       return undefined;
     worktrees.push({
       path,
+      ...(!bare && head ? { head } : {}),
       ...(branch ? { branch } : {}),
       ...(detached ? { detached: true } : {}),
       ...(locked ? { locked: true } : {}),
@@ -5503,4 +5524,61 @@ export function parseGitWorktreeInventory(output: string):
   )
     return undefined;
   return worktrees;
+}
+
+export async function captureSenderEnvironment(
+  pi: Pick<ExtensionAPI, "exec">,
+  ctx: ExtensionContext,
+): Promise<SenderEnvironment | undefined> {
+  const cwd = ctx.cwd;
+  if (
+    typeof cwd !== "string" ||
+    !isAbsolute(cwd) ||
+    !cwd ||
+    Buffer.byteLength(cwd) > 1024
+  )
+    return undefined;
+  try {
+    const rootResult = await pi.exec("git", ["rev-parse", "--show-toplevel"], {
+      cwd,
+      signal: ctx.signal,
+      timeout: 3_000,
+    });
+    const root = String(rootResult.stdout ?? "").trim();
+    if (
+      rootResult.code !== 0 ||
+      rootResult.killed ||
+      rootResult.stderr?.trim() ||
+      !isAbsolute(root) ||
+      Buffer.byteLength(root) > 1024
+    )
+      return { cwd };
+    const inventoryResult = await pi.exec(
+      "git",
+      ["worktree", "list", "--porcelain", "-z"],
+      { cwd, signal: ctx.signal, timeout: 3_000 },
+    );
+    if (
+      inventoryResult.code !== 0 ||
+      inventoryResult.killed ||
+      inventoryResult.stderr?.trim()
+    )
+      return { cwd };
+    const matches =
+      parseGitWorktreeInventory(String(inventoryResult.stdout ?? ""))?.filter(
+        (entry) => !entry.prunable && sameDirectory(entry.path, root),
+      ) ?? [];
+    const entry = matches.length === 1 ? matches[0] : undefined;
+    if (!entry?.head || (!entry.detached && !entry.branch)) return { cwd };
+    return {
+      cwd,
+      git: {
+        worktreeRoot: root,
+        branch: entry.detached ? null : entry.branch!,
+        head: entry.head,
+      },
+    };
+  } catch {
+    return { cwd };
+  }
 }

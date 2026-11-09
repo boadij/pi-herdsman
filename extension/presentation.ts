@@ -26,7 +26,12 @@ import type {
 import { createHash, randomUUID } from "node:crypto";
 import type { LeadExecutionMode } from "./core.ts";
 import { matchesToolPattern } from "./agent-definitions.ts";
-import { projectMessageEnvelope, projectMessageLabel } from "./supervision.ts";
+import {
+  projectMessageEnvelope,
+  projectMessageLabel,
+  senderEnvironmentAnnotation,
+  validSenderEnvironment,
+} from "./supervision.ts";
 import {
   chmodSync,
   closeSync,
@@ -1723,6 +1728,17 @@ export function formatSupervisionContext(
     status: SupervisionContextStatus;
     role?: "chief" | "manager";
     targets?: ReadonlyMap<string, string>;
+    git?: {
+      manager?: { branch: string | null; head: string };
+      assignments?: ReadonlyMap<
+        string,
+        { branch: string | null; head: string }
+      >;
+      supervisedLeads?: ReadonlyMap<
+        string,
+        { branch: string | null; head: string }
+      >;
+    };
   },
 ): string {
   const role = options.role ?? "chief";
@@ -1783,6 +1799,30 @@ export function formatSupervisionContext(
         ]),
   ];
   const sections: string[] = [];
+  const gitLines = [
+    ...(options.git?.manager
+      ? [
+          "  manager_checkout:",
+          `    branch: ${supervisionValue(options.git.manager.branch ?? "detached")}`,
+          `    head: ${options.git.manager.head}`,
+        ]
+      : []),
+    ...[...(options.git?.assignments ?? new Map())].map(
+      ([assignment, observation]) =>
+        `  assignment ${supervisionValue(assignment)}: checkout_branch=${supervisionValue(observation.branch ?? "detached")} head=${observation.head}`,
+    ),
+    ...[...(options.git?.supervisedLeads ?? [])].flatMap(
+      ([session, observation]) =>
+        options.targets?.has(session)
+          ? [
+              `  supervised_lead ${supervisionValue(options.targets.get(session)!)}: checkout_branch=${supervisionValue(observation.branch ?? "detached")} head=${observation.head}`,
+            ]
+          : [],
+    ),
+  ];
+  const gitSection = gitLines.length
+    ? ["git_observations:", ...gitLines].join("\n")
+    : undefined;
   if (snapshot?.diagnostics?.length)
     sections.push(
       [
@@ -1900,6 +1940,7 @@ export function formatSupervisionContext(
       included.pop();
     included.push(...notice);
   }
+  if (gitSection && fits([...included, gitSection])) included.push(gitSection);
   return [...included, closing].join("\n");
 }
 
@@ -4316,6 +4357,9 @@ export function renderCoordinationMessage(
     toDisplayName: optionalString("toDisplayName"),
     kind: projectKind,
   };
+  const senderEnvironment = validSenderEnvironment(rawDetails.senderEnvironment)
+    ? rawDetails.senderEnvironment
+    : undefined;
   const branch = d?.branch ?? "project work";
   const messageContent = contentText(message.content ?? "");
   let heading = "";
@@ -4376,7 +4420,13 @@ export function renderCoordinationMessage(
         break;
     }
   }
-  let body = messageContent;
+  const annotation = senderEnvironment
+    ? senderEnvironmentAnnotation(senderEnvironment)
+    : "";
+  let body =
+    annotation && messageContent.endsWith(annotation)
+      ? messageContent.slice(0, -annotation.length)
+      : messageContent;
   if (prefix && body.startsWith(prefix)) body = body.slice(prefix.length);
   const content = new Container();
   content.addChild(new WidthSafeText(heading, 0, 0));
@@ -4391,6 +4441,18 @@ export function renderCoordinationMessage(
       kind !== "project_assignment" &&
       (d?.fromSessionId ?? d?.leadSessionId)
         ? [`session: ${d?.fromSessionId ?? d?.leadSessionId}`]
+        : []),
+      ...(senderEnvironment
+        ? [
+            `sender cwd: ${senderEnvironment.cwd}`,
+            ...(senderEnvironment.git
+              ? [
+                  `worktree: ${senderEnvironment.git.worktreeRoot}`,
+                  `checked-out branch: ${senderEnvironment.git.branch ?? "detached"}`,
+                  `HEAD: ${senderEnvironment.git.head}`,
+                ]
+              : []),
+          ]
         : []),
     ];
     if (metadata.length) {

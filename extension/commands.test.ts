@@ -15590,6 +15590,75 @@ test("owned-Agent focus works before supervision is available and expires with i
   }
 });
 
+test("Manager supervision discards Git context when its generation changes during inventory", async (t) => {
+  const { createLeadSupervisionRuntime } = await import("./lead-runtime.ts");
+  const checkout = mkdtempSync(join(tmpdir(), "supervision-git-race-"));
+  const repoKey = join(checkout, ".git");
+  mkdirSync(repoKey);
+  t.after(() => rmSync(checkout, { recursive: true, force: true }));
+  const state: any = {
+    chiefMode: "inactive",
+    chiefModeGeneration: 0,
+    sessionGeneration: 1,
+    roleSuspended: false,
+    managerLease: { descriptor: { repoKey, workspaceId: "manager" } },
+  };
+  const snapshot: any = {
+    project: "project",
+    managerCheckoutPath: checkout,
+    work: [],
+    leads: [],
+  };
+  let markInventoryStarted!: () => void;
+  const inventoryStarted = new Promise<void>(
+    (resolve) => (markInventoryStarted = resolve),
+  );
+  let resolveInventory!: (result: { code: number; stdout: string }) => void;
+  let formatted = false;
+  let readLatest = false;
+  const runtime = createLeadSupervisionRuntime({
+    state,
+    activeRole: () => "manager",
+    isCurrentChief: () => false,
+    currentManager: async () => state.managerLease.descriptor,
+    herdrSessionSnapshot: async () => ({ agents: [] }),
+    managedAgentSnapshots: async () => ({ agents: [] }),
+    loadSnapshot: async () => snapshot,
+    presentationReports: () => [],
+    pi: {
+      exec: async (_command: string, args: string[]) => {
+        if (args[0] === "rev-parse") return { code: 0, stdout: repoKey };
+        if (args[0] === "worktree") {
+          markInventoryStarted();
+          return await new Promise((resolve) => (resolveInventory = resolve));
+        }
+        throw new Error(`Unexpected Git command: ${args.join(" ")}`);
+      },
+    },
+    formatContext: () => {
+      formatted = true;
+      return "stale supervision";
+    },
+    latestMessageText: async () => {
+      readLatest = true;
+      return undefined;
+    },
+  } as any);
+  const ctx = fakeContext() as any;
+  ctx.mode = "rpc";
+
+  const preparation = runtime.prepareMessage(ctx);
+  await inventoryStarted;
+  state.sessionGeneration++;
+  resolveInventory({
+    code: 0,
+    stdout: `worktree ${checkout}\0HEAD ${"a".repeat(40)}\0branch refs/heads/main\0\0`,
+  });
+  assert.equal(await preparation, undefined);
+  assert.equal(formatted, false);
+  assert.equal(readLatest, false);
+});
+
 test("Manager exact reports enrich only the selected Lead while preserving fleet identities", async (t) => {
   const { createLeadSupervisionRuntime } = await import("./lead-runtime.ts");
   const repo = mkdtempSync(join(tmpdir(), "exact-report-"));

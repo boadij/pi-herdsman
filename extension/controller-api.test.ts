@@ -5062,7 +5062,7 @@ async function runManagerStartupScenario(
         if (mode === "reconcile-absent") {
           assert.ok(gitInventories.length >= 2);
           assert.deepEqual(parseGitWorktreeInventory(gitListOutput), [
-            { path: ctx.cwd, branch: "main" },
+            { path: ctx.cwd, head: "a".repeat(40), branch: "main" },
           ]);
         }
         assert.deepEqual(assignments, []);

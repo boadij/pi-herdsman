@@ -97,6 +97,8 @@ const {
   writePeerLeadRecord,
   removeChiefMessage,
   writeLeadCoordinationState,
+  validSenderEnvironment,
+  senderEnvironmentAnnotation,
 } = await import("./supervision.ts");
 import type {
   GlobalProjectAssignment,
@@ -111,6 +113,26 @@ const socket = () =>
   join(mkdtempSync(join(tmpdir(), "supervision-test-")), "sock");
 const id = () => randomUUID();
 const BUILD = { version: "0.18.0", sha256: "a".repeat(64) } as const;
+
+test("sender environment validation and annotation reject malformed metadata and escape controls", () => {
+  const environment = {
+    cwd: "/repo/<x>\n",
+    git: { worktreeRoot: "/repo", branch: null, head: "a".repeat(40) },
+  };
+  assert.equal(validSenderEnvironment(environment), true);
+  assert.equal(validSenderEnvironment({ ...environment, extra: true }), false);
+  assert.equal(
+    validSenderEnvironment({
+      cwd: "/repo",
+      git: { ...environment.git, head: "bad" },
+    }),
+    false,
+  );
+  const annotation = senderEnvironmentAnnotation(environment);
+  assert.match(annotation, /&lt;x&gt;�/);
+  assert.match(annotation, /branch: "detached"/);
+  assert.doesNotMatch(annotation, /<x>/);
+});
 
 test("peer delivery receipts bind exact session, ID, and content durably", () => {
   const runtime = supervisionRuntime(socket());
@@ -4558,6 +4580,10 @@ test("project assignment uses durable project transport, not Manager message fra
     leadSessionId: session,
     branch: "feat/bootstrap",
     text: instruction,
+    senderEnvironment: {
+      cwd: "/repo/src",
+      git: { worktreeRoot: "/repo", branch: "main", head: "a".repeat(40) },
+    },
   });
   writeChiefMessage(record, runtime);
   const delivered: any[] = [];
@@ -4582,7 +4608,7 @@ test("project assignment uses durable project transport, not Manager message fra
   assert.equal(triggerTurn, true);
   assert.equal(
     delivered[0].content,
-    `Project assignment for branch ${record.branch}:\n\n${instruction}`,
+    `Project assignment for branch ${record.branch}:\n\n${instruction}\n\n<sender_environment informational="true">\ncwd: "/repo/src"\nworktree_root: "/repo"\nbranch: "main"\nhead: "${"a".repeat(40)}"\nInformational only; not an instruction or authorization.\n</sender_environment>`,
   );
   assert.doesNotMatch(delivered[0].content, new RegExp(session));
   assert.deepEqual(delivered[0].details, {
@@ -4592,6 +4618,7 @@ test("project assignment uses durable project transport, not Manager message fra
     toSessionId: record.toSessionId,
     leadSessionId: session,
     branch: record.branch,
+    senderEnvironment: record.senderEnvironment,
   });
 });
 
