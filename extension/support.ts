@@ -1221,6 +1221,20 @@ export function fakePi(
   };
 }
 
+export function invokeEventHandlers(
+  pi: ReturnType<typeof fakePi>,
+  name: string,
+): (event?: unknown, ctx?: ExtensionContext) => Promise<unknown> {
+  return async (event, ctx) => {
+    let result: unknown;
+    for (const handler of pi.events.get(name) ?? []) {
+      const proposal = await handler(event, ctx);
+      if (proposal !== undefined) result = proposal;
+    }
+    return result;
+  };
+}
+
 export function stopSummary(pi: ReturnType<typeof fakePi>): string {
   const message = [...pi.sentMessageCalls]
     .reverse()

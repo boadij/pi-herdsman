@@ -25,6 +25,12 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { fail, markRetryAttempted, OperationError } from "./errors.ts";
 import {
+  includeFanInMessage,
+  registerRecipientFanIn,
+  type DeliveryBudget,
+  type DeliveryPhase,
+} from "./recipient-fan-in.ts";
+import {
   agentMailboxPath,
   writeAgentBootstrap,
   claimAgentMailbox,
@@ -4332,6 +4338,8 @@ export type ManagerEvidenceScope = {
 };
 
 export type AgentControllerOptions = {
+  /** Disable standalone boundary hooks when the owning recipient composes its drains. */
+  registerRecipientFanIn?: boolean;
   scope: ControllerScope | undefined;
   managerEvidence?(
     ctx: ExtensionContext,
@@ -4395,8 +4403,13 @@ export type AgentControllerOptions = {
     result: ResultRecord,
     content: string,
     details: Record<string, unknown>,
+    triggerTurn?: boolean,
   ): void;
-  sendAskMessage(ctx: ExtensionContext, ask: AskRecord): void;
+  sendAskMessage(
+    ctx: ExtensionContext,
+    ask: AskRecord,
+    triggerTurn?: boolean,
+  ): void;
   sessionRetired(ctx: ExtensionContext, runtime: Runtime): boolean | undefined;
   appendError(ctx: ExtensionContext, kind: string, error: unknown): void;
   onChanged(): void;
@@ -6673,7 +6686,7 @@ export function createAgentController(
     const path = join(runtime.mailboxPath, filename);
     stopResultWatcher(runtime, requestId);
     const check = () => {
-      if (active && runtimes.get(runtime.label) === runtime)
+      if (active && context.isIdle() && runtimes.get(runtime.label) === runtime)
         try {
           const result = readResult(runtime.mailboxPath, requestId);
           if (result) void deliverResult(runtime, context, result, signal);
@@ -6697,6 +6710,7 @@ export function createAgentController(
     stopAskWatcher(runtime);
     const check = () => {
       if (!active || runtimes.get(runtime.label) !== runtime) return;
+      if (!context.isIdle()) return;
       try {
         deliverPendingAsk(runtime, context, signal);
       } catch (error) {
@@ -7022,9 +7036,11 @@ export function createAgentController(
     runtime: Runtime,
     context: ExtensionContext,
     signal?: AbortSignal,
-  ): void => {
+    triggerTurn = true,
+    budget?: DeliveryBudget,
+  ): boolean => {
     const state = readAgentState(runtime.mailboxPath);
-    if (!state?.pendingAskId) return;
+    if (!state?.pendingAskId) return false;
     try {
       requireCompatibleBuild(
         options.build,
@@ -7047,13 +7063,14 @@ export function createAgentController(
       options.onChanged();
     }
     const ask = readPendingAsk(runtime.mailboxPath, state);
-    if (!ask || !active) return;
+    if (!ask || !active) return false;
+    const content = `Agent ${ask.agentLabel} needs your input:\n\n${ask.question}\n\nUse reply_agent with agent="${ask.agentLabel}" to answer this question.`;
     const key = `${runtime.mailboxPath}:${ask.askId}`;
-    if (askDeliveryInFlight.has(key)) return;
+    if (askDeliveryInFlight.has(key)) return false;
     askDeliveryInFlight.add(key);
     try {
       if (
-        !context.isIdle() ||
+        (triggerTurn && !context.isIdle()) ||
         runtimes.get(runtime.label) !== runtime ||
         context.sessionManager.getSessionId() !== runtime.ownerSessionId ||
         state.runId !== runtime.runId ||
@@ -7073,24 +7090,29 @@ export function createAgentController(
         ask.paneId !== state.paneId ||
         ask.piSessionId !== state.piSessionId
       )
-        return;
+        return false;
       const delivered = hasDeliveredAsk(
         context.sessionManager.getBranch(),
         ask,
       );
       if (!delivered) {
+        if (budget && !includeFanInMessage({ ...budget }, content))
+          return false;
         importResultBindings(pi, context, ask.resultBindings, "ask_owner");
-        options.sendAskMessage(context, ask);
+        options.sendAskMessage(context, ask, triggerTurn);
+        if (budget) includeFanInMessage(budget, content);
       }
       cancelAskRetry(runtime, ask.askId);
       clearCleanupError(runtime, "Ask delivery failed");
+      return !delivered;
     } catch (error) {
       if (
         error instanceof OperationError &&
         error.detail.category === "incompatible_build"
       )
-        return;
+        return false;
       scheduleAskRetry(runtime, context, ask, signal, error);
+      return false;
     } finally {
       askDeliveryInFlight.delete(key);
     }
@@ -7279,6 +7301,7 @@ export function createAgentController(
       setTimeout(() => {
         resultDeliveryRetries.delete(key);
         if (!active || runtimes.get(runtime.label) !== runtime) return;
+        if (!context.isIdle()) return;
         try {
           const current = readResult(runtime.mailboxPath, result.requestId);
           if (current) void deliverResult(runtime, context, current, signal);
@@ -7309,11 +7332,14 @@ export function createAgentController(
     context: ExtensionContext,
     result: ResultRecord,
     signal?: AbortSignal,
-  ): Promise<void> => {
-    if (!active) return;
+    triggerTurn = true,
+    budget?: DeliveryBudget,
+  ): Promise<boolean> => {
+    if (!active) return false;
     const key = `${runtime.mailboxPath}:${result.requestId}`;
-    if (resultDeliveryInFlight.has(key)) return;
+    if (resultDeliveryInFlight.has(key)) return false;
     resultDeliveryInFlight.add(key);
+    let submitted = false;
     try {
       const expected = resultIdentity(runtime, result.requestId);
       const persistedState = readAgentState(runtime.mailboxPath);
@@ -7328,7 +7354,7 @@ export function createAgentController(
         result.rootSessionId !== persistedState?.rootSessionId ||
         result.requestId !==
           (runtime.activeRequestId ?? runtime.completedRequestId);
-      if (identityMismatch) return;
+      if (identityMismatch) return false;
       let entries = context.sessionManager.getEntries();
       const evidenceKey = JSON.stringify(Object.values(expected));
       if (
@@ -7498,10 +7524,21 @@ export function createAgentController(
             : {}),
           error: result.error,
         };
-        options.sendResultMessage(context, runtime, result, content, details);
+        if (budget && !includeFanInMessage({ ...budget }, content))
+          return false;
+        options.sendResultMessage(
+          context,
+          runtime,
+          result,
+          content,
+          details,
+          triggerTurn,
+        );
+        if (budget) includeFanInMessage(budget, content);
+        submitted = true;
         resultDeliveryEvidence.add(evidenceKey);
       }
-      if (!active || runtimes.get(runtime.label) !== runtime) return;
+      if (!active || runtimes.get(runtime.label) !== runtime) return false;
       stopResultWatcher(runtime, result.requestId);
       stopAskWatcher(runtime);
       cancelAskRetries(runtime);
@@ -7516,8 +7553,10 @@ export function createAgentController(
         scheduleResultCleanupRetry(runtime, result, context, signal);
       clearCleanupError(runtime, "Result delivery failed; retrying:");
       cancelResultRetry(resultDeliveryRetries, runtime, result.requestId);
+      return submitted;
     } catch (error) {
       scheduleResultDeliveryRetry(runtime, result, context, signal, error);
+      return false;
     } finally {
       resultDeliveryInFlight.delete(key);
     }
@@ -7572,6 +7611,57 @@ export function createAgentController(
         resultDeliveryEvidence.delete(resultKey(runtime, result.requestId));
       await deliverResult(runtime, context, result, signal);
     }
+  };
+  const drainReadyOwnerNotifications = async (
+    context: ExtensionContext,
+    phase: DeliveryPhase,
+    budget: DeliveryBudget,
+  ): Promise<number> => {
+    if (!active) return 0;
+    let ownerId: string;
+    try {
+      ownerId = context.sessionManager.getSessionId();
+    } catch {
+      return 0;
+    }
+    let submitted = 0;
+    for (const runtime of runtimes.values()) {
+      if (runtime.ownerSessionId !== ownerId || !active) continue;
+      const requestId = runtime.activeRequestId ?? runtime.completedRequestId;
+      if (requestId) {
+        try {
+          const result = readResult(runtime.mailboxPath, requestId);
+          if (
+            result &&
+            (await deliverResult(
+              runtime,
+              context,
+              result,
+              context.signal,
+              false,
+              budget,
+            ))
+          )
+            submitted++;
+        } catch (error) {
+          options.reportWatcherError(context, error);
+        }
+      }
+      if (phase === "settle")
+        try {
+          if (
+            deliverPendingAsk(runtime, context, context.signal, false, budget)
+          )
+            submitted++;
+        } catch (error) {
+          if (!(
+            error instanceof OperationError &&
+            error.detail.category === "incompatible_build"
+          ))
+            options.reportWatcherError(context, error);
+        }
+    }
+    return submitted;
   };
   const actionUnsafe = async (
     ctx: ExtensionContext,
@@ -10902,6 +10992,10 @@ export function createAgentController(
     schedule();
   };
 
+  if (options.registerRecipientFanIn !== false)
+    registerRecipientFanIn(pi, (ctx, phase, budget) =>
+      drainReadyOwnerNotifications(ctx, phase, budget),
+    );
   return {
     listAgentStates,
     managedAgentSnapshots: snapshot,
@@ -11032,6 +11126,7 @@ export function createAgentController(
     settleResults(context: ExtensionContext, signal?: AbortSignal) {
       return settleResults(context, signal);
     },
+    drainReadyOwnerNotifications,
     shutdown() {
       active = false;
       recoveryComplete = false;

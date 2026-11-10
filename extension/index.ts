@@ -846,7 +846,16 @@ function registerExtensionImpl(
       ),
     workspaceId: () =>
       process.env.PI_HERDSMAN_WORKSPACE_ID ?? process.env.HERDR_WORKSPACE_ID!,
-    sendResultMessage: (ctx, _runtime, _result, content, details) => {
+    sendResultMessage: (
+      ctx,
+      _runtime,
+      _result,
+      content,
+      details,
+      triggerTurn = true,
+    ) => {
+      if (triggerTurn && !ctx.isIdle())
+        throw new Error("Agent result owner is no longer idle");
       pi.sendMessage(
         {
           customType: "pi-herdsman-agent-result",
@@ -854,10 +863,15 @@ function registerExtensionImpl(
           display: true,
           details,
         },
-        { triggerTurn: true, deliverAs: "steer" },
+        {
+          triggerTurn,
+          ...(triggerTurn ? { deliverAs: "steer" as const } : {}),
+        },
       );
     },
-    sendAskMessage: (_ctx, ask) => {
+    sendAskMessage: (ctx, ask, triggerTurn = true) => {
+      if (triggerTurn && !ctx.isIdle())
+        throw new Error("Agent ask owner is no longer idle");
       pi.sendMessage(
         {
           customType: "pi-herdsman-agent-ask",
@@ -874,7 +888,7 @@ function registerExtensionImpl(
             piSessionId: ask.piSessionId,
           },
         },
-        { triggerTurn: true },
+        { triggerTurn },
       );
     },
     sessionRetired: (ctx, runtime) => {

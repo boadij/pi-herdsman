@@ -337,6 +337,8 @@ export type ChiefInboxDrainOptions = {
     | "followUp"
     | undefined
     | Promise<"steer" | "followUp" | undefined>;
+  forceNonTriggering?: boolean;
+  maxDeliveries?: number;
   senderTarget?: (
     record: ChiefMessageRecord,
   ) => string | undefined | Promise<string | undefined>;
@@ -1325,6 +1327,11 @@ export async function drainCoordinationInbox(
   let delivered = 0;
   let examined = 0;
   for (const path of allChiefMessagePaths(options.runtime, options.sessionId)) {
+    if (
+      options.maxDeliveries !== undefined &&
+      delivered >= options.maxDeliveries
+    )
+      break;
     if (examined >= COORDINATION_INBOX_SCAN_LIMIT) break;
     if (options.signal?.aborted) break;
     const id = basename(path, ".json");
@@ -1524,8 +1531,9 @@ export async function drainCoordinationInbox(
             },
             {
               deliverAs: deliverAs ?? "followUp",
-              triggerTurn:
-                record.kind !== "project_assignment" || !hasResumeInstruction,
+              triggerTurn: options.forceNonTriggering
+                ? false
+                : record.kind !== "project_assignment" || !hasResumeInstruction,
             },
             record,
           );
@@ -3415,6 +3423,7 @@ export function listProjectMessageHeaders(
   runtime: SupervisionRuntime,
   repoKey: string,
   branch: string,
+  onReadError?: (error: unknown) => void,
 ): ProjectMessageHeader[] {
   const directory = projectMessageDirectory(runtime, repoKey, branch);
   let entries: string[];
@@ -3440,6 +3449,10 @@ export function listProjectMessageHeaders(
           (error.cause as NodeJS.ErrnoException)?.code === "ENOENT"
         )
           return [];
+        if (onReadError) {
+          onReadError(error);
+          return [];
+        }
         throw error;
       }
     })
