@@ -700,7 +700,12 @@ export function createAgentStatusRuntime() {
       statusRefresh = false;
       statusInFlight = false;
       onStatusChange = undefined;
-      presentedStatus = { agents: [], stale: false, unavailable: true };
+      lastValidStatus = {
+        agents: [],
+        stale: false,
+        unavailable: true,
+      };
+      presentedStatus = lastValidStatus;
     },
     prepareSession: (ctx: ExtensionContext, beforeActivate?: () => void) => {
       clearTimer();
