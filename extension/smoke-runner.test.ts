@@ -157,6 +157,8 @@ import {
   selectSmokeModel,
   runScenario,
   sanitizedFailureEvidence,
+  continuationFailureTrace,
+  appendContinuationTraceEvent,
   preserveFailureEvidence,
   retainScenarioFailureEvidence,
   updateFailureEvidenceAfterCleanup,
@@ -5258,6 +5260,196 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     firstTextContent(decide("continuation", { messages: resumedWithEvidence }))
       .text,
     "pi-herdsman PI_HERDSMAN_CONTINUATION_SECOND",
+  );
+});
+
+test("continuation faux decisions do not persist trace on success", async () => {
+  const firstResult = {
+    role: "user",
+    content:
+      "Agent result · agent=smoke-continuation-implementer · definition=implementer · status=completed\n\nCONTINUATION_FIRST_DONE\n\nDelegation status: 0 active direct agents; 0 pending direct results; all direct assignments are resolved.",
+  };
+  const followup =
+    "Continue the exact saved Pi session at /isolated/session.jsonl. This is the same implementer you delegated previously.";
+  const call = {
+    role: "assistant",
+    content: [
+      {
+        type: "toolCall",
+        id: "continue-call",
+        name: "continue_agent",
+        arguments: { session: "/isolated/session.jsonl" },
+      },
+    ],
+  };
+  const messages = [
+    {
+      role: "user",
+      content: "Delegate exactly one bounded task to an implementer:",
+    },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "delegate-call",
+          name: "delegate_agent",
+          arguments: { label: "smoke-continuation-implementer" },
+        },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolName: "delegate_agent",
+      toolCallId: "delegate-call",
+      isError: false,
+    },
+    firstResult,
+    { role: "user", content: followup },
+    call,
+    {
+      role: "toolResult",
+      toolName: "continue_agent",
+      toolCallId: "continue-call",
+      isError: false,
+    },
+    {
+      role: "user",
+      content:
+        "Agent result · agent=smoke-continuation-implementer · definition=implementer · status=completed\n\npi-herdsman PI_HERDSMAN_CONTINUATION_SECOND\n\nDelegation status: 0 active direct agents; 0 pending direct results; all direct assignments are resolved.",
+    },
+    { role: "user", content: "Harmless coordination event." },
+  ];
+  const directory = await mkdtemp(join(tmpdir(), "continuation-trace-test-"));
+  const runtime = join(directory, "pi-herdsman", "runtime");
+  await mkdir(runtime, { recursive: true });
+  const originalCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = directory;
+  try {
+    const decision = decideSmokeFaux("continuation", { messages });
+    assert.match(decision.content[0].text, /already delivered/u);
+    const completed = decideSmokeFaux("continuation", {
+      messages: [
+        {
+          role: "user",
+          content: "Delegate exactly one bounded task to an implementer:",
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "first-call",
+              name: "delegate_agent",
+              arguments: { label: "smoke-continuation-implementer" },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolName: "delegate_agent",
+          toolCallId: "first-call",
+          isError: false,
+        },
+        {
+          role: "user",
+          content:
+            "Agent result · agent=smoke-continuation-implementer · definition=implementer · status=completed\n\nCONTINUATION_FIRST_DONE\n\nDelegation status: 0 active direct agents; 0 pending direct results; all direct assignments are resolved.",
+        },
+      ],
+    });
+    assert.equal(completed.content[0].text, "PI_HERDSMAN_CONTINUATION_FIRST");
+    await assert.rejects(
+      readFile(join(runtime, "continuation-faux-trace.jsonl"), "utf8"),
+      { code: "ENOENT" },
+    );
+  } finally {
+    if (originalCodingAgentDir === undefined)
+      delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalCodingAgentDir;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("continuation failure trace is bounded, sanitized, and failure-only", () => {
+  const raw = [
+    {
+      event: "message_state",
+      stage: "first_generation",
+      messageCount: 3,
+      userMessageCount: 1,
+      assistantMessageCount: 1,
+      toolCallCount: 1,
+      toolResultCount: 0,
+      customMessageCount: 0,
+      durableResultPresent: false,
+      ownerDeliveryPresent: false,
+      content: "PRIVATE MESSAGE",
+      sessionId: "PRIVATE SESSION ID",
+      path: "/private/session.jsonl",
+      credential: "PRIVATE TOKEN",
+    },
+    {
+      event: "faux_decision",
+      branch: "first_generation_pending",
+      correlatedResultPresent: false,
+      lastUserEqualsResult: false,
+      newerUserOrCoordinationEvent: false,
+    },
+  ];
+  assert.equal(continuationFailureTrace(raw, false), undefined);
+  const projected = continuationFailureTrace(raw, true);
+  assert.deepEqual(projected, [
+    {
+      event: "message_state",
+      stage: "first_generation",
+      messageCount: 3,
+      userMessageCount: 1,
+      assistantMessageCount: 1,
+      toolCallCount: 1,
+      toolResultCount: 0,
+      customMessageCount: 0,
+      durableResultPresent: false,
+      ownerDeliveryPresent: false,
+    },
+    {
+      event: "faux_decision",
+      branch: "first_generation_pending",
+      correlatedResultPresent: false,
+      lastUserEqualsResult: false,
+      newerUserOrCoordinationEvent: false,
+    },
+  ]);
+  assert.doesNotMatch(JSON.stringify(projected), /PRIVATE|session\.jsonl/u);
+  const ring = [];
+  for (let count = 0; count < 40; count++) {
+    appendContinuationTraceEvent(ring, {
+      ...raw[0],
+      messageCount: count,
+    });
+    assert.ok(ring.length <= 32);
+  }
+  assert.equal(ring.length, 32);
+  assert.equal(continuationFailureTrace(ring, true).length, 32);
+  assert.equal(ring[0].messageCount, 8);
+  assert.equal(ring.at(-1).messageCount, 39);
+
+  const ctx = { scenario: "continuation", continuationTraceEvents: raw };
+  assert.equal(
+    Object.hasOwn(
+      sanitizedFailureEvidence(ctx, null, "PASS", "PASS"),
+      "continuationTrace",
+    ),
+    false,
+  );
+  assert.deepEqual(
+    sanitizedFailureEvidence(
+      ctx,
+      { error: { smoke: { stage: "continuation-first-generation" } } },
+      "STALLED",
+      "PASS",
+    ).continuationTrace,
+    projected,
   );
 });
 

@@ -2510,6 +2510,313 @@ export function rootDelegationDiagnostics(contents) {
   };
 }
 
+const CONTINUATION_TRACE_EVENTS = new Set([
+  "delegation_state",
+  "candidate_state",
+  "faux_decision",
+  "message_state",
+]);
+const MAX_CONTINUATION_TRACE_EVENTS = 32;
+const CONTINUATION_TRACE_ENUMS = {
+  stage: new Set(["first_generation", "followup"]),
+  branch: new Set([
+    "first_generation_delegate",
+    "first_generation_pending",
+    "first_generation_result",
+    "first_generation_task",
+    "followup_start",
+    "followup_pending",
+    "followup_result",
+  ]),
+  matchingResult: new Set(["absent", "pending", "success", "error", "unknown"]),
+};
+const CONTINUATION_TRACE_BOOLEANS = new Set([
+  "delegationCallObserved",
+  "delegationAccepted",
+  "sessionObserved",
+  "sessionStartObserved",
+  "providerRequestObserved",
+  "requestCorrelated",
+  "durableResultPresent",
+  "ownerDeliveryPresent",
+  "correlatedResultPresent",
+  "lastUserEqualsResult",
+  "newerUserOrCoordinationEvent",
+]);
+const CONTINUATION_TRACE_COUNTS = new Set([
+  "delegationCallCount",
+  "messageCount",
+  "childCount",
+  "candidateProcessCount",
+  "sessionStartCount",
+  "providerRequestCount",
+  "userMessageCount",
+  "assistantMessageCount",
+  "toolCallCount",
+  "toolResultCount",
+  "customMessageCount",
+]);
+
+export function continuationFailureTrace(events, failed) {
+  if (!failed || !Array.isArray(events)) return undefined;
+  return events.slice(-MAX_CONTINUATION_TRACE_EVENTS).flatMap((event) => {
+    if (!CONTINUATION_TRACE_EVENTS.has(event?.event)) return [];
+    const projected = { event: event.event };
+    for (const [key, value] of Object.entries(event)) {
+      if (key === "event") continue;
+      if (CONTINUATION_TRACE_BOOLEANS.has(key) && typeof value === "boolean")
+        projected[key] = value;
+      else if (
+        CONTINUATION_TRACE_COUNTS.has(key) &&
+        Number.isSafeInteger(value) &&
+        value >= 0
+      )
+        projected[key] = Math.min(value, 10000);
+      else if (CONTINUATION_TRACE_ENUMS[key]?.has(value))
+        projected[key] = value;
+    }
+    return [projected];
+  });
+}
+
+export function appendContinuationTraceEvent(events, event) {
+  const projected = continuationFailureTrace([event], true)?.[0];
+  if (!projected) return;
+  if (events.length >= MAX_CONTINUATION_TRACE_EVENTS) events.shift();
+  events.push(projected);
+}
+
+function continuationMessageState(contents, stage) {
+  const messages = sessionEntries(contents)
+    .filter((entry) => entry.type === "message")
+    .map((entry) => entry.message ?? {});
+  const calls = messages.flatMap((message) =>
+    message.role === "assistant" && Array.isArray(message.content)
+      ? message.content.filter((part) => part.type === "toolCall")
+      : [],
+  );
+  const users = messages.filter((message) => message.role === "user");
+  const ownedResult = users.some((message) =>
+    messageText(message.content).startsWith("Agent result · "),
+  );
+  return {
+    event: "message_state",
+    stage,
+    messageCount: messages.length,
+    userMessageCount: users.length,
+    assistantMessageCount: messages.filter(
+      (message) => message.role === "assistant",
+    ).length,
+    toolCallCount: calls.length,
+    toolResultCount: messages.filter((message) => message.role === "toolResult")
+      .length,
+    customMessageCount: messages.filter(
+      (message) =>
+        message.type === "custom_message" || message.role === "custom",
+    ).length,
+    durableResultPresent: messages.some(
+      (message) =>
+        message.role === "assistant" &&
+        messageText(message.content).includes("CONTINUATION_FIRST_DONE"),
+    ),
+    ownerDeliveryPresent: ownedResult,
+  };
+}
+
+function continuationFauxDecisionState(contents, stage) {
+  const messages = sessionEntries(contents)
+    .filter((entry) => entry.type === "message")
+    .map((entry) => entry.message ?? {});
+  const users = messages
+    .map((message, index) => ({ message, index }))
+    .filter(({ message }) => message.role === "user");
+  const result = users.findLast(({ message }) => {
+    const content = messageText(message.content);
+    return (
+      content.startsWith("Agent result · ") &&
+      content.includes("status=completed") &&
+      content.includes(
+        stage === "followup"
+          ? "PI_HERDSMAN_CONTINUATION_SECOND"
+          : "CONTINUATION_FIRST_DONE",
+      )
+    );
+  });
+  const toolCalls = messages.flatMap((message, index) =>
+    message.role === "assistant" && Array.isArray(message.content)
+      ? message.content
+          .filter((part) => part.type === "toolCall")
+          .map((call) => ({ call, index }))
+      : [],
+  );
+  const targetName = stage === "followup" ? "continue_agent" : "delegate_agent";
+  const call = toolCalls.findLast(({ call }) => call.name === targetName);
+  const branch =
+    stage === "followup"
+      ? result
+        ? "followup_result"
+        : call
+          ? "followup_pending"
+          : "followup_start"
+      : result
+        ? "first_generation_result"
+        : call
+          ? "first_generation_delegate"
+          : "first_generation_pending";
+  return {
+    event: "faux_decision",
+    branch,
+    correlatedResultPresent: Boolean(result),
+    lastUserEqualsResult: Boolean(
+      result && users.at(-1)?.index === result.index,
+    ),
+    newerUserOrCoordinationEvent: Boolean(
+      result && users.some(({ index }) => index > result.index),
+    ),
+  };
+}
+
+async function continuationFailureEvents(ctx, failure) {
+  const events = [];
+  for (const event of ctx.continuationTraceEvents ?? [])
+    appendContinuationTraceEvent(events, event);
+  const runtime = join(ctx.paths.piAgent, "pi-herdsman", "runtime");
+  const readJsonl = async (name) => {
+    try {
+      return (await readFile(join(runtime, name), "utf8"))
+        .split(/\r?\n/u)
+        .filter(Boolean)
+        .flatMap((line) => {
+          try {
+            return [JSON.parse(line)];
+          } catch {
+            return [];
+          }
+        });
+    } catch {
+      return [];
+    }
+  };
+  const progress = failure?.error?.smoke?.lastProgress;
+  const observedPids = Array.isArray(ctx.continuationObservedPids)
+    ? ctx.continuationObservedPids
+    : Array.isArray(progress?.candidatePids)
+      ? progress.candidatePids
+      : [];
+  const sessionStarts = await readJsonl("smoke-faux-session-start.jsonl");
+  const providerRequests = await readJsonl("smoke-faux-provenance.jsonl");
+  const matchingStarts = sessionStarts.filter(
+    (record) =>
+      record.sessionId === ctx.continuationSessionId &&
+      observedPids.includes(record.pid),
+  );
+  const matchingRequests = providerRequests.filter(
+    (record) =>
+      record.sessionId === ctx.continuationSessionId &&
+      observedPids.includes(record.pid) &&
+      record.model === "continuation",
+  );
+  if (failure?.error?.smoke?.stage === "continuation-first-generation")
+    appendContinuationTraceEvent(events, {
+      event: "candidate_state",
+      sessionObserved: Boolean(ctx.continuationSessionPath),
+      candidateProcessCount: observedPids.length,
+      sessionStartObserved: matchingStarts.length > 0,
+      sessionStartCount: matchingStarts.length,
+      providerRequestObserved: matchingRequests.length > 0,
+      requestCorrelated: matchingRequests.length > 0,
+      providerRequestCount: matchingRequests.length,
+    });
+  if (
+    progress &&
+    failure?.error?.smoke?.stage === "continuation-first-generation"
+  )
+    appendContinuationTraceEvent(events, {
+      event: "candidate_state",
+      childCount: progress.childCount,
+      sessionObserved: Number.isSafeInteger(progress.sessionBytes)
+        ? progress.sessionBytes > 0
+        : false,
+      candidateProcessCount: Array.isArray(progress.candidatePids)
+        ? progress.candidatePids.length
+        : 0,
+    });
+  if (ctx.continuationSessionPath) {
+    try {
+      const contents = await readFile(ctx.continuationSessionPath, "utf8");
+      appendContinuationTraceEvent(
+        events,
+        continuationMessageState(
+          contents,
+          failure?.error?.smoke?.stage === "continuation-second-generation"
+            ? "followup"
+            : "first_generation",
+        ),
+      );
+    } catch {}
+  }
+  try {
+    const listed = await tryNestedCommand(ctx, ["agent", "list"]);
+    const rootAgent = listed.ok
+      ? (listed.value.agents ?? []).find(
+          (agent) => agent.pane_id === ctx.rootPaneId,
+        )
+      : null;
+    const rootPath = rootAgent?.agent_session?.value;
+    if (rootPath && rootAgent.agent_session?.kind === "path") {
+      const path = resolve(rootPath);
+      const sessionRoot = resolve(ctx.paths.piSessions);
+      const relativePath = relative(sessionRoot, path);
+      if (
+        relativePath &&
+        relativePath !== ".." &&
+        !relativePath.startsWith(`..${sep}`) &&
+        !isAbsolute(relativePath)
+      ) {
+        const contents = await readFile(path, "utf8");
+        const delegation = rootDelegationDiagnostics(contents);
+        appendContinuationTraceEvent(events, {
+          event: "delegation_state",
+          delegationCallObserved: delegation.delegationCallObserved,
+          delegationAccepted: delegation.matchingResult === "success",
+          matchingResult: delegation.matchingResult,
+          delegationCallCount: sessionEntries(contents)
+            .filter((entry) => entry.type === "message")
+            .flatMap((entry) =>
+              entry.message?.role === "assistant" &&
+              Array.isArray(entry.message.content)
+                ? entry.message.content.filter(
+                    (part) =>
+                      part.type === "toolCall" &&
+                      part.name === "delegate_agent",
+                  )
+                : [],
+            ).length,
+        });
+        appendContinuationTraceEvent(
+          events,
+          continuationMessageState(
+            contents,
+            failure?.error?.smoke?.stage === "continuation-second-generation"
+              ? "followup"
+              : "first_generation",
+          ),
+        );
+        appendContinuationTraceEvent(
+          events,
+          continuationFauxDecisionState(
+            contents,
+            failure?.error?.smoke?.stage === "continuation-second-generation"
+              ? "followup"
+              : "first_generation",
+          ),
+        );
+      }
+    }
+  } catch {}
+  return continuationFailureTrace(events, true) ?? [];
+}
+
 export function assertNoFailedAgentDelegation(contents) {
   const diagnostics = rootDelegationDiagnostics(contents);
   if (diagnostics.matchingResult !== "error") return;
@@ -7633,12 +7940,66 @@ async function runContinuationSmoke(ctx) {
   const firstPrompt = ctx.initialPrompt;
   const firstMarker = "PI_HERDSMAN_CONTINUATION_FIRST";
   const secondMarker = "PI_HERDSMAN_CONTINUATION_SECOND";
+  ctx.continuationTraceEvents = [];
   const expectedName = JSON.parse(
     await readFile(join(ctx.repoRoot, "package.json"), "utf8"),
   ).name;
   let firstSession;
   let firstGeneration;
   const firstPids = new Set();
+
+  const trace = (event) => {
+    const events = ctx.continuationTraceEvents;
+    const previous = events.at(-1);
+    const projected = continuationFailureTrace([event], true)?.[0];
+    if (JSON.stringify(previous) === JSON.stringify(projected)) return;
+    appendContinuationTraceEvent(events, event);
+  };
+  const readRuntimeRecords = async (name) => {
+    try {
+      return (
+        await readFile(
+          join(ctx.paths.piAgent, "pi-herdsman", "runtime", name),
+          "utf8",
+        )
+      )
+        .split(/\r?\n/u)
+        .filter(Boolean)
+        .flatMap((line) => {
+          try {
+            return [JSON.parse(line)];
+          } catch {
+            return [];
+          }
+        });
+    } catch {
+      return [];
+    }
+  };
+
+  const root = await rootSessionSnapshot(ctx).catch(() => null);
+  if (root) {
+    const delegation = rootDelegationDiagnostics(root.contents);
+    trace({
+      event: "delegation_state",
+      delegationCallObserved: delegation.delegationCallObserved,
+      delegationAccepted: delegation.matchingResult === "success",
+      matchingResult: delegation.matchingResult,
+      delegationCallCount: sessionEntries(root.contents)
+        .filter((entry) => entry.type === "message")
+        .flatMap((entry) =>
+          entry.message?.role === "assistant" &&
+          Array.isArray(entry.message.content)
+            ? entry.message.content.filter(
+                (part) =>
+                  part.type === "toolCall" && part.name === "delegate_agent",
+              )
+            : [],
+        ).length,
+    });
+    trace(continuationMessageState(root.contents, "first_generation"));
+    trace(continuationFauxDecisionState(root.contents, "first_generation"));
+  }
 
   const childAgents = async () => {
     const listed = await tryNestedCommand(ctx, ["agent", "list"]);
@@ -7696,10 +8057,40 @@ async function runContinuationSmoke(ctx) {
             .map(({ pid }) => pid)
             .filter((pid) => pid != null);
           firstSession = { ...session, paneId: agent.pane_id };
+          ctx.continuationSessionPath = session.path;
+          ctx.continuationSessionId = session.id;
           for (const pid of pids) firstPids.add(pid);
+          ctx.continuationObservedPids = [...firstPids];
           break;
         }
       }
+      const starts = firstSession
+        ? await readRuntimeRecords("smoke-faux-session-start.jsonl")
+        : [];
+      const requests = firstSession
+        ? await readRuntimeRecords("smoke-faux-provenance.jsonl")
+        : [];
+      const sessionStarts = starts.filter(
+        (record) =>
+          record.sessionId === firstSession?.id && pids.includes(record.pid),
+      );
+      const providerRequests = requests.filter(
+        (record) =>
+          record.sessionId === firstSession?.id &&
+          pids.includes(record.pid) &&
+          record.model === "continuation",
+      );
+      trace({
+        event: "candidate_state",
+        childCount: agents.length,
+        sessionObserved: Boolean(firstSession),
+        candidateProcessCount: pids.length,
+        sessionStartObserved: sessionStarts.length > 0,
+        sessionStartCount: sessionStarts.length,
+        providerRequestObserved: providerRequests.length > 0,
+        requestCorrelated: providerRequests.length > 0,
+        providerRequestCount: providerRequests.length,
+      });
       const done = !!firstSession && pids.length > 0;
       // Keep the simulated child alive until its required live evidence is captured.
       if (done && ctx.simulated)
@@ -7746,6 +8137,17 @@ async function runContinuationSmoke(ctx) {
       if (session) assertNoFailedAgentDelegation(session.contents);
       const result =
         session && assistantResultForSession(session, firstPrompt, firstMarker);
+      if (session) {
+        const delegation = rootDelegationDiagnostics(session.contents);
+        trace({
+          event: "delegation_state",
+          delegationCallObserved: delegation.delegationCallObserved,
+          delegationAccepted: delegation.matchingResult === "success",
+          matchingResult: delegation.matchingResult,
+          delegationCallCount: delegation.delegationCallObserved ? 1 : 0,
+        });
+        trace(continuationMessageState(session.contents, "first_generation"));
+      }
       return {
         done: !!result,
         progress: {
@@ -7804,6 +8206,13 @@ async function runContinuationSmoke(ctx) {
 
   const followup = `Continue the exact saved Pi session at ${firstSession.path}. This is the same implementer you delegated previously. Without rereading package.json, return the package name you were asked to remember, followed by exactly ${secondMarker}. The final answer to me must include that marker.`;
   await promptRoot(followup);
+  const afterFollowupPrompt = await rootSessionSnapshot(ctx).catch(() => null);
+  if (afterFollowupPrompt) {
+    trace(continuationMessageState(afterFollowupPrompt.contents, "followup"));
+    trace(
+      continuationFauxDecisionState(afterFollowupPrompt.contents, "followup"),
+    );
+  }
   firstGeneration = await waitForEvidence(
     ctx,
     "continuation-second-generation",
@@ -7849,6 +8258,13 @@ async function runContinuationSmoke(ctx) {
           }
         }
       }
+      trace({
+        event: "candidate_state",
+        stage: "followup",
+        childCount: agents.length,
+        sessionObserved: matchingSessionSeen,
+        candidateProcessCount: firstGeneration === undefined ? 0 : 1,
+      });
       return {
         done: firstGeneration !== undefined,
         value: firstGeneration,
@@ -12958,6 +13374,14 @@ export function sanitizedFailureEvidence(
     ...(ctx.scenario === "core" && diagnostics?.coreDelegation
       ? { coreDelegation: sanitizedCoreDelegation(diagnostics.coreDelegation) }
       : {}),
+    ...(failure && ctx.scenario === "continuation"
+      ? {
+          continuationTrace: continuationFailureTrace(
+            ctx.continuationTraceEvents,
+            true,
+          ),
+        }
+      : {}),
     lastVerified: ctx.lastVerified ?? null,
     processesVerified: ctx.coreProcessEvidence?.length ?? 0,
     sessionStartObserved: ctx.sessionStartObserved ?? false,
@@ -13556,6 +13980,11 @@ async function main() {
       }
     }
     try {
+      if (scenario === "continuation")
+        ctx.continuationTraceEvents = await continuationFailureEvents(
+          ctx,
+          failure,
+        );
       const diagnosticProjection = ctx.sessionName
         ? await bestEffortDiagnostics(ctx, () =>
             collectDiagnostics(ctx, owned, failure),
@@ -13598,6 +14027,10 @@ async function main() {
         "PENDING",
         diagnosticProjection,
       );
+      if (scenario === "continuation" && evidence.continuationTrace)
+        console.error(
+          `continuation trace: ${JSON.stringify(evidence.continuationTrace)}`,
+        );
       await retainScenarioFailureEvidence(ctx, evidence);
     } catch (diagnosticError) {
       reportFailureEvidenceWriteError(diagnosticError);
