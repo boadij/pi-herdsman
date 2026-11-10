@@ -252,6 +252,14 @@ For peers on another Herdr socket, Herdsman uses their live generation-bound
 published group and socket-scoped assignment evidence; it does not add a
 cross-socket topology RPC. Delivery always rechecks the recipient locally.
 
+Independently eligible coordination messages and completed Agent notifications
+may be inserted together at a recipient's next Pi turn boundary. Steering
+remains eligible at the earlier turn boundary; ordinary follow-ups wait until
+settlement. Fan-in is bounded per boundary, so additional eligible items remain
+pending for a later drain. Each communication keeps its own identity, authority
+checks, and delivery receipt: a shared model request does not combine receipts,
+accept work, or complete an assignment.
+
 Leads use nonblocking `message_supervisor` for timely coordination with their
 effective supervisor; Manager uses nonblocking `message_staff` for requests,
 clarifications, instructions, or steering. Routine information that can wait

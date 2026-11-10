@@ -82,6 +82,138 @@ import support, {
   seedLeadRole,
 } from "./support.ts";
 const { readConfig, updateConfig } = await import("./config.ts");
+
+test("Pi 1.5.0 includes non-triggering startup messages in the first provider request", async () => {
+  const faux = fauxProvider({
+    provider: "herdsman-startup-fan-in-test",
+    models: [{ id: "startup", contextWindow: 4096, maxTokens: 128 }],
+  });
+  const modelRuntime = await ModelRuntime.create({
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  modelRuntime.registerNativeProvider(faux.provider);
+  const settingsManager = SettingsManager.inMemory();
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    settingsManager,
+    noExtensions: true,
+    noContextFiles: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    extensionFactories: [
+      (api) =>
+        api.on("before_agent_start", async () => {
+          await api.sendMessage(
+            {
+              customType: "fan-in-test",
+              content: "startup sibling",
+              display: "none",
+            },
+            { triggerTurn: false },
+          );
+        }),
+    ],
+  });
+  await resourceLoader.reload();
+  let request: any[] = [];
+  faux.setResponses([
+    (context) => {
+      request = context.messages as any[];
+      return fauxAssistantMessage("done");
+    },
+  ]);
+  const { session } = await createAgentSession({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    modelRuntime,
+    model: faux.getModel()!,
+    settingsManager,
+    resourceLoader,
+    sessionManager: SessionManager.inMemory(WORKSPACE),
+  });
+  try {
+    await session.prompt("start");
+    assert.match(
+      JSON.stringify(request),
+      /startup sibling/,
+      JSON.stringify(request),
+    );
+  } finally {
+    await session.dispose();
+  }
+});
+
+test("Pi 1.5.0 includes turn-boundary messages in the continued provider request", async () => {
+  const faux = fauxProvider({
+    provider: "herdsman-turn-fan-in-test",
+    models: [{ id: "turn", contextWindow: 4096, maxTokens: 128 }],
+  });
+  const modelRuntime = await ModelRuntime.create({
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  modelRuntime.registerNativeProvider(faux.provider);
+  const settingsManager = SettingsManager.inMemory();
+  let sent = false;
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    settingsManager,
+    noExtensions: true,
+    noContextFiles: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    extensionFactories: [
+      (api) =>
+        api.on("turn_end", async (event) => {
+          if (event.outcome !== "completed" || sent) return;
+          sent = true;
+          await api.sendMessage(
+            {
+              customType: "fan-in-test",
+              content: "turn sibling",
+              display: "none",
+            },
+            { triggerTurn: false },
+          );
+          return { continue: true };
+        }),
+    ],
+  });
+  await resourceLoader.reload();
+  const requests: any[][] = [];
+  faux.setResponses([
+    (context) => {
+      requests.push(context.messages as any[]);
+      return fauxAssistantMessage("first response");
+    },
+    (context) => {
+      requests.push(context.messages as any[]);
+      return fauxAssistantMessage("second response");
+    },
+  ]);
+  const { session } = await createAgentSession({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    modelRuntime,
+    model: faux.getModel()!,
+    settingsManager,
+    resourceLoader,
+    sessionManager: SessionManager.inMemory(WORKSPACE),
+  });
+  try {
+    await session.prompt("start");
+    assert.equal(requests.length, 2);
+    assert.doesNotMatch(JSON.stringify(requests[0]), /turn sibling/);
+    assert.match(JSON.stringify(requests[1]), /turn sibling/);
+  } finally {
+    await session.dispose();
+  }
+});
 const {
   AGENT_REQUIRED_EVIDENCE_ENTRY,
   createManagedAgentEvidenceUpdater,

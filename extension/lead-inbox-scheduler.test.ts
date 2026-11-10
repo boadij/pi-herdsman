@@ -173,6 +173,61 @@ test("scheduled peer inbox drains without valid presence", async (t) => {
   }
 });
 
+test("recipient boundary drains preserve steering eligibility and disable extra triggers", async () => {
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  process.env.HERDR_SOCKET_PATH = "/unused-boundary-drain-test-socket";
+  const context = fakeContext();
+  let captured: any;
+  const peerRuntime = {};
+  const phases: string[] = [];
+  const runtime = createLeadInboxRuntime({
+    leadRuntime: {
+      chiefMode: "inactive",
+      roleSuspended: false,
+      sessionGeneration: 0,
+      chiefModeGeneration: 0,
+    },
+    leadInstanceId: () => "lead-instance",
+    activeRole: () => "manager",
+    controllerScope: { kind: "root" },
+    supervisionRuntime: () => ({}),
+    peerRuntime: () => peerRuntime,
+    pi: {},
+    coordinationHealthy: () => true,
+    managerDiagnostic: () => {},
+    managerDiagnosticEvents: new Set(),
+    listChiefMessagePaths: () => [],
+    drainCoordinationInbox: async (options: any) => {
+      if (options.runtime === peerRuntime) captured = options;
+      return 0;
+    },
+    currentPeerPresenceValid: async () => true,
+    drainProjectMessages: async (_ctx: unknown, phase: string) => {
+      phases.push(phase);
+      return 0;
+    },
+  } as any);
+
+  try {
+    runtime.beginSession();
+    runtime.start(context as any);
+    await flush();
+    await runtime.drainBoundary(context as any, "turn", { count: 0, bytes: 0 });
+    assert.equal(captured.forceNonTriggering, true);
+    assert.equal(captured.maxDeliveries, 32);
+    assert.equal(
+      await captured.deliveryMode({ kind: "chief_message" }),
+      "steer",
+    );
+    assert.deepEqual(phases, ["idle", "turn"]);
+  } finally {
+    runtime.beginShutdown();
+    runtime.shutdown();
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
+  }
+});
+
 test("peer send boundary rejects unavailable local presence", async () => {
   const previousSocket = process.env.HERDR_SOCKET_PATH;
   process.env.HERDR_SOCKET_PATH = "/unused-peer-send-test-socket";
