@@ -5167,6 +5167,36 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     ).text,
     "PI_HERDSMAN_CONTINUATION_FIRST",
   );
+  const firstWithLaterMessage = [
+    ...continuationStarted,
+    delivered(
+      "smoke-continuation-implementer",
+      "child-session",
+      "pi-herdsman CONTINUATION_FIRST_DONE",
+    ),
+    { role: "user", content: "delegation guidance" },
+  ];
+  assert.equal(
+    firstTextContent(
+      decide("continuation", { messages: firstWithLaterMessage }),
+    ).text,
+    "PI_HERDSMAN_CONTINUATION_FIRST",
+  );
+  assert.doesNotMatch(
+    firstTextContent(
+      decide("continuation", {
+        messages: [
+          ...firstWithLaterMessage,
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "PI_HERDSMAN_CONTINUATION_FIRST" }],
+          },
+          { role: "user", content: "additional coordination information" },
+        ],
+      }),
+    ).text,
+    /PI_HERDSMAN_CONTINUATION_FIRST/,
+  );
 
   const savedPath = "/isolated/pi-sessions/saved.jsonl";
   const followup = `Continue the exact saved Pi session at ${savedPath}. This is the same implementer you delegated previously.`;
@@ -5197,13 +5227,56 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     firstTextContent(decide("continuation", { messages: continued })).text,
     "pi-herdsman PI_HERDSMAN_CONTINUATION_SECOND",
   );
+  const completedWithLaterMessage = [
+    ...continued,
+    { role: "user", content: "delegation guidance" },
+  ];
+  assert.equal(
+    firstTextContent(
+      decide("continuation", { messages: completedWithLaterMessage }),
+    ).text,
+    "pi-herdsman PI_HERDSMAN_CONTINUATION_SECOND",
+  );
   assert.doesNotMatch(
     firstTextContent(
       decide("continuation", {
         messages: [
-          ...continued,
-          { role: "user", content: "delegation guidance" },
+          ...completedWithLaterMessage,
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: "pi-herdsman PI_HERDSMAN_CONTINUATION_SECOND",
+              },
+            ],
+          },
+          { role: "user", content: "additional coordination information" },
         ],
+      }),
+    ).text,
+    /PI_HERDSMAN_CONTINUATION_SECOND/,
+  );
+  assert.doesNotMatch(
+    firstTextContent(
+      decide("continuation", {
+        messages: continued.slice(0, -1),
+      }),
+    ).text,
+    /PI_HERDSMAN_CONTINUATION_SECOND/,
+  );
+  assert.doesNotMatch(
+    firstTextContent(
+      decide("continuation", {
+        messages: continued
+          .slice(0, -1)
+          .concat(
+            delivered(
+              "smoke-other-implementer",
+              "saved-id",
+              "pi-herdsman PI_HERDSMAN_CONTINUATION_SECOND",
+            ),
+          ),
       }),
     ).text,
     /PI_HERDSMAN_CONTINUATION_SECOND/,

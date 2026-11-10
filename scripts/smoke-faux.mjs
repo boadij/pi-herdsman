@@ -568,8 +568,9 @@ function continuationDecision(messages) {
       messages,
       "continue_agent",
       (content) =>
-        content.startsWith("Agent result · agent=") &&
-        content.includes("status=completed"),
+        content.startsWith(
+          "Agent result · agent=smoke-continuation-implementer ·",
+        ) && content.includes("status=completed"),
     );
     if (result) {
       const body = completedResultBody(result);
@@ -580,9 +581,13 @@ function continuationDecision(messages) {
         throw new Error(
           "Second continuation result omitted its completion marker",
         );
-      return lastUser(messages) === result
-        ? fauxAssistantMessage(body)
-        : waitForResult("Continued Agent result already delivered.");
+      return resultAlreadyAcknowledged(
+        messages,
+        result,
+        "PI_HERDSMAN_CONTINUATION_SECOND",
+      )
+        ? waitForResult("Continued Agent result already delivered.")
+        : fauxAssistantMessage(body);
     }
     if (latest?.role === "toolResult")
       return waitForResult(
@@ -609,9 +614,13 @@ function continuationDecision(messages) {
         throw new Error(
           "First continuation result omitted its completion marker",
         );
-      return lastUser(messages) === result
-        ? fauxAssistantMessage("PI_HERDSMAN_CONTINUATION_FIRST")
-        : waitForResult("First continuation Agent result already delivered.");
+      return resultAlreadyAcknowledged(
+        messages,
+        result,
+        "PI_HERDSMAN_CONTINUATION_FIRST",
+      )
+        ? waitForResult("First continuation Agent result already delivered.")
+        : fauxAssistantMessage("PI_HERDSMAN_CONTINUATION_FIRST");
     }
     if (correlatedCall(messages, "delegate_agent"))
       return waitForResult("Waiting for the implementer's completed handoff.");
@@ -649,6 +658,16 @@ function continuationDecision(messages) {
     return fauxAssistantMessage(`${pkg.name} PI_HERDSMAN_CONTINUATION_SECOND`);
   }
   throw new Error("Unexpected continuation transcript");
+}
+
+function resultAlreadyAcknowledged(messages, result, marker) {
+  return messages
+    .slice(messages.indexOf(result) + 1)
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        text(message).split(/\s+/u).includes(marker),
+    );
 }
 
 function agentCrashRecoveryDecision(model, context) {
