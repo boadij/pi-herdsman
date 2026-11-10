@@ -138,6 +138,7 @@ import {
   matchPiProvenance,
   assertContinuationFauxEvidence,
   continuationCompletionDiagnostics,
+  selectContinuationMailbox,
   managerHandoffLeadProcessProof,
   prepareManagerRepository,
   assertManagerFreshPrimary,
@@ -1516,6 +1517,11 @@ test("continuation failure diagnostics retain sanitized root delegation state", 
         mailboxStateHasCandidateLabel: false,
         mailboxRequestPresent: false,
         mailboxRequestMatchesActiveState: false,
+        mailboxIdentityObserved: false,
+        mailboxLabelMatchCount: 0,
+        mailboxSessionMatchCount: 0,
+        mailboxIdentityMismatch: false,
+        mailboxIdentityAmbiguous: false,
         mailboxStateRequestMatchesContinueResult: false,
         mailboxStateMatchesDeliveredResult: false,
         mailboxRequestMatchesDeliveredResult: false,
@@ -1568,6 +1574,11 @@ test("continuation failure diagnostics retain sanitized root delegation state", 
     mailboxStateHasCandidateLabel: false,
     mailboxRequestPresent: false,
     mailboxRequestMatchesActiveState: false,
+    mailboxIdentityObserved: false,
+    mailboxLabelMatchCount: 0,
+    mailboxSessionMatchCount: 0,
+    mailboxIdentityMismatch: false,
+    mailboxIdentityAmbiguous: false,
     mailboxStateRequestMatchesContinueResult: false,
     mailboxStateMatchesDeliveredResult: false,
     mailboxRequestMatchesDeliveredResult: false,
@@ -6757,6 +6768,12 @@ test("continuation diagnostics distinguish delivered metadata from request corre
       piSessionId: sessionId,
       agentLabel: "smoke",
     },
+    mailboxIdentityDiagnostics: {
+      labelMatchCount: 1,
+      sessionMatchCount: 1,
+      identityMismatch: false,
+      ambiguous: false,
+    },
     expectedVersion: "1.5.1",
     sessionStarts: [{ sessionId, pid: 202 }],
     provenance: [
@@ -6789,6 +6806,11 @@ test("continuation diagnostics distinguish delivered metadata from request corre
     mailboxStateHasCandidateLabel: true,
     mailboxRequestPresent: true,
     mailboxRequestMatchesActiveState: true,
+    mailboxIdentityObserved: true,
+    mailboxLabelMatchCount: 1,
+    mailboxSessionMatchCount: 1,
+    mailboxIdentityMismatch: false,
+    mailboxIdentityAmbiguous: false,
     mailboxStateRequestMatchesContinueResult: true,
     mailboxStateMatchesDeliveredResult: true,
     mailboxRequestMatchesDeliveredResult: true,
@@ -6861,6 +6883,50 @@ test("continuation diagnostics distinguish delivered metadata from request corre
   assert.equal(consumedRequest.mailboxRequestPresent, false);
   assert.equal(consumedRequest.mailboxStateRequestMatchesContinueResult, true);
   assert.equal(consumedRequest.mailboxStateMatchesDeliveredResult, true);
+});
+
+test("continuation mailbox selection ignores same-label stale generations in either directory order", () => {
+  const savedSessionId = "saved-session";
+  const stale = {
+    directory: "stale-mailbox",
+    state: { agentLabel: "smoke-implementer", piSessionId: "stale-session" },
+  };
+  const current = {
+    directory: "current-mailbox",
+    state: { agentLabel: "smoke-implementer", piSessionId: savedSessionId },
+  };
+  for (const candidates of [
+    [stale, current],
+    [current, stale],
+  ]) {
+    const selection = selectContinuationMailbox(candidates, savedSessionId);
+    assert.equal(selection.mailbox, current);
+    assert.deepEqual(selection.diagnostics, {
+      labelMatchCount: 2,
+      sessionMatchCount: 1,
+      identityMismatch: false,
+      ambiguous: false,
+    });
+  }
+  assert.deepEqual(
+    selectContinuationMailbox([stale], savedSessionId).diagnostics,
+    {
+      labelMatchCount: 1,
+      sessionMatchCount: 0,
+      identityMismatch: true,
+      ambiguous: false,
+    },
+  );
+  assert.deepEqual(
+    selectContinuationMailbox([current, { ...current }], savedSessionId)
+      .diagnostics,
+    {
+      labelMatchCount: 2,
+      sessionMatchCount: 2,
+      identityMismatch: true,
+      ambiguous: true,
+    },
+  );
 });
 
 test("continuation provider evidence wait polls until the second-generation request is recorded", async () => {

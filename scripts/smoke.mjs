@@ -4141,6 +4141,7 @@ export function continuationCompletionDiagnostics({
   candidateLabel,
   mailboxState,
   mailboxRequest,
+  mailboxIdentityDiagnostics,
   expectedVersion,
   sessionStarts = [],
   provenance = [],
@@ -4250,6 +4251,7 @@ export function continuationCompletionDiagnostics({
       Number.isSafeInteger(pid) ||
       provenanceMatches.length > 0 ||
       !!mailboxState ||
+      !!mailboxIdentityDiagnostics ||
       continueResults.length > 0 ||
       deliveredResults.length > 0,
     savedSessionObserved,
@@ -4293,6 +4295,18 @@ export function continuationCompletionDiagnostics({
       mailboxRequest.requestId === delivered.requestId &&
       mailboxRequest.runId === delivered.runId &&
       mailboxRequest.piSessionId === delivered.piSessionId,
+    mailboxIdentityObserved: !!mailboxIdentityDiagnostics,
+    mailboxLabelMatchCount: Math.min(
+      mailboxIdentityDiagnostics?.labelMatchCount ?? 0,
+      100,
+    ),
+    mailboxSessionMatchCount: Math.min(
+      mailboxIdentityDiagnostics?.sessionMatchCount ?? 0,
+      100,
+    ),
+    mailboxIdentityMismatch:
+      mailboxIdentityDiagnostics?.identityMismatch === true,
+    mailboxIdentityAmbiguous: mailboxIdentityDiagnostics?.ambiguous === true,
     deliveredResultBeforeWaitResponse: deliveredResults.some(
       ({ index: resultIndex }) =>
         waitIndexes.some((waitIndex) => resultIndex < waitIndex),
@@ -6450,10 +6464,26 @@ function smokeAgentLabel(agent) {
   return agent?.label ?? agent?.agent_label ?? agent?.agent;
 }
 
+export function selectContinuationMailbox(candidates, sessionId) {
+  const matching = candidates.filter(
+    ({ state }) => state.piSessionId === sessionId,
+  );
+  return {
+    mailbox: matching.length === 1 ? matching[0] : undefined,
+    diagnostics: {
+      labelMatchCount: Math.min(candidates.length, 100),
+      sessionMatchCount: Math.min(matching.length, 100),
+      identityMismatch: matching.length !== 1,
+      ambiguous: matching.length > 1,
+    },
+  };
+}
+
 async function smokeMailbox(
   ctx,
   agent,
   expectedLabel = smokeAgentLabel(agent),
+  expectedSessionId,
 ) {
   const root = join(
     ctx.paths.piAgent,
@@ -6461,27 +6491,8 @@ async function smokeMailbox(
     "runtime",
     "mailboxes-v5",
   );
-  for (const dir of await readdir(root, { withFileTypes: true })) {
-    if (!/^[0-9a-f]{32}$/.test(dir.name)) continue;
-    if (dir.isSymbolicLink() || !dir.isDirectory())
-      throw new Error("smoke mailbox inventory contains an unsafe entry");
-    const directory = join(root, dir.name);
-    const statePath = join(directory, "state.json");
-    let stateStat;
-    try {
-      stateStat = await lstat(statePath);
-    } catch (error) {
-      if (error.code === "ENOENT") continue;
-      throw error;
-    }
-    if (
-      !stateStat.isFile() ||
-      stateStat.isSymbolicLink() ||
-      stateStat.size > 65536
-    )
-      throw new Error("smoke mailbox state is not a bounded regular file");
-    const state = JSON.parse(await readFile(statePath, "utf8"));
-    if (state.agentLabel !== expectedLabel) continue;
+  const candidates = [];
+  const readRequest = async (directory, state) => {
     const requestPath = state.activeRequestId
       ? join(directory, `request-${state.activeRequestId}.json`)
       : undefined;
@@ -6503,6 +6514,42 @@ async function smokeMailbox(
       }
     }
     return { directory, state, request };
+  };
+  for (const dir of await readdir(root, { withFileTypes: true })) {
+    if (!/^[0-9a-f]{32}$/.test(dir.name)) continue;
+    if (dir.isSymbolicLink() || !dir.isDirectory())
+      throw new Error("smoke mailbox inventory contains an unsafe entry");
+    const directory = join(root, dir.name);
+    const statePath = join(directory, "state.json");
+    let stateStat;
+    try {
+      stateStat = await lstat(statePath);
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw error;
+    }
+    if (
+      !stateStat.isFile() ||
+      stateStat.isSymbolicLink() ||
+      stateStat.size > 65536
+    )
+      throw new Error("smoke mailbox state is not a bounded regular file");
+    const state = JSON.parse(await readFile(statePath, "utf8"));
+    if (state.agentLabel !== expectedLabel) continue;
+    if (expectedSessionId === undefined) return readRequest(directory, state);
+    candidates.push({ directory, state });
+  }
+  if (expectedSessionId !== undefined) {
+    const selection = selectContinuationMailbox(candidates, expectedSessionId);
+    return {
+      mailbox: selection.mailbox
+        ? await readRequest(
+            selection.mailbox.directory,
+            selection.mailbox.state,
+          )
+        : undefined,
+      diagnostics: selection.diagnostics,
+    };
   }
   throw new Error(`mailbox not found for ${smokeAgentLabel(agent)}`);
 }
@@ -8016,6 +8063,7 @@ async function runContinuationSmoke(ctx) {
   let firstGeneration;
   let savedAfterCleanup;
   let secondGenerationMailbox;
+  let secondGenerationMailboxDiagnostics;
   let resumedSessionObserved = false;
   let sessionStarts = [];
   let provenance = [];
@@ -8041,6 +8089,11 @@ async function runContinuationSmoke(ctx) {
     mailboxStateRequestMatchesContinueResult: false,
     mailboxStateMatchesDeliveredResult: false,
     mailboxRequestMatchesDeliveredResult: false,
+    mailboxIdentityObserved: false,
+    mailboxLabelMatchCount: 0,
+    mailboxSessionMatchCount: 0,
+    mailboxIdentityMismatch: false,
+    mailboxIdentityAmbiguous: false,
     deliveredResultBeforeWaitResponse: false,
     waitMessageCount: 0,
     ownerCompletionMarker: false,
@@ -8075,6 +8128,7 @@ async function runContinuationSmoke(ctx) {
       candidateLabel: secondGenerationMailbox?.candidateLabel,
       mailboxState: secondGenerationMailbox?.state,
       mailboxRequest: secondGenerationMailbox?.request,
+      mailboxIdentityDiagnostics: secondGenerationMailboxDiagnostics,
       expectedVersion: ctx.expectedPiVersion,
       sessionStarts,
       provenance,
@@ -8238,6 +8292,10 @@ async function runContinuationSmoke(ctx) {
   savedAfterCleanup = await isolatedSessionDetails(ctx, {
     agent_session: { kind: "path", value: firstSession.path },
   });
+  assert.ok(
+    typeof firstSession.id === "string" && firstSession.id.length > 0,
+    "saved Pi session identity is unavailable after cleanup",
+  );
   if (savedAfterCleanup.id !== firstSession.id)
     throw new Error(
       "continuation-session-identity: first cleanup changed the persisted Pi session ID",
@@ -8268,13 +8326,22 @@ async function runContinuationSmoke(ctx) {
         resumedSessionObserved = true;
         refreshContinuationDiagnostics();
         const candidateLabel = smokeAgentLabel(agent);
-        let mailbox;
-        try {
-          mailbox = await smokeMailbox(ctx, agent, candidateLabel);
-        } catch (error) {
-          if (error.message !== `mailbox not found for ${candidateLabel}`)
-            throw error;
-        }
+        assert.ok(
+          typeof candidateLabel === "string" &&
+            candidateLabel.trim().length > 0,
+          "continuation candidate label is missing",
+        );
+        const selection = await smokeMailbox(
+          ctx,
+          agent,
+          candidateLabel,
+          firstSession.id,
+        );
+        secondGenerationMailboxDiagnostics = selection.diagnostics;
+        refreshContinuationDiagnostics();
+        if (selection.diagnostics.ambiguous)
+          throw new Error("continuation mailbox identity is ambiguous");
+        const mailbox = selection.mailbox;
         if (mailbox) {
           secondGenerationMailbox ??= { ...mailbox, candidateLabel };
           refreshContinuationDiagnostics();
@@ -8315,12 +8382,19 @@ async function runContinuationSmoke(ctx) {
         }
       }
       return {
-        done: firstGeneration !== undefined,
+        done:
+          firstGeneration !== undefined &&
+          secondGenerationMailbox !== undefined,
         value: firstGeneration,
         progress: {
           matchingSessionSeen,
           matchingSessionObserved: matchingSessionSeen,
           newProcessObserved: firstGeneration !== undefined,
+          mailboxIdentityObserved: !!secondGenerationMailboxDiagnostics,
+          mailboxLabelMatchCount:
+            secondGenerationMailboxDiagnostics?.labelMatchCount ?? 0,
+          mailboxSessionMatchCount:
+            secondGenerationMailboxDiagnostics?.sessionMatchCount ?? 0,
         },
         evidence: { childCount: agents.length },
       };
@@ -13043,6 +13117,9 @@ function sanitizedFailureDiagnostics(value) {
     "mailboxStateHasCandidateLabel",
     "mailboxRequestPresent",
     "mailboxRequestMatchesActiveState",
+    "mailboxIdentityObserved",
+    "mailboxIdentityMismatch",
+    "mailboxIdentityAmbiguous",
     "mailboxStateRequestMatchesContinueResult",
     "mailboxStateMatchesDeliveredResult",
     "mailboxRequestMatchesDeliveredResult",
@@ -13055,6 +13132,8 @@ function sanitizedFailureDiagnostics(value) {
     "deliveredResultCount",
     "continueResultCount",
     "waitMessageCount",
+    "mailboxLabelMatchCount",
+    "mailboxSessionMatchCount",
   ];
   return {
     ...(typeof value.stage === "string" &&
