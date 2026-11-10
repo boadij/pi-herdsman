@@ -204,8 +204,14 @@ for divergent histories. With explicit conflict-free merge permission, Git
 preflight identifies conflicts before stopping the Lead; clean divergence can
 create a verified merge commit. This does not prove combined functionality or
 tests passed. Ask the responsible Lead for required validation evidence before
-accepting the result. A stopped Lead is not automatically restarted if a later
-integration step fails.
+accepting the result. New integration requires a matching completed Lead
+handoff for the accepted source revision and no unresolved assigned execution.
+A visible Git SHA, idle status, or interim supervisor message is insufficient.
+If the completion handoff has not arrived or is stale, wait for normal delivery
+or request a fresh completion report; do not repeatedly poll staff or
+integration tools. The handoff is evidence of a completed report, not proof
+that tests passed or requirements were met. A stopped Lead is not automatically
+restarted if a later integration step fails.
 
 Independent feature branches may be integrated one at a time; a later branch
 may need to incorporate earlier integration first. The Git branch is preserved.
@@ -217,6 +223,8 @@ guarded cleanup. If the checkout is already absent, reconciliation requires
 independent Git proof that the accepted SHA is on the verified primary branch
 and exact assignment/provenance checks. Checkout removal or assignment
 retirement alone does not prove integration or project validation succeeded.
+An already-integrated accepted SHA uses this existing cleanup-recovery path and
+does not require a new completion handoff.
 
 ## Coordinate and review
 

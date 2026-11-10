@@ -840,12 +840,8 @@ export function decide(model, context) {
       .match(/\b[0-9a-f]{40,64}\b/gi)
       ?.at(-1);
     if (!sha) throw new Error("Manager merge Lead Git command omitted HEAD");
-    const message = `MANAGER_MERGE_SOURCE_READY ${sha}`;
-    const reported = correlatedCall(messages, "message_supervisor");
-    if (!reported || reported.resultIndex < bash.resultIndex)
-      return call("message_supervisor", { message });
-    return waitForResult(
-      "Waiting for the Manager merge scenario's next Lead instruction.",
+    return fauxAssistantMessage(
+      `MANAGER_MERGE_SOURCE_READY ${sha}. The source commit was created and validated.`,
     );
   }
   if (model === "manager-merge") {
@@ -855,7 +851,7 @@ export function decide(model, context) {
       if (!branch) throw new Error("Manager merge assignment omitted branch");
       return call("delegate_work", {
         branch,
-        task: "Create and commit one source file using bash, then message_supervisor with MANAGER_MERGE_SOURCE_READY and its exact full HEAD. Wait for further Manager direction.",
+        task: "Create and commit one source file using bash, then finish your assignment with a final response containing MANAGER_MERGE_SOURCE_READY and the exact full HEAD, plus validation evidence. Do not send an interim supervisor message.",
       });
     }
     if (!assignment)
