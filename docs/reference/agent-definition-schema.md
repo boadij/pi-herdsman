@@ -339,12 +339,12 @@ must pass `tools` and `excludeTools` to be model-callable. Tool filtering is
 not extension sandboxing: loaded extensions may still run handlers, commands,
 shortcuts, providers, initialization, and other non-tool behavior.
 
-Pi's native tool policy is the callable boundary verified for the documented
-integration. A provider or conversion integration may add its own presentation
-layer, so provider-visible tool descriptions should not be treated as a Pi
-Herdsman permission registry or as proof that extension code is sandboxed. Pi Herdsman
-passes the native policy through; it does not independently guarantee every
-provider presentation boundary.
+Pi's native tool policy governs native Pi direct and nested tool execution.
+It does not guarantee that a provider or conversion integration will hide
+ineligible tools from its own discovery or presentation layer, or restrict an
+independent runtime that executes tools outside Pi's native dispatch. Provider-
+visible descriptions are not a Pi Herdsman permission registry, and tool
+filtering does not sandbox loaded extension code.
 
 Tools with the same name are not independently permissionable by source, and
 the winner for a name collision is not a supported ordering contract.
