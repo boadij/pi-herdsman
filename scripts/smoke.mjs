@@ -4135,6 +4135,11 @@ export function continuationOwnerCallDiagnostics(
   ownerContents = "",
   savedSessionId,
   savedSessionPath,
+  followupPrompt,
+  mailboxState,
+  candidatePaneId,
+  candidateLabel,
+  mailboxStateCandidates = [],
 ) {
   const entries = ownerContents
     .split(/\r?\n/u)
@@ -4146,10 +4151,37 @@ export function continuationOwnerCallDiagnostics(
         return [];
       }
     });
+  const promptEntry =
+    typeof followupPrompt === "string"
+      ? entries.find(
+          (entry) =>
+            entry.type === "message" &&
+            entry.message?.role === "user" &&
+            messageText(entry.message.content) === followupPrompt,
+        )
+      : undefined;
+  const entriesById = new Map(
+    entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
+  );
+  const descendsFromPrompt = (entry) => {
+    if (!promptEntry) return false;
+    let parentId = entry.parentId;
+    const visited = new Set();
+    while (parentId && !visited.has(parentId)) {
+      if (parentId === promptEntry.id) return true;
+      visited.add(parentId);
+      parentId = entriesById.get(parentId)?.parentId;
+    }
+    return false;
+  };
   const call = entries
     .flatMap((entry, index) => {
       const message = entry.type === "message" ? entry.message : undefined;
-      if (message?.role !== "assistant" || !Array.isArray(message.content))
+      if (
+        message?.role !== "assistant" ||
+        !Array.isArray(message.content) ||
+        (typeof followupPrompt === "string" && !descendsFromPrompt(entry))
+      )
         return [];
       return message.content.flatMap((part) =>
         part?.type === "toolCall" && part.name === "continue_agent"
@@ -4169,8 +4201,21 @@ export function continuationOwnerCallDiagnostics(
       })?.message
     : undefined;
   const isError = result?.isError || result?.details?.ok === false;
+  const resultDetails = result?.details;
+  const mailboxStates = [...mailboxStateCandidates];
+  if (mailboxState && !mailboxStates.includes(mailboxState))
+    mailboxStates.push(mailboxState);
+  const mailboxStateHasRequest = (state, requestId) =>
+    [state.activeRequestId, state.completedRequestId, state.lastAck?.requestId]
+      .filter((value) => typeof value === "string" && value.length > 0)
+      .includes(requestId);
+  const matchesMailboxRequest = (requestId) =>
+    mailboxStates.some((state) => mailboxStateHasRequest(state, requestId));
   return {
+    continuationFollowupPromptObserved: !!promptEntry,
     continueAgentCallObserved: !!call,
+    continueAgentCallAfterFollowupPrompt: !!call && !!promptEntry,
+    continueAgentCallResultCorrelated: !!call && !!result,
     continueAgentSelectorMatchesSavedSession:
       !!call &&
       [savedSessionId, savedSessionPath].some(
@@ -4180,11 +4225,14 @@ export function continuationOwnerCallDiagnostics(
           call.call.arguments?.session === selector,
       ),
     continueAgentSelectorKind: call
-      ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(
-          call.call.arguments.session,
-        )
-        ? "uuid"
-        : "path"
+      ? typeof call.call.arguments?.session !== "string" ||
+        !call.call.arguments.session
+        ? "other"
+        : /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(
+              call.call.arguments.session,
+            )
+          ? "uuid"
+          : "path"
       : "not_observed",
     continueAgentResultState:
       !call || !result
@@ -4202,17 +4250,151 @@ export function continuationOwnerCallDiagnostics(
         ? "not_observed"
         : "none",
     continueAgentAcceptedRunIdPresent:
-      typeof result?.details?.run_id === "string" &&
-      result.details.run_id.length > 0,
+      typeof resultDetails?.run_id === "string" &&
+      resultDetails.run_id.length > 0,
     continueAgentAcceptedRequestIdPresent:
-      typeof result?.details?.request_id === "string" &&
-      result.details.request_id.length > 0,
+      typeof resultDetails?.request_id === "string" &&
+      resultDetails.request_id.length > 0,
     continueAgentAcceptedSessionIdPresent:
-      typeof result?.details?.session_id === "string" &&
-      result.details.session_id.length > 0,
+      typeof resultDetails?.session_id === "string" &&
+      resultDetails.session_id.length > 0,
     continueAgentAcceptedPaneIdPresent:
-      typeof result?.details?.pane_id === "string" &&
-      result.details.pane_id.length > 0,
+      typeof resultDetails?.pane_id === "string" &&
+      resultDetails.pane_id.length > 0,
+    continueAgentAcceptedRunMatchesMailbox:
+      typeof resultDetails?.run_id === "string" &&
+      resultDetails.run_id.length > 0 &&
+      mailboxStates.some((state) => resultDetails.run_id === state.runId),
+    continueAgentAcceptedRequestMatchesMailbox:
+      typeof resultDetails?.request_id === "string" &&
+      resultDetails.request_id.length > 0 &&
+      matchesMailboxRequest(resultDetails.request_id),
+    continueAgentAcceptedSessionMatchesSaved:
+      (typeof resultDetails?.session_id === "string" &&
+        resultDetails.session_id === savedSessionId) ||
+      (typeof resultDetails?.session_path === "string" &&
+        resultDetails.session_path === savedSessionPath),
+    continueAgentAcceptedPaneMatchesCandidate:
+      typeof resultDetails?.pane_id === "string" &&
+      resultDetails.pane_id.length > 0 &&
+      (resultDetails.pane_id === candidatePaneId ||
+        mailboxStates.some((state) => resultDetails.pane_id === state.paneId)),
+    continueAgentAcceptedIdentityMatchesMailbox:
+      typeof resultDetails?.request_id === "string" &&
+      mailboxStates.some(
+        (state) =>
+          state.piSessionId === savedSessionId &&
+          (typeof candidateLabel !== "string" ||
+            state.agentLabel === candidateLabel) &&
+          mailboxStateHasRequest(state, resultDetails.request_id) &&
+          (typeof resultDetails.run_id !== "string" ||
+            state.runId === resultDetails.run_id) &&
+          (typeof resultDetails.pane_id !== "string" ||
+            state.paneId === resultDetails.pane_id),
+      ),
+    continuationMailboxStateObserved: mailboxStates.length > 0,
+    continuationMailboxHasPositiveLastAck: mailboxStates.some(
+      (state) => state.lastAck?.accepted === true,
+    ),
+    continuationMailboxLastAckMatchesAcceptedRequest:
+      typeof resultDetails?.request_id === "string" &&
+      mailboxStates.some(
+        (state) =>
+          state.lastAck?.accepted === true &&
+          state.lastAck.requestId === resultDetails.request_id,
+      ),
+    continuationMailboxRunIdPresent: mailboxStates.some(
+      (state) => typeof state.runId === "string" && state.runId.length > 0,
+    ),
+    continuationMailboxRequestIdPresent: mailboxStates.some((state) =>
+      [
+        state.activeRequestId,
+        state.completedRequestId,
+        state.lastAck?.requestId,
+      ].some(
+        (requestId) => typeof requestId === "string" && requestId.length > 0,
+      ),
+    ),
+    continuationMailboxSessionIdPresent: mailboxStates.some(
+      (state) =>
+        typeof state.piSessionId === "string" && state.piSessionId.length > 0,
+    ),
+    continuationMailboxPaneIdPresent: mailboxStates.some(
+      (state) => typeof state.paneId === "string" && state.paneId.length > 0,
+    ),
+    continuationCandidatePaneObserved:
+      typeof candidatePaneId === "string" && candidatePaneId.length > 0,
+    continuationMailboxInventoryStateCount: Math.min(mailboxStates.length, 100),
+    continuationMailboxSavedSessionMatchCount: Math.min(
+      mailboxStates.filter((state) => state.piSessionId === savedSessionId)
+        .length,
+      100,
+    ),
+    continuationMailboxExactLabelSessionMatchCount:
+      typeof candidateLabel === "string"
+        ? Math.min(
+            mailboxStates.filter(
+              (state) =>
+                state.agentLabel === candidateLabel &&
+                state.piSessionId === savedSessionId,
+            ).length,
+            100,
+          )
+        : 0,
+    continuationMailboxAcceptedRequestMatchCount:
+      typeof resultDetails?.request_id === "string"
+        ? Math.min(
+            mailboxStates.filter((state) =>
+              [
+                state.activeRequestId,
+                state.completedRequestId,
+                state.lastAck?.requestId,
+              ].includes(resultDetails.request_id),
+            ).length,
+            100,
+          )
+        : 0,
+  };
+}
+
+export function continuationRuntimeEvidenceDiagnostics({
+  sessionId,
+  pid,
+  sessionStarts = [],
+  provenance = [],
+  expectedVersion,
+}) {
+  const sessionStartMatches = sessionStarts.filter(
+    (record) => record.sessionId === sessionId,
+  );
+  const provenanceMatches = provenance.filter(
+    (record) =>
+      record.sessionId === sessionId &&
+      record.packageName === "@earendil-works/pi-coding-agent" &&
+      record.model === "continuation",
+  );
+  const generationProvenance = provenanceMatches.filter(
+    (record) => record.pid === pid,
+  );
+  const versions = [
+    ...new Set(generationProvenance.map(({ piVersion }) => piVersion)),
+  ];
+  const piVersion =
+    versions.length === 1 &&
+    typeof versions[0] === "string" &&
+    /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(versions[0])
+      ? versions[0].slice(0, 80)
+      : null;
+  return {
+    sessionStartSessionMatchCount: Math.min(sessionStartMatches.length, 100),
+    sessionStartPidMatchCount: Math.min(
+      sessionStartMatches.filter((record) => record.pid === pid).length,
+      100,
+    ),
+    provenanceSessionMatchCount: Math.min(provenanceMatches.length, 100),
+    provenancePidMatchCount: Math.min(generationProvenance.length, 100),
+    piVersion,
+    piVersionMatchesPinned: piVersion !== null && piVersion === expectedVersion,
   };
 }
 
@@ -4232,6 +4414,11 @@ export function continuationCompletionDiagnostics({
   provenance = [],
   ownerContents = "",
   savedSessionPath,
+  ownerFollowupPrompt,
+  continuationMailboxState,
+  continuationCandidatePaneId,
+  continuationCandidateLabel,
+  continuationMailboxStateCandidates = [],
   completionMarker,
 }) {
   const entries = ownerContents
@@ -4244,29 +4431,22 @@ export function continuationCompletionDiagnostics({
         return [];
       }
     });
-  const sessionStartPidMatchCount = sessionStarts.filter(
-    (record) => record.sessionId === sessionId && record.pid === pid,
-  ).length;
-  const provenanceMatches = provenance.filter(
-    (record) =>
-      record.sessionId === sessionId &&
-      record.pid === pid &&
-      record.packageName === "@earendil-works/pi-coding-agent" &&
-      record.model === "continuation",
-  );
-  const versions = [
-    ...new Set(provenanceMatches.map(({ piVersion }) => piVersion)),
-  ];
-  const piVersion =
-    versions.length === 1 &&
-    typeof versions[0] === "string" &&
-    /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(versions[0])
-      ? versions[0].slice(0, 80)
-      : null;
+  const runtimeEvidence = continuationRuntimeEvidenceDiagnostics({
+    sessionId,
+    pid,
+    sessionStarts,
+    provenance,
+    expectedVersion,
+  });
   const ownerCallDiagnostics = continuationOwnerCallDiagnostics(
     ownerContents,
     savedSessionId,
     savedSessionPath,
+    ownerFollowupPrompt,
+    continuationMailboxState ?? mailboxState,
+    continuationCandidatePaneId,
+    continuationCandidateLabel ?? candidateLabel,
+    continuationMailboxStateCandidates,
   );
   const continueResults = entries.flatMap((entry, index) => {
     const message = entry.type === "message" ? entry.message : undefined;
@@ -4340,7 +4520,7 @@ export function continuationCompletionDiagnostics({
       savedSessionObserved ||
       resumedSessionObserved ||
       Number.isSafeInteger(pid) ||
-      provenanceMatches.length > 0 ||
+      runtimeEvidence.provenancePidMatchCount > 0 ||
       !!mailboxState ||
       !!mailboxIdentityDiagnostics ||
       continueResults.length > 0 ||
@@ -4350,10 +4530,7 @@ export function continuationCompletionDiagnostics({
     resumedSessionMatchesSaved:
       resumedSessionObserved && sessionId === savedSessionId,
     resumedProcessObserved: Number.isSafeInteger(pid) && pid > 0,
-    sessionStartPidMatchCount: Math.min(sessionStartPidMatchCount, 100),
-    provenancePidMatchCount: Math.min(provenanceMatches.length, 100),
-    piVersion,
-    piVersionMatchesPinned: piVersion !== null && piVersion === expectedVersion,
+    ...runtimeEvidence,
     deliveredResultCount: Math.min(deliveredResults.length, 100),
     deliveredResultHasRequestAndRunMetadata: deliveredResults.some(
       ({ details }) =>
@@ -6587,6 +6764,7 @@ async function smokeMailbox(
     "mailboxes-v5",
   );
   const candidates = [];
+  const stateCandidates = [];
   const readRequest = async (directory, state) => {
     const requestPath = state.activeRequestId
       ? join(directory, `request-${state.activeRequestId}.json`)
@@ -6630,6 +6808,7 @@ async function smokeMailbox(
     )
       throw new Error("smoke mailbox state is not a bounded regular file");
     const state = JSON.parse(await readFile(statePath, "utf8"));
+    if (expectedSessionId !== undefined) stateCandidates.push(state);
     if (state.agentLabel !== expectedLabel) continue;
     if (expectedSessionId === undefined) return readRequest(directory, state);
     candidates.push({ directory, state });
@@ -6644,6 +6823,7 @@ async function smokeMailbox(
           )
         : undefined,
       diagnostics: selection.diagnostics,
+      stateCandidates,
     };
   }
   throw new Error(`mailbox not found for ${smokeAgentLabel(agent)}`);
@@ -8229,6 +8409,12 @@ async function runContinuationSmoke(ctx) {
       sessionStarts,
       provenance,
       ownerContents,
+      ownerFollowupPrompt: ctx.continuationFollowupPrompt,
+      continuationMailboxState: secondGenerationMailbox?.state,
+      continuationCandidatePaneId: ctx.continuationCandidatePaneId,
+      continuationCandidateLabel: ctx.continuationCandidateLabel,
+      continuationMailboxStateCandidates:
+        ctx.continuationMailboxStateCandidates,
       completionMarker: secondMarker,
     });
   };
@@ -8401,6 +8587,7 @@ async function runContinuationSmoke(ctx) {
   refreshContinuationDiagnostics();
 
   const followup = `Continue the exact saved Pi session at ${firstSession.path}. This is the same implementer you delegated previously. Without rereading package.json, return the package name you were asked to remember, followed by exactly ${secondMarker}. The final answer to me must include that marker.`;
+  ctx.continuationFollowupPrompt = followup;
   await promptRoot(followup);
   firstGeneration = await waitForEvidence(
     ctx,
@@ -8422,6 +8609,7 @@ async function runContinuationSmoke(ctx) {
           continue;
         matchingSessionSeen = true;
         resumedSessionObserved = true;
+        ctx.continuationCandidatePaneId = agent.pane_id;
         refreshContinuationDiagnostics();
         const candidateLabel = smokeAgentLabel(agent);
         assert.ok(
@@ -8436,12 +8624,16 @@ async function runContinuationSmoke(ctx) {
           firstSession.id,
         );
         secondGenerationMailboxDiagnostics = selection.diagnostics;
+        ctx.continuationCandidateLabel = candidateLabel;
+        ctx.continuationMailboxState = selection.mailbox?.state;
+        ctx.continuationMailboxStateCandidates = selection.stateCandidates;
         refreshContinuationDiagnostics();
         if (selection.diagnostics.ambiguous)
           throw new Error("continuation mailbox identity is ambiguous");
         const mailbox = selection.mailbox;
         if (mailbox) {
           secondGenerationMailbox ??= { ...mailbox, candidateLabel };
+          ctx.continuationMailboxState = secondGenerationMailbox.state;
           refreshContinuationDiagnostics();
           assert.equal(mailbox.state.piSessionId, firstSession.id);
           assert.equal(mailbox.state.agentLabel, candidateLabel);
@@ -8474,6 +8666,7 @@ async function runContinuationSmoke(ctx) {
             agent.pane_id !== firstSession.paneId
           ) {
             firstGeneration = proc.pid;
+            ctx.continuationSecondGenerationPid = proc.pid;
             ctx.continuationSecondPaneId = agent.pane_id;
             refreshContinuationDiagnostics();
           }
@@ -12193,6 +12386,56 @@ export async function collectDiagnostics(
     ctx.candidateExtension,
     ctx.herdrStateExtension,
   );
+  if (ctx.scenario === "continuation") {
+    const runtimeEvidenceDirectory =
+      typeof ctx.paths?.piAgent === "string"
+        ? join(ctx.paths.piAgent, "pi-herdsman", "runtime")
+        : undefined;
+    const readRuntimeEvidence = async (name) => {
+      if (!runtimeEvidenceDirectory) return undefined;
+      try {
+        return (await readFile(join(runtimeEvidenceDirectory, name), "utf8"))
+          .split(/\r?\n/u)
+          .filter(Boolean)
+          .flatMap((line) => {
+            try {
+              return [JSON.parse(line)];
+            } catch {
+              return [];
+            }
+          });
+      } catch {
+        return undefined;
+      }
+    };
+    const [sessionStarts, provenance] = await Promise.all([
+      readRuntimeEvidence("smoke-faux-session-start.jsonl"),
+      readRuntimeEvidence("smoke-faux-provenance.jsonl"),
+    ]);
+    diagnostics.continuationCompletion = {
+      ...diagnostics.continuationCompletion,
+      ...(sessionStarts || provenance
+        ? continuationRuntimeEvidenceDiagnostics({
+            sessionId: ctx.continuationSavedSessionId,
+            pid: ctx.continuationSecondGenerationPid,
+            sessionStarts: sessionStarts ?? [],
+            provenance: provenance ?? [],
+            expectedVersion: ctx.expectedPiVersion,
+          })
+        : {}),
+      continuationHerdrProcessObservedAtFailure:
+        Array.isArray(diagnostics.processes) &&
+        diagnostics.processes.some(
+          (record) =>
+            record.processMatch &&
+            record.paneId === ctx.continuationCandidatePaneId &&
+            record.pid === ctx.continuationSecondGenerationPid,
+        ),
+      continuationHerdrPidObserved:
+        Number.isSafeInteger(ctx.continuationSecondGenerationPid) &&
+        ctx.continuationSecondGenerationPid > 0,
+    };
+  }
   try {
     const session =
       rootSession.status === "fulfilled" ? rootSession.value : null;
@@ -12216,6 +12459,11 @@ export async function collectDiagnostics(
           session.contents,
           ctx.continuationSavedSessionId,
           ctx.continuationSavedSessionPath,
+          ctx.continuationFollowupPrompt,
+          ctx.continuationMailboxState,
+          ctx.continuationCandidatePaneId,
+          ctx.continuationCandidateLabel,
+          ctx.continuationMailboxStateCandidates,
         ),
       };
     }
@@ -13234,20 +13482,44 @@ function sanitizedFailureDiagnostics(value) {
     "deliveredResultBeforeWaitResponse",
     "ownerCompletionMarker",
     "continueAgentCallObserved",
+    "continueAgentCallResultCorrelated",
     "continueAgentSelectorMatchesSavedSession",
+    "continuationFollowupPromptObserved",
+    "continueAgentCallAfterFollowupPrompt",
     "continueAgentAcceptedRunIdPresent",
     "continueAgentAcceptedRequestIdPresent",
     "continueAgentAcceptedSessionIdPresent",
     "continueAgentAcceptedPaneIdPresent",
+    "continueAgentAcceptedRunMatchesMailbox",
+    "continueAgentAcceptedRequestMatchesMailbox",
+    "continueAgentAcceptedSessionMatchesSaved",
+    "continueAgentAcceptedPaneMatchesCandidate",
+    "continueAgentAcceptedIdentityMatchesMailbox",
+    "continuationMailboxStateObserved",
+    "continuationMailboxHasPositiveLastAck",
+    "continuationMailboxLastAckMatchesAcceptedRequest",
+    "continuationMailboxRunIdPresent",
+    "continuationMailboxRequestIdPresent",
+    "continuationMailboxSessionIdPresent",
+    "continuationMailboxPaneIdPresent",
+    "continuationCandidatePaneObserved",
+    "continuationHerdrProcessObservedAtFailure",
+    "continuationHerdrPidObserved",
   ];
   const continuationCounts = [
+    "sessionStartSessionMatchCount",
     "sessionStartPidMatchCount",
+    "provenanceSessionMatchCount",
     "provenancePidMatchCount",
     "deliveredResultCount",
     "continueResultCount",
     "waitMessageCount",
     "mailboxLabelMatchCount",
     "mailboxSessionMatchCount",
+    "continuationMailboxInventoryStateCount",
+    "continuationMailboxSavedSessionMatchCount",
+    "continuationMailboxExactLabelSessionMatchCount",
+    "continuationMailboxAcceptedRequestMatchCount",
   ];
   return {
     ...(typeof value.stage === "string" &&
@@ -13275,6 +13547,7 @@ function sanitizedFailureDiagnostics(value) {
             continueAgentSelectorKind: [
               "path",
               "uuid",
+              "other",
               "not_observed",
             ].includes(continuation.continueAgentSelectorKind)
               ? continuation.continueAgentSelectorKind

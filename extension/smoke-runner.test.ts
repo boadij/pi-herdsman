@@ -139,6 +139,7 @@ import {
   assertContinuationFauxEvidence,
   continuationCompletionDiagnostics,
   continuationOwnerCallDiagnostics,
+  continuationRuntimeEvidenceDiagnostics,
   selectContinuationMailbox,
   managerHandoffLeadProcessProof,
   prepareManagerRepository,
@@ -1506,7 +1507,9 @@ test("continuation failure diagnostics retain sanitized root delegation state", 
         resumedSessionObserved: false,
         resumedSessionMatchesSaved: false,
         resumedProcessObserved: true,
+        sessionStartSessionMatchCount: 1,
         sessionStartPidMatchCount: 1,
+        provenanceSessionMatchCount: 0,
         provenancePidMatchCount: 0,
         piVersion: "1.5.1",
         piVersionMatchesPinned: true,
@@ -1563,7 +1566,9 @@ test("continuation failure diagnostics retain sanitized root delegation state", 
     resumedSessionObserved: false,
     resumedSessionMatchesSaved: false,
     resumedProcessObserved: true,
+    sessionStartSessionMatchCount: 1,
     sessionStartPidMatchCount: 1,
+    provenanceSessionMatchCount: 0,
     provenancePidMatchCount: 0,
     piVersion: "1.5.1",
     piVersionMatchesPinned: true,
@@ -1571,11 +1576,33 @@ test("continuation failure diagnostics retain sanitized root delegation state", 
     deliveredResultHasRequestAndRunMetadata: false,
     continueResultCount: 0,
     continueAgentCallObserved: false,
+    continueAgentCallResultCorrelated: false,
     continueAgentSelectorMatchesSavedSession: false,
+    continuationFollowupPromptObserved: false,
+    continueAgentCallAfterFollowupPrompt: false,
     continueAgentAcceptedRunIdPresent: false,
     continueAgentAcceptedRequestIdPresent: false,
     continueAgentAcceptedSessionIdPresent: false,
     continueAgentAcceptedPaneIdPresent: false,
+    continueAgentAcceptedRunMatchesMailbox: false,
+    continueAgentAcceptedRequestMatchesMailbox: false,
+    continueAgentAcceptedSessionMatchesSaved: false,
+    continueAgentAcceptedPaneMatchesCandidate: false,
+    continueAgentAcceptedIdentityMatchesMailbox: false,
+    continuationMailboxStateObserved: false,
+    continuationMailboxHasPositiveLastAck: false,
+    continuationMailboxLastAckMatchesAcceptedRequest: false,
+    continuationMailboxRunIdPresent: false,
+    continuationMailboxRequestIdPresent: false,
+    continuationMailboxSessionIdPresent: false,
+    continuationMailboxPaneIdPresent: false,
+    continuationCandidatePaneObserved: false,
+    continuationHerdrProcessObservedAtFailure: false,
+    continuationHerdrPidObserved: false,
+    continuationMailboxInventoryStateCount: 0,
+    continuationMailboxSavedSessionMatchCount: 0,
+    continuationMailboxExactLabelSessionMatchCount: 0,
+    continuationMailboxAcceptedRequestMatchCount: 0,
     continueAgentSelectorKind: "not_observed",
     continueAgentResultState: "missing",
     continueAgentErrorCategory: "none",
@@ -6772,6 +6799,7 @@ test("continuation diagnostics distinguish delivered metadata from request corre
       agentLabel: "smoke",
       activeRequestId: requestId,
       runId,
+      lastAck: { requestId, accepted: true },
     },
     mailboxRequest: {
       requestId,
@@ -6805,7 +6833,9 @@ test("continuation diagnostics distinguish delivered metadata from request corre
     resumedSessionObserved: true,
     resumedSessionMatchesSaved: true,
     resumedProcessObserved: true,
+    sessionStartSessionMatchCount: 1,
     sessionStartPidMatchCount: 1,
+    provenanceSessionMatchCount: 1,
     provenancePidMatchCount: 1,
     piVersion: "1.5.1",
     piVersionMatchesPinned: true,
@@ -6813,11 +6843,31 @@ test("continuation diagnostics distinguish delivered metadata from request corre
     deliveredResultHasRequestAndRunMetadata: true,
     continueResultCount: 1,
     continueAgentCallObserved: true,
+    continueAgentCallResultCorrelated: true,
     continueAgentSelectorMatchesSavedSession: true,
+    continuationFollowupPromptObserved: false,
+    continueAgentCallAfterFollowupPrompt: false,
     continueAgentAcceptedRunIdPresent: false,
     continueAgentAcceptedRequestIdPresent: true,
     continueAgentAcceptedSessionIdPresent: true,
     continueAgentAcceptedPaneIdPresent: false,
+    continueAgentAcceptedRunMatchesMailbox: false,
+    continueAgentAcceptedRequestMatchesMailbox: true,
+    continueAgentAcceptedSessionMatchesSaved: true,
+    continueAgentAcceptedPaneMatchesCandidate: false,
+    continueAgentAcceptedIdentityMatchesMailbox: true,
+    continuationMailboxStateObserved: true,
+    continuationMailboxHasPositiveLastAck: true,
+    continuationMailboxLastAckMatchesAcceptedRequest: true,
+    continuationMailboxRunIdPresent: true,
+    continuationMailboxRequestIdPresent: true,
+    continuationMailboxSessionIdPresent: true,
+    continuationMailboxPaneIdPresent: false,
+    continuationCandidatePaneObserved: false,
+    continuationMailboxInventoryStateCount: 1,
+    continuationMailboxSavedSessionMatchCount: 1,
+    continuationMailboxExactLabelSessionMatchCount: 1,
+    continuationMailboxAcceptedRequestMatchCount: 1,
     continueAgentSelectorKind: "uuid",
     continueAgentResultState: "success",
     continueAgentErrorCategory: "none",
@@ -6962,7 +7012,10 @@ test("continuation owner call diagnostics correlate exact IDs and expose only sa
     sessionPath,
   );
   assert.deepEqual(diagnostics, {
+    continuationFollowupPromptObserved: false,
     continueAgentCallObserved: true,
+    continueAgentCallAfterFollowupPrompt: false,
+    continueAgentCallResultCorrelated: true,
     continueAgentSelectorMatchesSavedSession: true,
     continueAgentSelectorKind: "uuid",
     continueAgentResultState: "success",
@@ -6971,6 +7024,23 @@ test("continuation owner call diagnostics correlate exact IDs and expose only sa
     continueAgentAcceptedRequestIdPresent: true,
     continueAgentAcceptedSessionIdPresent: true,
     continueAgentAcceptedPaneIdPresent: true,
+    continueAgentAcceptedRunMatchesMailbox: false,
+    continueAgentAcceptedRequestMatchesMailbox: false,
+    continueAgentAcceptedSessionMatchesSaved: false,
+    continueAgentAcceptedPaneMatchesCandidate: false,
+    continueAgentAcceptedIdentityMatchesMailbox: false,
+    continuationMailboxStateObserved: false,
+    continuationMailboxHasPositiveLastAck: false,
+    continuationMailboxLastAckMatchesAcceptedRequest: false,
+    continuationMailboxRunIdPresent: false,
+    continuationMailboxRequestIdPresent: false,
+    continuationMailboxSessionIdPresent: false,
+    continuationMailboxPaneIdPresent: false,
+    continuationCandidatePaneObserved: false,
+    continuationMailboxInventoryStateCount: 0,
+    continuationMailboxSavedSessionMatchCount: 0,
+    continuationMailboxExactLabelSessionMatchCount: 0,
+    continuationMailboxAcceptedRequestMatchCount: 0,
   });
   assert.equal(JSON.stringify(diagnostics).includes("private-"), false);
   assert.equal(JSON.stringify(diagnostics).includes(sessionId), false);
@@ -7055,6 +7125,161 @@ test("continuation owner call diagnostics correlate exact IDs and expose only sa
   assert.equal(wrongSelector.continueAgentCallObserved, true);
   assert.equal(wrongSelector.continueAgentSelectorMatchesSavedSession, false);
   assert.equal(wrongSelector.continueAgentSelectorKind, "path");
+
+  const followup = "Continue saved session without printing it";
+  const prompted = [
+    {
+      type: "message",
+      id: "prior-prompt",
+      message: { role: "user", content: "unrelated" },
+    },
+    {
+      type: "message",
+      id: "prior-assistant",
+      parentId: "prior-prompt",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "continue_agent",
+            id: "unrelated-call",
+            arguments: { session: "another-session" },
+          },
+        ],
+      },
+    },
+    {
+      type: "message",
+      id: "followup-prompt",
+      message: { role: "user", content: followup },
+    },
+    {
+      type: "message",
+      id: "followup-assistant",
+      parentId: "followup-prompt",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "continue_agent",
+            id: callId,
+            arguments: { session: sessionPath },
+          },
+        ],
+      },
+    },
+    {
+      type: "message",
+      id: "followup-result",
+      parentId: "followup-assistant",
+      message: {
+        role: "toolResult",
+        toolName: "continue_agent",
+        toolCallId: callId,
+        details: {
+          ok: true,
+          run_id: "private-run-id",
+          request_id: "private-request-id",
+          session_id: sessionId,
+          pane_id: "private-pane-id",
+        },
+      },
+    },
+  ]
+    .map((entry) => JSON.stringify(entry))
+    .join("\n");
+  const promptDiagnostics = continuationOwnerCallDiagnostics(
+    prompted,
+    sessionId,
+    sessionPath,
+    followup,
+    undefined,
+    "private-pane-id",
+    "smoke",
+    [
+      {
+        agentLabel: "smoke",
+        runId: "private-run-id",
+        activeRequestId: "private-request-id",
+        piSessionId: sessionId,
+        paneId: "private-pane-id",
+      },
+    ],
+  );
+  assert.equal(promptDiagnostics.continuationFollowupPromptObserved, true);
+  assert.equal(promptDiagnostics.continueAgentCallAfterFollowupPrompt, true);
+  assert.equal(
+    promptDiagnostics.continueAgentAcceptedSessionMatchesSaved,
+    true,
+  );
+  assert.equal(promptDiagnostics.continueAgentAcceptedRunMatchesMailbox, true);
+  assert.equal(
+    promptDiagnostics.continueAgentAcceptedRequestMatchesMailbox,
+    true,
+  );
+  assert.equal(
+    promptDiagnostics.continueAgentAcceptedPaneMatchesCandidate,
+    true,
+  );
+  assert.equal(promptDiagnostics.continuationMailboxInventoryStateCount, 1);
+  assert.equal(
+    promptDiagnostics.continueAgentAcceptedIdentityMatchesMailbox,
+    true,
+  );
+  assert.equal(promptDiagnostics.continuationMailboxSavedSessionMatchCount, 1);
+  assert.equal(
+    promptDiagnostics.continuationMailboxAcceptedRequestMatchCount,
+    1,
+  );
+  assert.equal(JSON.stringify(promptDiagnostics).includes("private-"), false);
+  const wrongLabel = continuationOwnerCallDiagnostics(
+    prompted,
+    sessionId,
+    sessionPath,
+    followup,
+    undefined,
+    "private-pane-id",
+    "smoke",
+    [
+      {
+        agentLabel: "other-label",
+        runId: "private-run-id",
+        activeRequestId: "private-request-id",
+        piSessionId: sessionId,
+        paneId: "private-pane-id",
+      },
+    ],
+  );
+  assert.equal(wrongLabel.continueAgentAcceptedRequestMatchesMailbox, true);
+  assert.equal(wrongLabel.continueAgentAcceptedIdentityMatchesMailbox, false);
+
+  assert.deepEqual(
+    continuationRuntimeEvidenceDiagnostics({
+      sessionId,
+      pid: 202,
+      sessionStarts: [{ sessionId, pid: 101 }],
+      provenance: [
+        {
+          sessionId,
+          pid: 101,
+          packageName: "@earendil-works/pi-coding-agent",
+          model: "continuation",
+          piVersion: "1.5.1",
+        },
+      ],
+      expectedVersion: "1.5.1",
+    }),
+    {
+      sessionStartSessionMatchCount: 1,
+      sessionStartPidMatchCount: 0,
+      provenanceSessionMatchCount: 1,
+      provenancePidMatchCount: 0,
+      piVersion: null,
+      piVersionMatchesPinned: false,
+    },
+  );
 });
 
 test("continuation mailbox selection ignores same-label stale generations in either directory order", () => {
