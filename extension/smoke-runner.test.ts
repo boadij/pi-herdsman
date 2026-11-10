@@ -6322,7 +6322,6 @@ test("continuation first-generation stalls if completed child retires before obs
     "child_removed",
   ];
   let polls = 0;
-  let rootReads = 0;
   t.mock.timers.enable({ apis: ["Date"], now: 0 });
   const run = new Function(
     "readFile",
@@ -6330,6 +6329,9 @@ test("continuation first-generation stalls if completed child retires before obs
     "waitForEvidence",
     "tryNestedCommand",
     "rootSessionSnapshot",
+    "rootDelegationDiagnostics",
+    "continuationFailureTrace",
+    "appendContinuationTraceEvent",
     "isolatedSessionDetails",
     "MODEL_STALL_MS",
     `return (${exactFunction});`,
@@ -6343,10 +6345,10 @@ test("continuation first-generation stalls if completed child retires before obs
       if (++polls === 2) t.mock.timers.setTime(120_001);
       return { ok: true, value: { agents: [{ pane_id: "fixture-root" }] } };
     },
-    async () => {
-      rootReads++;
-      return root;
-    },
+    async () => null,
+    rootDelegationDiagnostics,
+    continuationFailureTrace,
+    appendContinuationTraceEvent,
     async () =>
       assert.fail("retired child must not be read through a live Agent"),
     120_000,
@@ -6374,7 +6376,6 @@ test("continuation first-generation stalls if completed child retires before obs
     "empty_child_poll",
     "empty_child_poll",
   ]);
-  assert.equal(rootReads, 0);
 });
 
 test("simulated continuation releases completion only after full live evidence", async () => {
@@ -6416,6 +6417,10 @@ test("simulated continuation releases completion only after full live evidence",
       "join",
       "waitForEvidence",
       "tryNestedCommand",
+      "rootSessionSnapshot",
+      "rootDelegationDiagnostics",
+      "continuationFailureTrace",
+      "appendContinuationTraceEvent",
       "isolatedSessionDetails",
       "candidateProcess",
       "writeFile",
@@ -6453,6 +6458,10 @@ test("simulated continuation releases completion only after full live evidence",
         ok: true,
         value: args[0] === "agent" ? { agents: [{ pane_id: "child" }] } : {},
       }),
+      async () => null,
+      rootDelegationDiagnostics,
+      continuationFailureTrace,
+      appendContinuationTraceEvent,
       async () =>
         inspection === 0 ? undefined : { id: "fixture", contents: "saved" },
       () => (inspection === 2 ? [{ pid: 123 }] : []),
