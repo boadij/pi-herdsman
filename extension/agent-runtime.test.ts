@@ -8390,6 +8390,145 @@ test("restricted Lead rejects nested tools outside its active profile", async ()
   assert.ok(unavailablePolicy.toolCall({ toolName: "bash" }, ctx)?.block);
 });
 
+test("root role tool_call guard denies unauthorized native nested dispatch before effects", async () => {
+  const { createLeadAgentEventRuntime } = await import("./lead-runtime.ts");
+
+  for (const scenario of [
+    { role: "manager", allowed: ["nested_parent", "allowed_probe"] },
+    { role: "chief", allowed: ["nested_parent", "allowed_probe"] },
+    { role: "lead", allowed: ["nested_parent", "allowed_probe"] },
+    {
+      role: "manager",
+      allowed: ["nested_parent", "allowed_probe", "forbidden_probe"],
+    },
+  ] as const) {
+    const faux = fauxProvider({
+      provider: `nested-role-policy-${randomUUID()}`,
+      models: [{ id: "test", reasoning: false, input: ["text"] }],
+    });
+    const modelRuntime = await ModelRuntime.create({
+      modelsPath: null,
+      refreshOnCreate: false,
+    });
+    modelRuntime.registerNativeProvider(faux.provider);
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: false },
+    });
+    let forbiddenExecutions = 0;
+    let allowedExecutions = 0;
+    let nestedResults: { denied: boolean; allowed: boolean } | undefined;
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: WORKSPACE,
+      agentDir: testTmpRoot,
+      settingsManager,
+      noExtensions: true,
+      noContextFiles: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      extensionFactories: [
+        (api) => {
+          api.registerTool({
+            name: "nested_parent",
+            label: "nested parent",
+            description: "Call two native child tools.",
+            parameters: Type.Object({}),
+            execute: async (_id, _params, signal, _update, ctx) => {
+              const denied = await ctx.executeTool(
+                "forbidden_probe",
+                {},
+                { signal },
+              );
+              const allowed = await ctx.executeTool(
+                "allowed_probe",
+                {},
+                { signal },
+              );
+              nestedResults = {
+                denied: denied.isError,
+                allowed: allowed.isError,
+              };
+              return {
+                content: [
+                  { type: "text", text: JSON.stringify(nestedResults) },
+                ],
+                details: undefined,
+              };
+            },
+          });
+          api.registerTool({
+            name: "forbidden_probe",
+            label: "forbidden probe",
+            description: "Must not execute without role authorization.",
+            exposure: "codemode",
+            parameters: Type.Object({}),
+            execute: async () => {
+              forbiddenExecutions++;
+              return { content: [{ type: "text", text: "forbidden" }] };
+            },
+          });
+          api.registerTool({
+            name: "allowed_probe",
+            label: "allowed probe",
+            description: "An allowed nested tool.",
+            exposure: "codemode",
+            parameters: Type.Object({}),
+            execute: async () => {
+              allowedExecutions++;
+              return { content: [{ type: "text", text: "allowed" }] };
+            },
+          });
+          const events = createLeadAgentEventRuntime({
+            isCurrentChief: () => scenario.role === "chief",
+            chiefTools: ["nested_parent", "allowed_probe"],
+            currentChiefAllowedTools: () => scenario.allowed,
+            isActiveManager: () => scenario.role === "manager",
+            managerTools: ["nested_parent", "allowed_probe"],
+            currentManagerAllowedTools: () => scenario.allowed,
+            currentLeadAllowedTools: () => scenario.allowed,
+          } as any);
+          api.on("tool_call", (event, ctx) =>
+            events.toolCall(event, ctx as any),
+          );
+          api.on("session_start", () => api.setActiveTools(["nested_parent"]));
+        },
+      ],
+    });
+    await resourceLoader.reload();
+    faux.setResponses([
+      () =>
+        fauxAssistantMessage([fauxToolCall("nested_parent", {})], {
+          stopReason: "toolUse",
+        }),
+      () => fauxAssistantMessage("Finished."),
+    ]);
+    const { session } = await createAgentSession({
+      cwd: WORKSPACE,
+      agentDir: testTmpRoot,
+      modelRuntime,
+      model: faux.getModel()!,
+      settingsManager,
+      resourceLoader,
+      sessionManager: SessionManager.inMemory(WORKSPACE),
+    });
+    try {
+      assert.ok(session.getCallableToolNames().includes("forbidden_probe"));
+      await session.prompt("Invoke the nested parent tool.");
+      assert.deepEqual(nestedResults, {
+        denied: !scenario.allowed.includes("forbidden_probe"),
+        allowed: false,
+      });
+      assert.equal(
+        forbiddenExecutions,
+        Number(scenario.allowed.includes("forbidden_probe")),
+      );
+      assert.equal(allowedExecutions, 1);
+    } finally {
+      await session.dispose();
+    }
+  }
+});
+
 for (const concurrentInbox of [false, true]) {
   test(`Pi 1.3.0 Manager retirement preflight reaches the first model request without waking or steering (concurrent inbox: ${concurrentInbox})`, async () => {
     const { createLeadAgentEventRuntime } = await import("./lead-runtime.ts");

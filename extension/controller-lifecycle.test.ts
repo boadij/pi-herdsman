@@ -754,6 +754,16 @@ test("read_evidence is added only to assigned project Lead tools", async () => {
     state.projectRoleTools(["read", "bash"], definition, ["read_evidence"]),
     ["read", "read_evidence"],
   );
+  const patterned = {
+    ...definition,
+    frontmatter: { tools: ["read*"], excludeTools: ["read_secret"] },
+  };
+  assert.deepEqual(
+    state.projectRoleTools(["read", "bash", "read_secret"], patterned, [
+      "read_evidence",
+    ]),
+    ["read", "read_evidence"],
+  );
   assert.deepEqual(state.projectRoleTools(["read", "bash"], definition, []), [
     "read",
   ]);
