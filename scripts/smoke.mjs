@@ -6736,9 +6736,20 @@ function smokeAgentLabel(agent) {
   return agent?.label ?? agent?.agent_label ?? agent?.agent;
 }
 
-export function selectContinuationMailbox(candidates, sessionId) {
+export function selectContinuationMailbox(candidates, sessionId, accepted) {
   const matching = candidates.filter(
-    ({ state }) => state.piSessionId === sessionId,
+    ({ state }) =>
+      state.piSessionId === sessionId &&
+      (!accepted ||
+        ([state.activeRequestId, state.completedRequestId].includes(
+          accepted.request_id,
+        ) &&
+          state.lastAck?.accepted === true &&
+          state.lastAck.requestId === accepted.request_id &&
+          (!accepted.run_id || state.runId === accepted.run_id) &&
+          (!accepted.pane_id || state.paneId === accepted.pane_id) &&
+          (!accepted.owner_session_id ||
+            state.ownerSessionId === accepted.owner_session_id))),
   );
   return {
     mailbox: matching.length === 1 ? matching[0] : undefined,
@@ -6751,11 +6762,73 @@ export function selectContinuationMailbox(candidates, sessionId) {
   };
 }
 
+export function continuationAcceptedResult(ownerContents, followupPrompt) {
+  const entries = ownerContents
+    .split(/\r?\n/u)
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line)];
+      } catch {
+        return [];
+      }
+    });
+  const byId = new Map(
+    entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
+  );
+  const prompt = entries.find(
+    (entry) =>
+      entry.type === "message" &&
+      entry.message?.role === "user" &&
+      messageText(entry.message.content) === followupPrompt,
+  );
+  if (!prompt) return undefined;
+  const descendant = (entry) => {
+    const seen = new Set();
+    for (
+      let parentId = entry.parentId;
+      parentId && !seen.has(parentId);
+      parentId = byId.get(parentId)?.parentId
+    ) {
+      if (parentId === prompt.id) return true;
+      seen.add(parentId);
+    }
+    return false;
+  };
+  const calls = entries.flatMap((entry, index) =>
+    entry.type === "message" &&
+    entry.message?.role === "assistant" &&
+    descendant(entry)
+      ? (entry.message.content ?? [])
+          .filter(
+            (part) =>
+              part?.type === "toolCall" && part.name === "continue_agent",
+          )
+          .map((call) => ({ call, index }))
+      : [],
+  );
+  const { call, index } = calls.at(-1) ?? {};
+  if (!call) return undefined;
+  const result = entries
+    .slice(index + 1)
+    .find(
+      (entry) =>
+        entry.type === "message" &&
+        entry.message?.role === "toolResult" &&
+        entry.message.toolName === "continue_agent" &&
+        entry.message.toolCallId === call.id,
+    )?.message;
+  return result && !result.isError && result.details?.ok === true
+    ? result.details
+    : undefined;
+}
+
 async function smokeMailbox(
   ctx,
   agent,
   expectedLabel = smokeAgentLabel(agent),
   expectedSessionId,
+  accepted,
 ) {
   const root = join(
     ctx.paths.piAgent,
@@ -6814,7 +6887,11 @@ async function smokeMailbox(
     candidates.push({ directory, state });
   }
   if (expectedSessionId !== undefined) {
-    const selection = selectContinuationMailbox(candidates, expectedSessionId);
+    const selection = selectContinuationMailbox(
+      candidates,
+      expectedSessionId,
+      accepted,
+    );
     return {
       mailbox: selection.mailbox
         ? await readRequest(
@@ -8611,7 +8688,22 @@ async function runContinuationSmoke(ctx) {
         resumedSessionObserved = true;
         ctx.continuationCandidatePaneId = agent.pane_id;
         refreshContinuationDiagnostics();
-        const candidateLabel = smokeAgentLabel(agent);
+        const owner = await rootSessionSnapshot(ctx);
+        const accepted = continuationAcceptedResult(
+          owner?.contents ?? "",
+          followup,
+        );
+        if (!accepted) return;
+        if (accepted.session_id !== firstSession.id)
+          throw new Error(
+            "continuation accepted session does not match saved session",
+          );
+        if (accepted.pane_id !== undefined)
+          if (accepted.pane_id !== agent.pane_id)
+            throw new Error(
+              "continuation accepted pane does not match candidate pane",
+            );
+        const candidateLabel = accepted.agent;
         assert.ok(
           typeof candidateLabel === "string" &&
             candidateLabel.trim().length > 0,
@@ -8622,6 +8714,7 @@ async function runContinuationSmoke(ctx) {
           agent,
           candidateLabel,
           firstSession.id,
+          accepted,
         );
         secondGenerationMailboxDiagnostics = selection.diagnostics;
         ctx.continuationCandidateLabel = candidateLabel;
@@ -8632,19 +8725,28 @@ async function runContinuationSmoke(ctx) {
           throw new Error("continuation mailbox identity is ambiguous");
         const mailbox = selection.mailbox;
         if (mailbox) {
+          if (!mailbox.request) return;
           secondGenerationMailbox ??= { ...mailbox, candidateLabel };
           ctx.continuationMailboxState = secondGenerationMailbox.state;
           refreshContinuationDiagnostics();
-          assert.equal(mailbox.state.piSessionId, firstSession.id);
-          assert.equal(mailbox.state.agentLabel, candidateLabel);
-          if (mailbox.request)
-            for (const [key, value] of Object.entries({
-              requestId: mailbox.state.activeRequestId,
-              runId: mailbox.state.runId,
-              piSessionId: firstSession.id,
-              agentLabel: candidateLabel,
-            }))
-              assert.equal(mailbox.request[key], value);
+          if (
+            mailbox.state.piSessionId !== firstSession.id ||
+            mailbox.state.agentLabel !== candidateLabel
+          )
+            throw new Error(
+              "continuation mailbox identity changed during selection",
+            );
+          for (const [key, value] of Object.entries({
+            requestId: accepted.request_id,
+            runId: accepted.run_id,
+            ownerSessionId: accepted.owner_session_id,
+            agentLabel: candidateLabel,
+            paneId: accepted.pane_id,
+          }))
+            if (value !== undefined && mailbox.request[key] !== value)
+              throw new Error(
+                "continuation mailbox request does not match accepted result",
+              );
         }
         const observed = await tryNestedCommand(ctx, [
           "pane",

@@ -142,6 +142,7 @@ import {
   continuationOwnerCallDiagnostics,
   continuationRuntimeEvidenceDiagnostics,
   selectContinuationMailbox,
+  continuationAcceptedResult,
   managerHandoffLeadProcessProof,
   prepareManagerRepository,
   assertManagerFreshPrimary,
@@ -7372,6 +7373,83 @@ test("continuation mailbox selection ignores same-label stale generations in eit
       identityMismatch: true,
       ambiguous: true,
     },
+  );
+});
+
+test("continuation selects the accepted mailbox label, not a Herdr candidate label", () => {
+  const accepted = {
+    agent: "mailbox-label",
+    request_id: "accepted-request",
+    pane_id: "accepted-pane",
+    owner_session_id: "owner-session",
+  };
+  const current = {
+    directory: "matching-mailbox",
+    state: {
+      agentLabel: accepted.agent,
+      piSessionId: "saved-session",
+      activeRequestId: accepted.request_id,
+      lastAck: { accepted: true, requestId: accepted.request_id },
+      paneId: accepted.pane_id,
+      ownerSessionId: accepted.owner_session_id,
+    },
+  };
+  const genericHerdrCandidate = { label: "generic-candidate-label" };
+  const followup = "continue saved session";
+  const result = continuationAcceptedResult(
+    [
+      {
+        id: "prompt",
+        type: "message",
+        message: { role: "user", content: followup },
+      },
+      {
+        id: "call",
+        parentId: "prompt",
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "call-id", name: "continue_agent" },
+          ],
+        },
+      },
+      {
+        id: "result",
+        parentId: "call",
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName: "continue_agent",
+          toolCallId: "call-id",
+          details: { ...accepted, ok: true },
+        },
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n"),
+    followup,
+  );
+  assert.notEqual(genericHerdrCandidate.label, result.agent);
+  assert.equal(
+    selectContinuationMailbox([current], "saved-session", result).mailbox,
+    current,
+  );
+  assert.equal(
+    selectContinuationMailbox(
+      [{ ...current, state: { ...current.state, lastAck: undefined } }],
+      "saved-session",
+      accepted,
+    ).mailbox,
+    undefined,
+  );
+  assert.equal(
+    selectContinuationMailbox(
+      [current, { ...current }],
+      "saved-session",
+      accepted,
+    ).diagnostics.ambiguous,
+    true,
   );
 });
 
