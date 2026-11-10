@@ -138,6 +138,7 @@ import {
   matchPiProvenance,
   assertContinuationFauxEvidence,
   continuationCompletionDiagnostics,
+  continuationOwnerCallDiagnostics,
   selectContinuationMailbox,
   managerHandoffLeadProcessProof,
   prepareManagerRepository,
@@ -1569,6 +1570,15 @@ test("continuation failure diagnostics retain sanitized root delegation state", 
     deliveredResultCount: 0,
     deliveredResultHasRequestAndRunMetadata: false,
     continueResultCount: 0,
+    continueAgentCallObserved: false,
+    continueAgentSelectorMatchesSavedSession: false,
+    continueAgentAcceptedRunIdPresent: false,
+    continueAgentAcceptedRequestIdPresent: false,
+    continueAgentAcceptedSessionIdPresent: false,
+    continueAgentAcceptedPaneIdPresent: false,
+    continueAgentSelectorKind: "not_observed",
+    continueAgentResultState: "missing",
+    continueAgentErrorCategory: "none",
     continueToolResultRequestMatchesDeliveredMetadata: false,
     mailboxStateMatchesSavedSession: false,
     mailboxStateHasCandidateLabel: false,
@@ -6695,7 +6705,7 @@ test("continuation requires configured faux extension and provider evidence for 
 });
 
 test("continuation diagnostics distinguish delivered metadata from request correlation", () => {
-  const sessionId = "private-session-id";
+  const sessionId = "8f1d4bc2-3902-42a8-9a14-c77619d00486";
   const requestId = "private-request-id";
   const runId = "private-run-id";
   const ownerContents = [
@@ -6720,6 +6730,7 @@ test("continuation diagnostics distinguish delivered metadata from request corre
         toolName: "continue_agent",
         toolCallId: "call-1",
         details: {
+          ok: true,
           session_id: sessionId,
           session_path: sessionId,
           request_id: requestId,
@@ -6801,6 +6812,15 @@ test("continuation diagnostics distinguish delivered metadata from request corre
     deliveredResultCount: 1,
     deliveredResultHasRequestAndRunMetadata: true,
     continueResultCount: 1,
+    continueAgentCallObserved: true,
+    continueAgentSelectorMatchesSavedSession: true,
+    continueAgentAcceptedRunIdPresent: false,
+    continueAgentAcceptedRequestIdPresent: true,
+    continueAgentAcceptedSessionIdPresent: true,
+    continueAgentAcceptedPaneIdPresent: false,
+    continueAgentSelectorKind: "uuid",
+    continueAgentResultState: "success",
+    continueAgentErrorCategory: "none",
     continueToolResultRequestMatchesDeliveredMetadata: true,
     mailboxStateMatchesSavedSession: true,
     mailboxStateHasCandidateLabel: true,
@@ -6824,10 +6844,8 @@ test("continuation diagnostics distinguish delivered metadata from request corre
     savedSessionId: sessionId,
     pid: 202,
     requestId,
-    candidateLabel: "smoke",
     mailboxState: {
       piSessionId: sessionId,
-      agentLabel: "smoke",
       completedRequestId: requestId,
       lastAck: { requestId, accepted: true },
       runId,
@@ -6850,6 +6868,7 @@ test("continuation diagnostics distinguish delivered metadata from request corre
   assert.equal(metadataAbsent.deliveredResultHasRequestAndRunMetadata, false);
   assert.equal(metadataAbsent.mailboxStateRequestMatchesContinueResult, true);
   assert.equal(metadataAbsent.mailboxRequestPresent, false);
+  assert.equal(metadataAbsent.mailboxStateHasCandidateLabel, false);
   assert.equal(metadataAbsent.mailboxStateMatchesDeliveredResult, false);
   const consumedRequest = continuationCompletionDiagnostics({
     sessionId,
@@ -6883,6 +6902,159 @@ test("continuation diagnostics distinguish delivered metadata from request corre
   assert.equal(consumedRequest.mailboxRequestPresent, false);
   assert.equal(consumedRequest.mailboxStateRequestMatchesContinueResult, true);
   assert.equal(consumedRequest.mailboxStateMatchesDeliveredResult, true);
+});
+
+test("continuation owner call diagnostics correlate exact IDs and expose only sanitized fields", () => {
+  const sessionId = "8f1d4bc2-3902-42a8-9a14-c77619d00486";
+  const sessionPath = "/private/session/path.jsonl";
+  const callId = "private-tool-call-id";
+  const entries = [
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "continue_agent",
+            id: "wrong-call-id",
+            arguments: { session: sessionPath },
+          },
+          {
+            type: "toolCall",
+            name: "continue_agent",
+            id: callId,
+            arguments: { session: sessionId },
+          },
+        ],
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "continue_agent",
+        toolCallId: "wrong-call-id",
+        details: { ok: false, error: { category: "agent_busy" } },
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "continue_agent",
+        toolCallId: callId,
+        details: {
+          ok: true,
+          run_id: "private-run-id",
+          request_id: "private-request-id",
+          session_id: "private-accepted-session-id",
+          pane_id: "private-pane-id",
+        },
+      },
+    },
+  ]
+    .map((entry) => JSON.stringify(entry))
+    .join("\n");
+  const diagnostics = continuationOwnerCallDiagnostics(
+    entries,
+    sessionId,
+    sessionPath,
+  );
+  assert.deepEqual(diagnostics, {
+    continueAgentCallObserved: true,
+    continueAgentSelectorMatchesSavedSession: true,
+    continueAgentSelectorKind: "uuid",
+    continueAgentResultState: "success",
+    continueAgentErrorCategory: "none",
+    continueAgentAcceptedRunIdPresent: true,
+    continueAgentAcceptedRequestIdPresent: true,
+    continueAgentAcceptedSessionIdPresent: true,
+    continueAgentAcceptedPaneIdPresent: true,
+  });
+  assert.equal(JSON.stringify(diagnostics).includes("private-"), false);
+  assert.equal(JSON.stringify(diagnostics).includes(sessionId), false);
+  assert.equal(JSON.stringify(diagnostics).includes(sessionPath), false);
+  const artifact = sanitizedFailureEvidence(
+    { scenario: "continuation", simulated: true },
+    {},
+    "FAIL",
+    "PENDING",
+    { continuationCompletion: diagnostics },
+  );
+  assert.equal(
+    artifact.diagnostics.continuationCompletion.continueAgentSelectorKind,
+    "uuid",
+  );
+  assert.equal(
+    artifact.diagnostics.continuationCompletion
+      .continueAgentAcceptedPaneIdPresent,
+    true,
+  );
+
+  const error = continuationOwnerCallDiagnostics(
+    JSON.stringify({
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "continue_agent",
+            id: callId,
+            arguments: { session: sessionPath },
+          },
+        ],
+      },
+    }) +
+      "\n" +
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName: "continue_agent",
+          toolCallId: callId,
+          isError: true,
+          details: {
+            ok: false,
+            error: { category: "invalid_request", message: "private error" },
+          },
+        },
+      }),
+    sessionId,
+    sessionPath,
+  );
+  assert.equal(error.continueAgentSelectorKind, "path");
+  assert.equal(error.continueAgentResultState, "error");
+  assert.equal(error.continueAgentErrorCategory, "invalid_request");
+  assert.equal(error.continueAgentAcceptedSessionIdPresent, false);
+  assert.equal(JSON.stringify(error).includes("private"), false);
+  assert.equal(
+    continuationOwnerCallDiagnostics("", sessionId, sessionPath)
+      .continueAgentResultState,
+    "missing",
+  );
+  const wrongSelector = continuationOwnerCallDiagnostics(
+    JSON.stringify({
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "continue_agent",
+            id: callId,
+            arguments: { session: "another-session" },
+          },
+        ],
+      },
+    }),
+    sessionId,
+    sessionPath,
+  );
+  assert.equal(wrongSelector.continueAgentCallObserved, true);
+  assert.equal(wrongSelector.continueAgentSelectorMatchesSavedSession, false);
+  assert.equal(wrongSelector.continueAgentSelectorKind, "path");
 });
 
 test("continuation mailbox selection ignores same-label stale generations in either directory order", () => {

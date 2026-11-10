@@ -4131,6 +4131,91 @@ export function assertContinuationFauxEvidence(
   }
 }
 
+export function continuationOwnerCallDiagnostics(
+  ownerContents = "",
+  savedSessionId,
+  savedSessionPath,
+) {
+  const entries = ownerContents
+    .split(/\r?\n/u)
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line)];
+      } catch {
+        return [];
+      }
+    });
+  const call = entries
+    .flatMap((entry, index) => {
+      const message = entry.type === "message" ? entry.message : undefined;
+      if (message?.role !== "assistant" || !Array.isArray(message.content))
+        return [];
+      return message.content.flatMap((part) =>
+        part?.type === "toolCall" && part.name === "continue_agent"
+          ? [{ call: part, index }]
+          : [],
+      );
+    })
+    .at(-1);
+  const result = call
+    ? entries.slice(call.index + 1).find((entry) => {
+        const message = entry.type === "message" ? entry.message : undefined;
+        return (
+          message?.role === "toolResult" &&
+          message.toolName === "continue_agent" &&
+          message.toolCallId === call.call.id
+        );
+      })?.message
+    : undefined;
+  const isError = result?.isError || result?.details?.ok === false;
+  return {
+    continueAgentCallObserved: !!call,
+    continueAgentSelectorMatchesSavedSession:
+      !!call &&
+      [savedSessionId, savedSessionPath].some(
+        (selector) =>
+          typeof selector === "string" &&
+          selector.length > 0 &&
+          call.call.arguments?.session === selector,
+      ),
+    continueAgentSelectorKind: call
+      ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(
+          call.call.arguments.session,
+        )
+        ? "uuid"
+        : "path"
+      : "not_observed",
+    continueAgentResultState:
+      !call || !result
+        ? "missing"
+        : isError
+          ? "error"
+          : result.details?.ok === true
+            ? "success"
+            : "missing",
+    continueAgentErrorCategory: isError
+      ? STRUCTURED_TOOL_ERROR_CATEGORIES.has(result?.details?.error?.category)
+        ? result.details.error.category
+        : "unstructured_error"
+      : call && !result
+        ? "not_observed"
+        : "none",
+    continueAgentAcceptedRunIdPresent:
+      typeof result?.details?.run_id === "string" &&
+      result.details.run_id.length > 0,
+    continueAgentAcceptedRequestIdPresent:
+      typeof result?.details?.request_id === "string" &&
+      result.details.request_id.length > 0,
+    continueAgentAcceptedSessionIdPresent:
+      typeof result?.details?.session_id === "string" &&
+      result.details.session_id.length > 0,
+    continueAgentAcceptedPaneIdPresent:
+      typeof result?.details?.pane_id === "string" &&
+      result.details.pane_id.length > 0,
+  };
+}
+
 export function continuationCompletionDiagnostics({
   sessionId,
   savedSessionId,
@@ -4146,6 +4231,7 @@ export function continuationCompletionDiagnostics({
   sessionStarts = [],
   provenance = [],
   ownerContents = "",
+  savedSessionPath,
   completionMarker,
 }) {
   const entries = ownerContents
@@ -4177,6 +4263,11 @@ export function continuationCompletionDiagnostics({
     /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(versions[0])
       ? versions[0].slice(0, 80)
       : null;
+  const ownerCallDiagnostics = continuationOwnerCallDiagnostics(
+    ownerContents,
+    savedSessionId,
+    savedSessionPath,
+  );
   const continueResults = entries.flatMap((entry, index) => {
     const message = entry.type === "message" ? entry.message : undefined;
     if (
@@ -4272,11 +4363,15 @@ export function continuationCompletionDiagnostics({
         details.runId.length > 0,
     ),
     continueResultCount: Math.min(continueResults.length, 100),
+    ...ownerCallDiagnostics,
     continueToolResultRequestMatchesDeliveredMetadata: continueResults.some(
       ({ requestMatches }) => requestId !== undefined && requestMatches,
     ),
     mailboxStateMatchesSavedSession: mailboxState?.piSessionId === sessionId,
-    mailboxStateHasCandidateLabel: mailboxState?.agentLabel === candidateLabel,
+    mailboxStateHasCandidateLabel:
+      typeof candidateLabel === "string" &&
+      candidateLabel.length > 0 &&
+      mailboxState?.agentLabel === candidateLabel,
     mailboxRequestPresent: !!mailboxRequest,
     mailboxRequestMatchesActiveState: mailboxRequestMatchesState,
     mailboxStateRequestMatchesContinueResult:
@@ -8121,6 +8216,7 @@ async function runContinuationSmoke(ctx) {
     ctx.continuationCompletionDiagnostics = continuationCompletionDiagnostics({
       sessionId: resumedSessionObserved ? firstSession?.id : undefined,
       savedSessionId: savedAfterCleanup?.id ?? firstSession?.id,
+      savedSessionPath: firstSession?.path,
       pid: firstGeneration,
       savedSessionObserved: !!firstSession,
       resumedSessionObserved,
@@ -8232,6 +8328,8 @@ async function runContinuationSmoke(ctx) {
     throw new Error(
       "continuation-first-generation: no candidate process identity was observed",
     );
+  ctx.continuationSavedSessionId = firstSession.id;
+  ctx.continuationSavedSessionPath = firstSession.path;
 
   await waitForEvidence(
     ctx,
@@ -12111,6 +12209,16 @@ export async function collectDiagnostics(
             : null,
         }
       : { error: "no saved root Pi session was available" };
+    if (ctx.scenario === "continuation" && session) {
+      diagnostics.continuationCompletion = {
+        ...diagnostics.continuationCompletion,
+        ...continuationOwnerCallDiagnostics(
+          session.contents,
+          ctx.continuationSavedSessionId,
+          ctx.continuationSavedSessionPath,
+        ),
+      };
+    }
   } catch (error) {
     diagnostics.rootSession = { error: error.message };
   }
@@ -13125,6 +13233,12 @@ function sanitizedFailureDiagnostics(value) {
     "mailboxRequestMatchesDeliveredResult",
     "deliveredResultBeforeWaitResponse",
     "ownerCompletionMarker",
+    "continueAgentCallObserved",
+    "continueAgentSelectorMatchesSavedSession",
+    "continueAgentAcceptedRunIdPresent",
+    "continueAgentAcceptedRequestIdPresent",
+    "continueAgentAcceptedSessionIdPresent",
+    "continueAgentAcceptedPaneIdPresent",
   ];
   const continuationCounts = [
     "sessionStartPidMatchCount",
@@ -13158,6 +13272,26 @@ function sanitizedFailureDiagnostics(value) {
             ...Object.fromEntries(
               continuationCounts.map((key) => [key, count(continuation[key])]),
             ),
+            continueAgentSelectorKind: [
+              "path",
+              "uuid",
+              "not_observed",
+            ].includes(continuation.continueAgentSelectorKind)
+              ? continuation.continueAgentSelectorKind
+              : "not_observed",
+            continueAgentResultState: ["success", "error", "missing"].includes(
+              continuation.continueAgentResultState,
+            )
+              ? continuation.continueAgentResultState
+              : "missing",
+            continueAgentErrorCategory: [
+              ...STRUCTURED_TOOL_ERROR_CATEGORIES,
+              "unstructured_error",
+              "not_observed",
+              "none",
+            ].includes(continuation.continueAgentErrorCategory)
+              ? continuation.continueAgentErrorCategory
+              : "not_observed",
             piVersion:
               typeof continuation.piVersion === "string" &&
               continuation.piVersion.length <= 80 &&
