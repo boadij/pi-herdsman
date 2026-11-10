@@ -537,6 +537,18 @@ test(
         createdAt: Date.now(),
       } as const;
       const managerMessagePath = writeChiefMessage(managerMessage, runtime);
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      assert.equal(
+        pi.sentMessageCalls.some(
+          ({ message }: any) => message?.details?.id === managerMessage.id,
+        ),
+        false,
+        "busy phase-less polling defers the Manager message to a turn boundary",
+      );
+      assert.deepEqual(listChiefMessagePaths(runtime, leadId), [
+        managerMessagePath,
+      ]);
+      await invokeEventHandlers(pi, "turn_end")({ outcome: "completed" }, ctx);
       await waitForStage(t, "first Manager message delivery", () => {
         const call = pi.sentMessageCalls.find(
           ({ message }: any) =>
@@ -546,7 +558,7 @@ test(
         assert.ok(call);
         assert.deepEqual(call.options, {
           deliverAs: "steer",
-          triggerTurn: true,
+          triggerTurn: false,
         });
       });
       await new Promise((resolve) => setTimeout(resolve, 1_100));

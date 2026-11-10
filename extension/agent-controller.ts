@@ -4338,6 +4338,8 @@ export type ManagerEvidenceScope = {
 };
 
 export type AgentControllerOptions = {
+  /** Disable standalone boundary hooks when the owning recipient composes its drains. */
+  registerRecipientFanIn?: boolean;
   scope: ControllerScope | undefined;
   managerEvidence?(
     ctx: ExtensionContext,
@@ -10990,9 +10992,10 @@ export function createAgentController(
     schedule();
   };
 
-  registerRecipientFanIn(pi, (ctx, phase, budget) =>
-    drainReadyOwnerNotifications(ctx, phase, budget),
-  );
+  if (options.registerRecipientFanIn !== false)
+    registerRecipientFanIn(pi, (ctx, phase, budget) =>
+      drainReadyOwnerNotifications(ctx, phase, budget),
+    );
   return {
     listAgentStates,
     managedAgentSnapshots: snapshot,

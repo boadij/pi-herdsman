@@ -146,7 +146,9 @@ test("Pi 1.5.0 includes non-triggering startup messages in the first provider re
   }
 });
 
-test("Pi 1.5.0 includes turn-boundary messages in the continued provider request", async () => {
+test("two Chief inbox records reach one continued provider request from a turn-boundary drain", async () => {
+  const { drainCoordinationInbox, supervisionRuntime, writeChiefMessage } =
+    await import("./supervision.ts");
   const faux = fauxProvider({
     provider: "herdsman-turn-fan-in-test",
     models: [{ id: "turn", contextWindow: 4096, maxTokens: 128 }],
@@ -157,7 +159,32 @@ test("Pi 1.5.0 includes turn-boundary messages in the continued provider request
   });
   modelRuntime.registerNativeProvider(faux.provider);
   const settingsManager = SettingsManager.inMemory();
-  let sent = false;
+  const inboxRuntime = supervisionRuntime(
+    join(testTmpRoot, `chief-fan-in-${randomUUID()}.sock`),
+  );
+  const sessionId = randomUUID();
+  const messages = [
+    { id: randomUUID(), text: `Chief downlink one ${randomUUID()}` },
+    { id: randomUUID(), text: `Chief downlink two ${randomUUID()}` },
+  ];
+  for (const { id, text } of messages)
+    writeChiefMessage(
+      {
+        version: 2,
+        build: HERDSMAN_BUILD,
+        id,
+        leaseId: randomUUID(),
+        kind: "chief_message",
+        fromSessionId: randomUUID(),
+        toSessionId: sessionId,
+        leadSessionId: sessionId,
+        text,
+        createdAt: Date.now(),
+      },
+      inboxRuntime,
+    );
+  const delivered = new Set<string>();
+  const submissions: { id: string; triggerTurn: boolean }[] = [];
   const resourceLoader = new DefaultResourceLoader({
     cwd: WORKSPACE,
     agentDir: testTmpRoot,
@@ -170,17 +197,25 @@ test("Pi 1.5.0 includes turn-boundary messages in the continued provider request
     extensionFactories: [
       (api) =>
         api.on("turn_end", async (event) => {
-          if (event.outcome !== "completed" || sent) return;
-          sent = true;
-          await api.sendMessage(
-            {
-              customType: "fan-in-test",
-              content: "turn sibling",
-              display: "none",
+          if (event.outcome !== "completed") return;
+          const count = await drainCoordinationInbox({
+            runtime: inboxRuntime,
+            sessionId,
+            isAuthorized: () => true,
+            isDelivered: (id) => delivered.has(id),
+            deliveryMode: (record) =>
+              record.kind === "chief_message" ? "steer" : undefined,
+            forceNonTriggering: true,
+            sendMessage: async (message, options, record) => {
+              await api.sendMessage(message, options);
+              submissions.push({
+                id: record.id,
+                triggerTurn: options.triggerTurn,
+              });
+              delivered.add(record.id);
             },
-            { triggerTurn: false },
-          );
-          return { continue: true };
+          });
+          return count ? { continue: true } : undefined;
         }),
     ],
   });
@@ -208,10 +243,19 @@ test("Pi 1.5.0 includes turn-boundary messages in the continued provider request
   try {
     await session.prompt("start");
     assert.equal(requests.length, 2);
-    assert.doesNotMatch(JSON.stringify(requests[0]), /turn sibling/);
-    assert.match(JSON.stringify(requests[1]), /turn sibling/);
+    for (const { text } of messages) {
+      assert.doesNotMatch(JSON.stringify(requests[0]), new RegExp(text));
+      assert.match(JSON.stringify(requests[1]), new RegExp(text));
+    }
+    assert.deepEqual(
+      submissions.sort((a, b) => a.id.localeCompare(b.id)),
+      messages
+        .map(({ id }) => ({ id, triggerTurn: false }))
+        .sort((a, b) => a.id.localeCompare(b.id)),
+    );
   } finally {
     await session.dispose();
+    realFs.rmSync(inboxRuntime.root, { recursive: true, force: true });
   }
 });
 const {

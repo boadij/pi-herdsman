@@ -228,6 +228,75 @@ test("recipient boundary drains preserve steering eligibility and disable extra 
   }
 });
 
+test("busy polling defers supervisor steering until one non-triggering turn drain", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  process.env.HERDR_SOCKET_PATH = "/unused-busy-inbox-test-socket";
+  const context = fakeContext();
+  context.isIdle = () => false;
+  const messages = [
+    { id: "first", kind: "chief_message" },
+    { id: "second", kind: "chief_message" },
+  ];
+  const submissions: { id: string; mode: unknown; triggerTurn: unknown }[] = [];
+  const peerRuntime = {};
+  const runtime = createLeadInboxRuntime({
+    leadRuntime: {
+      chiefMode: "inactive",
+      roleSuspended: false,
+      sessionGeneration: 0,
+      chiefModeGeneration: 0,
+    },
+    leadInstanceId: () => "manager-instance",
+    activeRole: () => "manager",
+    controllerScope: { kind: "root" },
+    supervisionRuntime: () => ({}),
+    peerRuntime: () => peerRuntime,
+    pi: {},
+    coordinationHealthy: () => true,
+    managerDiagnostic: () => {},
+    managerDiagnosticEvents: new Set(),
+    listChiefMessagePaths: () => [],
+    drainCoordinationInbox: async (options: any) => {
+      if (options.runtime !== peerRuntime) {
+        for (const record of messages) {
+          const mode = await options.deliveryMode(record);
+          if (mode)
+            submissions.push({
+              id: record.id,
+              mode,
+              triggerTurn: options.forceNonTriggering ? false : true,
+            });
+        }
+      }
+      return 0;
+    },
+    currentPeerPresenceValid: async () => true,
+    drainProjectMessages: async () => 0,
+  } as any);
+
+  try {
+    runtime.beginSession();
+    runtime.start(context as any);
+    await flush();
+    assert.deepEqual(submissions, []);
+    t.mock.timers.tick(500);
+    await flush();
+    assert.deepEqual(submissions, []);
+
+    await runtime.drainBoundary(context as any, "turn", { count: 0, bytes: 0 });
+    assert.deepEqual(submissions, [
+      { id: "first", mode: "steer", triggerTurn: false },
+      { id: "second", mode: "steer", triggerTurn: false },
+    ]);
+  } finally {
+    runtime.beginShutdown();
+    runtime.shutdown();
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
+  }
+});
+
 test("peer send boundary rejects unavailable local presence", async () => {
   const previousSocket = process.env.HERDR_SOCKET_PATH;
   process.env.HERDR_SOCKET_PATH = "/unused-peer-send-test-socket";

@@ -11931,11 +11931,21 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     leadAgent.cwd = "/tmp";
     writeFileSync(unrelatedStatePath, unrelatedState);
     useLeadIdentity();
+    await invokeEventHandlers(lead!, "turn_end")(
+      { outcome: "completed" },
+      leadCtx,
+    );
     await t.waitFor(() =>
       assert.equal(
         listCoordinationMessagePaths(supervisionRuntime(), leadSession).length,
         0,
       ),
+    );
+    assert.deepEqual(
+      lead!.sentMessageCalls.find(
+        ({ message }: any) => message?.details?.id === queued.details.id,
+      )?.options,
+      { deliverAs: "steer", triggerTurn: false },
     );
     useManagerIdentity();
     omitLeadFromManagerTopology = true;
@@ -12010,15 +12020,17 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     useLeadIdentity();
     const currentLead = lead;
     assert.ok(currentLead);
-    await t.waitFor(() =>
-      assert.ok(
-        currentLead.sent.some(
-          (message: any) =>
-            message?.customType === "pi-herdsman-manager_message" &&
-            message?.details?.id === managerMessage.details.id &&
-            message?.details?.fromSessionId === LEAD_SESSION_ID &&
-            message?.details?.toSessionId === leadSession,
-        ),
+    await invokeEventHandlers(currentLead, "turn_end")(
+      { outcome: "completed" },
+      leadCtx,
+    );
+    assert.ok(
+      currentLead.sent.some(
+        (message: any) =>
+          message?.customType === "pi-herdsman-manager_message" &&
+          message?.details?.id === managerMessage.details.id &&
+          message?.details?.fromSessionId === LEAD_SESSION_ID &&
+          message?.details?.toSessionId === leadSession,
       ),
     );
     assert.deepEqual(
@@ -12026,7 +12038,7 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
         ({ message }: any) =>
           message?.customType === "pi-herdsman-manager_message",
       )?.options,
-      { deliverAs: "steer", triggerTurn: true },
+      { deliverAs: "steer", triggerTurn: false },
     );
     assert.deepEqual(
       listCoordinationMessagePaths(supervisionRuntime(), leadSession),

@@ -8,25 +8,6 @@ export type DeliveryPhase = "startup" | "turn" | "settle";
 export type DeliveryBudget = { count: number; bytes: number };
 
 const MAX_BYTES = 256 * 1024;
-const recipientBudgets = new WeakMap<
-  ExtensionAPI,
-  WeakMap<object, DeliveryBudget>
->();
-
-function boundaryBudget(pi: ExtensionAPI, event: object): DeliveryBudget {
-  let events = recipientBudgets.get(pi);
-  if (!events) {
-    events = new WeakMap();
-    recipientBudgets.set(pi, events);
-  }
-  let budget = events.get(event);
-  if (!budget) {
-    budget = recipientFanInBudget();
-    events.set(event, budget);
-  }
-  return budget;
-}
-
 export function recipientFanInBudget(): DeliveryBudget {
   return { count: 0, bytes: 0 };
 }
@@ -64,16 +45,16 @@ export function registerRecipientFanIn(
   ) => Promise<number>,
 ): void {
   pi.on("before_agent_start", async (event, ctx) => {
-    await drain(ctx, "startup", boundaryBudget(pi, event));
+    await drain(ctx, "startup", recipientFanInBudget());
   });
   pi.on("turn_end", async (event, ctx) => {
     if (event?.outcome !== "completed") return;
-    const count = await drain(ctx, "turn", boundaryBudget(pi, event));
+    const count = await drain(ctx, "turn", recipientFanInBudget());
     if (count > 0) return { continue: true };
   });
   pi.on("agent_before_settle", async (event, ctx) => {
     if (event?.outcome !== "completed") return;
-    const count = await drain(ctx, "settle", boundaryBudget(pi, event));
+    const count = await drain(ctx, "settle", recipientFanInBudget());
     if (count > 0) return { continue: true };
   });
 }

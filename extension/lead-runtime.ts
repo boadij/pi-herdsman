@@ -3026,6 +3026,7 @@ export function registerLeadRuntime(
   };
   const controller = createAgentController(pi, {
     ...options.controllerServices,
+    registerRecipientFanIn: false,
     scope: { kind: "root" },
     managerEvidence,
     persistClosedDescendants: async (ctx, closures, selected) => {
@@ -4491,7 +4492,13 @@ export function registerLeadRuntime(
   pi.on("turn_start", () => controller.resetAssignmentGuidance());
   registerRecipientFanIn(pi, async (ctx, phase, budget) => {
     if (isQuarantinedSession(ctx)) return 0;
-    return inboxRuntime.drainBoundary(ctx, phase, budget);
+    const agentNotifications = await controller.drainReadyOwnerNotifications(
+      ctx,
+      phase,
+      budget,
+    );
+    const inboxMessages = await inboxRuntime.drainBoundary(ctx, phase, budget);
+    return agentNotifications + inboxMessages;
   });
   pi.on("before_agent_start", (event: any, ctx: ExtensionContext) => {
     if (!isQuarantinedSession(ctx))
@@ -8521,13 +8528,17 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
               return undefined;
             }
             if (!authorized) return "followUp";
+            if (!phase && !ctx.isIdle()) return undefined;
             return "steer";
           }
           const supervisorDownlink =
             (role === "lead" && record.kind === "chief_message") ||
             (role === "manager" && record.kind === "chief_message");
 
-          if (supervisorDownlink && phase !== "settle") return "steer";
+          if (supervisorDownlink && phase !== "settle") {
+            if (!phase && !ctx.isIdle()) return undefined;
+            return "steer";
+          }
           return phase === "settle" || phase === "startup" || ctx.isIdle()
             ? "followUp"
             : undefined;
