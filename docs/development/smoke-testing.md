@@ -81,9 +81,15 @@ provider accepts only expected transcript states and requires actual correlated
 tool results before producing completion responses. It cannot produce
 successful tool results or directly mutate Herdsman or Herdr state. The
 simulated-only scenarios use real Pi, Herdsman, and Herdr; they do not replace
-live-model acceptance. `agent-crash-recovery` fully stops and restarts its
-generated named Herdr server, reopens the exact owner Pi session, and verifies
-that the restored pending-child parent remains `blocked`. If that live parent
+live-model acceptance. `agent-crash-recovery` starts an accepted, in-flight
+managed target, verifies its isolated process identity against its exact Pi
+session and session-start evidence, then abruptly terminates only that proven
+disposable target with `SIGKILL`. It verifies the original assignment remains
+unresolved before fully stopping and restarting its generated named Herdr
+server. This tests abrupt Agent loss followed by a server restart; it does not
+abruptly terminate the Herdr server itself. The scenario then reopens the exact
+owner Pi session and verifies that the restored pending-child parent remains
+`blocked`. If that live parent
 advertises `steer_agent`, the scripted owner tries it once and the scenario
 requires the receiverless request to be rejected; listing the tool alone does
 not prove receiver readiness. It then persists a successful close tool result

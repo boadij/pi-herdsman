@@ -6610,6 +6610,247 @@ async function runAgentCrashRecoverySmoke(ctx) {
   );
   assert.ok(ownerHeader?.id, "saved owner session omitted its exact ID");
   ctx.crashRecovery.ownerSessionId = ownerHeader.id;
+
+  const target = ctx.crashRecovery.target;
+  assert.equal(
+    target.request?.ownerSessionId,
+    ownerHeader.id,
+    "accepted target request does not belong to the captured owner session",
+  );
+  const targetListings =
+    (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
+  const targetCandidates = targetListings.filter(
+    (agent) =>
+      agent.pane_id === target.paneId &&
+      agent.workspace_id === target.workspaceId,
+  );
+  assert.equal(
+    targetCandidates.length,
+    1,
+    "target pane/workspace identity is ambiguous before process loss",
+  );
+  const targetAgent = targetCandidates[0];
+  assert.equal(
+    smokeAgentLabel(targetAgent),
+    "smoke-crash-target",
+    "target pane is not the accepted disposable Agent",
+  );
+  const targetSession = await isolatedSessionDetails(ctx, targetAgent);
+  assert.ok(targetSession, "target session is unavailable before process loss");
+  assert.equal(targetSession.id, target.sessionId);
+  assert.equal(targetSession.path, target.sessionPath);
+
+  const targetMailbox = await smokeMailbox(
+    ctx,
+    targetAgent,
+    "smoke-crash-target",
+  );
+  for (const [key, value] of Object.entries({
+    piSessionId: target.sessionId,
+    runId: target.runId,
+    activeRequestId: target.requestId,
+    ownerSessionId: ownerHeader.id,
+    workspaceId: target.workspaceId,
+    paneId: target.paneId,
+    agentLabel: "smoke-crash-target",
+  }))
+    assert.equal(
+      targetMailbox.state[key],
+      value,
+      `target mailbox ${key} changed`,
+    );
+  assert.ok(targetMailbox.request, "accepted target request is missing");
+  for (const [key, value] of Object.entries({
+    requestId: target.requestId,
+    runId: target.runId,
+    ownerSessionId: ownerHeader.id,
+    workspaceId: target.workspaceId,
+    paneId: target.paneId,
+    agentLabel: "smoke-crash-target",
+  }))
+    assert.equal(
+      targetMailbox.request[key],
+      value,
+      `target request ${key} changed`,
+    );
+
+  const targetResultPath = join(
+    targetMailbox.directory,
+    `result-${target.requestId}.json`,
+  );
+  await assert.rejects(lstat(targetResultPath), { code: "ENOENT" });
+
+  const targetProcessResult = await nestedCommand(ctx, [
+    "pane",
+    "process-info",
+    "--pane",
+    target.paneId,
+  ]);
+  const targetProcessInfo = targetProcessResult.process_info;
+  assert.equal(targetProcessInfo?.pane_id, target.paneId);
+  const foregroundProcesses = targetProcessInfo.foreground_processes ?? [];
+  assert.equal(
+    foregroundProcesses.length,
+    1,
+    "target pane has ambiguous foreground processes",
+  );
+  const candidateProcesses = candidateProcess(
+    targetProcessResult,
+    ctx.candidateExtension,
+    ctx.herdrStateExtension,
+  );
+  assert.equal(
+    candidateProcesses.length,
+    1,
+    "expected one verified target Pi process",
+  );
+  const [targetProcess] = candidateProcesses;
+  const targetPid = targetProcess.pid;
+  assert.equal(foregroundProcesses[0].pid, targetPid);
+  assert.ok(
+    Number.isSafeInteger(targetPid) &&
+      targetPid > 0 &&
+      targetPid !== process.pid &&
+      targetPid !== targetProcessInfo.shell_pid,
+    "unsafe target process identity",
+  );
+
+  const otherAgentProcesses = ctx.crashRecovery.processInfoBeforeRestart.filter(
+    ({ label }) =>
+      label === "smoke-crash-parent" || label === "smoke-crash-child",
+  );
+  assert.deepEqual(
+    new Set(otherAgentProcesses.map(({ label }) => label)),
+    new Set(["smoke-crash-parent", "smoke-crash-child"]),
+    "parent/child process identities are unavailable",
+  );
+  const protectedPids = new Set();
+  for (const { processInfo } of otherAgentProcesses) {
+    const observedPids = [
+      processInfo.shellPid,
+      ...(processInfo.foregroundProcesses ?? []).map(({ pid }) => pid),
+    ].filter((pid) => Number.isSafeInteger(pid) && pid > 0);
+    assert.ok(
+      observedPids.length,
+      "parent/child process identity is unavailable",
+    );
+    for (const pid of observedPids) protectedPids.add(pid);
+  }
+  assert.ok(
+    !protectedPids.has(targetPid),
+    "target PID belongs to parent or child",
+  );
+
+  const sessionStartPath = join(
+    ctx.paths.piAgent,
+    "pi-herdsman",
+    "runtime",
+    "smoke-faux-session-start.jsonl",
+  );
+  const targetSessionStartPids = async () => {
+    const stat = await lstat(sessionStartPath);
+    assert.ok(
+      stat.isFile() && !stat.isSymbolicLink() && stat.size <= 1024 * 1024,
+      "isolated Pi session-start evidence is unsafe or oversized",
+    );
+    const records = (await readFile(sessionStartPath, "utf8"))
+      .split(/\r?\n/u)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.sessionId === target.sessionId);
+    assert.ok(records.length, "target Pi session-start evidence is missing");
+    assert.ok(
+      records.every(({ pid }) => Number.isSafeInteger(pid) && pid > 0),
+      "target Pi session-start evidence has an invalid PID",
+    );
+    return new Set(records.map(({ pid }) => pid));
+  };
+  assert.deepEqual(
+    await targetSessionStartPids(),
+    new Set([targetPid]),
+    "target session/PID does not match unique Pi session-start evidence",
+  );
+
+  const targetPidIsAlive = () => {
+    try {
+      process.kill(targetPid, 0);
+      return true;
+    } catch (error) {
+      if (error.code === "ESRCH") return false;
+      throw error;
+    }
+  };
+  assert.ok(targetPidIsAlive(), "verified target process is not running");
+  process.kill(targetPid, "SIGKILL");
+  await waitForEvidence(
+    ctx,
+    "crash-recovery-target-process-lost",
+    async () => {
+      const alive = targetPidIsAlive();
+      return {
+        done: !alive,
+        progress: { originalPidAlive: alive },
+      };
+    },
+    { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS, pollMs: 200 },
+  );
+
+  const retainedMailbox = await smokeMailbox(
+    ctx,
+    targetAgent,
+    "smoke-crash-target",
+  );
+  assert.equal(retainedMailbox.state.piSessionId, target.sessionId);
+  assert.equal(retainedMailbox.state.runId, target.runId);
+  assert.equal(retainedMailbox.state.activeRequestId, target.requestId);
+  assert.equal(retainedMailbox.state.ownerSessionId, ownerHeader.id);
+  assert.equal(retainedMailbox.state.workspaceId, target.workspaceId);
+  assert.equal(retainedMailbox.state.paneId, target.paneId);
+  await assert.rejects(lstat(targetResultPath), { code: "ENOENT" });
+  assert.deepEqual(
+    await targetSessionStartPids(),
+    new Set([targetPid]),
+    "a replacement Pi process started for the unresolved target",
+  );
+  const remainingAgents =
+    (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
+  const targetSessionAgents = remainingAgents.filter((agent) => {
+    const identity = agent.agent_session;
+    return (
+      identity?.kind === "path" &&
+      typeof identity.value === "string" &&
+      resolve(identity.value) === target.sessionPath
+    );
+  });
+  assert.ok(
+    targetSessionAgents.length <= 1,
+    "target session has duplicate live agents",
+  );
+  for (const agent of targetSessionAgents) {
+    const processInfo = await nestedCommand(ctx, [
+      "pane",
+      "process-info",
+      "--pane",
+      agent.pane_id,
+    ]);
+    assert.equal(processInfo.process_info?.pane_id, agent.pane_id);
+    assert.equal(
+      candidateProcess(
+        processInfo,
+        ctx.candidateExtension,
+        ctx.herdrStateExtension,
+      ).length,
+      0,
+      "replacement Pi process is still running for the target session",
+    );
+  }
+  ctx.crashRecovery.targetLoss = {
+    pid: targetPid,
+    signal: "SIGKILL",
+    exitObserved: true,
+    unresolvedRequestId: target.requestId,
+  };
+
   await restartNestedHerdr(ctx);
   ctx.crashRecovery.restartDurationMs = Date.now() - startedAt;
 
