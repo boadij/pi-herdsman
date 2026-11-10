@@ -69,10 +69,12 @@ const stage = (name, details = {}) => {
   console.log(`[peer-smoke-stage] ${JSON.stringify(resources.stages.at(-1))}`);
 };
 
-function command(bin, args, { allowFailure = false, input } = {}) {
+function command(bin, args, { allowFailure = false, input, timeout } = {}) {
   const result = spawnSync(bin, args, {
     encoding: "utf8",
     input,
+    timeout,
+    ...(timeout ? { killSignal: "SIGKILL" } : {}),
     stdio: [input ? "pipe" : "ignore", "pipe", "pipe"],
   });
   if (result.error || (!allowFailure && result.status !== 0))
@@ -377,8 +379,12 @@ try {
 
   // Prepare isolated Pi/Herdr roots inside each owned container. Keep Herdr's
   // server and workspace data test-local rather than using its default config.
-  const exec = (side, args, extra = []) =>
-    command("docker", ["exec", ...extra, resources[side].container, ...args]);
+  const exec = (side, args, extra = [], options) =>
+    command(
+      "docker",
+      ["exec", ...extra, resources[side].container, ...args],
+      options,
+    );
   const fixturePath = (side) => `/tmp/p${runId.slice(-8)}${side}`;
   const herdrEnv = (side) => [
     "-e",
@@ -3099,15 +3105,42 @@ try {
   resources.a.recoveredOriginGeneration = resumedManager.claim.id;
   resources.a.staleGenerationRejected = true;
   save();
-  const replyCompletion = herdr("a", [
-    "pane",
-    "wait-output",
-    resources.a.paneId,
-    "--match",
-    "PEER_E2E_A_RECEIVED_REPLY",
-    "--timeout",
-    "240000",
-  ]);
+  let replyCompletion;
+  const replyCompletionDeadline = Date.now() + 240_000;
+  while (Date.now() < replyCompletionDeadline) {
+    let entries;
+    try {
+      entries = exec("a", ["cat", resources.a.managerSessionFile], [], {
+        timeout: Math.max(1, replyCompletionDeadline - Date.now()),
+      })
+        .split("\n")
+        .filter(Boolean)
+        .map(JSON.parse);
+    } catch {
+      throw new Error(
+        "A's Pi history read failed or exceeded the completion timeout",
+      );
+    }
+    if (
+      entries.some(
+        (entry) =>
+          entry.message?.role === "assistant" &&
+          entry.message.content?.some(
+            (part) =>
+              part.type === "text" &&
+              part.text.includes("PEER_E2E_A_RECEIVED_REPLY"),
+          ),
+      )
+    ) {
+      replyCompletion = "durable-pi-history";
+      break;
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+  }
+  if (!replyCompletion)
+    throw new Error(
+      "A's Pi history did not record completed final-reply handling",
+    );
   const autoRecovery = JSON.parse(
     exec("a", [
       "cat",
@@ -3250,6 +3283,7 @@ try {
   resources.exchange = {
     requestReplyComplete: true,
     replyCompletionMarker: "PEER_E2E_A_RECEIVED_REPLY",
+    replyCompletionEvidence: replyCompletion,
     replyEvidenceForwarded: true,
     backgroundReconciliation: true,
     autonomousReplyReceipt: autonomousReceipt,

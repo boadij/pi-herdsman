@@ -25,6 +25,26 @@ import {
   parseDelegateResult,
   ordinaryLeadDeliveryReady,
 } from "./peer-federation-result.mjs";
+import { decide } from "./smoke-faux.mjs";
+
+test("a final peer reply outranks outbound recovery prompts in decide()", () => {
+  for (const prompt of [
+    "PEER_E2E_A_OUTBOUND_RECOVERY_FIRST",
+    "PEER_E2E_A_OUTBOUND_RECOVERY_STATUS",
+  ]) {
+    const result = decide("federated-peer-a", {
+      messages: [
+        { role: "user", content: prompt },
+        {
+          type: "custom_message",
+          customType: "pi-herdsman-peer_message",
+          content: "PEER_E2E_REPLY_FINAL: completed",
+        },
+      ],
+    });
+    assert.equal(result.content[0].text, "PEER_E2E_A_RECEIVED_REPLY");
+  }
+});
 
 test("ordinary Lead send acceptance requires one fresh discovery, one send, and its exact receipt", () => {
   const diagnostics = {

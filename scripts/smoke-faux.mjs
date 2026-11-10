@@ -16,6 +16,11 @@ import {
   getCurrentSystemPrompt,
 } from "@earendil-works/pi-ai";
 
+function federatedReplyDecision({ finalReplyPresent, progressReplyPresent }) {
+  if (finalReplyPresent) return "final";
+  if (progressReplyPresent) return "progress";
+}
+
 export function matchesProjectMessageContent(actual, expected) {
   return (
     typeof actual === "string" &&
@@ -989,12 +994,6 @@ export function decide(model, context) {
         throw new Error("federation discovery found no remote Manager");
       return fauxAssistantMessage("PEER_E2E_A_DISCOVERED");
     }
-    if (prompt.includes("PEER_E2E_A_OUTBOUND_RECOVERY_FIRST")) {
-      return fauxAssistantMessage("PEER_E2E_A_OUTBOUND_RECOVERY_FIRST_DONE");
-    }
-    if (prompt.includes("PEER_E2E_A_OUTBOUND_RECOVERY_STATUS")) {
-      return fauxAssistantMessage("PEER_E2E_A_OUTBOUND_RECOVERY_STATUS_DONE");
-    }
     const send = prompt.includes("PEER_E2E_A_SEND");
     const list = correlatedCall(messages, "list_peers");
     if (send && !list) return call("list_peers", {});
@@ -1022,13 +1021,20 @@ export function decide(model, context) {
     }
     if (send && successfulCallCount(messages, "message_peer") >= 2)
       return fauxAssistantMessage("PEER_E2E_A_SENT");
-    if (
-      messages.some(
+    const replyDecision = federatedReplyDecision({
+      finalReplyPresent: messages.some(
         (message) =>
           (message.role === "user" || message.type === "custom_message") &&
           text(message).includes("PEER_E2E_REPLY_FINAL"),
-      )
-    ) {
+      ),
+      progressReplyPresent: messages.some(
+        (message) =>
+          message.type === "custom_message" &&
+          message.customType === "pi-herdsman-peer_message" &&
+          text(message).includes("PEER_E2E_REPLY_PROGRESS"),
+      ),
+    });
+    if (replyDecision === "final") {
       const forwarding = messages.some(
         (message) =>
           message.role === "user" &&
@@ -1071,15 +1077,12 @@ export function decide(model, context) {
       }
       return fauxAssistantMessage("PEER_E2E_A_RECEIVED_REPLY");
     }
-    if (
-      messages.some(
-        (message) =>
-          message.type === "custom_message" &&
-          message.customType === "pi-herdsman-peer_message" &&
-          text(message).includes("PEER_E2E_REPLY_PROGRESS"),
-      )
-    )
+    if (replyDecision === "progress")
       return fauxAssistantMessage("PEER_E2E_A_PROGRESS_RECEIVED");
+    if (prompt.includes("PEER_E2E_A_OUTBOUND_RECOVERY_FIRST"))
+      return fauxAssistantMessage("PEER_E2E_A_OUTBOUND_RECOVERY_FIRST_DONE");
+    if (prompt.includes("PEER_E2E_A_OUTBOUND_RECOVERY_STATUS"))
+      return fauxAssistantMessage("PEER_E2E_A_OUTBOUND_RECOVERY_STATUS_DONE");
     throw new Error("Unexpected federated-peer A transcript");
   }
   if (model === "federated-peer-b") {
