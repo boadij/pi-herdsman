@@ -119,6 +119,7 @@ import {
   discoverAgentDefinitions,
   validateRoleAgentDefinitionReferences,
   matchesToolPattern,
+  toolPolicyAllowsName,
   expandAgentBodyFiles,
   FLEXIBLE_LEAD_DEFINITION_NAME,
   ORCHESTRATOR_LEAD_DEFINITION_NAME,
@@ -832,6 +833,7 @@ export function createLeadToolState(
     requiredTools: readonly string[],
   ) => {
     const policy = configuredToolPolicy(definition, requiredTools);
+    const required = new Set(requiredTools);
     const selected = policy.explicit
       ? policy.tools.flatMap((pattern) =>
           [...registeredToolNames()].filter((name) =>
@@ -839,10 +841,10 @@ export function createLeadToolState(
           ),
         )
       : [...baseline];
-    const excluded = (name: string) =>
-      policy.excluded.some((pattern) => matchesToolPattern(pattern, name));
     return appendRegisteredTools(
-      normalizeBaseTools(selected.filter((name) => !excluded(name))),
+      normalizeBaseTools(
+        selected.filter((name) => toolPolicyAllowsName(policy, required, name)),
+      ),
       requiredTools,
     );
   };

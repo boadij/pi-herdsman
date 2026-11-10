@@ -20,6 +20,7 @@ import {
   agentDefinitionEnabled,
   agentLaunchArgs,
   configuredModel,
+  configuredToolPolicy,
   AGENT_COORDINATION_TOOLS,
   discoverAgent,
   discoverAgentDefinitions,
@@ -38,6 +39,7 @@ import {
   mergeFrontmatter,
   projectAgentDefinition,
   resolveChildModel,
+  toolPolicyAllowsName,
   updateAgentOverride,
   validateAgentDefinitionReferences,
   writePrivatePromptSnapshots,
@@ -3237,6 +3239,27 @@ test("wildcard exclusions reject mandatory overlap and escape regex syntax", () 
     args[args.indexOf("--exclude-tools") + 1],
     "ask.?*,agent,xask_*",
   );
+});
+
+test("tool policy name predicate applies allow and exclude patterns with required overrides", () => {
+  const definition = {
+    name: "policy",
+    path: "/policy.md",
+    body: "",
+    frontmatter: { tools: ["read*", "write"], excludeTools: ["read_secret"] },
+  } satisfies AgentDefinition;
+  const required = new Set(["read_required"]);
+  const policy = configuredToolPolicy(definition, [...required]);
+  assert.equal(toolPolicyAllowsName(policy, required, "read_file"), true);
+  assert.equal(toolPolicyAllowsName(policy, required, "read_secret"), false);
+  assert.equal(toolPolicyAllowsName(policy, required, "write"), true);
+  assert.equal(toolPolicyAllowsName(policy, required, "bash"), false);
+  assert.equal(toolPolicyAllowsName(policy, required, "read_required"), true);
+  const inherited = configuredToolPolicy(
+    { ...definition, frontmatter: {} },
+    [],
+  );
+  assert.equal(toolPolicyAllowsName(inherited, new Set(), "bash"), true);
 });
 
 test("Agent and Coordinator namespaces isolate misplaced user definitions", () => {
