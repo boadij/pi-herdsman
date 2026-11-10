@@ -137,6 +137,7 @@ import {
   terminalFailureEvidence,
   matchPiProvenance,
   assertContinuationFauxEvidence,
+  continuationCompletionDiagnostics,
   managerHandoffLeadProcessProof,
   prepareManagerRepository,
   assertManagerFreshPrimary,
@@ -1497,6 +1498,31 @@ test("continuation failure diagnostics retain sanitized root delegation state", 
       paths: {},
       sessionName: "isolated",
       rootPaneId: "root",
+      continuationCompletionDiagnostics: {
+        observed: true,
+        savedSessionObserved: true,
+        resumedSessionObserved: false,
+        resumedSessionMatchesSaved: false,
+        resumedProcessObserved: true,
+        sessionStartPidMatchCount: 1,
+        provenancePidMatchCount: 0,
+        piVersion: "1.5.1",
+        piVersionMatchesPinned: true,
+        deliveredResultCount: 0,
+        deliveredResultHasRequestAndRunMetadata: false,
+        continueResultCount: 0,
+        continueToolResultRequestMatchesDeliveredMetadata: false,
+        mailboxStateMatchesSavedSession: false,
+        mailboxStateHasCandidateLabel: false,
+        mailboxRequestPresent: false,
+        mailboxRequestMatchesActiveState: false,
+        mailboxStateRequestMatchesContinueResult: false,
+        mailboxStateMatchesDeliveredResult: false,
+        mailboxRequestMatchesDeliveredResult: false,
+        deliveredResultBeforeWaitResponse: false,
+        waitMessageCount: 0,
+        ownerCompletionMarker: false,
+      },
     },
     { hostPaneId: "host" },
     null,
@@ -1523,6 +1549,31 @@ test("continuation failure diagnostics retain sanitized root delegation state", 
     assistantObserved: true,
     assistantStopReason: "error",
     assistantErrorObserved: true,
+  });
+  assert.deepEqual(projection.continuationCompletion, {
+    observed: true,
+    savedSessionObserved: true,
+    resumedSessionObserved: false,
+    resumedSessionMatchesSaved: false,
+    resumedProcessObserved: true,
+    sessionStartPidMatchCount: 1,
+    provenancePidMatchCount: 0,
+    piVersion: "1.5.1",
+    piVersionMatchesPinned: true,
+    deliveredResultCount: 0,
+    deliveredResultHasRequestAndRunMetadata: false,
+    continueResultCount: 0,
+    continueToolResultRequestMatchesDeliveredMetadata: false,
+    mailboxStateMatchesSavedSession: false,
+    mailboxStateHasCandidateLabel: false,
+    mailboxRequestPresent: false,
+    mailboxRequestMatchesActiveState: false,
+    mailboxStateRequestMatchesContinueResult: false,
+    mailboxStateMatchesDeliveredResult: false,
+    mailboxRequestMatchesDeliveredResult: false,
+    deliveredResultBeforeWaitResponse: false,
+    waitMessageCount: 0,
+    ownerCompletionMarker: false,
   });
   const evidence = sanitizedFailureEvidence(
     {
@@ -1552,6 +1603,10 @@ test("continuation failure diagnostics retain sanitized root delegation state", 
   try {
     const saved = JSON.parse(await readFile(artifact, "utf8"));
     assert.equal(saved.diagnostics.rootDelegation.matchingResult, "absent");
+    assert.equal(
+      saved.diagnostics.continuationCompletion.savedSessionObserved,
+      true,
+    );
     assert.doesNotMatch(JSON.stringify(saved), /PRIVATE/u);
   } finally {
     await rm(dirname(artifact), { recursive: true, force: true });
@@ -6167,9 +6222,9 @@ test("continuation first-generation stalls if completed child retires before obs
       assert.equal(error.smoke.stage, "continuation-first-generation");
       assert.deepEqual(error.smoke.lastProgress, {
         childCount: 0,
-        sessionId: null,
+        sessionObserved: false,
         sessionBytes: 0,
-        candidatePids: [],
+        candidateProcessCount: 0,
       });
       return true;
     },
@@ -6228,12 +6283,13 @@ test("simulated continuation releases completion only after full live evidence",
       "candidateProcess",
       "writeFile",
       "MODEL_STALL_MS",
+      "continuationCompletionDiagnostics",
       `return (${exactFunction});`,
     )(
       async () => '{"name":"pi-herdsman"}',
       join,
       async (
-        _ctx: unknown,
+        smokeCtx: any,
         stage: string,
         inspect: () => Promise<{
           done: boolean;
@@ -6253,6 +6309,14 @@ test("simulated continuation releases completion only after full live evidence",
         assert.ok(
           (await stat(join(runtime, "continuation-first-observed"))).isFile(),
         );
+        assert.equal(
+          smokeCtx.continuationCompletionDiagnostics.savedSessionObserved,
+          true,
+        );
+        assert.equal(
+          smokeCtx.continuationCompletionDiagnostics.resumedSessionObserved,
+          false,
+        );
         await completion;
         assert.equal(completed, true);
         throw stop;
@@ -6266,6 +6330,7 @@ test("simulated continuation releases completion only after full live evidence",
       () => (inspection === 2 ? [{ pid: 123 }] : []),
       writeFile,
       120_000,
+      continuationCompletionDiagnostics,
     );
     await assert.rejects(
       run({
@@ -6616,6 +6681,186 @@ test("continuation requires configured faux extension and provider evidence for 
       assertContinuationFauxEvidence(starts, provenance, sessionId, [101, 101]),
     /distinct PIDs/,
   );
+});
+
+test("continuation diagnostics distinguish delivered metadata from request correlation", () => {
+  const sessionId = "private-session-id";
+  const requestId = "private-request-id";
+  const runId = "private-run-id";
+  const ownerContents = [
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "continue_agent",
+            id: "call-1",
+            arguments: { session: sessionId },
+          },
+        ],
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "continue_agent",
+        toolCallId: "call-1",
+        details: {
+          session_id: sessionId,
+          session_path: sessionId,
+          request_id: requestId,
+        },
+      },
+    },
+    {
+      type: "custom_message",
+      customType: "pi-herdsman-agent-result",
+      details: {
+        requestId,
+        runId,
+        piSessionId: sessionId,
+        agentLabel: "smoke",
+        status: "completed",
+      },
+      content: "PI_HERDSMAN_CONTINUATION_SECOND",
+    },
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: "Continued Agent result already delivered.",
+      },
+    },
+  ]
+    .map((entry) => JSON.stringify(entry))
+    .join("\n");
+  const diagnostics = continuationCompletionDiagnostics({
+    sessionId,
+    savedSessionId: sessionId,
+    savedSessionObserved: true,
+    resumedSessionObserved: true,
+    pid: 202,
+    requestId,
+    candidateLabel: "smoke",
+    mailboxState: {
+      piSessionId: sessionId,
+      agentLabel: "smoke",
+      activeRequestId: requestId,
+      runId,
+    },
+    mailboxRequest: {
+      requestId,
+      runId,
+      piSessionId: sessionId,
+      agentLabel: "smoke",
+    },
+    expectedVersion: "1.5.1",
+    sessionStarts: [{ sessionId, pid: 202 }],
+    provenance: [
+      {
+        sessionId,
+        pid: 202,
+        packageName: "@earendil-works/pi-coding-agent",
+        model: "continuation",
+        piVersion: "1.5.1",
+      },
+    ],
+    ownerContents,
+    completionMarker: "PI_HERDSMAN_CONTINUATION_SECOND",
+  });
+  assert.deepEqual(diagnostics, {
+    observed: true,
+    savedSessionObserved: true,
+    resumedSessionObserved: true,
+    resumedSessionMatchesSaved: true,
+    resumedProcessObserved: true,
+    sessionStartPidMatchCount: 1,
+    provenancePidMatchCount: 1,
+    piVersion: "1.5.1",
+    piVersionMatchesPinned: true,
+    deliveredResultCount: 1,
+    deliveredResultHasRequestAndRunMetadata: true,
+    continueResultCount: 1,
+    continueToolResultRequestMatchesDeliveredMetadata: true,
+    mailboxStateMatchesSavedSession: true,
+    mailboxStateHasCandidateLabel: true,
+    mailboxRequestPresent: true,
+    mailboxRequestMatchesActiveState: true,
+    mailboxStateRequestMatchesContinueResult: true,
+    mailboxStateMatchesDeliveredResult: true,
+    mailboxRequestMatchesDeliveredResult: true,
+    deliveredResultBeforeWaitResponse: true,
+    waitMessageCount: 1,
+    ownerCompletionMarker: true,
+  });
+  assert.equal(JSON.stringify(diagnostics).includes(sessionId), false);
+  const metadataAbsent = continuationCompletionDiagnostics({
+    sessionId,
+    savedSessionId: sessionId,
+    pid: 202,
+    requestId,
+    candidateLabel: "smoke",
+    mailboxState: {
+      piSessionId: sessionId,
+      agentLabel: "smoke",
+      completedRequestId: requestId,
+      lastAck: { requestId, accepted: true },
+      runId,
+    },
+    expectedVersion: "1.5.1",
+    sessionStarts: [{ sessionId, pid: 202 }],
+    provenance: [
+      {
+        sessionId,
+        pid: 202,
+        packageName: "@earendil-works/pi-coding-agent",
+        model: "continuation",
+        piVersion: "1.5.1",
+      },
+    ],
+    ownerContents: ownerContents.replace(`"runId":"${runId}",`, ""),
+    completionMarker: "PI_HERDSMAN_CONTINUATION_SECOND",
+  });
+  assert.equal(metadataAbsent.deliveredResultCount, 1);
+  assert.equal(metadataAbsent.deliveredResultHasRequestAndRunMetadata, false);
+  assert.equal(metadataAbsent.mailboxStateRequestMatchesContinueResult, true);
+  assert.equal(metadataAbsent.mailboxRequestPresent, false);
+  assert.equal(metadataAbsent.mailboxStateMatchesDeliveredResult, false);
+  const consumedRequest = continuationCompletionDiagnostics({
+    sessionId,
+    savedSessionId: sessionId,
+    savedSessionObserved: true,
+    resumedSessionObserved: true,
+    pid: 202,
+    requestId,
+    candidateLabel: "smoke",
+    mailboxState: {
+      piSessionId: sessionId,
+      agentLabel: "smoke",
+      completedRequestId: requestId,
+      lastAck: { requestId, accepted: true },
+      runId,
+    },
+    expectedVersion: "1.5.1",
+    sessionStarts: [{ sessionId, pid: 202 }],
+    provenance: [
+      {
+        sessionId,
+        pid: 202,
+        packageName: "@earendil-works/pi-coding-agent",
+        model: "continuation",
+        piVersion: "1.5.1",
+      },
+    ],
+    ownerContents,
+    completionMarker: "PI_HERDSMAN_CONTINUATION_SECOND",
+  });
+  assert.equal(consumedRequest.mailboxRequestPresent, false);
+  assert.equal(consumedRequest.mailboxStateRequestMatchesContinueResult, true);
+  assert.equal(consumedRequest.mailboxStateMatchesDeliveredResult, true);
 });
 
 test("continuation provider evidence wait polls until the second-generation request is recorded", async () => {

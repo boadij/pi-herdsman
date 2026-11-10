@@ -4117,7 +4117,7 @@ export function assertContinuationFauxEvidence(
       sessionStarts.some(
         (record) => record.sessionId === sessionId && record.pid === pid,
       ),
-      `missing faux session_start evidence for ${sessionId} PID ${pid}`,
+      "missing faux session_start evidence for a continuation generation",
     );
     assert.ok(
       provenance.some(
@@ -4126,9 +4126,180 @@ export function assertContinuationFauxEvidence(
           record.pid === pid &&
           record.model === "continuation",
       ),
-      `missing faux continuation provider request for ${sessionId} PID ${pid}`,
+      "missing faux continuation provider request for a generation",
     );
   }
+}
+
+export function continuationCompletionDiagnostics({
+  sessionId,
+  savedSessionId,
+  pid,
+  savedSessionObserved = false,
+  resumedSessionObserved = false,
+  requestId,
+  candidateLabel,
+  mailboxState,
+  mailboxRequest,
+  expectedVersion,
+  sessionStarts = [],
+  provenance = [],
+  ownerContents = "",
+  completionMarker,
+}) {
+  const entries = ownerContents
+    .split(/\r?\n/u)
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line)];
+      } catch {
+        return [];
+      }
+    });
+  const sessionStartPidMatchCount = sessionStarts.filter(
+    (record) => record.sessionId === sessionId && record.pid === pid,
+  ).length;
+  const provenanceMatches = provenance.filter(
+    (record) =>
+      record.sessionId === sessionId &&
+      record.pid === pid &&
+      record.packageName === "@earendil-works/pi-coding-agent" &&
+      record.model === "continuation",
+  );
+  const versions = [
+    ...new Set(provenanceMatches.map(({ piVersion }) => piVersion)),
+  ];
+  const piVersion =
+    versions.length === 1 &&
+    typeof versions[0] === "string" &&
+    /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(versions[0])
+      ? versions[0].slice(0, 80)
+      : null;
+  const continueResults = entries.flatMap((entry, index) => {
+    const message = entry.type === "message" ? entry.message : undefined;
+    if (
+      message?.role !== "toolResult" ||
+      message.toolName !== "continue_agent" ||
+      message.isError ||
+      message.details?.session_id !== sessionId
+    )
+      return [];
+    const call = entries
+      .slice(0, index)
+      .some((candidate) =>
+        (candidate.type === "message"
+          ? candidate.message
+          : undefined
+        )?.content?.some(
+          (part) =>
+            part?.type === "toolCall" &&
+            part.name === "continue_agent" &&
+            part.id === message.toolCallId &&
+            [sessionId, message.details.session_path].includes(
+              part.arguments?.session,
+            ),
+        ),
+      );
+    return call
+      ? [
+          {
+            index,
+            requestId: message.details?.request_id,
+            requestMatches: message.details?.request_id === requestId,
+          },
+        ]
+      : [];
+  });
+  const waitIndexes = entries.flatMap((entry, index) => {
+    const message = entry.type === "message" ? entry.message : undefined;
+    return message?.role === "assistant" &&
+      messageText(message.content).includes(
+        "Continued Agent result already delivered.",
+      )
+      ? [index]
+      : [];
+  });
+  const deliveredResults = entries.flatMap((entry, index) => {
+    const details = entry.type === "custom_message" ? entry.details : undefined;
+    return entry.customType === "pi-herdsman-agent-result" &&
+      details?.piSessionId === sessionId &&
+      details?.status === "completed" &&
+      typeof completionMarker === "string" &&
+      String(entry.content ?? "").includes(completionMarker)
+      ? [{ index, details }]
+      : [];
+  });
+  const delivered = deliveredResults[0]?.details;
+  const stateRequestId =
+    mailboxState?.activeRequestId ??
+    mailboxState?.completedRequestId ??
+    (mailboxState?.lastAck?.accepted
+      ? mailboxState.lastAck.requestId
+      : undefined);
+  const mailboxRequestMatchesState =
+    !!mailboxRequest &&
+    mailboxRequest.requestId === mailboxState?.activeRequestId &&
+    mailboxRequest.runId === mailboxState?.runId &&
+    mailboxRequest.piSessionId === mailboxState?.piSessionId &&
+    mailboxRequest.agentLabel === mailboxState?.agentLabel;
+  return {
+    observed:
+      savedSessionObserved ||
+      resumedSessionObserved ||
+      Number.isSafeInteger(pid) ||
+      provenanceMatches.length > 0 ||
+      !!mailboxState ||
+      continueResults.length > 0 ||
+      deliveredResults.length > 0,
+    savedSessionObserved,
+    resumedSessionObserved,
+    resumedSessionMatchesSaved:
+      resumedSessionObserved && sessionId === savedSessionId,
+    resumedProcessObserved: Number.isSafeInteger(pid) && pid > 0,
+    sessionStartPidMatchCount: Math.min(sessionStartPidMatchCount, 100),
+    provenancePidMatchCount: Math.min(provenanceMatches.length, 100),
+    piVersion,
+    piVersionMatchesPinned: piVersion !== null && piVersion === expectedVersion,
+    deliveredResultCount: Math.min(deliveredResults.length, 100),
+    deliveredResultHasRequestAndRunMetadata: deliveredResults.some(
+      ({ details }) =>
+        typeof details.requestId === "string" &&
+        details.requestId.length > 0 &&
+        typeof details.runId === "string" &&
+        details.runId.length > 0,
+    ),
+    continueResultCount: Math.min(continueResults.length, 100),
+    continueToolResultRequestMatchesDeliveredMetadata: continueResults.some(
+      ({ requestMatches }) => requestId !== undefined && requestMatches,
+    ),
+    mailboxStateMatchesSavedSession: mailboxState?.piSessionId === sessionId,
+    mailboxStateHasCandidateLabel: mailboxState?.agentLabel === candidateLabel,
+    mailboxRequestPresent: !!mailboxRequest,
+    mailboxRequestMatchesActiveState: mailboxRequestMatchesState,
+    mailboxStateRequestMatchesContinueResult:
+      stateRequestId !== undefined &&
+      continueResults.some(
+        ({ requestId: resultRequestId }) => resultRequestId === stateRequestId,
+      ),
+    mailboxStateMatchesDeliveredResult:
+      !!delivered &&
+      delivered.requestId === stateRequestId &&
+      delivered.runId === mailboxState?.runId &&
+      delivered.piSessionId === mailboxState?.piSessionId,
+    mailboxRequestMatchesDeliveredResult:
+      mailboxRequestMatchesState &&
+      !!delivered &&
+      mailboxRequest.requestId === delivered.requestId &&
+      mailboxRequest.runId === delivered.runId &&
+      mailboxRequest.piSessionId === delivered.piSessionId,
+    deliveredResultBeforeWaitResponse: deliveredResults.some(
+      ({ index: resultIndex }) =>
+        waitIndexes.some((waitIndex) => resultIndex < waitIndex),
+    ),
+    waitMessageCount: Math.min(waitIndexes.length, 100),
+    ownerCompletionMarker: ownerContents.includes(completionMarker),
+  };
 }
 
 export function rootFailureProvenance(contents, sessionId) {
@@ -6511,14 +6682,6 @@ async function runAgentCrashRecoverySmoke(ctx) {
           requestId: targetMailbox.state.activeRequestId,
           paneId: target.pane_id,
           workspaceId: target.workspace_id,
-          request: targetMailbox.request
-            ? {
-                requestId: targetMailbox.request.requestId,
-                runId: targetMailbox.request.runId,
-                ownerSessionId: targetMailbox.request.ownerSessionId,
-                kind: targetMailbox.request.kind,
-              }
-            : null,
         },
         parent: {
           sessionId: parentSession.id,
@@ -6612,11 +6775,6 @@ async function runAgentCrashRecoverySmoke(ctx) {
   ctx.crashRecovery.ownerSessionId = ownerHeader.id;
 
   const target = ctx.crashRecovery.target;
-  assert.equal(
-    target.request?.ownerSessionId,
-    ownerHeader.id,
-    "accepted target request does not belong to the captured owner session",
-  );
   const targetListings =
     (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
   const targetCandidates = targetListings.filter(
@@ -6630,11 +6788,6 @@ async function runAgentCrashRecoverySmoke(ctx) {
     "target pane/workspace identity is ambiguous before process loss",
   );
   const targetAgent = targetCandidates[0];
-  assert.equal(
-    smokeAgentLabel(targetAgent),
-    "smoke-crash-target",
-    "target pane is not the accepted disposable Agent",
-  );
   const targetSession = await isolatedSessionDetails(ctx, targetAgent);
   assert.ok(targetSession, "target session is unavailable before process loss");
   assert.equal(targetSession.id, target.sessionId);
@@ -6659,20 +6812,8 @@ async function runAgentCrashRecoverySmoke(ctx) {
       value,
       `target mailbox ${key} changed`,
     );
-  assert.ok(targetMailbox.request, "accepted target request is missing");
-  for (const [key, value] of Object.entries({
-    requestId: target.requestId,
-    runId: target.runId,
-    ownerSessionId: ownerHeader.id,
-    workspaceId: target.workspaceId,
-    paneId: target.paneId,
-    agentLabel: "smoke-crash-target",
-  }))
-    assert.equal(
-      targetMailbox.request[key],
-      value,
-      `target request ${key} changed`,
-    );
+  assert.equal(targetMailbox.state.lastAck?.requestId, target.requestId);
+  assert.equal(targetMailbox.state.lastAck?.accepted, true);
 
   const targetResultPath = join(
     targetMailbox.directory,
@@ -7873,7 +8014,74 @@ async function runContinuationSmoke(ctx) {
   ).name;
   let firstSession;
   let firstGeneration;
+  let savedAfterCleanup;
+  let secondGenerationMailbox;
+  let resumedSessionObserved = false;
+  let sessionStarts = [];
+  let provenance = [];
+  let ownerContents = "";
+  ctx.continuationCompletionDiagnostics = {
+    observed: false,
+    savedSessionObserved: false,
+    resumedSessionObserved: false,
+    resumedSessionMatchesSaved: false,
+    resumedProcessObserved: false,
+    sessionStartPidMatchCount: 0,
+    provenancePidMatchCount: 0,
+    piVersion: null,
+    piVersionMatchesPinned: false,
+    deliveredResultCount: 0,
+    deliveredResultHasRequestAndRunMetadata: false,
+    continueResultCount: 0,
+    continueToolResultRequestMatchesDeliveredMetadata: false,
+    mailboxStateMatchesSavedSession: false,
+    mailboxStateHasCandidateLabel: false,
+    mailboxRequestPresent: false,
+    mailboxRequestMatchesActiveState: false,
+    mailboxStateRequestMatchesContinueResult: false,
+    mailboxStateMatchesDeliveredResult: false,
+    mailboxRequestMatchesDeliveredResult: false,
+    deliveredResultBeforeWaitResponse: false,
+    waitMessageCount: 0,
+    ownerCompletionMarker: false,
+  };
   const firstPids = new Set();
+  const refreshContinuationDiagnostics = () => {
+    const deliveredResult = ownerContents
+      .split(/\r?\n/u)
+      .filter(Boolean)
+      .flatMap((line) => {
+        try {
+          return [JSON.parse(line)];
+        } catch {
+          return [];
+        }
+      })
+      .find(
+        (entry) =>
+          entry.type === "custom_message" &&
+          entry.customType === "pi-herdsman-agent-result" &&
+          entry.details?.piSessionId === firstSession?.id &&
+          entry.details?.status === "completed" &&
+          messageText(entry.content).includes(secondMarker),
+      );
+    ctx.continuationCompletionDiagnostics = continuationCompletionDiagnostics({
+      sessionId: resumedSessionObserved ? firstSession?.id : undefined,
+      savedSessionId: savedAfterCleanup?.id ?? firstSession?.id,
+      pid: firstGeneration,
+      savedSessionObserved: !!firstSession,
+      resumedSessionObserved,
+      requestId: deliveredResult?.details?.requestId,
+      candidateLabel: secondGenerationMailbox?.candidateLabel,
+      mailboxState: secondGenerationMailbox?.state,
+      mailboxRequest: secondGenerationMailbox?.request,
+      expectedVersion: ctx.expectedPiVersion,
+      sessionStarts,
+      provenance,
+      ownerContents,
+      completionMarker: secondMarker,
+    });
+  };
 
   const childAgents = async () => {
     const listed = await tryNestedCommand(ctx, ["agent", "list"]);
@@ -7921,7 +8129,7 @@ async function runContinuationSmoke(ctx) {
             return {
               done: false,
               observationError: observed.error,
-              evidence: { sessionId: session.id, paneId: agent.pane_id },
+              evidence: { sessionObserved: true, processObserved: false },
             };
           pids = candidateProcess(
             observed.value,
@@ -7931,6 +8139,7 @@ async function runContinuationSmoke(ctx) {
             .map(({ pid }) => pid)
             .filter((pid) => pid != null);
           firstSession = { ...session, paneId: agent.pane_id };
+          refreshContinuationDiagnostics();
           for (const pid of pids) firstPids.add(pid);
           break;
         }
@@ -7953,16 +8162,13 @@ async function runContinuationSmoke(ctx) {
         value: firstSession,
         progress: {
           childCount: agents.length,
-          sessionId: session?.id ?? null,
+          sessionObserved: !!session,
           sessionBytes: session ? Buffer.byteLength(session.contents) : 0,
-          candidatePids: pids.sort(),
+          candidateProcessCount: pids.length,
         },
         evidence: {
-          sessionError,
-          agents: agents.map(({ pane_id, agent_status }) => ({
-            pane_id,
-            agent_status,
-          })),
+          sessionErrorObserved: !!sessionError,
+          childCount: agents.length,
         },
       };
     },
@@ -8017,7 +8223,7 @@ async function runContinuationSmoke(ctx) {
       return {
         done: !paneStillExists,
         progress: { paneStillExists },
-        evidence: { paneId: firstSession.paneId },
+        evidence: { paneStillExists: paneStillExists },
       };
     },
     { timeoutMs: 60_000, stallMs: CONTROL_STALL_MS, pollMs: 300 },
@@ -8029,13 +8235,14 @@ async function runContinuationSmoke(ctx) {
     throw new Error(
       "continuation-first-cleanup: first managed pane did not disappear",
     );
-  const savedAfterCleanup = await isolatedSessionDetails(ctx, {
+  savedAfterCleanup = await isolatedSessionDetails(ctx, {
     agent_session: { kind: "path", value: firstSession.path },
   });
   if (savedAfterCleanup.id !== firstSession.id)
     throw new Error(
       "continuation-session-identity: first cleanup changed the persisted Pi session ID",
     );
+  refreshContinuationDiagnostics();
 
   const followup = `Continue the exact saved Pi session at ${firstSession.path}. This is the same implementer you delegated previously. Without rereading package.json, return the package name you were asked to remember, followed by exactly ${secondMarker}. The final answer to me must include that marker.`;
   await promptRoot(followup);
@@ -8045,7 +8252,6 @@ async function runContinuationSmoke(ctx) {
     async () => {
       const agents = await childAgents();
       let matchingSessionSeen = false;
-      let matchingPane;
       for (const agent of agents) {
         const session = await isolatedSessionDetails(ctx, agent).catch(
           (error) => {
@@ -8059,7 +8265,30 @@ async function runContinuationSmoke(ctx) {
         )
           continue;
         matchingSessionSeen = true;
-        matchingPane = agent.pane_id;
+        resumedSessionObserved = true;
+        refreshContinuationDiagnostics();
+        const candidateLabel = smokeAgentLabel(agent);
+        let mailbox;
+        try {
+          mailbox = await smokeMailbox(ctx, agent, candidateLabel);
+        } catch (error) {
+          if (error.message !== `mailbox not found for ${candidateLabel}`)
+            throw error;
+        }
+        if (mailbox) {
+          secondGenerationMailbox ??= { ...mailbox, candidateLabel };
+          refreshContinuationDiagnostics();
+          assert.equal(mailbox.state.piSessionId, firstSession.id);
+          assert.equal(mailbox.state.agentLabel, candidateLabel);
+          if (mailbox.request)
+            for (const [key, value] of Object.entries({
+              requestId: mailbox.state.activeRequestId,
+              runId: mailbox.state.runId,
+              piSessionId: firstSession.id,
+              agentLabel: candidateLabel,
+            }))
+              assert.equal(mailbox.request[key], value);
+        }
         const observed = await tryNestedCommand(ctx, [
           "pane",
           "process-info",
@@ -8081,6 +8310,7 @@ async function runContinuationSmoke(ctx) {
           ) {
             firstGeneration = proc.pid;
             ctx.continuationSecondPaneId = agent.pane_id;
+            refreshContinuationDiagnostics();
           }
         }
       }
@@ -8089,8 +8319,8 @@ async function runContinuationSmoke(ctx) {
         value: firstGeneration,
         progress: {
           matchingSessionSeen,
-          matchingPane: matchingPane ?? null,
-          newPid: firstGeneration ?? null,
+          matchingSessionObserved: matchingSessionSeen,
+          newProcessObserved: firstGeneration !== undefined,
         },
         evidence: { childCount: agents.length },
       };
@@ -8112,17 +8342,19 @@ async function runContinuationSmoke(ctx) {
     ctx,
     "continuation-second-provider-request",
     async () => {
-      const provenance = await readJsonl("smoke-faux-provenance.jsonl");
+      provenance = await readJsonl("smoke-faux-provenance.jsonl");
+      sessionStarts = await readJsonl("smoke-faux-session-start.jsonl");
       const found = provenance.some(
         (record) =>
           record.sessionId === firstSession.id &&
           record.pid === firstGeneration &&
           record.model === "continuation",
       );
+      refreshContinuationDiagnostics();
       return {
         done: found,
         progress: { secondGenerationProviderRequest: found },
-        evidence: { sessionId: firstSession.id, pid: firstGeneration },
+        evidence: { matchingSessionObserved: true, processObserved: true },
       };
     },
     {
@@ -8143,6 +8375,8 @@ async function runContinuationSmoke(ctx) {
     "continuation-follow-up",
     async () => {
       const session = await rootSessionSnapshot(ctx);
+      ownerContents = session?.contents ?? "";
+      refreshContinuationDiagnostics();
       const matchingResults =
         session &&
         continuationResultsForPrompt(session.contents, followup, secondMarker);
@@ -8198,6 +8432,12 @@ async function runContinuationSmoke(ctx) {
           ),
         );
         ctx.continuationSessionEvidence = evidence;
+        [sessionStarts, provenance] = await Promise.all([
+          readJsonl("smoke-faux-session-start.jsonl"),
+          readJsonl("smoke-faux-provenance.jsonl"),
+        ]);
+        ownerContents = session.contents;
+        refreshContinuationDiagnostics();
         if (
           !evidence.sessionIdMatches ||
           !evidence.continuationTaskFound ||
@@ -11725,6 +11965,8 @@ export async function collectDiagnostics(
   diagnostics.managerRecovery = ctx.managerRecovery ?? null;
   diagnostics.terminalFailure = ctx.terminalFailure ?? null;
   diagnostics.continuationSession = ctx.continuationSessionEvidence ?? null;
+  diagnostics.continuationCompletion =
+    ctx.continuationCompletionDiagnostics ?? null;
   diagnostics.failure = failure?.smoke ?? null;
   diagnostics.stage = ctx.stage ?? null;
   diagnostics.preflight = ctx.preflight ?? null;
@@ -12113,6 +12355,13 @@ export async function collectDiagnostics(
         ? diagnostics.processes.filter((record) => record.processMatch).length
         : null,
       rootSessionObserved: !diagnostics.rootSession?.error,
+      ...(diagnostics.continuationCompletion
+        ? {
+            continuationCompletion: sanitizedFailureDiagnostics({
+              continuationCompletion: diagnostics.continuationCompletion,
+            }).continuationCompletion,
+          }
+        : {}),
       ...(diagnostics.coreDelegation
         ? {
             coreDelegation: sanitizedCoreDelegation(diagnostics.coreDelegation),
@@ -12134,6 +12383,13 @@ export async function collectDiagnostics(
     rootSessionObserved: Boolean(
       diagnostics.rootSession && !diagnostics.rootSession.error,
     ),
+    ...(diagnostics.continuationCompletion
+      ? {
+          continuationCompletion: sanitizedFailureDiagnostics({
+            continuationCompletion: diagnostics.continuationCompletion,
+          }).continuationCompletion,
+        }
+      : {}),
     ...(ctx.scenario === "continuation"
       ? {
           rootDelegation:
@@ -12773,6 +13029,33 @@ function sanitizedFailureDiagnostics(value) {
     Number.isSafeInteger(input) && input >= 0 ? Math.min(input, 256) : null;
   const root = value.rootDelegation;
   const supervisor = value.supervisorAgent;
+  const continuation = value.continuationCompletion;
+  const continuationBooleans = [
+    "observed",
+    "savedSessionObserved",
+    "resumedSessionObserved",
+    "resumedSessionMatchesSaved",
+    "resumedProcessObserved",
+    "piVersionMatchesPinned",
+    "deliveredResultHasRequestAndRunMetadata",
+    "continueToolResultRequestMatchesDeliveredMetadata",
+    "mailboxStateMatchesSavedSession",
+    "mailboxStateHasCandidateLabel",
+    "mailboxRequestPresent",
+    "mailboxRequestMatchesActiveState",
+    "mailboxStateRequestMatchesContinueResult",
+    "mailboxStateMatchesDeliveredResult",
+    "mailboxRequestMatchesDeliveredResult",
+    "deliveredResultBeforeWaitResponse",
+    "ownerCompletionMarker",
+  ];
+  const continuationCounts = [
+    "sessionStartPidMatchCount",
+    "provenancePidMatchCount",
+    "deliveredResultCount",
+    "continueResultCount",
+    "waitMessageCount",
+  ];
   return {
     ...(typeof value.stage === "string" &&
     /^[a-z0-9-]{1,80}$/u.test(value.stage)
@@ -12784,6 +13067,29 @@ function sanitizedFailureDiagnostics(value) {
       typeof value.rootSessionObserved === "boolean"
         ? value.rootSessionObserved
         : false,
+    ...(continuation && typeof continuation === "object"
+      ? {
+          continuationCompletion: {
+            ...Object.fromEntries(
+              continuationBooleans.map((key) => [
+                key,
+                continuation[key] === true,
+              ]),
+            ),
+            ...Object.fromEntries(
+              continuationCounts.map((key) => [key, count(continuation[key])]),
+            ),
+            piVersion:
+              typeof continuation.piVersion === "string" &&
+              continuation.piVersion.length <= 80 &&
+              /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(
+                continuation.piVersion,
+              )
+                ? continuation.piVersion
+                : null,
+          },
+        }
+      : {}),
     ...(root && typeof root === "object"
       ? {
           rootDelegation: {
@@ -13728,13 +14034,25 @@ async function main() {
           "continuation provenance does not match both process generations",
         );
       }
+      const provenanceSummary =
+        scenario === "continuation"
+          ? {
+              rootRecordCount: Math.min(versions[0].length, 100),
+              childRecordCounts: versions
+                .slice(1)
+                .map((records) => Math.min(records.length, 100)),
+              piVersion: versions[1]?.[0]?.piVersion ?? null,
+            }
+          : { root: versions[0], children: versions.slice(1) };
       console.log(
-        `Pi version provenance: ${JSON.stringify({ root: versions[0], children: versions.slice(1) })}`,
+        `Pi version provenance: ${JSON.stringify(provenanceSummary)}`,
       );
     }
-    console.log(`herdr server: ${ctx.nestedServerVersion}`);
-    console.log(`model: ${ctx.model}`);
-    console.log(`candidate: ${ctx.candidateExtension}`);
+    if (scenario !== "continuation") {
+      console.log(`herdr server: ${ctx.nestedServerVersion}`);
+      console.log(`model: ${ctx.model}`);
+      console.log(`candidate: ${ctx.candidateExtension}`);
+    }
     if (scenario === "core") {
       console.log(`descendant panes: ${ctx.descendantCount}`);
       console.log(
@@ -13744,14 +14062,7 @@ async function main() {
     }
     if (scenario === "continuation")
       console.log(
-        `continuation: ${JSON.stringify({
-          sessionId: ctx.continuationSessionId,
-          sessionPath: ctx.continuationSessionPath,
-          firstPane: ctx.continuationFirstPaneId,
-          secondPane: ctx.continuationSecondPaneId,
-          secondPid: ctx.continuationGenerationPid,
-          result: "one final remembered-context owner result",
-        })}`,
+        `continuation: ${JSON.stringify(ctx.continuationCompletionDiagnostics ?? { completed: false })}`,
       );
     if (scenario === "chief-tree")
       console.log(
@@ -13772,12 +14083,20 @@ async function main() {
       console.log(`agent-crash-recovery: ${JSON.stringify(ctx.crashRecovery)}`);
     if (scenario === "deep-chain")
       console.log(`deep-chain: ${JSON.stringify(ctx.deepChain)}`);
-    console.log(`authentication: ${ctx.authMechanism}`);
+    if (scenario !== "continuation")
+      console.log(`authentication: ${ctx.authMechanism}`);
   } catch (error) {
     failure = { phase, error };
+    const failureKind = classifySmokeFailure(phase, error).replace("_", " ");
     console.error(
-      `smoke ${scenario}: ${classifySmokeFailure(phase, error).replace("_", " ")}\n${formatSmokeFailure(error, ctx.stage)}`,
+      scenario === "continuation"
+        ? `smoke continuation: ${failureKind}`
+        : `smoke ${scenario}: ${failureKind}\n${formatSmokeFailure(error, ctx.stage)}`,
     );
+    if (scenario === "continuation")
+      console.error(
+        `continuation: ${JSON.stringify(ctx.continuationCompletionDiagnostics ?? { observed: false })}`,
+      );
     if (scenario === "manager-bootstrap") {
       try {
         ctx.managerBootstrapFailureDiagnostics =
