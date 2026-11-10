@@ -13992,6 +13992,39 @@ export function sanitizedFailureEvidence(
     ...(ctx.scenario === "core" && ctx.simulated && ctx.coreRootProvenance
       ? { rootProvenance: ctx.coreRootProvenance }
       : {}),
+    ...(ctx.continuationDecisionEvents
+      ? {
+          continuationDecisionEvents: ctx.continuationDecisionEvents
+            .slice(-20)
+            .map((event) => ({
+              resultFound: event.resultFound === true,
+              isLatestUser: event.isLatestUser === true,
+              decision: [
+                "continue_call",
+                "continued_marker",
+                "first_marker",
+                "result_not_latest_user",
+                "wait",
+              ].includes(event.decision)
+                ? event.decision
+                : "unknown",
+              lastUserCategory: [
+                "user:agent_result",
+                "user:coordination",
+                "user:instruction",
+                "user:other",
+                "assistant:not_user",
+                "toolResult:not_user",
+                "system:not_user",
+                "other:not_user",
+              ].includes(event.lastUserCategory)
+                ? event.lastUserCategory
+                : "other:not_user",
+              expectedMarkerOrContinueEmitted:
+                event.expectedMarkerOrContinueEmitted === true,
+            })),
+        }
+      : {}),
     firstRequestVerified: ctx.firstRequestVerified ?? false,
     parentOwnership: parent
       ? {
@@ -14613,6 +14646,25 @@ async function main() {
           .split(/\r?\n/)
           .filter(Boolean).length;
       } catch {}
+      if (ctx.scenario === "continuation" && ctx.simulated) {
+        try {
+          ctx.continuationDecisionEvents = (
+            await readFile(
+              join(
+                paths.piAgent,
+                "pi-herdsman",
+                "runtime",
+                "smoke-faux-continuation.jsonl",
+              ),
+              "utf8",
+            )
+          )
+            .trim()
+            .split(/\r?\n/u)
+            .filter(Boolean)
+            .map((line) => JSON.parse(line));
+        } catch {}
+      }
       ctx.sessionStartObserved = Boolean(ctx.sessionStarts);
       try {
         const provenance = await readFile(

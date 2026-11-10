@@ -1,6 +1,7 @@
 import {
   appendFileSync,
   existsSync,
+  mkdirSync,
   readFileSync,
   realpathSync,
   watch,
@@ -649,6 +650,81 @@ function continuationDecision(messages) {
     return fauxAssistantMessage(`${pkg.name} PI_HERDSMAN_CONTINUATION_SECOND`);
   }
   throw new Error("Unexpected continuation transcript");
+}
+
+export function continuationDecisionDiagnostics(messages, answer) {
+  const followup = messages.some(
+    (message) =>
+      message.role === "user" &&
+      /Continue the exact saved Pi session at .+?\. This is the same implementer/.test(
+        text(message),
+      ),
+  );
+  const toolName = followup ? "continue_agent" : "delegate_agent";
+  const result = deliveredResult(messages, toolName, (content) =>
+    followup
+      ? content.startsWith("Agent result · agent=") &&
+        content.includes("status=completed")
+      : content.startsWith(
+          "Agent result · agent=smoke-continuation-implementer ·",
+        ),
+  );
+  const latestUser = lastUser(messages);
+  const emittedCall = answer.content?.some?.(
+    (part) => part.type === "toolCall" && part.name === "continue_agent",
+  );
+  const emittedMarker =
+    text(answer).includes("PI_HERDSMAN_CONTINUATION_FIRST") ||
+    text(answer).includes("PI_HERDSMAN_CONTINUATION_SECOND");
+  const role = ["user", "assistant", "toolResult", "system"].includes(
+    latestUser?.role,
+  )
+    ? latestUser.role
+    : "other";
+  const content = text(latestUser);
+  const kind =
+    role !== "user"
+      ? "not_user"
+      : content.startsWith("Agent result · agent=")
+        ? "agent_result"
+        : /^(Waiting for |First continuation Agent result already delivered\.|Continued Agent result already delivered\.)/u.test(
+              content,
+            )
+          ? "coordination"
+          : followup || content.includes("SMOKE_CONTINUATION")
+            ? "instruction"
+            : "other";
+  const decision = emittedCall
+    ? "continue_call"
+    : emittedMarker
+      ? followup
+        ? "continued_marker"
+        : "first_marker"
+      : result && latestUser !== result
+        ? "result_not_latest_user"
+        : "wait";
+  return {
+    resultFound: Boolean(result),
+    isLatestUser: Boolean(result && latestUser === result),
+    decision,
+    lastUserCategory: `${role}:${kind}`,
+    expectedMarkerOrContinueEmitted: Boolean(emittedCall || emittedMarker),
+  };
+}
+
+function recordContinuationDecision(messages, answer) {
+  if (!process.env.PI_CODING_AGENT_DIR) return;
+  const evidenceDir = join(
+    process.env.PI_CODING_AGENT_DIR,
+    "pi-herdsman",
+    "runtime",
+  );
+  mkdirSync(evidenceDir, { recursive: true, mode: 0o700 });
+  appendFileSync(
+    join(evidenceDir, "smoke-faux-continuation.jsonl"),
+    `${JSON.stringify(continuationDecisionDiagnostics(messages, answer))}\n`,
+    { mode: 0o600 },
+  );
 }
 
 function agentCrashRecoveryDecision(model, context) {
@@ -1429,7 +1505,11 @@ export function decide(model, context) {
     );
   }
   if (model === "core") return coreDecision(context);
-  if (model === "continuation") return continuationDecision(messages);
+  if (model === "continuation") {
+    const answer = continuationDecision(messages);
+    recordContinuationDecision(messages, answer);
+    return answer;
+  }
   if (model === "deep-chain") return deepChainDecision(context);
   if (model.startsWith("agent-crash-"))
     return agentCrashRecoveryDecision(

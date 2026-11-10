@@ -14,6 +14,7 @@ import type {
 import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 import {
   decide as decideSmokeFaux,
+  continuationDecisionDiagnostics,
   managerHandoffSupervisorToolAvailable,
 } from "../scripts/smoke-faux.mjs";
 import {
@@ -1314,6 +1315,54 @@ test("cleanup evidence retry failure reports sanitized error without undefined r
   );
 });
 import installFaux, { decide } from "../scripts/smoke-faux.mjs";
+
+test("continuation fixture decision diagnostics expose only allowlisted categories", () => {
+  const messages = [
+    {
+      role: "user",
+      content:
+        "Continue the exact saved Pi session at /private/session. This is the same implementer.",
+    },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "secret-id",
+          name: "continue_agent",
+          arguments: { session: "/private/session" },
+        },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolName: "continue_agent",
+      toolCallId: "secret-id",
+      content: "private response",
+    },
+    {
+      role: "user",
+      content:
+        "Agent result · agent=private · status=completed\nprivate result",
+    },
+    { role: "user", content: "Waiting for another event." },
+  ];
+  const diagnostics = continuationDecisionDiagnostics(messages, {
+    role: "assistant",
+    content: "Continued Agent result already delivered.",
+  });
+  assert.deepEqual(diagnostics, {
+    resultFound: true,
+    isLatestUser: false,
+    decision: "result_not_latest_user",
+    lastUserCategory: "user:coordination",
+    expectedMarkerOrContinueEmitted: false,
+  });
+  assert.doesNotMatch(
+    JSON.stringify(diagnostics),
+    /private|secret|prompt|response/,
+  );
+});
 
 test("package read identity accepts equivalent paths and rejects other files", () => {
   const cwd = "/workspace/project";
