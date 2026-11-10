@@ -2500,6 +2500,33 @@ test("deferred inbox records remain pending without authorization", async () => 
   assert.deepEqual(listChiefMessagePaths(runtime, record.toSessionId), [path]);
 });
 
+test("boundary inbox delivery is non-triggering, bounded, and keeps exact records", async () => {
+  const runtime = supervisionRuntime(socket());
+  const first = message({ createdAt: 1 });
+  const second = message({ createdAt: 2 });
+  writeChiefMessage(first, runtime);
+  const secondPath = writeChiefMessage(second, runtime);
+  const delivered = new Set<string>();
+  const options: ChiefInboxDrainOptions = {
+    runtime,
+    sessionId: first.toSessionId,
+    isAuthorized: () => true,
+    isDelivered: (id) => delivered.has(id),
+    forceNonTriggering: true,
+    maxDeliveries: 1,
+    sendMessage: (_message, delivery, record) => {
+      assert.equal(delivery.triggerTurn, false);
+      delivered.add(record.id);
+    },
+  };
+
+  assert.equal(await drainCoordinationInbox(options), 1);
+  assert.equal(delivered.size, 1);
+  assert.deepEqual(listChiefMessagePaths(runtime, first.toSessionId), [
+    secondPath,
+  ]);
+});
+
 test("a rejected delivery policy leaves its record pending and drains later records", async () => {
   const runtime = supervisionRuntime(socket());
   const rejected = message({ text: "reject policy", createdAt: 1 });
@@ -4398,6 +4425,27 @@ test("project messages are durable, assignment-scoped, bounded, and removable", 
     ).some((message) => message.id === large.id && message.bodyRef),
     "compact enumeration does not open the overflow body",
   );
+  const malformedId = id();
+  const messageDirectory = join(dirname(largePath), "");
+  writeFileSync(join(messageDirectory, `${malformedId}.json`), "{}", "utf8");
+  const readErrors: unknown[] = [];
+  assert.ok(
+    listProjectMessageHeaders(
+      runtime,
+      assignment.repoKey,
+      assignment.branch,
+      (error) => readErrors.push(error),
+    ).some((message) => message.id === large.id),
+    "independent scanning retains valid records",
+  );
+  assert.equal(readErrors.length, 1);
+  assert.throws(
+    () =>
+      listProjectMessageHeaders(runtime, assignment.repoKey, assignment.branch),
+    /Unable to read project message/,
+    "callers without an error handler remain fail-closed",
+  );
+  unlinkSync(join(messageDirectory, `${malformedId}.json`));
   assert.throws(
     () =>
       readProjectMessage(

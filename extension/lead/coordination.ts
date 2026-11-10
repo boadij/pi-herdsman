@@ -41,6 +41,12 @@ import {
 } from "../supervision.ts";
 
 import { OperationError } from "../errors.ts";
+import {
+  includeFanInMessage,
+  releaseFanInMessage,
+  type DeliveryBudget,
+  type DeliveryPhase,
+} from "../recipient-fan-in.ts";
 
 import { prepareMessageInput } from "../core.ts";
 import {
@@ -347,7 +353,12 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
   const requireCompatibleBuild: LeadCoordinationHost["requireCompatibleBuild"] =
     host.requireCompatibleBuild;
   const reportedProjectMessageCleanupErrors = new Set<string>();
+  const reportedProjectMessageSubmissionErrors = new Set<string>();
   const reportedProjectMessageReadErrors = new Set<string>();
+  const projectMessageSubmissions = new Map<string, number>();
+  let projectStartupEligibility:
+    | { sessionId: string; managerCreatedAt: number; through: number }
+    | undefined;
   const reportedRetirementErrors = new Set<string>();
   const retirementCursors = new Map<string, string>();
   const prepareCoordinationInput = async (
@@ -2753,11 +2764,14 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
   };
   const drainProjectMessages = async (
     ctx: ExtensionContext,
+    phase: DeliveryPhase | "idle" = "idle",
+    budget: DeliveryBudget = { count: 0, bytes: 0 },
   ): Promise<number> => {
     if (
       activeRole() !== "manager" ||
       leadRuntime.roleSuspended ||
-      !ctx.isIdle()
+      (phase === "idle" && !ctx.isIdle()) ||
+      phase === "turn"
     )
       return 0;
     const lease = leadRuntime.managerLease;
@@ -2766,6 +2780,10 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     if (!mightHaveProjectMessages(runtime, lease.descriptor.repoKey)) return 0;
     const manager = await currentManager(ctx);
     if (!manager || !sameManagerDescriptor(manager, lease.descriptor)) return 0;
+    const submissionPrefix = `${ctx.sessionManager.getSessionId()}:${manager.createdAt}:`;
+    for (const key of projectMessageSubmissions.keys())
+      if (!key.startsWith(submissionPrefix))
+        projectMessageSubmissions.delete(key);
     const hasProjectMessageReceipt = (record: ProjectMessage): boolean =>
       ctx.sessionManager
         .getEntries()
@@ -2781,6 +2799,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       try {
         removeProjectMessage(runtime, record.repoKey, record.branch, record.id);
         reportedProjectMessageCleanupErrors.delete(record.id);
+        reportedProjectMessageSubmissionErrors.delete(record.id);
         reportedProjectMessageReadErrors.delete(record.id);
       } catch (error) {
         if (!reportedProjectMessageCleanupErrors.has(record.id)) {
@@ -2789,6 +2808,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         }
       }
     };
+    let submitted = 0;
     for (const assignment of listProjectAssignments(runtime, manager.repoKey)) {
       let pending: ProjectMessageHeader[];
       try {
@@ -2796,6 +2816,12 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           runtime,
           manager.repoKey,
           assignment.branch,
+          (error) => {
+            const key = `header:${String(error)}`;
+            if (reportedProjectMessageReadErrors.has(key)) return;
+            reportedProjectMessageReadErrors.add(key);
+            appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+          },
         );
       } catch (error) {
         appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
@@ -2803,9 +2829,27 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       }
       for (const record of pending) {
         if (record.fromSessionId !== assignment.id) continue;
+        if (
+          phase === "startup" &&
+          (projectStartupEligibility?.sessionId !==
+            ctx.sessionManager.getSessionId() ||
+            projectStartupEligibility.managerCreatedAt !== manager.createdAt ||
+            record.createdAt > projectStartupEligibility.through)
+        )
+          continue;
         if (hasProjectMessageReceipt(record)) {
+          projectMessageSubmissions.delete(
+            `${ctx.sessionManager.getSessionId()}:${manager.createdAt}:${record.id}`,
+          );
           consumeProjectMessage(record);
           continue;
+        }
+        const submissionKey = `${ctx.sessionManager.getSessionId()}:${manager.createdAt}:${record.id}`;
+        const previousSubmission = projectMessageSubmissions.get(submissionKey);
+        if (previousSubmission !== undefined) {
+          if (Date.now() - previousSubmission < 30_000 || phase !== "idle")
+            continue;
+          projectMessageSubmissions.delete(submissionKey);
         }
         const current = await currentManager(ctx);
         const stillAssigned = readProjectAssignment(
@@ -2814,7 +2858,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           assignment.branch,
         );
         if (
-          !ctx.isIdle() ||
+          (phase === "idle" && !ctx.isIdle()) ||
           !current ||
           !sameManagerDescriptor(current, manager) ||
           !stillAssigned ||
@@ -2846,38 +2890,70 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         const backlog = message.createdAt < manager.createdAt;
         const actionableFailure =
           backlog && message.kind === "execution_failure";
-        pi.sendMessage(
-          {
-            customType: "pi-herdsman-project_message",
-            content:
-              projectMessageEnvelope(
-                message.kind,
-                message.branch,
-                message.fromSessionId,
-              ) +
-              message.text +
-              senderEnvironmentAnnotation(message.senderEnvironment),
-            display: true,
-            details: {
-              id: message.id,
-              repoKey: message.repoKey,
-              branch: message.branch,
-              fromSessionId: message.fromSessionId,
-              kind: message.kind,
-              ...(message.senderEnvironment
-                ? { senderEnvironment: message.senderEnvironment }
-                : {}),
+        const concurrentSubmission =
+          projectMessageSubmissions.get(submissionKey);
+        if (concurrentSubmission !== undefined) {
+          if (phase !== "idle" || Date.now() - concurrentSubmission < 30_000)
+            continue;
+          projectMessageSubmissions.delete(submissionKey);
+        }
+        const content =
+          projectMessageEnvelope(
+            message.kind,
+            message.branch,
+            message.fromSessionId,
+          ) +
+          message.text +
+          senderEnvironmentAnnotation(message.senderEnvironment);
+        if (!includeFanInMessage(budget, content)) continue;
+        const submittedAt = Date.now();
+        projectMessageSubmissions.set(submissionKey, submittedAt);
+        try {
+          const delivery = pi.sendMessage(
+            {
+              customType: "pi-herdsman-project_message",
+              content,
+              display: true,
+              details: {
+                id: message.id,
+                repoKey: message.repoKey,
+                branch: message.branch,
+                fromSessionId: message.fromSessionId,
+                kind: message.kind,
+                ...(message.senderEnvironment
+                  ? { senderEnvironment: message.senderEnvironment }
+                  : {}),
+              },
             },
-          },
-          backlog && !actionableFailure
-            ? { triggerTurn: false }
-            : { deliverAs: "followUp", triggerTurn: true },
-        );
+            phase !== "idle" || (backlog && !actionableFailure)
+              ? { triggerTurn: false }
+              : { deliverAs: "followUp", triggerTurn: true },
+          );
+          if (phase !== "idle") await delivery;
+          else
+            void Promise.resolve(delivery).catch((error) => {
+              if (projectMessageSubmissions.get(submissionKey) === submittedAt)
+                projectMessageSubmissions.delete(submissionKey);
+              if (!reportedProjectMessageSubmissionErrors.has(record.id)) {
+                reportedProjectMessageSubmissionErrors.add(record.id);
+                appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+              }
+            });
+        } catch (error) {
+          projectMessageSubmissions.delete(submissionKey);
+          releaseFanInMessage(budget, content);
+          if (!reportedProjectMessageSubmissionErrors.has(record.id)) {
+            reportedProjectMessageSubmissionErrors.add(record.id);
+            appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+          }
+          continue;
+        }
         if (hasProjectMessageReceipt(message)) consumeProjectMessage(message);
-        return 1;
+        submitted++;
+        if (phase === "idle") return submitted;
       }
     }
-    return 0;
+    return submitted;
   };
   return {
     persistCoordinatorState,
@@ -2907,6 +2983,22 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     enterCoordinationPublication,
     drainRetirementNotices,
     drainProjectMessages,
+    beginProjectMessageStartup: (ctx: ExtensionContext): void => {
+      const descriptor = leadRuntime.managerLease?.descriptor;
+      if (
+        activeRole() !== "manager" ||
+        leadRuntime.roleSuspended ||
+        !descriptor ||
+        !ctx.isIdle()
+      )
+        return;
+      // Snapshot only what was pending before an idle wake began; arrivals during active work wait for settlement.
+      projectStartupEligibility = {
+        sessionId: ctx.sessionManager.getSessionId(),
+        managerCreatedAt: descriptor.createdAt,
+        through: Date.now(),
+      };
+    },
     supervisorMessage: executeSupervisorMessage,
     peerMessage: executePeerMessage,
     latestCustomMessageText,

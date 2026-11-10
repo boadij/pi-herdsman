@@ -82,6 +82,182 @@ import support, {
   seedLeadRole,
 } from "./support.ts";
 const { readConfig, updateConfig } = await import("./config.ts");
+
+test("Pi 1.5.0 includes non-triggering startup messages in the first provider request", async () => {
+  const faux = fauxProvider({
+    provider: "herdsman-startup-fan-in-test",
+    models: [{ id: "startup", contextWindow: 4096, maxTokens: 128 }],
+  });
+  const modelRuntime = await ModelRuntime.create({
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  modelRuntime.registerNativeProvider(faux.provider);
+  const settingsManager = SettingsManager.inMemory();
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    settingsManager,
+    noExtensions: true,
+    noContextFiles: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    extensionFactories: [
+      (api) =>
+        api.on("before_agent_start", async () => {
+          await api.sendMessage(
+            {
+              customType: "fan-in-test",
+              content: "startup sibling",
+              display: "none",
+            },
+            { triggerTurn: false },
+          );
+        }),
+    ],
+  });
+  await resourceLoader.reload();
+  let request: any[] = [];
+  faux.setResponses([
+    (context) => {
+      request = context.messages as any[];
+      return fauxAssistantMessage("done");
+    },
+  ]);
+  const { session } = await createAgentSession({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    modelRuntime,
+    model: faux.getModel()!,
+    settingsManager,
+    resourceLoader,
+    sessionManager: SessionManager.inMemory(WORKSPACE),
+  });
+  try {
+    await session.prompt("start");
+    assert.match(
+      JSON.stringify(request),
+      /startup sibling/,
+      JSON.stringify(request),
+    );
+  } finally {
+    await session.dispose();
+  }
+});
+
+test("two Chief inbox records reach one continued provider request from a turn-boundary drain", async () => {
+  const { drainCoordinationInbox, supervisionRuntime, writeChiefMessage } =
+    await import("./supervision.ts");
+  const faux = fauxProvider({
+    provider: "herdsman-turn-fan-in-test",
+    models: [{ id: "turn", contextWindow: 4096, maxTokens: 128 }],
+  });
+  const modelRuntime = await ModelRuntime.create({
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  modelRuntime.registerNativeProvider(faux.provider);
+  const settingsManager = SettingsManager.inMemory();
+  const inboxRuntime = supervisionRuntime(
+    join(testTmpRoot, `chief-fan-in-${randomUUID()}.sock`),
+  );
+  const sessionId = randomUUID();
+  const messages = [
+    { id: randomUUID(), text: `Chief downlink one ${randomUUID()}` },
+    { id: randomUUID(), text: `Chief downlink two ${randomUUID()}` },
+  ];
+  for (const { id, text } of messages)
+    writeChiefMessage(
+      {
+        version: 2,
+        build: HERDSMAN_BUILD,
+        id,
+        leaseId: randomUUID(),
+        kind: "chief_message",
+        fromSessionId: randomUUID(),
+        toSessionId: sessionId,
+        leadSessionId: sessionId,
+        text,
+        createdAt: Date.now(),
+      },
+      inboxRuntime,
+    );
+  const delivered = new Set<string>();
+  const submissions: { id: string; triggerTurn: boolean }[] = [];
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    settingsManager,
+    noExtensions: true,
+    noContextFiles: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    extensionFactories: [
+      (api) =>
+        api.on("turn_end", async (event) => {
+          if (event.outcome !== "completed") return;
+          const count = await drainCoordinationInbox({
+            runtime: inboxRuntime,
+            sessionId,
+            isAuthorized: () => true,
+            isDelivered: (id) => delivered.has(id),
+            deliveryMode: (record) =>
+              record.kind === "chief_message" ? "steer" : undefined,
+            forceNonTriggering: true,
+            sendMessage: async (message, options, record) => {
+              await api.sendMessage(message, options);
+              submissions.push({
+                id: record.id,
+                triggerTurn: options.triggerTurn,
+              });
+              delivered.add(record.id);
+            },
+          });
+          return count ? { continue: true } : undefined;
+        }),
+    ],
+  });
+  await resourceLoader.reload();
+  const requests: any[][] = [];
+  faux.setResponses([
+    (context) => {
+      requests.push(context.messages as any[]);
+      return fauxAssistantMessage("first response");
+    },
+    (context) => {
+      requests.push(context.messages as any[]);
+      return fauxAssistantMessage("second response");
+    },
+  ]);
+  const { session } = await createAgentSession({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    modelRuntime,
+    model: faux.getModel()!,
+    settingsManager,
+    resourceLoader,
+    sessionManager: SessionManager.inMemory(WORKSPACE),
+  });
+  try {
+    await session.prompt("start");
+    assert.equal(requests.length, 2);
+    for (const { text } of messages) {
+      assert.doesNotMatch(JSON.stringify(requests[0]), new RegExp(text));
+      assert.match(JSON.stringify(requests[1]), new RegExp(text));
+    }
+    assert.deepEqual(
+      submissions.sort((a, b) => a.id.localeCompare(b.id)),
+      messages
+        .map(({ id }) => ({ id, triggerTurn: false }))
+        .sort((a, b) => a.id.localeCompare(b.id)),
+    );
+  } finally {
+    await session.dispose();
+    realFs.rmSync(inboxRuntime.root, { recursive: true, force: true });
+  }
+});
 const {
   AGENT_REQUIRED_EVIDENCE_ENTRY,
   createManagedAgentEvidenceUpdater,

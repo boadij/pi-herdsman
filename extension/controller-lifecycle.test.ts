@@ -10299,6 +10299,8 @@ test("replacement Manager wakes once for exact-assignment failure backlog only",
       ...failure,
       id: randomUUID(),
       text: "failure arrived during active Manager work",
+      // Keep this current-generation failure distinct from the prior backlog fixture.
+      createdAt: Date.now(),
     };
     writeProjectMessage(activeFailure, runtime);
     assert.equal(
@@ -10331,7 +10333,8 @@ test("replacement Manager wakes once for exact-assignment failure backlog only",
         skills: [],
       } satisfies NormalizedBuildSystemPromptOptions,
     } satisfies BeforeAgentStartEvent;
-    await pi.events.get("before_agent_start")![0](customStartup, ctx);
+    for (const handler of pi.events.get("before_agent_start") ?? [])
+      await handler(customStartup, ctx);
     assert.equal(deliveries(activeFailure.id).length, 0);
     assert.deepEqual(
       listProjectMessageHeaders(runtime, repoKey, branch).map(({ id }) => id),
@@ -11424,6 +11427,7 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     ];
     const parentContext = fakeAgentContext(parentEntries, parentBranch);
     parentContext.sessionManager.getBranch = () => parentBranch;
+    writeAgentState(childMailbox, childWaiting);
     for (const handler of parentAgent.events.get("session_start") ?? [])
       await handler(undefined, parentContext);
     assert.equal(
@@ -11431,8 +11435,22 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       parentRequestId,
       parentEntries.map(String).join("\n"),
     );
-    writeAgentState(childMailbox, childWaiting);
+    parentContext.isIdle = () => false;
     writeAsk(childMailbox, childAsk);
+    await parentAgent.events.get("agent_before_settle")![0](
+      { outcome: "completed" },
+      parentContext,
+    );
+    assert.ok(
+      parentAgent.sentMessageCalls.some(
+        ({ message, options }) =>
+          (message as { customType?: string }).customType ===
+            "pi-herdsman-agent-ask" &&
+          (options as { triggerTurn?: boolean }).triggerTurn === false,
+      ),
+      "active managed owner receives its direct child's question at settlement without another trigger",
+    );
+    parentContext.isIdle = () => true;
     const parentAskTool = parentAgent.tools.find(
       (tool) => tool.name === "ask_owner",
     );
@@ -11817,36 +11835,51 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
           label: process.env.PI_HERDSMAN_LABEL ?? "agent",
         },
       },
-      {
-        type: "custom_message",
-        id: randomUUID(),
-        parentId: null,
-        timestamp: new Date().toISOString(),
-        customType: "pi-herdsman-agent-result",
-        content: "ALPHA",
-        display: true,
-        details: resultEntryDetails(child, childRequestId),
-      },
     ];
     const parentResultContext = fakeAgentContext(parentResultEntries);
+    parentResultContext.isIdle = () => false;
     for (const handler of parentAgent.events.get("session_start") ?? [])
       await handler(undefined, parentResultContext);
+    const firstBoundary = await parentAgent.events.get("turn_end")![0](
+      { outcome: "completed" },
+      parentResultContext,
+    );
+    assert.deepEqual(firstBoundary, { continue: true });
+    assert.ok(
+      parentAgent.sentMessageCalls.some(
+        ({ message, options }) =>
+          (message as { customType?: string }).customType ===
+            "pi-herdsman-agent-result" &&
+          (options as { triggerTurn?: boolean }).triggerTurn === false,
+      ),
+      "managed owner receives its nested result through the shared active boundary",
+    );
+    parentResultEntries.push({
+      type: "custom_message",
+      id: randomUUID(),
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      customType: "pi-herdsman-agent-result",
+      content: "ALPHA",
+      display: true,
+      details: resultEntryDetails(child, childRequestId),
+    });
+    parentResultContext.isIdle = () => true;
     parentAgent.events.get("message_end")![0](
       { message: { role: "assistant", content: "Parent completed." } },
       parentResultContext,
     );
-    await parentAgent.events.get("turn_end")![0](
-      {
-        outcome: "completed",
-        message: { role: "assistant", content: "Parent completed." },
-        messageEntryId: "parent-response",
-      },
-      parentResultContext,
-    );
-    await parentAgent.events.get("agent_before_settle")![0](
-      { outcome: "completed" },
-      parentResultContext,
-    );
+    for (const handler of parentAgent.events.get("turn_end") ?? [])
+      await handler(
+        {
+          outcome: "completed",
+          message: { role: "assistant", content: "Parent completed." },
+          messageEntryId: "parent-response",
+        },
+        parentResultContext,
+      );
+    for (const handler of parentAgent.events.get("agent_before_settle") ?? [])
+      await handler({ outcome: "completed" }, parentResultContext);
     await parentAgent.events.get("agent_settled")![0](
       { aborted: false },
       parentResultContext,
@@ -13611,17 +13644,30 @@ test("scoped assignment result delivery persists terminal ownership and removes 
       text: "completed review result",
       completedAt: Date.now(),
     });
+    context.isIdle = () => false;
     emitMailboxChange(mailbox);
+    for (const handler of pi.events.get("turn_end") ?? [])
+      await handler({ outcome: "completed" }, context);
     for (
       let attempt = 0;
       attempt < 100 && realFs.existsSync(mailbox);
       attempt++
     )
       await new Promise((resolve) => setTimeout(resolve, 20));
+    context.isIdle = () => true;
     const terminal = pi.entries.find(
       (entry: any) => entry?.customType === "pi-herdsman-agent-result",
     ) as any;
     assert.ok(terminal, "owner should persist delivered terminal result");
+    assert.ok(
+      pi.sentMessageCalls.some(
+        ({ message, options }) =>
+          (message as { customType?: string }).customType ===
+            "pi-herdsman-agent-result" &&
+          (options as { triggerTurn?: boolean }).triggerTurn === false,
+      ),
+      "active owner result is delivered non-triggeringly at its turn boundary",
+    );
     assert.equal(terminal.details.requestId, accepted!.requestId);
     assert.equal(terminal.details.runId, accepted!.runId);
     assert.equal(terminal.details.piSessionId, sessionId);

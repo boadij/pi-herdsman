@@ -60,9 +60,17 @@ import {
   verifyManagerCoordinationAuthority,
   verifyRemoteChiefAuthority,
   writePeerDeliveryReceipt,
+  COORDINATION_INBOX_SCAN_LIMIT,
 } from "./supervision.ts";
 
 import { OperationError } from "./errors.ts";
+import {
+  includeFanInMessage,
+  registerRecipientFanIn,
+  releaseFanInMessage,
+  type DeliveryBudget,
+  type DeliveryPhase,
+} from "./recipient-fan-in.ts";
 import {
   localRepositoryScope,
   sameDirectory,
@@ -641,7 +649,12 @@ type LeadInboxHost = LeadInboxBaseHost & {
   projectAssignmentForScope: LeadRoleTransitionRuntime["projectAssignmentForScope"];
   resolveEffectiveSupervisor: LeadRoleTransitionRuntime["resolveEffectiveSupervisor"];
   currentPeerPresenceValid(ctx: ExtensionContext): Promise<boolean>;
-  drainProjectMessages(ctx: ExtensionContext): Promise<number>;
+  beginProjectMessageStartup?(ctx: ExtensionContext): void;
+  drainProjectMessages(
+    ctx: ExtensionContext,
+    phase?: DeliveryPhase | "idle",
+    budget?: DeliveryBudget,
+  ): Promise<number>;
   reconcileRemotePeers?(
     ctx: ExtensionContext,
     signal?: AbortSignal,
@@ -2800,13 +2813,26 @@ export function registerLeadRuntime(
     currentPeerPresenceValid: async (ctx: ExtensionContext) =>
       (sessionKind?.kind !== "managed" || managedLifecycle === "assigned") &&
       (await coordinationRuntime.currentPeerPresenceValid(ctx)),
-    drainProjectMessages: (ctx: ExtensionContext) =>
-      coordinationRuntime
-        .drainRetirementNotices(ctx)
-        .then(
-          async (count) =>
-            count + (await coordinationRuntime.drainProjectMessages(ctx)),
-        ),
+    beginProjectMessageStartup: (ctx: ExtensionContext) =>
+      coordinationRuntime.beginProjectMessageStartup(ctx),
+    drainProjectMessages: (
+      ctx: ExtensionContext,
+      phase?: DeliveryPhase | "idle",
+      budget?: DeliveryBudget,
+    ) =>
+      phase && phase !== "idle"
+        ? coordinationRuntime.drainProjectMessages(ctx, phase, budget)
+        : coordinationRuntime
+            .drainRetirementNotices(ctx)
+            .then(
+              async (count) =>
+                count +
+                (await coordinationRuntime.drainProjectMessages(
+                  ctx,
+                  "idle",
+                  budget,
+                )),
+            ),
     reconcileRemotePeers: async (
       ctx: ExtensionContext,
       signal?: AbortSignal,
@@ -3000,6 +3026,7 @@ export function registerLeadRuntime(
   };
   const controller = createAgentController(pi, {
     ...options.controllerServices,
+    registerRecipientFanIn: false,
     scope: { kind: "root" },
     managerEvidence,
     persistClosedDescendants: async (ctx, closures, selected) => {
@@ -4463,6 +4490,16 @@ export function registerLeadRuntime(
     herdRun: herdRunRuntime,
   });
   pi.on("turn_start", () => controller.resetAssignmentGuidance());
+  registerRecipientFanIn(pi, async (ctx, phase, budget) => {
+    if (isQuarantinedSession(ctx)) return 0;
+    const agentNotifications = await controller.drainReadyOwnerNotifications(
+      ctx,
+      phase,
+      budget,
+    );
+    const inboxMessages = await inboxRuntime.drainBoundary(ctx, phase, budget);
+    return agentNotifications + inboxMessages;
+  });
   pi.on("before_agent_start", (event: any, ctx: ExtensionContext) => {
     if (!isQuarantinedSession(ctx))
       return agentEvents.beforeAgentStart(event, ctx);
@@ -7802,6 +7839,13 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
   let remoteReconciliationInFlight = false;
   let currentSubmittedAt: Map<string, number> | undefined;
   let settledSubmissions = new Set<string>();
+  let runBoundaryDrain:
+    | ((
+        ctx: ExtensionContext,
+        phase: DeliveryPhase,
+        budget: DeliveryBudget,
+      ) => Promise<number>)
+    | undefined;
   type ChiefStartPreflight = {
     sessionId: string;
     sessionGeneration: number;
@@ -8354,6 +8398,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
     }
   };
   const startChiefInbox = (ctx: ExtensionContext): void => {
+    runBoundaryDrain = undefined;
     const generation = ++chiefInboxGeneration;
     const socket = process.env.HERDR_SOCKET_PATH;
     if (!socket) return;
@@ -8432,7 +8477,12 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       if (transaction.role === "inactive" && activeRole() !== "manager")
         assertCurrentLeadCoordination(ctx);
     };
-    const inboxOptions = (verifyLease: boolean, inboxRuntime = runtime) => {
+    const inboxOptions = (
+      verifyLease: boolean,
+      inboxRuntime = runtime,
+      phase?: DeliveryPhase,
+      budget?: DeliveryBudget,
+    ) => {
       if (!isCurrent()) throw new Error("Stale inbox transaction (options)");
       return {
         runtime: inboxRuntime,
@@ -8456,6 +8506,20 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
               return undefined;
           }
           const role = activeRole();
+          if (phase === "turn") {
+            if (
+              role === "lead" &&
+              record.kind === "manager_message" &&
+              (await authorizeChiefRecord(record, ctx))
+            )
+              return "steer";
+            if (
+              (role === "lead" || role === "manager") &&
+              record.kind === "chief_message"
+            )
+              return "steer";
+            return undefined;
+          }
           if (role === "lead" && record.kind === "manager_message") {
             let authorized: boolean;
             try {
@@ -8464,14 +8528,20 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
               return undefined;
             }
             if (!authorized) return "followUp";
+            if (!phase && !ctx.isIdle()) return undefined;
             return "steer";
           }
           const supervisorDownlink =
             (role === "lead" && record.kind === "chief_message") ||
             (role === "manager" && record.kind === "chief_message");
 
-          if (supervisorDownlink) return "steer";
-          return ctx.isIdle() ? "followUp" : undefined;
+          if (supervisorDownlink && phase !== "settle") {
+            if (!phase && !ctx.isIdle()) return undefined;
+            return "steer";
+          }
+          return phase === "settle" || phase === "startup" || ctx.isIdle()
+            ? "followUp"
+            : undefined;
         },
         senderTarget: (record: ChiefMessageRecord) => {
           if (record.kind === "peer_message") {
@@ -8557,6 +8627,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
           options: Parameters<ChiefInboxDrainOptions["sendMessage"]>[1],
           record: ChiefMessageRecord,
         ) => {
+          let reservedContent: string | undefined;
           const projectAssignment =
             typeof message === "object" &&
             message !== null &&
@@ -8659,6 +8730,14 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
               !(await authorizePeerRecord(record, ctx))
             )
               throw new Error("Peer eligibility changed before delivery");
+            if (phase) options = { ...options, triggerTurn: false };
+            const reservePayload = (): void => {
+              if (!phase || !budget || typeof payload.content !== "string")
+                return;
+              if (!includeFanInMessage(budget, payload.content))
+                throw new Error("Recipient fan-in budget exhausted");
+              reservedContent = payload.content;
+            };
             let result: void | Promise<void>;
             try {
               if (record.kind === "peer_message") {
@@ -8762,6 +8841,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                   )
                     throw new Error("Peer eligibility changed before delivery");
                   importResultBindings(pi, ctx, resultBindings, record.kind);
+                  reservePayload();
                   submitted = pi.sendMessage(payload, options);
                 };
                 if (
@@ -8773,6 +8853,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                 result = submitted;
               } else {
                 importResultBindings(pi, ctx, resultBindings, record.kind);
+                reservePayload();
                 result = pi.sendMessage(payload, options);
               }
             } catch (error) {
@@ -8801,6 +8882,8 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
             }
             return;
           } catch (error) {
+            if (reservedContent && budget)
+              releaseFanInMessage(budget, reservedContent);
             managerDiagnostic("inbox_catch", { category: "send" });
             if (projectAssignment)
               managerDiagnostic("project_assignment_send", {
@@ -8812,6 +8895,8 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         },
         transaction: {
           begin: (record: ChiefMessageRecord) => {
+            if (transactions.has(record.id))
+              throw new Error("Inbox record already has an active drain");
             const token = {
               id: record.id,
               record,
@@ -8839,6 +8924,10 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
               }
           },
         },
+        forceNonTriggering: !!phase,
+        maxDeliveries: budget
+          ? Math.max(0, COORDINATION_INBOX_SCAN_LIMIT - budget.count)
+          : undefined,
         accepted: async (record: ChiefMessageRecord) => {
           if (record.kind === "peer_message")
             writePeerDeliveryReceipt(peerInboxRuntime, record);
@@ -8859,7 +8948,11 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         },
       };
     };
-    const drainInbox = async (initial = false): Promise<number> => {
+    const drainInbox = async (
+      initial = false,
+      phase?: DeliveryPhase,
+      budget?: DeliveryBudget,
+    ): Promise<number> => {
       if (initial) managerDiagnostic("initial_inbox_drain_start");
       const sessionId = ctx.sessionManager.getSessionId();
       const complete = (count: number): number => {
@@ -8872,7 +8965,9 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       const held = chiefStartPreflightHeld(ctx);
       managerDiagnostic("inbox_preflight", { reason: held ? "held" : "pass" });
       if (held) return complete(0);
+      if (!phase && ctx.isIdle()) host.beginProjectMessageStartup?.(ctx);
       if (
+        !phase &&
         (leadRuntime.chiefMode === "active" || activeRole() === "manager") &&
         ctx.isIdle() &&
         listChiefMessagePaths(runtime, sessionId).some(
@@ -8918,28 +9013,43 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         }
       }
       if (initial) {
-        const chief = await drainCoordinationInbox(inboxOptions(false));
+        const chief = await drainCoordinationInbox(
+          inboxOptions(false, runtime, phase, budget),
+        );
         const peerPresent = await currentPeerPresenceValid(ctx);
         managerDiagnostic("inbox_peer_presence", {
           reason: peerPresent ? "pass" : "missing",
         });
         const peer = await drainCoordinationInbox(
-          inboxOptions(false, peerInboxRuntime),
+          inboxOptions(false, peerInboxRuntime, phase, budget),
         );
-        return complete(chief + peer + (await drainProjectMessages(ctx)));
+        const project = await drainProjectMessages(
+          ctx,
+          phase ?? "idle",
+          budget,
+        );
+        return complete(phase ? (budget?.count ?? 0) : chief + peer + project);
       }
       const active =
         leadRuntime.chiefMode === "active" || activeRole() === "manager";
-      const chief = await drainCoordinationInbox(inboxOptions(active));
+      const chief = await drainCoordinationInbox(
+        inboxOptions(active, runtime, phase, budget),
+      );
       const peerPresent = await currentPeerPresenceValid(ctx);
       managerDiagnostic("inbox_peer_presence", {
         reason: peerPresent ? "pass" : "missing",
       });
       const peer = await drainCoordinationInbox(
-        inboxOptions(active, peerInboxRuntime),
+        inboxOptions(active, peerInboxRuntime, phase, budget),
       );
-      return complete(chief + peer + (await drainProjectMessages(ctx)));
+      const project = await drainProjectMessages(ctx, phase ?? "idle", budget);
+      return complete(phase ? (budget?.count ?? 0) : chief + peer + project);
     };
+    runBoundaryDrain = (boundaryCtx, phase, budget) =>
+      boundaryCtx.sessionManager.getSessionId() ===
+      ctx.sessionManager.getSessionId()
+        ? drainInbox(false, phase, budget)
+        : Promise.resolve(0);
     const schedule = (): void => {
       if (
         generation !== chiefInboxGeneration ||
@@ -9005,6 +9115,11 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
   };
   return {
     start: startChiefInbox,
+    drainBoundary: (
+      ctx: ExtensionContext,
+      phase: DeliveryPhase,
+      budget: DeliveryBudget,
+    ) => runBoundaryDrain?.(ctx, phase, budget) ?? Promise.resolve(0),
     cleanupManagedPeerInbox,
     isStartPreflightHeld: chiefStartPreflightHeld,
     clearStartPreflight,
