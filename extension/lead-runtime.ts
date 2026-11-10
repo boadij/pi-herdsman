@@ -2707,7 +2707,10 @@ export function registerLeadRuntime(
       coordinationRuntime.schedulePeerPresence(ctx),
     removePeerPresence: () => coordinationRuntime.removePeerPresence(),
     clearNormalUI: () => statusRuntime.clear(),
-    startNormalUI: (ctx: ExtensionContext) => statusRuntime.start(ctx),
+    startNormalUI: (ctx: ExtensionContext) => {
+      statusRuntime.clear();
+      statusRuntime.start(ctx);
+    },
     startSupervisionUI,
     clearSupervisionUI,
     publishLeadRole,

@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.43.0](https://github.com/boadij/pi-herdsman/compare/v0.42.1...v0.43.0) (2026-11-09)
+
+
+### Features
+
+* **coordination:** expose sender checkout and manager Git context ([#901](https://github.com/boadij/pi-herdsman/issues/901)) ([2835bec](https://github.com/boadij/pi-herdsman/commit/2835becb93de0733901f3e829e099d5016da156f))
+* **manager:** integrate conflict-free divergent Lead branches ([#900](https://github.com/boadij/pi-herdsman/issues/900)) ([e22667e](https://github.com/boadij/pi-herdsman/commit/e22667ece54c11b9fcda75c451f62288155479cf))
+* **tools:** enable native Code Mode in bundled roles ([#888](https://github.com/boadij/pi-herdsman/issues/888)) ([7988a63](https://github.com/boadij/pi-herdsman/commit/7988a631e5a768abe6f41caad5dceb926d9b40ed))
+* **tools:** support native Code Mode Agent delegation ([#889](https://github.com/boadij/pi-herdsman/issues/889)) ([807e386](https://github.com/boadij/pi-herdsman/commit/807e386a8afb2cffa14bb169e379170d5489324a))
+* **ui:** show checkout Git state in Lead and Manager headers ([#896](https://github.com/boadij/pi-herdsman/issues/896)) ([750555e](https://github.com/boadij/pi-herdsman/commit/750555e1d81ebec75917d6dae2cb313bf1eab8bb))
+* **ui:** show Git diff stats in managed Lead status widget ([#894](https://github.com/boadij/pi-herdsman/issues/894)) ([e20c619](https://github.com/boadij/pi-herdsman/commit/e20c61959afef00f01368105f2b81b0aa9803fa6))
+* **ui:** show live session activity in status headers ([#902](https://github.com/boadij/pi-herdsman/issues/902)) ([581e6b1](https://github.com/boadij/pi-herdsman/commit/581e6b1b511fef3f862e694985587d01f1ef2ccc))
+
+
+### Fixes
+
+* **agent:** allow steering while waiting for child work ([#887](https://github.com/boadij/pi-herdsman/issues/887)) ([fbd27ea](https://github.com/boadij/pi-herdsman/commit/fbd27ea44035c9e9439a9c787577e4705be05318))
+* **agents:** enable extension discovery for pinned models ([#883](https://github.com/boadij/pi-herdsman/issues/883)) ([df4a1e4](https://github.com/boadij/pi-herdsman/commit/df4a1e4bce3adb5326d35ea6770404232afce10e))
+* **config:** isolate misplaced definitions ([#884](https://github.com/boadij/pi-herdsman/issues/884)) ([a4dcb99](https://github.com/boadij/pi-herdsman/commit/a4dcb99de47d74612a706fb4b21e1b0783aafc67))
+* **lead:** enforce managed tool policy across reload and dispatch ([#893](https://github.com/boadij/pi-herdsman/issues/893)) ([bc45018](https://github.com/boadij/pi-herdsman/commit/bc450187f9f0bd131bb937bbced80c46e30e3e5a)), closes [#309](https://github.com/boadij/pi-herdsman/issues/309)
+* **smoke:** retain verified root process identity during core acceptance ([#899](https://github.com/boadij/pi-herdsman/issues/899)) ([a32aacb](https://github.com/boadij/pi-herdsman/commit/a32aacbecf5ade73e161b0dcfa3b71edea9d8cc9)), closes [#897](https://github.com/boadij/pi-herdsman/issues/897)
+* **tools:** support native code-mode coordination ([#885](https://github.com/boadij/pi-herdsman/issues/885)) ([44d6826](https://github.com/boadij/pi-herdsman/commit/44d682677c7d8b587397669bc78001a65143ecdf))
+
+
+### Documentation
+
+* keep AGENTS.md code map synchronized ([#891](https://github.com/boadij/pi-herdsman/issues/891)) ([54eb5c0](https://github.com/boadij/pi-herdsman/commit/54eb5c06089473fa3a05b0bac6858089c613f9d4))
+* recognize community contributors ([#878](https://github.com/boadij/pi-herdsman/issues/878)) ([d19f045](https://github.com/boadij/pi-herdsman/commit/d19f04534ecc79a91637c3a725d64a5ce8c48d7e))
+* replace obsolete backlog instructions with issue-reporting guidance ([#892](https://github.com/boadij/pi-herdsman/issues/892)) ([2f5d96b](https://github.com/boadij/pi-herdsman/commit/2f5d96bc030ab0bf6333eb793458c3f0d9433881))
+
+
+### Tests
+
+* tighten TypeScript fixture contracts ([#898](https://github.com/boadij/pi-herdsman/issues/898)) ([be407ed](https://github.com/boadij/pi-herdsman/commit/be407ed92a516658eeabd205eee33d4963a77146))
+
+
+### Other Changes
+
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.11.5 ([#890](https://github.com/boadij/pi-herdsman/issues/890)) ([89943fe](https://github.com/boadij/pi-herdsman/commit/89943fe9ad9ad0f675e64d1f8a6f92140299246f))
+* **ui:** subtly emphasize status header roles ([#903](https://github.com/boadij/pi-herdsman/issues/903)) ([df5883c](https://github.com/boadij/pi-herdsman/commit/df5883cfdbec2dc31645d540dc0d621be9d11299))
+
 ## [0.42.1](https://github.com/boadij/pi-herdsman/compare/v0.42.0...v0.42.1) (2026-11-08)
 
 
