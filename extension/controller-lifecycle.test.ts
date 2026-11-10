@@ -269,6 +269,79 @@ test("Agent status observer publishes freshness and invalidates old refreshes", 
   runtime.shutdown();
 });
 
+test("clearing status before same-session restart prevents Chief fallback", async (t) => {
+  const { createAgentStatusRuntime } = await import("./agent-controller.ts");
+  const runtime = createAgentStatusRuntime();
+  const pending: {
+    resolve(snapshot: any): void;
+    reject(error: Error): void;
+  }[] = [];
+  let widget: { render(width: number): string[] } | undefined;
+  const ctx = {
+    mode: "tui",
+    hasUI: true,
+    ui: {
+      setWidget: (_key: string, content: any) => {
+        if (typeof content === "function")
+          widget = content(
+            { requestRender: () => undefined },
+            {
+              fg: (_color: string, text: string) => text,
+              bold: (text: string) => text,
+            },
+          );
+      },
+    },
+  } as any;
+  runtime.configure({
+    loadSnapshot: () =>
+      new Promise((resolve, reject) => pending.push({ resolve, reject })),
+    pendingStartEntries: () => [],
+    hasPendingStart: () => false,
+    clearPendingStart: () => false,
+    runtimeForLabel: () => undefined,
+    ownToolsSnapshot: () => ({}),
+  });
+  t.after(() => runtime.shutdown());
+
+  runtime.prepareSession(ctx);
+  runtime.start(ctx);
+  pending[0]!.resolve({
+    agents: [],
+    stale: false,
+    unavailable: false,
+    breadcrumb: [{ text: "chief" }],
+  });
+  await flush();
+  assert.match(widget!.render(160).join("\n"), /chief/u);
+
+  runtime.requestRefresh();
+  runtime.clear();
+  runtime.start(ctx);
+  assert.doesNotMatch(widget!.render(160).join("\n"), /chief/u);
+  pending[1]!.resolve({
+    agents: [],
+    stale: false,
+    unavailable: false,
+    breadcrumb: [{ text: "chief" }],
+  });
+  pending[2]!.reject(new Error("Lead status unavailable"));
+  await flush();
+  assert.match(widget!.render(160).join("\n"), /unavailable/u);
+  assert.doesNotMatch(widget!.render(160).join("\n"), /chief/u);
+
+  runtime.requestRefresh();
+  pending[3]!.resolve({
+    agents: [],
+    stale: false,
+    unavailable: false,
+    breadcrumb: [{ text: "lead" }],
+  });
+  await flush();
+  assert.match(widget!.render(160).join("\n"), /lead/u);
+  assert.doesNotMatch(widget!.render(160).join("\n"), /chief/u);
+});
+
 const flush = async () => {
   for (let i = 0; i < 20; i++) await Promise.resolve();
 };

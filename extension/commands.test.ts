@@ -15671,15 +15671,16 @@ test("Chief activation replaces the lead widget and overview selection is intera
   });
   const context = fakeContext(entries) as any;
   context.hasUI = true;
-  const widgetKeys: string[] = [];
+  const widgetCalls: { key: string; content: unknown }[] = [];
   const notices: string[] = [];
   let overview: any;
   let overviewDone = 0;
   let customCalls = 0;
   context.ui = {
-    setWidget: (key: string) => widgetKeys.push(key),
+    setWidget: (key: string, content: unknown) =>
+      widgetCalls.push({ key, content }),
     notify: (message: string) => notices.push(message),
-    confirm: async () => false,
+    confirm: async () => true,
     select: async () => undefined,
     custom: async (factory: any) => {
       customCalls++;
@@ -15709,8 +15710,8 @@ test("Chief activation replaces the lead widget and overview selection is intera
   await pi.commandOptions.get("chief").handler("", context);
   assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
   assert.equal(pi.pi.getActiveTools().includes("read_evidence"), false);
-  assert.ok(widgetKeys.includes("pi-herdsman"));
-  assert.ok(widgetKeys.includes("pi-herdsman-staff"));
+  assert.ok(widgetCalls.some(({ key }) => key === "pi-herdsman"));
+  assert.ok(widgetCalls.some(({ key }) => key === "pi-herdsman-staff"));
   assert.equal(
     pi.commandOptions.get("chief").description,
     "Activate Chief mode, open its overview, or refresh its profile",
@@ -15767,6 +15768,16 @@ test("Chief activation replaces the lead widget and overview selection is intera
   overview.handleInput("\u001b[B");
   overview.handleInput("\r");
   await t.waitFor(() => assert.equal(overviewDone, 2, notices.join(" | ")));
+  await pi.commandOptions.get("chief").handler("leave", context);
+  assert.ok(
+    widgetCalls.some(
+      ({ key, content }) =>
+        key === "pi-herdsman-staff" && content === undefined,
+    ),
+    "leaving Chief removes its supervision widget",
+  );
+  assert.equal(widgetCalls.at(-1)?.key, "pi-herdsman");
+  assert.equal(typeof widgetCalls.at(-1)?.content, "function");
 });
 
 test("Manager direct reports preserve assigned Leads when ordinary supervision is ambiguous", async (t) => {
