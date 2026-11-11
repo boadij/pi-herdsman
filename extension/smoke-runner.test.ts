@@ -6581,6 +6581,27 @@ test("simulated continuation releases completion only after full live evidence",
   }
 });
 
+test("simulated resumed continuation waits for exact live identity observation", async () => {
+  const { waitForContinuationResumeObservation } =
+    await import("../scripts/smoke-faux.mjs");
+  const directory = await mkdtemp(join(tmpdir(), "smoke-continuation-resume-gate-"));
+  const runtime = join(directory, "pi-herdsman", "runtime");
+  await mkdir(runtime, { recursive: true });
+  let released = false;
+  const completion = waitForContinuationResumeObservation(runtime).then(() => {
+    released = true;
+  });
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(released, false);
+    await writeFile(join(runtime, "continuation-resume-observed"), "observed\n");
+    await completion;
+    assert.equal(released, true);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("continuation completion wait tears down on abort, timeout, and filesystem failure", async (t) => {
   const { waitForContinuationObservation } =
     await import("../scripts/smoke-faux.mjs");

@@ -8947,10 +8947,17 @@ async function runContinuationSmoke(ctx) {
           refreshContinuationDiagnostics();
         }
       }
+      const done =
+        firstGeneration !== undefined &&
+        secondGenerationMailbox !== undefined;
+      if (done && ctx.simulated)
+        await writeFile(
+          join(runtimeEvidence, "continuation-resume-observed"),
+          "observed\n",
+          { flag: "wx", mode: 0o600 },
+        );
       return {
-        done:
-          firstGeneration !== undefined &&
-          secondGenerationMailbox !== undefined,
+        done,
         value: firstGeneration,
         progress: {
           matchingSessionSeen,

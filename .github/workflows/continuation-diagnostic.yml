@@ -14,10 +14,6 @@ jobs:
   continuation:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [main, pi-pins-only, pr-head]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -30,28 +26,11 @@ jobs:
       - name: Select isolated comparison target
         shell: bash
         env:
-          TARGET: ${{ matrix.target }}
           SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          git fetch origin main
-          temp="$RUNNER_TEMP/pi-pins-only"
-          if [ "$TARGET" = "pi-pins-only" ]; then
-            mkdir -p "$temp"
-            git show "$SOURCE_SHA:package.json" > "$temp/package.json"
-            git show "$SOURCE_SHA:package-lock.json" > "$temp/package-lock.json"
-            git checkout --detach origin/main
-            cp "$temp/package.json" package.json
-            cp "$temp/package-lock.json" package-lock.json
-          elif [ "$TARGET" = "main" ]; then
-            git checkout --detach origin/main
-          elif [ "$TARGET" = "pr-head" ]; then
-            git checkout --detach "$SOURCE_SHA"
-          else
-            echo "Unsupported comparison target" >&2
-            exit 2
-          fi
-          printf 'comparison_target=%s\n' "$TARGET" >> "$GITHUB_STEP_SUMMARY"
+          git checkout --detach "$SOURCE_SHA"
+          printf 'comparison_target=pr-head\n' >> "$GITHUB_STEP_SUMMARY"
           printf 'checkout=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
       - run: npm ci
       - name: Verify exact Pi and Node baselines
