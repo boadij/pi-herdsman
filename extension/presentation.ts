@@ -4788,6 +4788,60 @@ export function renderAgentAskMessage(
   return renderMessageBox(content, theme, options.outputPad ?? 0);
 }
 
+export function renderAgentOwnerMessage(
+  message: {
+    content?: CustomMessageInput["content"];
+    details?: unknown;
+  },
+  options: { expanded?: boolean; outputPad?: number },
+  theme: any,
+): TuiBox {
+  const details = isRecord(message.details) ? message.details : {};
+  const agentLabel = value(details.agentLabel);
+  const label = /^[a-z][a-z0-9_-]{0,31}$/u.test(agentLabel)
+    ? agentLabel
+    : "agent";
+  const heading = `${humanText(theme, "accent", "✉")} ${theme.bold(label)} notified owner`;
+  const rawBody = contentText(message.content ?? "");
+  const body = rawBody.startsWith(`Agent ${label} notification:\n\n`)
+    ? rawBody.slice(`Agent ${label} notification:\n\n`.length)
+    : label === "agent"
+      ? rawBody.replace(/^Agent [^\n]+ notification:\n\n/u, "")
+      : rawBody;
+  const content = new Container();
+  content.addChild(new Text(heading, 0, 0));
+  if (options.expanded) {
+    if (body) {
+      content.addChild(new Spacer(1));
+      content.addChild(new Markdown(body, 0, 0, getMarkdownTheme()));
+    }
+    const metadata = [
+      ...(value(details.messageId)
+        ? [`message: ${value(details.messageId)}`]
+        : []),
+      ...(value(details.requestId)
+        ? [`request: ${value(details.requestId)}`]
+        : []),
+      ...(value(details.piSessionId)
+        ? [`session: ${value(details.piSessionId)}`]
+        : []),
+    ];
+    if (metadata.length) {
+      content.addChild(new Spacer(1));
+      content.addChild(new WidthSafeText(metadata.join("\n"), 0, 0));
+    }
+  } else {
+    const preview = collapseDisplayText(body, 200);
+    if (preview)
+      content.addChild(
+        new Markdown(`  ${preview}`, 0, 0, getMarkdownTheme(), {
+          color: (text) => humanText(theme, "muted", text),
+        }),
+      );
+  }
+  return renderMessageBox(content, theme, options.outputPad ?? 0);
+}
+
 export function renderAgentAttentionMessage(
   message: { details?: unknown },
   options: { expanded?: boolean; outputPad?: number },

@@ -777,9 +777,15 @@ do not select evidence unless the owner needs it.
 Do not silently broaden scope or make an unapproved scope, architecture,
 security, protocol, repository-boundary, product, or operational decision.
 
-Use notify_owner when your direct owner needs material information but you can
-continue working. Use await_owner only when your assignment cannot proceed
-without the owner's answer. After an accepted await_owner call, end your turn;
+Use notify_owner only for material information your direct owner needs before
+the normal final handoff, or for an explicitly requested meaningful
+checkpoint. Do not send routine progress, duplicate an imminent final result,
+or notify merely to show activity.
+
+Use await_owner only for a required owner decision that prevents further
+correct progress. Complete independently safe work first. Do not ask for
+decisions already settled by the assignment, existing evidence, or your
+delegated authority. After an accepted await_owner call, end your turn;
 Herdsman retains the blocked assignment until the owner replies. Explicit attachments must be supported UTF-8
 text fully embedded within the applicable per-file and complete-message
 budgets. Call await_owner alone as the final tool call of the turn. Wait for the
@@ -6809,6 +6815,7 @@ export function createAgentController(
     stopOwnerMessageWatcher(runtime);
     const check = () => {
       if (!active || runtimes.get(runtime.label) !== runtime) return;
+      if (!context.isIdle()) return;
       try {
         deliverOwnerMessages(runtime, context, signal);
       } catch (error) {
@@ -7217,6 +7224,8 @@ export function createAgentController(
     signal?: AbortSignal,
     triggerTurn = true,
     budget?: DeliveryBudget,
+    receiptsOnly = false,
+    retryMessageIds?: ReadonlySet<string>,
   ): boolean => {
     if (!active || runtimes.get(runtime.label) !== runtime) return false;
     let submitted = false;
@@ -7282,6 +7291,9 @@ export function createAgentController(
             submittedOwnerMessages.delete(messageKey);
             continue;
           }
+          if (receiptsOnly) continue;
+          if (retryMessageIds && !retryMessageIds.has(ownerMessage.messageId))
+            continue;
           if (submittedOwnerMessages.has(messageKey)) continue;
           const content = `Agent ${ownerMessage.agentLabel} notification:\n\n${ownerMessage.text}`;
           if (budget && !includeFanInMessage({ ...budget }, content)) continue;
@@ -7856,13 +7868,6 @@ export function createAgentController(
       return 0;
     }
     let submitted = 0;
-    // Each recipient reconciliation is a new delivery episode. Delivery
-    // checks persisted history before consulting this process-local guard.
-    for (const runtime of runtimes.values())
-      if (runtime.ownerSessionId === ownerId)
-        for (const key of submittedOwnerMessages)
-          if (key.startsWith(`${runtime.mailboxPath}:`))
-            submittedOwnerMessages.delete(key);
     for (const runtime of runtimes.values()) {
       if (runtime.ownerSessionId !== ownerId || !active) continue;
       if (deliverOwnerMessages(runtime, context, context.signal, false, budget))
@@ -11236,6 +11241,35 @@ export function createAgentController(
     registerRecipientFanIn(pi, (ctx, phase, budget) =>
       drainReadyOwnerNotifications(ctx, phase, budget),
     );
+  pi.on("agent_settled", (_event, context) => {
+    if (!active) return;
+    let ownerId: string;
+    try {
+      ownerId = context.sessionManager.getSessionId();
+    } catch {
+      return;
+    }
+    for (const runtime of runtimes.values()) {
+      if (runtime.ownerSessionId !== ownerId) continue;
+      const prefix = `${runtime.mailboxPath}:`;
+      const retryMessageIds = new Set<string>();
+      for (const key of submittedOwnerMessages) {
+        if (!key.startsWith(prefix)) continue;
+        retryMessageIds.add(key.slice(prefix.length));
+        submittedOwnerMessages.delete(key);
+      }
+      // Only retry messages previously submitted by this exact owner runtime.
+      deliverOwnerMessages(
+        runtime,
+        context,
+        undefined,
+        true,
+        undefined,
+        false,
+        retryMessageIds,
+      );
+    }
+  });
   return {
     listAgentStates,
     managedAgentSnapshots: snapshot,

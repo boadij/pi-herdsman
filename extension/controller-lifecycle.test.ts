@@ -11894,10 +11894,8 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       );
     for (const handler of parentAgent.events.get("agent_before_settle") ?? [])
       await handler({ outcome: "completed" }, parentResultContext);
-    await parentAgent.events.get("agent_settled")![0](
-      { aborted: false },
-      parentResultContext,
-    );
+    for (const handler of parentAgent.events.get("agent_settled") ?? [])
+      await handler({ aborted: false }, parentResultContext);
     assert.equal(
       readResult(parentMailbox, parentRequestId)?.text,
       "Parent completed.",
