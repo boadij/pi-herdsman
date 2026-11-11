@@ -5485,6 +5485,10 @@ test("crash-recovery probes an advertised waiting-parent steer and requires reje
             label: "smoke-crash-parent",
             available_tools: ["steer_agent"],
           },
+          {
+            label: "smoke-crash-target",
+            available_tools: ["stop_agent"],
+          },
         ],
       },
     },
@@ -5523,6 +5527,14 @@ test("crash-recovery accepts only the resumed target's marked completion", () =>
       toolName: "list_agents",
       toolCallId: "list",
       isError: false,
+      details: {
+        agents: [
+          {
+            label: "smoke-crash-target",
+            available_tools: ["stop_agent"],
+          },
+        ],
+      },
       content: "",
     },
     {
@@ -5590,6 +5602,48 @@ test("crash-recovery accepts only the resumed target's marked completion", () =>
   assert.equal(
     firstTextContent(resumed).text,
     "PI_HERDSMAN_CRASH_RECOVERY_CONTINUED",
+  );
+});
+
+test("crash-recovery does not treat a missing target as closed without verified-settlement authorization", () => {
+  const messages = [
+    {
+      role: "user",
+      content: "PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART",
+    },
+    {
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "list", name: "list_agents", arguments: {} },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolName: "list_agents",
+      toolCallId: "list",
+      isError: false,
+      details: { agents: [{ label: "smoke-crash-parent" }] },
+    },
+  ];
+  const unverified = decideSmokeFaux("agent-crash-root", { messages });
+  assert.match(
+    firstTextContent(unverified).text,
+    /Waiting for verified settled-target recovery/,
+  );
+  const authorized = decideSmokeFaux("agent-crash-root", {
+    messages: [
+      ...messages,
+      {
+        role: "user",
+        content:
+          "PI_HERDSMAN_CRASH_RECOVERY_SETTLED_CONTINUE /saved/target.jsonl",
+      },
+    ],
+  });
+  assert.equal(firstToolCall(authorized).name, "continue_agent");
+  assert.equal(
+    firstToolCall(authorized).arguments.session,
+    "/saved/target.jsonl",
   );
 });
 

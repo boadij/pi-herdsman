@@ -715,6 +715,11 @@ function agentCrashRecoveryDecision(model, context) {
           (agent.label ?? agent.agent_label ?? agent.agent) ===
           "smoke-crash-parent",
       );
+      const target = list.result?.details?.agents?.find(
+        (agent) =>
+          (agent.label ?? agent.agent_label ?? agent.agent) ===
+          "smoke-crash-target",
+      );
       if (parent?.available_tools?.includes("steer_agent")) {
         const steerCall = messages
           .filter(
@@ -752,17 +757,33 @@ function agentCrashRecoveryDecision(model, context) {
         "stop_agent",
         "smoke-crash-target",
       );
-      if (!closed) return call("stop_agent", { agent: "smoke-crash-target" });
+      const settledPrompt = messages.find(
+        (message) =>
+          message.role === "user" &&
+          text(message).startsWith(
+            "PI_HERDSMAN_CRASH_RECOVERY_SETTLED_CONTINUE ",
+          ),
+      );
+      if (!closed && target?.available_tools?.includes("stop_agent"))
+        return call("stop_agent", { agent: "smoke-crash-target" });
+      if (!closed && !settledPrompt)
+        return waitForResult(
+          "Waiting for verified settled-target recovery or an eligible stop receipt.",
+        );
       const continuePrompt = messages.find(
         (message) =>
           message.role === "user" &&
           text(message).includes("PI_HERDSMAN_CRASH_RECOVERY_CONTINUE"),
       );
-      if (!continuePrompt)
+      if (!settledPrompt && !continuePrompt)
         return fauxAssistantMessage("PI_HERDSMAN_CRASH_RECOVERY_CLOSED");
-      const session = closed.result?.details?.closed_assignment?.session_path;
+      const session = settledPrompt
+        ? text(settledPrompt).slice(
+            "PI_HERDSMAN_CRASH_RECOVERY_SETTLED_CONTINUE ".length,
+          )
+        : closed.result?.details?.closed_assignment?.session_path;
       if (!session)
-        throw new Error("Restart prompt omitted exact target session path");
+        throw new Error("Crash recovery omitted exact target session path");
       const continued = correlatedCall(messages, "continue_agent");
       if (!continued)
         return call("continue_agent", {
