@@ -49,6 +49,7 @@ import {
   retainSupervisionSelection,
   renderCompletionMessage,
   renderAgentAskMessage,
+  renderAgentOwnerMessage,
   renderAgentAttentionMessage,
   renderAgentStaleMessage,
   renderAgentLostMessage,
@@ -5578,6 +5579,75 @@ test("ask, stale, and lost custom messages preserve attention semantics and iden
   assert.doesNotMatch(expandedLost, /Close this lost generation/);
   assert.match(expandedLost, /next reminder: ~2m 30s/);
   assert.match(expandedLost, /request: request-id/);
+});
+
+test("owner notifications render a compact preview and expandable full message", () => {
+  const notification = {
+    content:
+      "Agent privacy-fix notification:\n\nHosted **A/B comparison** completed. Main passed; PR head still fails.\n\nFull detail.",
+    details: {
+      agentLabel: "privacy-fix",
+      messageId: "message-id",
+      requestId: "request-id",
+      piSessionId: "session-id",
+    },
+  };
+  const collapsed = renderedText(
+    renderAgentOwnerMessage(
+      notification,
+      { expanded: false },
+      presentationTheme,
+    ),
+  );
+  assert.match(collapsed, /✉ privacy-fix notified owner/);
+  assert.match(collapsed, /Hosted A\/B comparison completed/);
+  assert.doesNotMatch(
+    collapsed,
+    /Agent privacy-fix notification|message-id|request-id|session-id/,
+  );
+
+  const expanded = renderedText(
+    renderAgentOwnerMessage(
+      notification,
+      { expanded: true },
+      presentationTheme,
+    ),
+  );
+  assert.match(expanded, /Hosted A\/B comparison completed\. Main passed/);
+  assert.match(expanded, /Full detail\./);
+  assert.match(expanded, /message: message-id/);
+  assert.match(expanded, /request: request-id/);
+  assert.match(expanded, /session: session-id/);
+  assert.doesNotMatch(expanded, /Agent privacy-fix notification/);
+
+  const malformed = renderedText(
+    renderAgentOwnerMessage(
+      {
+        content: "Agent fallback notification:\n\nSafe fallback",
+        details: null,
+      },
+      { expanded: false },
+      presentationTheme,
+    ),
+    12,
+  );
+  assert.match(malformed, /agent\nnotified\nowner/);
+  assert.match(malformed, /Safe\nfallback/);
+
+  for (const agentLabel of ["bad\nlabel", `a${"x".repeat(32)}`]) {
+    const invalidLabel = renderedText(
+      renderAgentOwnerMessage(
+        {
+          content: "Agent actual-label notification:\n\nSafe fallback",
+          details: { agentLabel },
+        },
+        { expanded: false },
+        presentationTheme,
+      ),
+    );
+    assert.match(invalidLabel, /✉ agent notified owner/);
+    assert.doesNotMatch(invalidLabel, /bad|x{32}/);
+  }
 });
 
 test("generic attention messages keep compact output small and expanded identity details", () => {

@@ -2914,7 +2914,10 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       { message: { role: "assistant", content: "premature answer" } },
       context,
     );
-    const settle = pi.events.get("agent_settled")![0];
+    const settle = async (event: unknown, ctx: typeof context) => {
+      for (const handler of pi.events.get("agent_settled") ?? [])
+        await handler(event, ctx);
+    };
     await settle({ aborted: false }, context);
     assert.equal(readResult(parentMailbox, parentRequestId), undefined);
     assert.equal(
@@ -4142,8 +4145,17 @@ test("agent registers native activity events and coalesces activity writes", asy
   agent.events.get("session_shutdown")?.[0]();
 });
 
-test("shared Agent instructions do not advertise optional shell tools", () => {
+test("shared Agent instructions preserve shell and owner-communication guidance", () => {
   assert.doesNotMatch(SHARED_AGENT_INSTRUCTIONS, /\b(?:bash|powershell)\b/u);
+  assert.match(
+    SHARED_AGENT_INSTRUCTIONS,
+    /notify_owner only for material information your direct owner needs before\s+the normal final handoff, or for an explicitly requested meaningful\s+checkpoint/u,
+  );
+  assert.match(
+    SHARED_AGENT_INSTRUCTIONS,
+    /await_owner only for a required owner decision that prevents further\s+correct progress/u,
+  );
+  assert.match(SHARED_AGENT_INSTRUCTIONS, /normal final handoff/u);
 });
 
 test("managed agents cap direct built-in shell calls without explicit timeouts", async () => {
@@ -7607,6 +7619,7 @@ test("owner notification is retained until its exact persisted session receipt",
       identity,
     ),
   });
+  let restartedPi: ReturnType<typeof fakePi> | undefined;
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries, []);
   try {
@@ -7624,39 +7637,88 @@ test("owner notification is retained until its exact persisted session receipt",
       deliverAs: "steer",
     });
     assert.deepEqual(pi.sentMessageCalls[1]?.options, { triggerTurn: false });
-    // A repeated reconciliation within this delivery episode must not enqueue
-    // duplicates; a later completed recipient boundary may retry unreceipted work.
+    // Startup and turn fan-in must not release submissions still in flight.
     pi.events.get("session_tree")?.[0](undefined, context);
+    await pi.events.get("before_agent_start")?.[0](undefined, context);
+    await pi.events.get("agent_before_settle")?.[0](
+      { outcome: "completed" },
+      context,
+    );
+    for (const handler of pi.events.get("turn_end") ?? [])
+      await handler({ outcome: "completed" }, context);
     assert.equal(
       pi.sent.filter(
         (entry: any) => entry.customType === "pi-herdsman-agent-owner-message",
       ).length,
       2,
     );
+    entries.push({
+      customType: sent.customType,
+      details: { ...sent.details, paneId: "wrong-pane" },
+    });
+    await pi.events.get("before_agent_start")?.[0](undefined, context);
+    assert.equal(readOwnerMessages(mailbox).length, 2);
+    // The exact receipt is persisted before settlement; settlement reconciles
+    // it without resubmitting the other, still-unreceipted notification.
+    entries.pop();
+    entries.push({ customType: sent.customType, details: sent.details });
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: false }, context);
+    // Receipt cleanup is identity-specific; the second message remains durable.
+    assert.deepEqual(
+      readOwnerMessages(mailbox).map(({ messageId }) => messageId),
+      ["88888888-8888-4888-8888-888888888888"],
+    );
+    assert.equal(
+      pi.sent.filter(
+        (entry: any) => entry.customType === "pi-herdsman-agent-owner-message",
+      ).length,
+      2,
+      "settlement checks receipts but does not retry a missing receipt",
+    );
     for (const handler of pi.events.get("turn_end") ?? [])
       await handler({ outcome: "completed" }, context);
     const retried = pi.sent.filter(
       (entry: any) => entry.customType === "pi-herdsman-agent-owner-message",
     );
-    assert.equal(retried.length, 4);
-    assert.equal(readOwnerMessages(mailbox).length, 2);
-    entries.push({
-      customType: sent.customType,
-      details: { ...sent.details, paneId: "wrong-pane" },
+    assert.equal(retried.length, 3);
+    assert.equal(readOwnerMessages(mailbox).length, 1);
+    pi.events.get("session_shutdown")?.[0]();
+    restartedPi = fakePi({
+      exec: leadExec(
+        label,
+        "working",
+        identity.piSessionId,
+        undefined,
+        identity.piSessionId,
+        identity,
+      ),
     });
-    for (const handler of pi.events.get("turn_end") ?? [])
-      await handler({ outcome: "completed" }, context);
-    assert.equal(readOwnerMessages(mailbox).length, 2);
-    entries.push({ customType: sent.customType, details: sent.details });
-    entries.push({
+    registerExtension!(restartedPi.pi as never);
+    const restartedEntries: unknown[] = [];
+    const restartedContext = fakeContext(restartedEntries, []);
+    await restartedPi.events.get("session_start")![0](
+      undefined,
+      restartedContext,
+    );
+    assert.equal(
+      restartedPi.sent.filter(
+        (entry: any) => entry.customType === "pi-herdsman-agent-owner-message",
+      ).length,
+      1,
+      "a new controller can recover the durable unreceipted notification",
+    );
+    assert.equal(readOwnerMessages(mailbox).length, 1);
+    restartedEntries.push({
       customType: sentMessages[1]!.customType,
       details: sentMessages[1]!.details,
     });
-    for (const handler of pi.events.get("turn_end") ?? [])
-      await handler({ outcome: "completed" }, context);
+    for (const handler of restartedPi.events.get("turn_end") ?? [])
+      await handler({ outcome: "completed" }, restartedContext);
     assert.equal(readOwnerMessages(mailbox).length, 0);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
+    restartedPi?.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
   }
 });
