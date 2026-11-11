@@ -46,6 +46,8 @@ import {
   removeResult,
   removeAgentMailbox,
   readPendingAsk,
+  readOwnerMessages,
+  removeOwnerMessage,
   parseControlMarker,
   readResult,
   readUnacknowledgedRequest,
@@ -57,6 +59,7 @@ import {
   waitForStartupOutcome,
   unacknowledgedRequestExists,
   type AskRecord,
+  type OwnerMessageRecord,
   type ResultRecord,
   type ManagedAgentState,
   type RequestRecord,
@@ -797,10 +800,12 @@ do not select evidence unless the owner needs it.
 Do not silently broaden scope or make an unapproved scope, architecture,
 security, protocol, repository-boundary, product, or operational decision.
 
-Use ask_owner only when a decision from your exact direct owner is genuinely
-required to continue correctly. Explicit attachments must be supported UTF-8
+Use notify_owner when your direct owner needs material information but you can
+continue working. Use await_owner only when your assignment cannot proceed
+without the owner's answer. After an accepted await_owner call, end your turn;
+Herdsman retains the blocked assignment until the owner replies. Explicit attachments must be supported UTF-8
 text fully embedded within the applicable per-file and complete-message
-budgets. Call ask_owner alone as the final tool call of the turn. Wait for the
+budgets. Call await_owner alone as the final tool call of the turn. Wait for the
 direct owner's reply only after the tool confirms the question was sent; if
 rejected, address the error or report a non-empty blocker. Keep at most one
 question outstanding. Do not guess the answer. The reply resumes the same
@@ -1090,7 +1095,7 @@ export const AGENT_EXECUTION_OWNERSHIP_GUIDANCE =
 export const AGENT_UNRESOLVED_GUIDANCE =
   "Use list_agents when fresh Agent state or ownership is materially needed for a control or recovery decision, or to refresh the definition roster; do not use it for progress polling. " +
   "Follow current available_tools and revalidation: steer_agent queues a cooperative correction for Pi to deliver after the current assistant turn and its tool calls reach a steering boundary; it does not preempt the current operation. interrupt_agent cancels the current operation and replaces its direction. " +
-  "Use reply_agent only to answer that Agent's exact pending ask_owner question. stop_agent abandons an eligible Agent generation and its unfinished assignment. inspect_agent provides bounded live terminal/process evidence; read_agent_transcript provides bounded persisted conversation/tool evidence. " +
+  "Use reply_agent only to answer that Agent's exact pending await_owner question. stop_agent abandons an eligible Agent generation and its unfinished assignment. inspect_agent provides bounded live terminal/process evidence; read_agent_transcript provides bounded persisted conversation/tool evidence. " +
   "When Agent work is unresolved, handle required control, then continue only necessary work you still own or end the turn without concluding; results or attention resume the session automatically. Do not poll with status requests, sleep, or other waiting mechanisms. " +
   "Stale health attention is diagnosis, not progress polling: use attached evidence first and, when absent or insufficient, perform at most one bounded diagnostic read before passive waiting. A repeated reminder for the same stale episode is additional recovery evidence: unchanged qualifying activity means the Agent has not crossed an execution boundary since the previous reminder. A steer queued during that unchanged episode cannot have taken effect yet. Do not repeat diagnostic reads solely because a reminder fired. Continue waiting only while existing evidence still positively supports a legitimate long-running operation; otherwise use interrupt_agent to stop the current operation and continue the same assignment. " +
   "A proven lost Agent remains unresolved; physical disappearance is not completion. A physically unknown Agent remains fail-closed: do not control, close, replace, or infer completion of that generation. Unknown Agent identity does not by itself prove a currently active competing writer. For a concrete recovery decision, use available current evidence and at most one bounded diagnostic read when necessary; distinguish historical Agent identity from current execution and delegated scope. Continue necessary independent work that remains authorized and has no unresolved execution conflict. Do not take over the Agent's unresolved assignment. Do not take over or replace unresolved delegated work until the current generation is resolved or explicitly closed. If evidence is insufficient to exclude competing execution, preserve the affected scope and identify the specific missing evidence or external action. Do not repeat the same identity investigation without new evidence.";
@@ -1145,7 +1150,7 @@ omit unrelated evidence and evidence already inherited as the same required vers
 but explicitly forward changed versions. Summaries do not transfer evidence.
 The lead retains architecture, approved scope, acceptance, and final-decision
 authority. Delegate only to definitions listed in your effective agents field.
-ask_owner follows its normal eligibility rules when you have no unresolved
+await_owner follows its normal eligibility rules when you have no unresolved
 direct-agent work. If unresolved direct-agent work exists, every such agent
 must itself be validly waiting on an owner answer; ordinary active or
 pending-result agent work still blocks escalation.`;
@@ -2411,6 +2416,28 @@ export function hasDeliveredAsk(
       details?.workspaceId === ask.workspaceId &&
       details?.paneId === ask.paneId &&
       details?.piSessionId === ask.piSessionId
+    );
+  });
+}
+
+export function hasDeliveredOwnerMessage(
+  entries: readonly unknown[],
+  ownerMessage: OwnerMessageRecord,
+): boolean {
+  return entries.some((entry: any) => {
+    const message = entry?.message;
+    const details = entry?.details ?? message?.details;
+    return (
+      (entry?.customType === "pi-herdsman-agent-owner-message" ||
+        message?.customType === "pi-herdsman-agent-owner-message") &&
+      details?.messageId === ownerMessage.messageId &&
+      details?.requestId === ownerMessage.requestId &&
+      details?.runId === ownerMessage.runId &&
+      details?.ownerSessionId === ownerMessage.ownerSessionId &&
+      details?.agentLabel === ownerMessage.agentLabel &&
+      details?.workspaceId === ownerMessage.workspaceId &&
+      details?.paneId === ownerMessage.paneId &&
+      details?.piSessionId === ownerMessage.piSessionId
     );
   });
 }
@@ -4433,6 +4460,11 @@ export type AgentControllerOptions = {
     ask: AskRecord,
     triggerTurn?: boolean,
   ): void;
+  sendOwnerMessage(
+    ctx: ExtensionContext,
+    message: OwnerMessageRecord,
+    triggerTurn?: boolean,
+  ): void;
   sessionRetired(ctx: ExtensionContext, runtime: Runtime): boolean | undefined;
   appendError(ctx: ExtensionContext, kind: string, error: unknown): void;
   onChanged(): void;
@@ -4477,8 +4509,11 @@ export function createAgentController(
   const pendingStarts = new Map<string, PendingStart>();
   const resultWatchers = new Map<string, () => void>();
   const askWatchers = new Map<string, () => void>();
+  const ownerMessageWatchers = new Map<string, () => void>();
   const resultDeliveryInFlight = new Set<string>();
   const askDeliveryInFlight = new Set<string>();
+  const ownerMessageDeliveryInFlight = new Set<string>();
+  const submittedOwnerMessages = new Set<string>();
   const resultDeliveryRetries = new Map<
     string,
     ReturnType<typeof setTimeout>
@@ -5560,6 +5595,8 @@ export function createAgentController(
         watchResult(runtime, context, signal);
         if (runtime.activeRequestId === requestId)
           watchAsk(runtime, context, signal);
+        if (runtime.activeRequestId === requestId)
+          watchOwnerMessages(runtime, context, signal);
       }
       return requestId;
     } finally {
@@ -5687,7 +5724,7 @@ export function createAgentController(
         ? readUnacknowledgedRequest(runtime.mailboxPath, current)
         : undefined;
       const nextAction = current?.pendingAskId
-        ? "Answer the pending ask_owner question with reply_agent."
+        ? "Answer the pending await_owner question with reply_agent."
         : controlState === "settling" || pendingRequest
           ? "Allow the current control or completion transition to finish."
           : controlState === "unknown"
@@ -5739,7 +5776,7 @@ export function createAgentController(
       if (!current?.activeRequestId || !askId || !ask)
         fail("agent_busy", "Agent is not waiting for an owner reply", "reply", {
           nextAction:
-            "Use reply_agent only for an outstanding ask_owner question; otherwise continue normal control or refresh with list_agents.",
+            "Use reply_agent only for an outstanding await_owner question; otherwise continue normal control or refresh with list_agents.",
         });
       if (
         ask.askId !== askId ||
@@ -6175,6 +6212,8 @@ export function createAgentController(
         hasNewerWork(current)
       )
         throw new Error("Managed agent changed before result cleanup");
+      if (!clearConfirmedOwnerMessages(mailbox, current, context))
+        throw new Error("Owner notification receipt is still unconfirmed");
       const presence = managedAgentPresence(
         current,
         await herdrSessionSnapshot(pi, context, signal),
@@ -6218,6 +6257,8 @@ export function createAgentController(
         hasNewerWork(current)
       )
         throw new Error("Managed agent changed during result cleanup");
+      if (!clearConfirmedOwnerMessages(mailbox, current, context))
+        throw new Error("Owner notification receipt is still unconfirmed");
       removeResult(mailbox, requestId);
       const after = readAgentState(mailbox);
       if (
@@ -6225,8 +6266,11 @@ export function createAgentController(
         !after.activeRequestId &&
         after.completedRequestId === requestId &&
         !hasNewerWork(after)
-      )
+      ) {
+        if (!clearConfirmedOwnerMessages(mailbox, after, context))
+          throw new Error("Owner notification receipt is still unconfirmed");
         removeAgentMailbox(mailbox);
+      }
       invalidateRuntime(state.agentLabel);
     } finally {
       release?.();
@@ -6246,6 +6290,7 @@ export function createAgentController(
     signal?: AbortSignal,
     report?: StopReport,
     assignmentLockHeld = false,
+    preserveOwnerMessages = false,
   ): Promise<void> => {
     const state = snapshot.state;
     const mailbox = agentMailboxPath(state.workspaceId, state.agentLabel);
@@ -6265,6 +6310,11 @@ export function createAgentController(
       let current = readAgentState(mailbox);
       if (!current || !sameIdentity(current, state))
         fail("target_ambiguous", "Managed agent changed before close", "close");
+      if (
+        preserveOwnerMessages &&
+        !clearConfirmedOwnerMessages(mailbox, current, context)
+      )
+        throw new Error("Owner notification receipt is still unconfirmed");
       if (hasDurableResult(mailbox, current))
         fail(
           "target_ambiguous",
@@ -6340,6 +6390,11 @@ export function createAgentController(
           );
       }
       try {
+        if (
+          preserveOwnerMessages &&
+          !clearConfirmedOwnerMessages(mailbox, current, context)
+        )
+          throw new Error("Owner notification receipt is still unconfirmed");
         removeAgentMailbox(mailbox);
       } catch (error) {
         const message = `Agent pane closed but mailbox cleanup failed: ${String(error)}`;
@@ -6420,7 +6475,14 @@ export function createAgentController(
           deliveredRootResultId,
         );
         try {
-          await closeSnapshot(context, child, signal, report);
+          await closeSnapshot(
+            context,
+            child,
+            signal,
+            report,
+            false,
+            deliveredRootResultId !== undefined,
+          );
           if (
             readAgentState(
               agentMailboxPath(child.state.workspaceId, child.state.agentLabel),
@@ -6676,6 +6738,10 @@ export function createAgentController(
     askWatchers.get(path)?.();
     askWatchers.delete(path);
   };
+  const stopOwnerMessageWatcher = (runtime: Runtime): void => {
+    ownerMessageWatchers.get(runtime.mailboxPath)?.();
+    ownerMessageWatchers.delete(runtime.mailboxPath);
+  };
   const invalidateRuntime = (label: string, workspaceId?: string): void => {
     const runtime = runtimes.get(label);
     if (
@@ -6685,6 +6751,10 @@ export function createAgentController(
       return;
     stopResultWatcher(runtime);
     stopAskWatcher(runtime);
+    stopOwnerMessageWatcher(runtime);
+    for (const key of submittedOwnerMessages)
+      if (key.startsWith(`${runtime.mailboxPath}:`))
+        submittedOwnerMessages.delete(key);
     cancelAskRetries(runtime);
     for (const requestId of [
       runtime.activeRequestId,
@@ -6762,6 +6832,29 @@ export function createAgentController(
       (error) => options.reportWatcherError(context, error),
     );
     askWatchers.set(path, stop);
+    check();
+  };
+  const watchOwnerMessages = (
+    runtime: Runtime,
+    context: ExtensionContext,
+    signal?: AbortSignal,
+  ): void => {
+    stopOwnerMessageWatcher(runtime);
+    const check = () => {
+      if (!active || runtimes.get(runtime.label) !== runtime) return;
+      try {
+        deliverOwnerMessages(runtime, context, signal);
+      } catch (error) {
+        options.reportWatcherError(context, error);
+      }
+    };
+    const stop = observeMailbox(
+      runtime.mailboxPath,
+      (name) => name.startsWith("owner-message-") && name.endsWith(".json"),
+      check,
+      (error) => options.reportWatcherError(context, error),
+    );
+    ownerMessageWatchers.set(runtime.mailboxPath, stop);
     check();
   };
   const resultIdentity = (runtime: Runtime, requestId: string) => ({
@@ -6859,6 +6952,7 @@ export function createAgentController(
         } else validateIdentity(runtime, state);
         if (signal.aborted) return;
         runtimes.set(runtime.label, runtime);
+        watchOwnerMessages(runtime, context, signal);
         if (runtime.activeRequestId) {
           watchResult(runtime, context, signal);
           watchAsk(runtime, context, signal);
@@ -7131,7 +7225,7 @@ export function createAgentController(
       if (!delivered) {
         if (budget && !includeFanInMessage({ ...budget }, content))
           return false;
-        importResultBindings(pi, context, ask.resultBindings, "ask_owner");
+        importResultBindings(pi, context, ask.resultBindings, "await_owner");
         options.sendAskMessage(context, ask, triggerTurn);
         if (budget) includeFanInMessage(budget, content);
       }
@@ -7150,6 +7244,133 @@ export function createAgentController(
       askDeliveryInFlight.delete(key);
     }
   };
+  const deliverOwnerMessages = (
+    runtime: Runtime,
+    context: ExtensionContext,
+    signal?: AbortSignal,
+    triggerTurn = true,
+    budget?: DeliveryBudget,
+  ): boolean => {
+    if (!active || runtimes.get(runtime.label) !== runtime) return false;
+    let submitted = false;
+    let shouldTriggerTurn = triggerTurn;
+    try {
+      const state = readAgentState(runtime.mailboxPath);
+      if (!state) return false;
+      requireCompatibleBuild(
+        options.build,
+        state.build,
+        "notify_owner",
+        `Agent ${state.agentLabel}`,
+      );
+      validateIdentity(runtime, state);
+      if (context.sessionManager.getSessionId() !== runtime.ownerSessionId)
+        return false;
+      for (const ownerMessage of readOwnerMessages(runtime.mailboxPath)) {
+        if (
+          ownerMessage.runId !== runtime.runId ||
+          ownerMessage.ownerSessionId !== runtime.ownerSessionId ||
+          ownerMessage.workspaceId !== runtime.workspaceId ||
+          ownerMessage.agentLabel !== runtime.label ||
+          ownerMessage.paneId !== runtime.paneId ||
+          ownerMessage.piSessionId !== runtime.piSessionId ||
+          (ownerMessage.requestId !== runtime.activeRequestId &&
+            ownerMessage.requestId !== runtime.completedRequestId)
+        )
+          throw new Error(
+            `Owner notification identity did not match Agent ${runtime.label}`,
+          );
+        const messageKey = `${runtime.mailboxPath}:${ownerMessage.messageId}`;
+        if (ownerMessageDeliveryInFlight.has(messageKey)) continue;
+        ownerMessageDeliveryInFlight.add(messageKey);
+        try {
+          const entries = context.sessionManager.getEntries();
+          if (hasDeliveredOwnerMessage(entries, ownerMessage)) {
+            const release = claimAssignmentLock(
+              runtime.mailboxPath,
+              "notify_owner",
+              {
+                label: runtime.label,
+                paneId: runtime.paneId,
+              },
+            );
+            try {
+              const current = readAgentState(runtime.mailboxPath);
+              const matching = readOwnerMessages(runtime.mailboxPath).find(
+                (record) => record.messageId === ownerMessage.messageId,
+              );
+              if (
+                !current ||
+                !sameIdentity(current, state) ||
+                !matching ||
+                !isDeepStrictEqual(matching, ownerMessage)
+              )
+                throw new Error(
+                  "Owner notification changed before receipt cleanup",
+                );
+              removeOwnerMessage(runtime.mailboxPath, ownerMessage.messageId);
+            } finally {
+              release();
+            }
+            submittedOwnerMessages.delete(messageKey);
+            continue;
+          }
+          if (submittedOwnerMessages.has(messageKey)) continue;
+          const content = `Agent ${ownerMessage.agentLabel} notification:\n\n${ownerMessage.text}`;
+          if (budget && !includeFanInMessage({ ...budget }, content)) continue;
+          importResultBindings(
+            pi,
+            context,
+            ownerMessage.resultBindings,
+            "notify_owner",
+          );
+          options.sendOwnerMessage(context, ownerMessage, shouldTriggerTurn);
+          shouldTriggerTurn = false;
+          submittedOwnerMessages.add(messageKey);
+          if (budget) includeFanInMessage(budget, content);
+          submitted = true;
+        } finally {
+          ownerMessageDeliveryInFlight.delete(messageKey);
+        }
+      }
+    } catch (error) {
+      if (
+        !(error instanceof OperationError) ||
+        error.detail.category !== "incompatible_build"
+      )
+        options.reportWatcherError(context, error);
+    }
+    return submitted;
+  };
+  const clearConfirmedOwnerMessages = (
+    mailbox: string,
+    state: ManagedAgentState,
+    context: ExtensionContext,
+  ): boolean => {
+    const ownerMessages = readOwnerMessages(mailbox);
+    if (!ownerMessages.length) return true;
+    if (context.sessionManager.getSessionId() !== state.ownerSessionId)
+      throw new Error("Owner session changed before notification cleanup");
+    const entries = context.sessionManager.getEntries();
+    for (const ownerMessage of ownerMessages) {
+      if (
+        ownerMessage.runId !== state.runId ||
+        ownerMessage.ownerSessionId !== state.ownerSessionId ||
+        ownerMessage.workspaceId !== state.workspaceId ||
+        ownerMessage.agentLabel !== state.agentLabel ||
+        ownerMessage.paneId !== state.paneId ||
+        ownerMessage.piSessionId !== state.piSessionId ||
+        ![state.activeRequestId, state.completedRequestId].includes(
+          ownerMessage.requestId,
+        )
+      )
+        throw new Error("Owner notification identity changed before cleanup");
+      if (!hasDeliveredOwnerMessage(entries, ownerMessage)) return false;
+      removeOwnerMessage(mailbox, ownerMessage.messageId);
+      submittedOwnerMessages.delete(`${mailbox}:${ownerMessage.messageId}`);
+    }
+    return true;
+  };
   const resultCleanupReady = (
     runtime: Runtime,
     requestId: string,
@@ -7158,7 +7379,14 @@ export function createAgentController(
     if (!hasDeliveredResult(entries, resultIdentity(runtime, requestId)))
       return false;
     const state = readAgentState(runtime.mailboxPath);
+    let notifications: OwnerMessageRecord[];
+    try {
+      notifications = readOwnerMessages(runtime.mailboxPath);
+    } catch {
+      return false;
+    }
     return (
+      notifications.length === 0 &&
       !!state &&
       state.runId === runtime.runId &&
       state.ownerSessionId === runtime.ownerSessionId &&
@@ -7241,6 +7469,8 @@ export function createAgentController(
           candidate.workspaceId === state.workspaceId &&
           candidate.ownerSessionId === state.piSessionId,
       );
+      deliverOwnerMessages(runtime, context, signal, false);
+      if (readOwnerMessages(runtime.mailboxPath).length) return false;
       if (
         managedAgent &&
         !ownsDescendants &&
@@ -7388,6 +7618,7 @@ export function createAgentController(
         result.requestId !==
           (runtime.activeRequestId ?? runtime.completedRequestId);
       if (identityMismatch) return false;
+      deliverOwnerMessages(runtime, context, signal, false, budget);
       let entries = context.sessionManager.getEntries();
       const evidenceKey = JSON.stringify(Object.values(expected));
       if (
@@ -7658,8 +7889,17 @@ export function createAgentController(
       return 0;
     }
     let submitted = 0;
+    // Each recipient reconciliation is a new delivery episode. Delivery
+    // checks persisted history before consulting this process-local guard.
+    for (const runtime of runtimes.values())
+      if (runtime.ownerSessionId === ownerId)
+        for (const key of submittedOwnerMessages)
+          if (key.startsWith(`${runtime.mailboxPath}:`))
+            submittedOwnerMessages.delete(key);
     for (const runtime of runtimes.values()) {
       if (runtime.ownerSessionId !== ownerId || !active) continue;
+      if (deliverOwnerMessages(runtime, context, context.signal, false, budget))
+        submitted++;
       const requestId = runtime.activeRequestId ?? runtime.completedRequestId;
       if (requestId) {
         try {
@@ -10090,7 +10330,7 @@ export function createAgentController(
       name: "reply_agent",
       label: "reply agent",
       description:
-        "Answer the exact pending ask_owner question for a direct Agent.",
+        "Answer the exact pending await_owner question for a direct Agent.",
       parameters: agentMessageParameters,
       promptSnippet: undefined,
       promptGuidelines: [FILE_HANDOFF_GUIDANCE],
@@ -10685,7 +10925,7 @@ export function createAgentController(
             {
               customType: "pi-herdsman-agent-attention",
               content: [
-                `Agent ${current.agentLabel} is blocked in its live runtime, but no Herdsman ask_owner question exists.`,
+                `Agent ${current.agentLabel} is blocked in its live runtime, but no Herdsman await_owner question exists.`,
                 `Request: ${current.activeRequestId}`,
                 `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
                 `Next reminder if unresolved: ~${formatHealthAttentionDuration(intervalMs)}`,
@@ -11087,8 +11327,10 @@ export function createAgentController(
     rollbackUnknownStartedAgent,
     watchResult,
     watchAsk,
+    watchOwnerMessages,
     stopResultWatcher,
     stopAskWatcher,
+    stopOwnerMessageWatcher,
     deliverResult,
     cleanupDeliveredResult(
       runtime: Runtime,
@@ -11126,7 +11368,10 @@ export function createAgentController(
     sessionTreeChanged(context: ExtensionContext, signal?: AbortSignal) {
       active = true;
       for (const runtime of runtimes.values()) {
-        if (runtime.activeRequestId) watchAsk(runtime, context, signal);
+        if (runtime.activeRequestId) {
+          watchAsk(runtime, context, signal);
+          watchOwnerMessages(runtime, context, signal);
+        }
       }
     },
     abortSession() {
@@ -11165,8 +11410,10 @@ export function createAgentController(
       recoveryComplete = false;
       for (const watcher of resultWatchers.values()) watcher();
       for (const watcher of askWatchers.values()) watcher();
+      for (const watcher of ownerMessageWatchers.values()) watcher();
       resultWatchers.clear();
       askWatchers.clear();
+      ownerMessageWatchers.clear();
       for (const timer of resultDeliveryRetries.values()) clearTimeout(timer);
       for (const timer of resultCleanupRetries.values()) clearTimeout(timer);
       for (const timer of askDeliveryRetries.values()) clearTimeout(timer);
@@ -11175,6 +11422,8 @@ export function createAgentController(
       askDeliveryRetries.clear();
       resultDeliveryInFlight.clear();
       askDeliveryInFlight.clear();
+      ownerMessageDeliveryInFlight.clear();
+      submittedOwnerMessages.clear();
       resultDeliveryEvidence.clear();
       resultDeliverySemanticRefs.clear();
       runtimes.clear();

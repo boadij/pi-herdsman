@@ -1060,7 +1060,7 @@ test("stop_agent availability accounts for the whole descendant cascade", async 
   );
 });
 
-test("a multi-level ask_owner reaches only the direct owner, who can reply", async () => {
+test("a multi-level await_owner reaches only the direct owner, who can reply", async () => {
   await fromMiddleAgent({ max: 4, pendingAsk: true }, async ({ tool }) => {
     const listing = await tool("list_agents", {});
     assert.ok(listedTools(listing, "a3").includes("reply_agent"));

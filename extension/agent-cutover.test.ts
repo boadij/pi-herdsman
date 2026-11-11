@@ -136,7 +136,7 @@ test("the legacy allowlist environment variable grants no agent capability", () 
         name,
       );
     assert.equal(
-      pi.tools.some((tool) => tool.name === "ask_owner"),
+      pi.tools.some((tool) => tool.name === "await_owner"),
       true,
     );
   } finally {
@@ -153,8 +153,9 @@ test("managed Agent surfaces distinguish delegation capability from leaf access"
   const leaf = fakePi();
   registerExtension!(leaf.pi as never);
   assert.deepEqual(names(leaf), [
-    "ask_owner",
     "attach_handoff",
+    "await_owner",
+    "notify_owner",
     "read_evidence",
   ]);
   leaf.events.get("session_shutdown")?.[0]();
@@ -166,13 +167,14 @@ test("managed Agent surfaces distinguish delegation capability from leaf access"
   assert.deepEqual(
     names(delegating),
     [
-      "ask_owner",
+      "await_owner",
       "stop_agent",
       "continue_agent",
       "delegate_agent",
       "inspect_agent",
       "interrupt_agent",
       "list_agents",
+      "notify_owner",
       "reply_agent",
       "steer_agent",
       "read_agent_transcript",

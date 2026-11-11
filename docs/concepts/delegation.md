@@ -25,7 +25,7 @@ final decision authority for its assignment.
 
 A managed Agent may delegate to the definitions in its effective
 `agents` allowlist only when delegation is enabled by its tool policy. Every
-managed agent receives `ask_owner`; qualifying delegating agents also receive
+managed agent receives `await_owner` and `notify_owner`; qualifying delegating agents also receive
 Agent ownership tools. See the [agent-definition schema](../reference/agent-definition-schema.md#managed-agent-coordination-tools)
 for the exact eligibility, exclusion, and mandatory-tool rules.
 
@@ -58,7 +58,7 @@ allows chains of four agents. Delegation at every level still requires the
 launching agent's definition to list `agents`, and each level may delegate only
 to definitions in its own allowlist. When a delegated agent's result is
 delivered and cleaned up, any agents it still owns are closed with it, as they
-are for a root controller. Questions from `ask_owner`, results, stop, and
+are for a root controller. Questions from `await_owner`, results, stop, and
 continuation always go through the direct owner, so each level behaves the
 same whatever its depth. Lowering `maxAgentDepth` never removes running
 agents: they stay manageable, but agents at the new limit can no longer start
@@ -150,10 +150,11 @@ merely to keep the controller active. For the full turn-navigation model, see
 
 ## Clarification across ownership edges
 
-An agent may ask its exact direct owner through `ask_owner`.
+An agent may notify its exact direct owner without blocking through
+`notify_owner`, or request an answer required to proceed through `await_owner`.
 
 A delegating agent with no unresolved direct-agent work follows normal
-`ask_owner` eligibility. If unresolved direct agents exist, every unresolved
+`await_owner` eligibility. If unresolved direct agents exist, every unresolved
 child must itself be validly blocked on an owner question. Ordinary active work
 or an undelivered result still blocks escalation. Questions are not
 automatically forwarded through an ownership chain.
@@ -166,6 +167,7 @@ closed, the delegating agent is preserved rather than destructively guessing.
 
 ## See also
 
-- [`ask_owner` API](../reference/ask-owner.md)
+- [`await_owner` API](../reference/await-owner.md)
+- [`notify_owner` API](../reference/notify-owner.md)
 - [Lifecycle](lifecycle.md)
 - [Handoffs and files](../guides/handoffs.md)

@@ -7886,6 +7886,7 @@ export function assertCoreToolEvidence(simulated, evidence, expectedPackage) {
         "delegate_agent",
         "delegate_agent",
         "delegate_agent",
+        "notify_owner",
         "read",
       ]),
     "core must select and forward nested result evidence to a next Agent",
@@ -8193,6 +8194,7 @@ async function runCoreSmoke(ctx) {
         if (
           call.name !== "delegate_agent" &&
           call.name !== "attach_handoff" &&
+          call.name !== "notify_owner" &&
           !(
             call.name === "read" && isPackageReadPath(call.arguments?.path, cwd)
           )
@@ -8215,6 +8217,26 @@ async function runCoreSmoke(ctx) {
     }
     assertCoreToolEvidence(ctx.simulated, evidence, ctx.expectedPackage);
     ctx.coreToolEvidence = evidence.map(({ name }) => name);
+    const ownerNotificationReceived = sessionEntries(rootSession.contents).some(
+      (entry) => {
+        const message = entry.message;
+        const details = entry.details ?? message?.details;
+        return (
+          (entry.customType === "pi-herdsman-agent-owner-message" ||
+            message?.customType === "pi-herdsman-agent-owner-message") &&
+          details?.ownerSessionId === ctx.coreRootSessionId &&
+          details?.agentLabel === "smoke-core-implementer" &&
+          typeof details?.messageId === "string" &&
+          messageText(message?.content ?? entry.content ?? "").includes(
+            "SMOKE_CORE_OWNER_NOTIFICATION",
+          )
+        );
+      },
+    );
+    requireSmokeEvidence(
+      ownerNotificationReceived,
+      "core must deliver the Agent's accepted owner notification into persisted Lead history",
+    );
     const captured = await coreNestedDelegationDiagnostics(
       ctx,
       rootSession.contents,
@@ -8423,10 +8445,10 @@ export function assertDeepChainEvidence(sessions) {
     });
   requireSmokeEvidence(
     successfulCalls(
-      "ask_owner",
+      "await_owner",
       (args) => args?.question === "SMOKE_DEEP_QUESTION",
     ).length === 1,
-    "deep-chain leaf must escalate one ask_owner to its owner",
+    "deep-chain leaf must escalate one await_owner to its owner",
   );
   requireSmokeEvidence(
     successfulCalls(
@@ -14722,7 +14744,7 @@ async function main() {
         "agent",
         "prompt",
         ctx.rootPaneId,
-        `PI_HERDSMAN_CRASH_RECOVERY_INITIAL: perform exactly two delegations. Delegate smoke-crash-target with the task "Call ask_owner with exactly CRASH_TARGET_WAITING, then remain waiting for an owner reply." Then delegate definition implementer as label smoke-crash-parent with the task "Delegate exactly one scout as smoke-crash-child; that child must call ask_owner with exactly CRASH_CHILD_WAITING and remain waiting. Remain unresolved while the child is pending." After both assignments are accepted, end your turn without replying to either ask_owner. Do not complete either Agent's task before the owner restarts Herdr.`,
+        `PI_HERDSMAN_CRASH_RECOVERY_INITIAL: perform exactly two delegations. Delegate smoke-crash-target with the task "Call await_owner with exactly CRASH_TARGET_WAITING, then remain waiting for an owner reply." Then delegate definition implementer as label smoke-crash-parent with the task "Delegate exactly one scout as smoke-crash-child; that child must call await_owner with exactly CRASH_CHILD_WAITING and remain waiting. Remain unresolved while the child is pending." After both assignments are accepted, end your turn without replying to either await_owner. Do not complete either Agent's task before the owner restarts Herdr.`,
       ]);
     }
     phase = "scenario";

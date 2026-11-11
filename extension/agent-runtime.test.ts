@@ -46,6 +46,7 @@ import support, {
   agentControllerExecutor,
   assignmentLockPathForTest,
   readPendingAsk,
+  readOwnerMessages,
   readRequest,
   readResult,
   readAgentState,
@@ -73,6 +74,7 @@ import support, {
   DEFAULT_PI_SESSION_ID,
   startupExecutor,
   writeAsk,
+  writeOwnerMessage,
   writeMetadataTask,
   writeRequest,
   writeResult,
@@ -1378,7 +1380,7 @@ test("registered agent writes state, handles input, and settles one result", asy
   const agent = fakePi();
   registerExtension!(agent.pi as never);
   assert.equal(
-    agent.tools.filter((tool) => tool.name === "ask_owner").length,
+    agent.tools.filter((tool) => tool.name === "await_owner").length,
     1,
   );
   assert.equal(
@@ -1386,7 +1388,7 @@ test("registered agent writes state, handles input, and settles one result", asy
     1,
   );
   const askSchema = agent.tools.find(
-    (tool) => tool.name === "ask_owner",
+    (tool) => tool.name === "await_owner",
   )!.parameters;
   assert.equal(
     Value.Check(askSchema, { question: "choose", files: ["options.md"] }),
@@ -1494,7 +1496,7 @@ test("registered agent writes state, handles input, and settles one result", asy
         content: [
           { type: "text", text: "done" },
           { type: "image", data: "ignored" },
-          { type: "toolCall", name: "ask_owner" },
+          { type: "toolCall", name: "await_owner" },
         ],
       },
     },
@@ -1505,7 +1507,7 @@ test("registered agent writes state, handles input, and settles one result", asy
     content: [
       { type: "text", text: "done" },
       { type: "image", data: "ignored" },
-      { type: "toolCall", name: "ask_owner" },
+      { type: "toolCall", name: "await_owner" },
     ],
   });
   agent.events.get("agent_before_settle")![0](
@@ -2011,7 +2013,7 @@ test("agent rejects task replay while result persistence recovery is present", (
   resetAgentMailbox(mailbox);
 });
 
-test("agent ask_owner blocks settlement and reply resumes the same assignment", async (t) => {
+test("agent await_owner blocks settlement and reply resumes the same assignment", async (t) => {
   const mailbox = setAgentEnvironment();
   let context: ReturnType<typeof fakeAgentContext>;
   let pumpReply = false;
@@ -2023,14 +2025,14 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
     },
   });
   registerExtension!(agent.pi as never);
-  const askTool = agent.tools.find((tool) => tool.name === "ask_owner");
+  const askTool = agent.tools.find((tool) => tool.name === "await_owner");
   assert.ok(askTool);
   const branch: unknown[] = [
     {
       type: "message",
       message: {
         role: "assistant",
-        content: [{ type: "toolCall", name: "ask_owner" }],
+        content: [{ type: "toolCall", name: "await_owner" }],
       },
     },
   ];
@@ -2062,7 +2064,7 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
     message: {
       role: "assistant",
       content: [
-        { type: "toolCall", name: "ask_owner" },
+        { type: "toolCall", name: "await_owner" },
         { type: "toolCall", name: "read" },
       ],
     },
@@ -2075,7 +2077,7 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
       undefined,
       context,
     ),
-    /call ask_owner alone as the final tool call/i,
+    /call await_owner alone as the final tool call/i,
   );
   assert.equal(readAgentState(mailbox)?.pendingAskId, undefined);
   assert.equal(readPendingAsk(mailbox, readAgentState(mailbox)!), undefined);
@@ -2085,7 +2087,7 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
     type: "message",
     message: {
       role: "assistant",
-      content: [{ type: "toolCall", name: "ask_owner" }],
+      content: [{ type: "toolCall", name: "await_owner" }],
     },
   };
   await assert.rejects(
@@ -2136,6 +2138,22 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
     readPendingAsk(mailbox, waiting!)?.question ?? "",
     /registered-ask-options\.md/,
   );
+  const originalAsk = readPendingAsk(mailbox, waiting!);
+  await assert.rejects(
+    askTool.execute(
+      "ask-again",
+      { question: "Do not replace the pending question" },
+      undefined,
+      undefined,
+      context,
+    ),
+    /cannot ask its owner: already waiting for an owner reply/i,
+  );
+  assert.equal(readAgentState(mailbox)?.pendingAskId, waiting!.pendingAskId);
+  assert.deepEqual(
+    readPendingAsk(mailbox, readAgentState(mailbox)!),
+    originalAsk,
+  );
   await agent.events.get("agent_settled")![0]({ aborted: false }, context);
   assert.equal(readResult(mailbox, assignment.requestId), undefined);
 
@@ -2179,7 +2197,87 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
   realFs.rmSync(askFile, { force: true });
 });
 
-test("agent ask_owner rejects oversized semantic results without persisting an ask", async () => {
+test("notify_owner durably queues nonblocking notices without blocking assignment completion", async () => {
+  const mailbox = setAgentEnvironment();
+  const agent = fakePi();
+  registerExtension!(agent.pi as never);
+  const notify = agent.tools.find((tool) => tool.name === "notify_owner");
+  assert.ok(notify);
+  assert.equal(notify.exposure, "direct");
+  const context = fakeAgentContext();
+  await agent.events.get("session_start")![0](undefined, context);
+  const assignment: RequestRecord = {
+    version: 5,
+    runId: AGENT_ID,
+    requestId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    ownerSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    workspaceId: WORKSPACE,
+    agentLabel: "registered-agent",
+    paneId: "registered-pane",
+    kind: "task",
+    text: "continue this work",
+    createdAt: Date.now(),
+  };
+  writeRequest(mailbox, assignment);
+  assert.deepEqual(
+    agent.events.get("input")![0](
+      { text: controlMarker(assignment.requestId) },
+      context,
+    ),
+    { action: "transform", text: assignment.text },
+  );
+  removeRequest(mailbox, assignment.requestId);
+  const filePath = join(testTmpRoot, "notify-owner-evidence.md");
+  realFs.writeFileSync(filePath, "confirmed finding");
+  const result = await notify.execute(
+    "notice",
+    { message: "The behavior changed; I am adapting.", files: [filePath] },
+    undefined,
+    undefined,
+    context,
+  );
+  assert.equal(result.terminate, undefined);
+  assert.deepEqual(readAgentState(mailbox)?.pendingAskId, undefined);
+  assert.equal(readAgentState(mailbox)?.activeRequestId, assignment.requestId);
+  const [saved] = readOwnerMessages(mailbox);
+  assert.ok(saved);
+  assert.equal(saved.text.includes("confirmed finding"), true);
+  assert.equal(saved.requestId, assignment.requestId);
+  for (let index = 1; index < 8; index++)
+    await notify.execute(
+      `notice-${index}`,
+      { message: `Additional durable notice ${index}` },
+      undefined,
+      undefined,
+      context,
+    );
+  await assert.rejects(
+    notify.execute(
+      "over-capacity",
+      { message: "This ninth notice must not be accepted." },
+      undefined,
+      undefined,
+      context,
+    ),
+    /Eight owner notifications are already awaiting confirmed delivery/,
+  );
+  agent.events.get("message_end")![0](
+    { message: { role: "assistant", content: "Finished without waiting." } },
+    context,
+  );
+  emitAgentTurn(agent, context, {
+    role: "assistant",
+    content: "Finished without waiting.",
+  });
+  await agent.events.get("agent_settled")![0]({ aborted: false }, context);
+  assert.equal(readResult(mailbox, assignment.requestId)?.status, "completed");
+  assert.equal(readOwnerMessages(mailbox).length, 8);
+  realFs.rmSync(filePath, { force: true });
+  agent.events.get("session_shutdown")?.[0]();
+  resetAgentMailbox(mailbox);
+});
+
+test("agent await_owner rejects oversized semantic results without persisting an ask", async () => {
   const mailbox = setAgentEnvironment();
   const requestId = randomUUID();
   const canonicalRef = resultRef(requestId);
@@ -2191,7 +2289,7 @@ test("agent ask_owner rejects oversized semantic results without persisting an a
     const semanticRef = "result:reviewer#1";
     agent = fakePi();
     registerExtension!(agent.pi as never);
-    const askTool = agent.tools.find((tool) => tool.name === "ask_owner");
+    const askTool = agent.tools.find((tool) => tool.name === "await_owner");
     assert.ok(askTool);
     const resultEntry = {
       type: "custom",
@@ -2208,7 +2306,7 @@ test("agent ask_owner rejects oversized semantic results without persisting an a
         type: "message",
         message: {
           role: "assistant",
-          content: [{ type: "toolCall", name: "ask_owner" }],
+          content: [{ type: "toolCall", name: "await_owner" }],
         },
       },
     ];
@@ -2258,7 +2356,7 @@ test("agent ask_owner rejects oversized semantic results without persisting an a
   }
 });
 
-test("agent ask_owner capacity rejection is reported when execution completes empty", async () => {
+test("agent await_owner capacity rejection is reported when execution completes empty", async () => {
   const mailbox = setAgentEnvironment();
   const previousInlineLimit = readConfig().inlineAttachmentLimitBytes;
   const previousMailboxLimit = readConfig().mailboxPayloadLimitBytes;
@@ -2271,7 +2369,7 @@ test("agent ask_owner capacity rejection is reported when execution completes em
       type: "message",
       message: {
         role: "assistant",
-        content: [{ type: "toolCall", name: "ask_owner" }],
+        content: [{ type: "toolCall", name: "await_owner" }],
       },
     },
   ];
@@ -2326,7 +2424,7 @@ test("agent ask_owner capacity rejection is reported when execution completes em
     let reportedPayloadBytes: number | undefined;
     await assert.rejects(
       agent.tools
-        .find((tool) => tool.name === "ask_owner")!
+        .find((tool) => tool.name === "await_owner")!
         .execute(
           "capacity-rejected",
           { question: "Which option?", files: [first, second] },
@@ -2389,7 +2487,7 @@ test("message limits do not consult project trust", async () => {
       type: "message",
       message: {
         role: "assistant",
-        content: [{ type: "toolCall", name: "ask_owner" }],
+        content: [{ type: "toolCall", name: "await_owner" }],
       },
     },
   ];
@@ -2419,7 +2517,7 @@ test("message limits do not consult project trust", async () => {
     context.isProjectTrusted = () => {
       throw new Error("message limits must not consult project trust");
     };
-    const askTool = agent.tools.find((tool) => tool.name === "ask_owner");
+    const askTool = agent.tools.find((tool) => tool.name === "await_owner");
     assert.ok(askTool);
     await askTool.execute(
       "global-only-limits",
@@ -2434,7 +2532,7 @@ test("message limits do not consult project trust", async () => {
   }
 });
 
-test("ask_owner eligibility permits no children or only ask-blocked children", async () => {
+test("await_owner eligibility permits no children or only ask-blocked children", async () => {
   const cases = [
     { name: "no child", children: [], allowed: true },
     {
@@ -2529,7 +2627,7 @@ test("ask_owner eligibility permits no children or only ask-blocked children", a
         type: "message",
         message: {
           role: "assistant",
-          content: [{ type: "toolCall", name: "ask_owner" }],
+          content: [{ type: "toolCall", name: "await_owner" }],
         },
       },
     ];
@@ -2537,7 +2635,7 @@ test("ask_owner eligibility permits no children or only ask-blocked children", a
     registerExtension!(agent.pi as never);
     const context = fakeAgentContext([], branch);
     await agent.events.get("session_start")![0](undefined, context);
-    const askTool = agent.tools.find((tool) => tool.name === "ask_owner");
+    const askTool = agent.tools.find((tool) => tool.name === "await_owner");
     assert.ok(askTool);
     if (scenario.allowed) {
       const result = await askTool.execute(
@@ -7467,6 +7565,100 @@ test("owner ask delivery is branch-local and recovers on tree navigation", async
   });
   pi.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
+});
+
+test("owner notification is retained until its exact persisted session receipt", async () => {
+  setLeadEnvironment();
+  const label = "owner-notification-agent";
+  const identity = recoveryIdentity(label);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  const requestId = REQUEST_ID;
+  const state = managedState(label, requestId, identity);
+  writeAgentState(mailbox, state);
+  const notification = {
+    version: 5 as const,
+    messageId: "99999999-9999-4999-8999-999999999999",
+    requestId,
+    runId: state.runId,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    piSessionId: state.piSessionId,
+    text: "The implementation needs one compatibility adjustment.",
+    createdAt: Date.now(),
+  };
+  writeOwnerMessage(mailbox, notification);
+  writeOwnerMessage(mailbox, {
+    ...notification,
+    messageId: "88888888-8888-4888-8888-888888888888",
+    text: "A second independent notification.",
+    createdAt: notification.createdAt + 1,
+  });
+  const entries: unknown[] = [];
+  const pi = fakePi({
+    exec: leadExec(
+      label,
+      "working",
+      identity.piSessionId,
+      undefined,
+      identity.piSessionId,
+      identity,
+    ),
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(entries, []);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const sent = pi.sent.find(
+      (entry: any) => entry.customType === "pi-herdsman-agent-owner-message",
+    ) as any;
+    assert.ok(sent);
+    const sentMessages = pi.sent.filter(
+      (entry: any) => entry.customType === "pi-herdsman-agent-owner-message",
+    ) as any[];
+    assert.equal(sentMessages.length, 2);
+    assert.deepEqual(pi.sentMessageCalls[0]?.options, {
+      triggerTurn: true,
+      deliverAs: "steer",
+    });
+    assert.deepEqual(pi.sentMessageCalls[1]?.options, { triggerTurn: false });
+    // A repeated reconciliation within this delivery episode must not enqueue
+    // duplicates; a later completed recipient boundary may retry unreceipted work.
+    pi.events.get("session_tree")?.[0](undefined, context);
+    assert.equal(
+      pi.sent.filter(
+        (entry: any) => entry.customType === "pi-herdsman-agent-owner-message",
+      ).length,
+      2,
+    );
+    for (const handler of pi.events.get("turn_end") ?? [])
+      await handler({ outcome: "completed" }, context);
+    const retried = pi.sent.filter(
+      (entry: any) => entry.customType === "pi-herdsman-agent-owner-message",
+    );
+    assert.equal(retried.length, 4);
+    assert.equal(readOwnerMessages(mailbox).length, 2);
+    entries.push({
+      customType: sent.customType,
+      details: { ...sent.details, paneId: "wrong-pane" },
+    });
+    for (const handler of pi.events.get("turn_end") ?? [])
+      await handler({ outcome: "completed" }, context);
+    assert.equal(readOwnerMessages(mailbox).length, 2);
+    entries.push({ customType: sent.customType, details: sent.details });
+    entries.push({
+      customType: sentMessages[1]!.customType,
+      details: sentMessages[1]!.details,
+    });
+    for (const handler of pi.events.get("turn_end") ?? [])
+      await handler({ outcome: "completed" }, context);
+    assert.equal(readOwnerMessages(mailbox).length, 0);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
 });
 
 test("owner ask resolved while busy is not delivered after settlement", async () => {

@@ -15,17 +15,17 @@ supporting native programmatic invocation are `list_agents`, `steer_agent`,
 `read_staff_transcript`, `message_staff`, `delegate_work`, `resume_work`,
 `stop_lead`, `remove_worktree`, `integrate_branch`, `message_supervisor`,
 `list_peers`, `message_peer`, `attach_handoff`, `delegate_agent`, and
-`continue_agent`. Delegation tools return after assignment acceptance, not
+`continue_agent`, and `notify_owner`. Delegation tools return after assignment acceptance, not
 completion; eventual results arrive through Herdsman's normal result-delivery
-mechanism. `ask_owner` also remains `model-only` because it must be a direct,
+mechanism. `await_owner` also remains `model-only` because it must be a direct,
 exclusive tool call in its turn. See
-[`ask_owner`](reference/ask-owner.md) for its contract.
+[`await_owner`](reference/await-owner.md) for its contract.
 
 Tool access still depends on the active role, ownership, extension loading, and
 runtime authorization. This documents Pi's native contract; behavior through
 third-party code-mode integrations and their approval or foreground settings
 depends on that integration and is not guaranteed here. In environments where
-`ask_owner` and Fabric are both registered, Fabric may configure it as a
+`await_owner` and Fabric are both registered, Fabric may configure it as a
 foreground tool, for example:
 
 ```json
@@ -33,7 +33,7 @@ foreground tool, for example:
   "foreground": {
     "tools": [
       {
-        "name": "ask_owner",
+        "name": "await_owner",
         "owner": "pi-herdsman",
         "reason": "turn-steering"
       }
@@ -65,7 +65,8 @@ read_agent_transcript
 ```
 
 Managed Agents contact their exact direct owner through
-[`ask_owner`](reference/ask-owner.md).
+[`notify_owner`](reference/notify-owner.md) for nonblocking information or
+[`await_owner`](reference/await-owner.md) when progress depends on an answer.
 
 The lifecycle and execution-ownership rules are documented in
 [Lifecycle](concepts/lifecycle.md) and [Delegation](concepts/delegation.md).

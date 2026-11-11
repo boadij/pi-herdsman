@@ -209,14 +209,14 @@ live in [Staff tools](../reference/staff.md).
 
 Coordination crosses one authority edge at a time:
 
-| Direction | Interface                                   | Boundary                                            |
-| --------- | ------------------------------------------- | --------------------------------------------------- |
-| Up        | `message_supervisor` / automatic results    | Assigned Lead -> Manager                            |
-| Down      | `message_staff` / project operations        | Manager -> assigned Lead                            |
-| Up        | `message_supervisor`                        | Ordinary Lead -> Manager or Chief; Manager -> Chief |
-| Down      | `message_staff`                             | Manager -> ordinary Lead (cooperative steering)     |
-| Sideways  | `message_peer`                              | Lead <-> Lead or Manager <-> Manager                |
-| Ownership | Agent controls / `reply_agent`; `ask_owner` | owner <-> directly owned Agent                      |
+| Direction | Interface                                                     | Boundary                                            |
+| --------- | ------------------------------------------------------------- | --------------------------------------------------- |
+| Up        | `message_supervisor` / automatic results                      | Assigned Lead -> Manager                            |
+| Down      | `message_staff` / project operations                          | Manager -> assigned Lead                            |
+| Up        | `message_supervisor`                                          | Ordinary Lead -> Manager or Chief; Manager -> Chief |
+| Down      | `message_staff`                                               | Manager -> ordinary Lead (cooperative steering)     |
+| Sideways  | `message_peer`                                                | Lead <-> Lead or Manager <-> Manager                |
+| Ownership | Agent controls / `notify_owner`, `await_owner`, `reply_agent` | owner <-> directly owned Agent                      |
 
 ### Coordination does not imply dependency
 

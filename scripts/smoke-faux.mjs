@@ -415,6 +415,11 @@ function coreDecision(context) {
   }
 
   if (rootAgentPrompt(messages, "SMOKE_CORE_IMPLEMENTER:")) {
+    if (!correlatedCall(messages, "notify_owner"))
+      return call("notify_owner", {
+        message:
+          "SMOKE_CORE_OWNER_NOTIFICATION: I am starting the delegated Scout work and will continue this assignment.",
+      });
     const result = deliveredAgentResult(
       messages,
       "delegate_agent",
@@ -485,8 +490,8 @@ function deepChainDecision(context) {
     if (tools.includes("delegate_agent"))
       throw new Error("The Agent at the depth limit must be a leaf");
     // Escalate to the direct owner (level 3) and finish only after its reply.
-    if (!correlatedCall(messages, "ask_owner"))
-      return call("ask_owner", { question: "SMOKE_DEEP_QUESTION" });
+    if (!correlatedCall(messages, "await_owner"))
+      return call("await_owner", { question: "SMOKE_DEEP_QUESTION" });
     const answered = messages.some(
       (message) =>
         message.role === "user" && text(message).includes("SMOKE_DEEP_ANSWER"),
@@ -527,7 +532,7 @@ function deepChainDecision(context) {
     task: `SMOKE_DEEP_LEVEL_${next}: ${
       next < DEEP_CHAIN_DEPTH
         ? `delegate exactly smoke-deep-${next + 1} and return its result prefixed with L${next}:`
-        : "you are the leaf; call ask_owner with SMOKE_DEEP_QUESTION, wait for the reply, then return L4:SMOKE_DEEP_LEAF"
+        : "you are the leaf; call await_owner with SMOKE_DEEP_QUESTION, wait for the reply, then return L4:SMOKE_DEEP_LEAF"
     }`,
   });
 }
@@ -885,8 +890,8 @@ function agentCrashRecoveryDecision(model, context) {
     return waitForResult("Parent remains pending on its direct child.");
   }
   if (model === "agent-crash-child") {
-    const asked = correlatedCall(messages, "ask_owner");
-    if (!asked) return call("ask_owner", { question: "CRASH_CHILD_WAITING" });
+    const asked = correlatedCall(messages, "await_owner");
+    if (!asked) return call("await_owner", { question: "CRASH_CHILD_WAITING" });
     return waitForResult("Child remains blocked on its owner.");
   }
   if (latest?.role === "toolResult")

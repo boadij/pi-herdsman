@@ -125,6 +125,13 @@ consumption. Prefer eliminating work over adding caches or infrastructure,
 and justify optimization complexity with evidence. Never trade correctness,
 reliability, security, or recovery for speed.
 
+When independently eligible messages, results, or notifications target the
+same model session, prefer recipient-side fan-in at existing Pi execution
+boundaries over separate model turns. Do not delay time-sensitive delivery just
+to form a batch. Preserve each communication's identity, authority checks,
+ordering requirements, receipts, and recovery; reuse native delivery rather
+than introduce batching infrastructure without demonstrated need.
+
 ## Decision test
 
 For any proposed feature, ask:

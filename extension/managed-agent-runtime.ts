@@ -19,18 +19,21 @@ import {
   readPendingAsk,
   readResult,
   readRequest,
+  readOwnerMessages,
   readAgentState,
   readUnacknowledgedRequest,
   removeRequest,
   removeAsk as removeMailboxAsk,
   writeResult,
   writeAsk,
+  writeOwnerMessage,
   writeAgentState,
   writeAgentStartupOutcome,
   readAgentBootstrap,
   removeAgentBootstrap,
   unacknowledgedRequestExists,
   type AskRecord,
+  type OwnerMessageRecord,
   type ManagedAgentState,
   type ManagedAgentStartupStage,
   type ResultRecord,
@@ -1404,7 +1407,7 @@ export function createManagedAgentAskOwnerHandler(options: {
       throw new Error("Question must contain non-whitespace text");
     if (!options.isSoleToolCall(ctx))
       throw new Error(
-        "Call ask_owner alone as the final tool call of the turn, with no other tool calls, then wait for the reply.",
+        "Call await_owner alone as the final tool call of the turn, with no other tool calls, then wait for the reply.",
       );
     const managed = managedAgentIdentity(ctx);
     const state = options.state();
@@ -1473,6 +1476,120 @@ export function createManagedAgentAskOwnerHandler(options: {
       ],
       details: { askId, assignmentRequestId: ask.requestId },
       terminate: true,
+    };
+  };
+}
+
+export function createManagedAgentNotifyOwnerHandler(options: {
+  state(): ManagedAgentState | undefined;
+  sameIdentity(left: ManagedAgentState, right: ManagedAgentState): boolean;
+  eligible(): boolean;
+  rejectionReason(): string;
+  messageLimits(ctx: ExtensionContext): Promise<{
+    inline: { bytes: number };
+    mailbox: { bytes: number };
+  }>;
+  prepare(
+    ctx: ExtensionContext,
+    message: string,
+    files: string[] | undefined,
+    state: ManagedAgentState,
+    messageId: string,
+    createdAt: number,
+    limits: { inline: { bytes: number }; mailbox: { bytes: number } },
+  ): Promise<{ text: string; resultBindings: ResultBinding[] }>;
+  claimLock(mailbox: string, state: ManagedAgentState): () => void;
+  readState(mailbox: string): ManagedAgentState | undefined;
+  readMessages(mailbox: string): OwnerMessageRecord[];
+  writeMessage(mailbox: string, message: OwnerMessageRecord): void;
+}) {
+  return async (
+    _id: string,
+    params: { message: string; files?: string[] },
+    _signal: AbortSignal | undefined,
+    _update: unknown,
+    ctx: ExtensionContext,
+  ) => {
+    if (typeof params.message !== "string" || !params.message.trim())
+      throw new Error("Message must contain non-whitespace text");
+    const managed = managedAgentIdentity(ctx);
+    const state = options.state();
+    if (!state || !options.sameIdentity(state, managed))
+      throw new Error("Agent identity is not eligible to notify its owner");
+    if (!options.eligible())
+      throw new Error(
+        `Agent cannot notify its owner: ${options.rejectionReason()}`,
+      );
+    const messageId = randomUUID();
+    const createdAt = Date.now();
+    const limits = await options.messageLimits(ctx);
+    const prepared = await options.prepare(
+      ctx,
+      params.message,
+      params.files,
+      state,
+      messageId,
+      createdAt,
+      limits,
+    );
+    const message: OwnerMessageRecord = {
+      version: 5,
+      messageId,
+      requestId: state.activeRequestId!,
+      runId: state.runId,
+      ownerSessionId: state.ownerSessionId,
+      workspaceId: state.workspaceId,
+      agentLabel: state.agentLabel,
+      paneId: state.paneId,
+      piSessionId: state.piSessionId,
+      text: prepared.text,
+      ...(prepared.resultBindings.length
+        ? { resultBindings: prepared.resultBindings }
+        : {}),
+      createdAt,
+    };
+    const bytes = mailboxRecordBytes(message);
+    if (bytes > limits.mailbox.bytes)
+      fail(
+        "invalid_request",
+        `Mailbox payload is ${bytes} bytes; configured limit is ${limits.mailbox.bytes} bytes`,
+        "notify_owner",
+        { details: { capacity: true } },
+      );
+    const mailbox = process.env.PI_HERDSMAN_MAILBOX!;
+    const release = options.claimLock(mailbox, state);
+    try {
+      const current = options.readState(mailbox);
+      if (
+        !current ||
+        !options.sameIdentity(current, state) ||
+        current.activeRequestId !== state.activeRequestId ||
+        current.completedRequestId ||
+        !options.eligible()
+      )
+        throw new Error(
+          "Agent assignment changed or began settling while notifying its owner",
+        );
+      const pending = options.readMessages(mailbox);
+      if (pending.length >= 8)
+        fail(
+          "invalid_request",
+          "Eight owner notifications are already awaiting confirmed delivery; continue without another notification or wait for delivery",
+          "notify_owner",
+          { details: { capacity: true } },
+        );
+      options.writeMessage(mailbox, message);
+    } finally {
+      release();
+    }
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: "Notification queued for your direct owner. Continue your assignment.",
+        },
+      ],
+      details: { messageId, assignmentRequestId: message.requestId },
     };
   };
 }
@@ -1647,7 +1764,7 @@ export function registerManagedAgentAskOwnerTool(
     ),
   );
   pi.registerTool({
-    name: "ask_owner",
+    name: "await_owner",
     label: "Ask owner",
     exposure: "model-only",
     promptSnippet:
@@ -1661,6 +1778,47 @@ export function registerManagedAgentAskOwnerTool(
         question: Type.String({
           minLength: 1,
           description: "Non-empty decision question required to continue.",
+        }),
+        files,
+      },
+      { additionalProperties: false },
+    ),
+    execute,
+  });
+}
+
+export function registerManagedAgentNotifyOwnerTool(
+  pi: ExtensionAPI,
+  execute: ReturnType<typeof createManagedAgentNotifyOwnerHandler>,
+): void {
+  const files = Type.Optional(
+    Type.Array(
+      Type.String({
+        minLength: 1,
+        description:
+          "Readable regular local file path or exact result ref returned by Herdsman.",
+      }),
+      {
+        description:
+          "File or result evidence transferred to the recipient. Copy result refs exactly. Files do not grant runtime capabilities.",
+      },
+    ),
+  );
+  pi.registerTool({
+    name: "notify_owner",
+    label: "Notify owner",
+    exposure: "direct",
+    promptSnippet:
+      "Send material information to your direct owner while continuing work",
+    promptGuidelines: [FILE_HANDOFF_GUIDANCE],
+    description:
+      "Notify your direct owner about material information when you can continue your assignment. This does not block your assignment or require a reply.",
+    executionMode: "sequential",
+    parameters: Type.Object(
+      {
+        message: Type.String({
+          minLength: 1,
+          description: "Non-empty material information for your direct owner.",
         }),
         files,
       },
@@ -2475,7 +2633,7 @@ export function registerManagedAgentSettlementHandlers(
                     ? "Agent model execution failed"
                     : observation?.requestId === state.activeRequestId &&
                         observation.askOwnerCapacityError
-                      ? `Agent produced no assistant text. Earlier in this execution, ask_owner rejected its attachments: ${observation.askOwnerCapacityError}. The question was not sent.`
+                      ? `Agent produced no assistant text. Earlier in this execution, await_owner rejected its attachments: ${observation.askOwnerCapacityError}. The question was not sent.`
                       : "Agent produced no assistant text",
             },
           }),
@@ -3138,14 +3296,14 @@ export function registerManagedAgentRuntime(
     sameIdentity: sameManagedAgentIdentity,
     eligible: requestState.eligibleToAsk,
     rejectionReason: requestState.askRejectionReason,
-    isSoleToolCall: (ctx) => currentTurnIsSoleToolCall(ctx, "ask_owner"),
+    isSoleToolCall: (ctx) => currentTurnIsSoleToolCall(ctx, "await_owner"),
     messageLimits: options.messageLimits,
     prepare: async (ctx, question, files, state, askId, createdAt, limits) =>
       prepareMessageInput(
         question,
-        options.resolveMessageFiles(ctx, files, "ask_owner"),
+        options.resolveMessageFiles(ctx, files, "await_owner"),
         state.cwd,
-        "ask_owner",
+        "await_owner",
         "Question",
         {
           inlineLimitBytes: limits.inline.bytes,
@@ -3160,12 +3318,12 @@ export function registerManagedAgentRuntime(
         fail(
           "invalid_request",
           `Mailbox payload is ${bytes} bytes; configured limit is ${limit} bytes`,
-          "ask_owner",
+          "await_owner",
           { details: { capacity: true } },
         );
     },
     claimLock: (mailbox, state) =>
-      options.claimAssignmentLock(mailbox, "ask_owner", {
+      options.claimAssignmentLock(mailbox, "await_owner", {
         label: state.agentLabel,
         paneId: state.paneId,
       }),
@@ -3184,7 +3342,7 @@ export function registerManagedAgentRuntime(
     } catch (error) {
       if (
         error instanceof OperationError &&
-        error.detail.operation === "ask_owner" &&
+        error.detail.operation === "await_owner" &&
         error.detail.details?.capacity === true &&
         observation?.requestId &&
         observation === execution.observation &&
@@ -3195,6 +3353,50 @@ export function registerManagedAgentRuntime(
       throw error;
     }
   });
+  const executeNotifyOwner = createManagedAgentNotifyOwnerHandler({
+    state: () => execution.assignment,
+    sameIdentity: sameManagedAgentIdentity,
+    eligible: requestState.eligibleToNotify,
+    rejectionReason: requestState.notifyRejectionReason,
+    messageLimits: options.messageLimits,
+    prepare: async (ctx, message, files, state, messageId, createdAt, limits) =>
+      prepareMessageInput(
+        message,
+        options.resolveMessageFiles(ctx, files, "notify_owner"),
+        state.cwd,
+        "notify_owner",
+        "Message",
+        {
+          inlineLimitBytes: limits.inline.bytes,
+          mailboxLimitBytes: limits.mailbox.bytes,
+          requireInline: true,
+          serializedBytes: (text, bindings) =>
+            mailboxRecordBytes({
+              version: 5,
+              messageId,
+              requestId: state.activeRequestId!,
+              runId: state.runId,
+              ownerSessionId: state.ownerSessionId,
+              workspaceId: state.workspaceId,
+              agentLabel: state.agentLabel,
+              paneId: state.paneId,
+              piSessionId: state.piSessionId,
+              text,
+              ...(bindings.length ? { resultBindings: bindings } : {}),
+              createdAt,
+            }),
+        },
+      ),
+    claimLock: (mailbox, state) =>
+      options.claimAssignmentLock(mailbox, "notify_owner", {
+        label: state.agentLabel,
+        paneId: state.paneId,
+      }),
+    readState: readAgentState,
+    readMessages: readOwnerMessages,
+    writeMessage: writeOwnerMessage,
+  });
+  registerManagedAgentNotifyOwnerTool(pi, executeNotifyOwner);
   const prepareDelegatingRoster = async (
     ctx: ExtensionContext,
   ): Promise<void> => {
@@ -3507,6 +3709,27 @@ export function createManagedAgentRequestState(
       options.allDirectChildrenAskBlocked(state)
     );
   };
+  const eligibleToNotify = (): boolean => {
+    const state = options.state();
+    return (
+      !!state?.activeRequestId &&
+      !state.pendingAskId &&
+      !state.completedRequestId &&
+      !options.pendingResult() &&
+      !options.pendingStateTransition() &&
+      !unacknowledgedRequestExists(process.env.PI_HERDSMAN_MAILBOX!, state)
+    );
+  };
+  const notifyRejectionReason = (): string => {
+    const state = options.state();
+    if (!state?.activeRequestId) return "no active assignment";
+    if (state.completedRequestId || options.pendingResult())
+      return "assignment is settling";
+    if (options.pendingStateTransition()) return "assignment state is settling";
+    if (unacknowledgedRequestExists(process.env.PI_HERDSMAN_MAILBOX!, state))
+      return "a control request is still pending";
+    return "agent state is not eligible";
+  };
   const askRejectionReason = (): string => {
     const state = options.state();
     if (!state?.activeRequestId) return "no active assignment";
@@ -3537,6 +3760,8 @@ export function createManagedAgentRequestState(
     pump,
     eligibleToAsk,
     askRejectionReason,
+    eligibleToNotify,
+    notifyRejectionReason,
     reportAcknowledgementFailure,
     reset,
   };

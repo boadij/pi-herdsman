@@ -118,7 +118,7 @@ Ordinary files supplied to `message_staff`, `message_supervisor`, or
 configured per-file and complete-message budgets; unsupported, changed, or
 non-fitting files reject the handoff instead of becoming path-only references.
 Other `files` operations retain their existing preparation behavior. In
-particular, `ask_owner` requires supported UTF-8 text attachments to fit fully
+particular, `await_owner` requires supported UTF-8 text attachments to fit fully
 within its per-file and complete-message budgets; rejection does not fall back
 to a path-only reference. Ordinary
 coordination attachments are per-message evidence unless retained through an
@@ -144,13 +144,13 @@ Pi Herdsman has two text-file mechanisms with different purposes:
 - `files` supplies evidence to the coordination operations that accept it:
   `delegate_agent`, `continue_agent`, `steer_agent`, `interrupt_agent`,
   `reply_agent`, `delegate_work`, `message_staff`,
-  `message_supervisor`, `message_peer`, and `ask_owner`.
+  `message_supervisor`, `message_peer`, `notify_owner`, and `await_owner`.
 - whole-line body `@file` references put definition-owned text into the agent
   system prompt when a new agent generation is built.
 
 For coordination operations that allow reference fallback, strict UTF-8 text is
 embedded when it fits; ordinary non-text and non-fitting files are canonical
-local references and are not copied or snapshotted. `ask_owner` is stricter:
+local references and are not copied or snapshotted. `await_owner` is stricter:
 its explicit files must be embedded supported UTF-8 text, or the request is
 rejected. The required-assignment exception preserves supported text snapshots
 and can reference those snapshots when they do not fit inline; see
@@ -234,8 +234,8 @@ markup frames evidence for the model and is not a security boundary.
 
 `files` is supported by `delegate_agent`, `continue_agent`, `steer_agent`,
 `interrupt_agent`, `reply_agent`, `delegate_work`, `message_staff`,
-`message_supervisor`, `message_peer`, and `ask_owner`. For controller actions,
-relative paths resolve from the calling controller's cwd; for `ask_owner`, they
+`message_supervisor`, `message_peer`, `notify_owner`, and `await_owner`. For controller actions,
+relative paths resolve from the calling controller's cwd; for `await_owner`, they
 resolve from the managed agent's cwd. Accepted ordinary filesystem paths retain
 canonical absolute-path names; semantic and canonical result refs retain the
 exact supplied reference as the model-facing name.

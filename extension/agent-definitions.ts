@@ -1384,11 +1384,12 @@ export function agentLaunchArgs(
       ? agentDefinitionDelegationEnabled(agent)
         ? [
             ...AGENT_COORDINATION_TOOLS,
-            "ask_owner",
+            "await_owner",
+            "notify_owner",
             "read_evidence",
             "attach_handoff",
           ]
-        : ["ask_owner", "read_evidence", "attach_handoff"]
+        : ["await_owner", "notify_owner", "read_evidence", "attach_handoff"]
       : []),
     ...(options.requiredTools ?? []),
   ].filter((tool, index, all) => all.indexOf(tool) === index);

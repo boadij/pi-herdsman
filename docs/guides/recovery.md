@@ -40,10 +40,15 @@ Do not intervene solely because a stale threshold was reached.
 
 The generic attention reasons are `result_error`, live runtime `blocked`, old
 unacknowledged `handoff`, and physical `unknown`. Stale, lost, and delivered
-`ask_owner` conditions retain their dedicated message types. A retained
+`await_owner` conditions retain their dedicated message types. A retained
 unacknowledged request must not be duplicated or resubmitted: timeout or lack
 of acknowledgement does not prove non-delivery. `settling` alone does not
 generate generic attention.
+
+An Agent may remain `settling` after its result is delivered while accepted
+`notify_owner` records await receipt in the owner's persisted session history.
+Do not treat a successful Pi message submission as confirmation or close the
+Agent; normal cleanup retries after the receipt is recorded.
 
 ## Agent is `blocked`
 
@@ -53,7 +58,7 @@ If the agent is waiting for an owner answer, use `reply_agent` with its exact ag
 
 Otherwise inspect the reported external/runtime condition and resolve it using
 only the currently listed actions. A live Herdr runtime reported as `blocked`
-may generate health attention when no `ask_owner` question exists. This is
+may generate health attention when no `await_owner` question exists. This is
 different from a delegating parent whose public projection is `blocked` while
 it waits for direct child work; parent waiting is not, by itself, evidence of
 an externally blocked runtime. Do not delegate a new task to a blocked agent.
@@ -134,7 +139,7 @@ Do not guess from pane IDs, process appearance, elapsed time, or stale metadata.
 
 Physical `unknown` remains fail-closed: it has no mutation actions and receives
 at most one generic attention event for an unresolved episode. Do not infer
-loss, guess a pane or process, or use `ask_owner` as a generic escalation path.
+loss, guess a pane or process, or use `await_owner` as a generic escalation path.
 Refresh with `list_agents` and resolve the identity/lifecycle condition when new exact
 evidence is available. If a cleanup or recovery error is present, inspect its
 exact details.

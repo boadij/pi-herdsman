@@ -591,9 +591,14 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     [...semanticNames].sort(),
   );
   assert.equal(
-    tools.has("ask_owner"),
+    tools.has("await_owner"),
     false,
-    "ordinary Leads do not get ask_owner",
+    "ordinary Leads do not get await_owner",
+  );
+  assert.equal(
+    tools.has("notify_owner"),
+    false,
+    "ordinary Leads do not get notify_owner",
   );
   assert.equal(
     tools.has("attach_handoff"),
@@ -660,10 +665,14 @@ test("semantic coordination tools expose exact strict object contracts", () => {
   registerExtension!(leaf.pi as never);
   assert.deepEqual(
     leaf.tools.map((tool) => tool.name).sort(),
-    ["ask_owner", "attach_handoff", "read_evidence"].sort(),
+    ["await_owner", "notify_owner", "attach_handoff", "read_evidence"].sort(),
   );
-  const askOwner = leaf.tools.find((tool) => tool.name === "ask_owner")!;
+  const askOwner = leaf.tools.find((tool) => tool.name === "await_owner")!;
   assertPortableToolSchema(askOwner, "model-only");
+  assertPortableToolSchema(
+    leaf.tools.find((tool) => tool.name === "notify_owner")!,
+    "direct",
+  );
   for (const name of ["read_evidence", "attach_handoff"])
     assert.equal(
       leaf.tools.find((tool) => tool.name === name)?.exposure,
@@ -935,7 +944,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     false,
   );
   assert.equal(
-    lead.tools.some((tool) => tool.name === "ask_owner"),
+    lead.tools.some((tool) => tool.name === "await_owner"),
     false,
   );
   assert.deepEqual(
@@ -1124,12 +1133,18 @@ test("managed agents receive no peer tool and Chiefs expose only staff actively"
     false,
   );
   assert.equal(
-    managed.tools.find((tool) => tool.name === "ask_owner")?.promptSnippet,
+    managed.tools.find((tool) => tool.name === "await_owner")?.promptSnippet,
     "Ask this managed agent's direct owner for a required decision",
   );
-  const askOwnerTool = managed.tools.find((tool) => tool.name === "ask_owner");
+  const askOwnerTool = managed.tools.find(
+    (tool) => tool.name === "await_owner",
+  );
   assert.ok(askOwnerTool);
   assertPortableToolSchema(askOwnerTool, "model-only");
+  assertPortableToolSchema(
+    managed.tools.find((tool) => tool.name === "notify_owner")!,
+    "direct",
+  );
   managed.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
 
@@ -5771,7 +5786,7 @@ test("delegating agents receive only their allowed definition roster", async () 
     );
   assert.match(
     role,
-    /ask_owner follows its normal eligibility rules when you have no unresolved direct-agent work/,
+    /await_owner follows its normal eligibility rules when you have no unresolved direct-agent work/,
   );
   assert.match(
     role,

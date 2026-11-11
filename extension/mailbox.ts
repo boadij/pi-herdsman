@@ -128,6 +128,20 @@ export interface AskRecord {
   resultBindings?: ResultBinding[];
   createdAt: number;
 }
+export interface OwnerMessageRecord {
+  version: 5;
+  messageId: string;
+  requestId: string;
+  runId: string;
+  ownerSessionId: string;
+  workspaceId: string;
+  agentLabel: string;
+  paneId: string;
+  piSessionId: string;
+  text: string;
+  resultBindings?: readonly ResultBinding[];
+  createdAt: number;
+}
 export interface ResultRecord {
   version: 5;
   runId: string;
@@ -174,7 +188,9 @@ const UUID =
 const PREFIX = "__PI_HERDSMAN_AGENT_V5__:";
 /** Fixed protocol safety ceiling; configuration only limits new submissions. */
 export const MAILBOX_PROTOCOL_LIMIT_BYTES = 1024 * 1024;
-export function mailboxRecordBytes(record: RequestRecord | AskRecord): number {
+export function mailboxRecordBytes(
+  record: RequestRecord | AskRecord | OwnerMessageRecord,
+): number {
   return Buffer.byteLength(JSON.stringify(record), "utf8");
 }
 export class MailboxClaimOccupiedError extends Error {
@@ -186,6 +202,7 @@ const LIMITS = {
   state: 64 * 1024,
   request: MAILBOX_PROTOCOL_LIMIT_BYTES,
   ask: MAILBOX_PROTOCOL_LIMIT_BYTES,
+  ownerMessage: MAILBOX_PROTOCOL_LIMIT_BYTES,
   result: 4 * 1024 * 1024,
 };
 const root = join(herdsmanDataRoot(), "runtime", "mailboxes-v5");
@@ -560,10 +577,10 @@ function validate(
             "taskEvidenceId",
             "createdAt",
           ]
-        : kind === "ask"
+        : kind === "ownerMessage"
           ? [
               "version",
-              "askId",
+              "messageId",
               "requestId",
               "runId",
               "ownerSessionId",
@@ -571,26 +588,41 @@ function validate(
               "agentLabel",
               "paneId",
               "piSessionId",
-              "question",
+              "text",
               "resultBindings",
               "createdAt",
             ]
-          : [
-              "version",
-              "runId",
-              "requestId",
-              "ownerSessionId",
-              "workspaceId",
-              "agentLabel",
-              "paneId",
-              "rootSessionId",
-              "status",
-              "text",
-              "error",
-              "resultBindings",
-              "contextUsage",
-              "completedAt",
-            ];
+          : kind === "ask"
+            ? [
+                "version",
+                "askId",
+                "requestId",
+                "runId",
+                "ownerSessionId",
+                "workspaceId",
+                "agentLabel",
+                "paneId",
+                "piSessionId",
+                "question",
+                "resultBindings",
+                "createdAt",
+              ]
+            : [
+                "version",
+                "runId",
+                "requestId",
+                "ownerSessionId",
+                "workspaceId",
+                "agentLabel",
+                "paneId",
+                "rootSessionId",
+                "status",
+                "text",
+                "error",
+                "resultBindings",
+                "contextUsage",
+                "completedAt",
+              ];
   if (Object.keys(v).some((key) => !allowed.includes(key)))
     throw new Error("Unknown mailbox field");
   if (
@@ -610,9 +642,9 @@ function validate(
           "piSessionId",
           "cwd",
         ]
-      : kind === "ask"
+      : kind === "ownerMessage"
         ? [
-            "askId",
+            "messageId",
             "requestId",
             "runId",
             "ownerSessionId",
@@ -621,21 +653,33 @@ function validate(
             "paneId",
             "piSessionId",
           ]
-        : [
-            "runId",
-            "requestId",
-            "ownerSessionId",
-            "workspaceId",
-            "agentLabel",
-            "paneId",
-          ];
+        : kind === "ask"
+          ? [
+              "askId",
+              "requestId",
+              "runId",
+              "ownerSessionId",
+              "workspaceId",
+              "agentLabel",
+              "paneId",
+              "piSessionId",
+            ]
+          : [
+              "runId",
+              "requestId",
+              "ownerSessionId",
+              "workspaceId",
+              "agentLabel",
+              "paneId",
+            ];
   for (const field of required)
     if (typeof v[field] !== "string" || !(v[field] as string).trim())
       throw new Error(`Invalid mailbox field: ${field}`);
   if (
     !UUID.test(v.runId) ||
     (kind !== "state" && !UUID.test(v.requestId)) ||
-    (kind === "ask" && !UUID.test(v.askId))
+    (kind === "ask" && !UUID.test(v.askId)) ||
+    (kind === "ownerMessage" && !UUID.test(v.messageId))
   )
     throw new Error("Invalid mailbox UUID");
   const finite = (field: string) => {
@@ -877,6 +921,16 @@ function validate(
     )
       throw new Error("Invalid request evidence assignment identity");
     finite("createdAt");
+  } else if (kind === "ownerMessage") {
+    if (typeof v.text !== "string" || !v.text.trim())
+      throw new Error("Invalid owner message text");
+    if (
+      v.resultBindings !== undefined &&
+      (!Array.isArray(v.resultBindings) ||
+        !v.resultBindings.every(isResultBinding))
+    )
+      throw new Error("Invalid owner message result bindings");
+    finite("createdAt");
   } else if (kind === "ask") {
     if (typeof v.question !== "string" || !v.question.trim())
       throw new Error("Invalid ask question");
@@ -1030,7 +1084,7 @@ export function resetAgentMailbox(path: string): void {
     "ask.json",
     "bootstrap.json",
     ...readdirSync(path).filter((x: string) =>
-      /^(request|result)-.*\.json$/.test(x),
+      /^(request|result|owner-message)-.*\.json$/.test(x),
     ),
   ]) {
     try {
@@ -1240,6 +1294,43 @@ export function removeAsk(path: string): void {
     unlinkSync(file(path, "ask.json"));
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+}
+export function writeOwnerMessage(
+  path: string,
+  message: OwnerMessageRecord,
+): void {
+  assertFileId(message.messageId);
+  atomic(
+    file(path, `owner-message-${message.messageId}.json`),
+    message,
+    "ownerMessage",
+  );
+}
+export function readOwnerMessages(path: string): OwnerMessageRecord[] {
+  return readdirSync(path)
+    .filter((name) => name.startsWith("owner-message-"))
+    .map((name) => {
+      if (!/^owner-message-[0-9a-f-]+\.json$/iu.test(name))
+        throw new Error(`Malformed owner message filename: ${name}`);
+      const record = read<OwnerMessageRecord>(file(path, name), "ownerMessage");
+      if (!record) throw new Error("Owner message disappeared while reading");
+      validate(record, "ownerMessage");
+      if (name !== `owner-message-${record.messageId}.json`)
+        throw new Error("Owner message filename identity mismatch");
+      return record;
+    })
+    .sort(
+      (a, b) =>
+        a.createdAt - b.createdAt || a.messageId.localeCompare(b.messageId),
+    );
+}
+export function removeOwnerMessage(path: string, messageId: string): void {
+  assertFileId(messageId);
+  try {
+    unlinkSync(file(path, `owner-message-${messageId}.json`));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }
 export function writeResult(path: string, result: ResultRecord): void {

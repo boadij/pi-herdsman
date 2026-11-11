@@ -2944,6 +2944,12 @@ test("exact core and continuation tool evidence is enforced only in simulated mo
   const scoutRef = "result:smoke-core-scout#1";
   const exactCoreEvidence = [
     {
+      name: "notify_owner",
+      arguments: { message: "notice" },
+      result: "Notification queued",
+      sessionId: "intermediate-session",
+    },
+    {
       name: "delegate_agent",
       arguments: { label: "smoke-core-implementer" },
       result: "started",
@@ -5271,6 +5277,12 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
   );
   const nestedPackage = [
     { role: "user", content: "SMOKE_CORE_IMPLEMENTER: delegate one scout." },
+    call(
+      "notify_owner",
+      { message: "SMOKE_CORE_OWNER_NOTIFICATION: continuing work." },
+      "notify-owner-1",
+    ),
+    result("notify_owner", "notify-owner-1"),
     call(
       "delegate_agent",
       { definition: "scout", label: "smoke-core-scout" },
@@ -11663,7 +11675,7 @@ test("deep-chain faux requires delegation below the limit and a leaf at it", () 
   const ask = decideSmokeFaux("deep-chain", {
     messages: deepMessages("SMOKE_DEEP_LEVEL_4: go", false),
   });
-  assert.equal(firstToolCall(ask).name, "ask_owner");
+  assert.equal(firstToolCall(ask).name, "await_owner");
   assert.equal(firstToolCall(ask).arguments.question, "SMOKE_DEEP_QUESTION");
   // The depth-3 owner answers the leaf's delivered question.
   const depthThreeCall = {
@@ -11766,7 +11778,7 @@ const deepSession = (
 });
 
 const deepAsk = () =>
-  deepCall("ask_owner", { question: "SMOKE_DEEP_QUESTION" });
+  deepCall("await_owner", { question: "SMOKE_DEEP_QUESTION" });
 const deepReply = () =>
   deepCall("reply_agent", {
     agent: "smoke-deep-4",
@@ -11818,7 +11830,7 @@ test("deep-chain evidence needs one delegation per level, the escalation and the
   );
   assert.throws(
     () => assertDeepChainEvidence(deepGood(undefined, true, false)),
-    /must escalate one ask_owner/,
+    /must escalate one await_owner/,
   );
   assert.throws(
     () =>
