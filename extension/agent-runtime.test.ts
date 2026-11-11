@@ -83,10 +83,6 @@ import support, {
   nativeSessions,
   seedLeadRole,
 } from "./support.ts";
-import {
-  includeFanInMessage,
-  registerRecipientFanIn,
-} from "./recipient-fan-in.ts";
 const { readConfig, updateConfig } = await import("./config.ts");
 
 test("Pi 1.5.0 includes non-triggering startup messages in the first provider request", async () => {
@@ -154,6 +150,8 @@ test("Pi 1.5.0 includes non-triggering startup messages in the first provider re
 
 test("batched health attention reaches one faux-provider request with startup fan-in", async () => {
   setLeadEnvironment();
+  const { includeFanInMessage, registerRecipientFanIn } =
+    await import("./recipient-fan-in.ts");
   const states = ["provider-health-one", "provider-health-two"].map((label) => {
     const identity = recoveryIdentity(label);
     const state = managedState(label, undefined, identity);
