@@ -12650,6 +12650,9 @@ export async function collectDiagnostics(
           : "",
       ),
     };
+  if (ctx.scenario === "continuation")
+    ctx.continuationRuntimeDiagnostics =
+      diagnostics.continuationRuntimeDiagnostics;
   diagnostics.observedCoreProcesses = ctx.coreProcessEvidence ?? [];
   diagnostics.coreProcessDiagnostics = ctx.coreProcessDiagnostics ?? [];
   const paneIds = diagnostics.panes.ok
@@ -13143,7 +13146,17 @@ export async function bestEffortDiagnostics(ctx, collect) {
   try {
     return await collect();
   } catch {
-    return { stage: ctx.stage ?? null, collectionFailed: true };
+    return {
+      stage: ctx.stage ?? null,
+      collectionFailed: true,
+      ...(ctx.scenario === "continuation" &&
+      ctx.continuationRuntimeDiagnostics
+        ? {
+            continuationRuntimeDiagnostics:
+              ctx.continuationRuntimeDiagnostics,
+          }
+        : {}),
+    };
   }
 }
 

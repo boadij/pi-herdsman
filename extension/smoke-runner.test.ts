@@ -10129,6 +10129,45 @@ test("diagnostic collection failure preserves sanitized primary failure evidence
   }
 });
 
+test("continuation boundary diagnostics survive collection failure without request identity", async () => {
+  const ctx = {
+    scenario: "continuation",
+    stage: "continuation-second-generation",
+    continuationRuntimeDiagnostics: {
+      owner: [
+        {
+          event: "owner_delivery",
+          outcome: "delivered",
+          requestId: "PRIVATE_REQUEST_ID",
+        },
+      ],
+      resumedAgent: [
+        {
+          event: "result_persisted",
+          outcome: "present",
+          requestId: "PRIVATE_REQUEST_ID",
+        },
+      ],
+    },
+  };
+  const diagnostics = await bestEffortDiagnostics(ctx, async () => {
+    throw new Error("private collection error");
+  });
+  const evidence = sanitizedFailureEvidence(
+    ctx,
+    { phase: "scenario", error: new Error("primary failure") },
+    "SCENARIO_FAIL",
+    "PENDING",
+    diagnostics,
+  );
+
+  assert.deepEqual(evidence.diagnostics.continuationRuntimeDiagnostics, {
+    owner: [{ event: "owner_delivery", outcome: "delivered" }],
+    resumedAgent: [{ event: "result_persisted", outcome: "present" }],
+  });
+  assert.doesNotMatch(JSON.stringify(evidence), /PRIVATE_REQUEST_ID|private collection error/u);
+});
+
 test("collectDiagnostics projects supervisor-agent evidence without private session data", async () => {
   const privatePrompt = "PRIVATE_PROMPT PRIVATE_TOKEN";
   const privatePath = "/PRIVATE_PATH/session.jsonl";
