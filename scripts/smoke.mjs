@@ -77,6 +77,7 @@ const CLEANUP_TIMEOUT_MS = 30_000;
 const DEFAULT_MANAGER_READY_TIMEOUT_MS = 6 * 60_000;
 const MAX_MANAGER_READY_TIMEOUT_MS = 10 * 60_000;
 const MANAGER_DIAGNOSTIC_PREFIX = "[pi-herdsman-manager-diagnostic] ";
+const CONTINUATION_DIAGNOSTIC_PREFIX = "[pi-herdsman-continuation-diagnostic] ";
 const HERDR_ROUTING_KEYS = [
   "HERDR_SOCKET_PATH",
   "HERDR_CLIENT_SOCKET_PATH",
@@ -295,6 +296,40 @@ export function managerDiagnosticLines(contents) {
     }
   }
   return safeLines;
+}
+
+export function continuationDiagnosticLines(contents) {
+  if (typeof contents !== "string") return [];
+  const outcomes = {
+    turn_end: ["completed", "aborted", "error", "unknown"],
+    agent_settled: [
+      "entered",
+      "interrupt_replacement",
+      "no_active_request",
+      "pending_ask",
+      "pending_result",
+      "pending_state_transition",
+      "undelivered_child_work",
+      "settlement_queued",
+    ],
+    result_persisted: ["present", "missing", "write_error"],
+    owner_watcher: ["started"],
+    owner_delivery: ["delivered", "not_delivered"],
+  };
+  const lines = [];
+  for (const line of contents.split(/\r?\n/u)) {
+    const index = line.indexOf(CONTINUATION_DIAGNOSTIC_PREFIX);
+    if (index < 0) continue;
+    try {
+      const diagnostic = JSON.parse(
+        line.slice(index + CONTINUATION_DIAGNOSTIC_PREFIX.length),
+      );
+      if (!outcomes[diagnostic?.event]?.includes(diagnostic?.outcome)) continue;
+      lines.push({ event: diagnostic.event, outcome: diagnostic.outcome });
+      if (lines.length >= 32) break;
+    } catch {}
+  }
+  return lines;
 }
 
 export async function captureManagerLeadDiagnostics(
@@ -12447,7 +12482,7 @@ export async function collectDiagnostics(
   diagnostics.failure = failure?.smoke ?? null;
   diagnostics.stage = ctx.stage ?? null;
   diagnostics.preflight = ctx.preflight ?? null;
-  const [agents, panes, rootSession, rootPane, hostPane] =
+  const [agents, panes, rootSession, rootPane, hostPane, continuationPane] =
     await Promise.allSettled([
       observe(["agent", "list"], { env, timeout: OBSERVATION_TIMEOUT_MS }),
       observe(["pane", "list"], { env, timeout: OBSERVATION_TIMEOUT_MS }),
@@ -12469,6 +12504,21 @@ export async function collectDiagnostics(
         : null,
       owned.hostPaneId
         ? readParentHostPane(ctx, owned.hostPaneId, execute)
+        : null,
+      ctx.scenario === "continuation" && ctx.continuationCandidatePaneId
+        ? execute(
+            "herdr",
+            [
+              "pane",
+              "read",
+              ctx.continuationCandidatePaneId,
+              "--source",
+              "recent-unwrapped",
+              "--lines",
+              "120",
+            ],
+            { env, timeout: OBSERVATION_TIMEOUT_MS },
+          )
         : null,
     ]);
   diagnostics.agents =
@@ -12848,6 +12898,17 @@ export async function collectDiagnostics(
     hostPane.status === "fulfilled"
       ? hostPane.value.stdout.slice(-12_000)
       : { error: hostPane.reason?.message ?? null };
+  if (ctx.scenario === "continuation")
+    diagnostics.continuationRuntimeDiagnostics = {
+      owner: continuationDiagnosticLines(
+        rootPane.status === "fulfilled" ? rootPane.value.stdout : "",
+      ),
+      resumedAgent: continuationDiagnosticLines(
+        continuationPane.status === "fulfilled"
+          ? (continuationPane.value?.stdout ?? "")
+          : "",
+      ),
+    };
   const knownDescendants = [
     ...new Set(
       [
@@ -13567,6 +13628,29 @@ function sanitizedCoreHandoff(value) {
 
 function sanitizedFailureDiagnostics(value) {
   if (!value || typeof value !== "object") return null;
+  const safeContinuationRecords = (records) => {
+    if (!Array.isArray(records)) return [];
+    const allowed = {
+      turn_end: ["completed", "aborted", "error", "unknown"],
+      agent_settled: [
+        "entered",
+        "interrupt_replacement",
+        "no_active_request",
+        "pending_ask",
+        "pending_result",
+        "pending_state_transition",
+        "undelivered_child_work",
+        "settlement_queued",
+      ],
+      result_persisted: ["present", "missing", "write_error"],
+      owner_watcher: ["started"],
+      owner_delivery: ["delivered", "not_delivered"],
+    };
+    return records
+      .slice(0, 32)
+      .filter((record) => allowed[record?.event]?.includes(record?.outcome))
+      .map(({ event, outcome }) => ({ event, outcome }));
+  };
   const count = (input) =>
     Number.isSafeInteger(input) && input >= 0 ? Math.min(input, 256) : null;
   const root = value.rootDelegation;
@@ -13685,6 +13769,19 @@ function sanitizedFailureDiagnostics(value) {
               )
                 ? continuation.piVersion
                 : null,
+          },
+        }
+      : {}),
+    ...(value.continuationRuntimeDiagnostics &&
+    typeof value.continuationRuntimeDiagnostics === "object"
+      ? {
+          continuationRuntimeDiagnostics: {
+            owner: safeContinuationRecords(
+              value.continuationRuntimeDiagnostics.owner,
+            ),
+            resumedAgent: safeContinuationRecords(
+              value.continuationRuntimeDiagnostics.resumedAgent,
+            ),
           },
         }
       : {}),
@@ -14332,6 +14429,8 @@ function cleanupEvidence(owned) {
 
 async function main() {
   const args = parseSmokeArgs(process.argv.slice(2));
+  process.env.PI_HERDSMAN_CONTINUATION_DIAGNOSTICS =
+    args.scenario === "continuation" && args.simulated ? "1" : "0";
   const pkg = JSON.parse(
     await readFile(join(repoRoot, "package.json"), "utf8"),
   );

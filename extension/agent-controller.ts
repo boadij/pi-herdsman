@@ -159,6 +159,29 @@ import {
   type AgentDefinition,
 } from "./agent-definitions.ts";
 
+let continuationDiagnosticCount = 0;
+const continuationDiagnostic = (
+  runtime: Runtime,
+  requestId: string,
+  event: "owner_watcher" | "owner_delivery",
+  outcome: "started" | "delivered" | "not_delivered",
+): void => {
+  if (
+    process.env.PI_HERDSMAN_CONTINUATION_DIAGNOSTICS !== "1" ||
+    continuationDiagnosticCount >= 32 ||
+    (runtime.activeRequestId !== requestId &&
+      runtime.completedRequestId !== requestId) ||
+    !runtime.piSessionId ||
+    !runtime.paneId ||
+    !runtime.ownerSessionId
+  )
+    return;
+  continuationDiagnosticCount++;
+  console.error(
+    `[pi-herdsman-continuation-diagnostic] ${JSON.stringify({ event, outcome })}`,
+  );
+};
+
 const delegationLockPath = (workspaceId: string, sessionId: string) =>
   join(
     herdsmanTempRoot(),
@@ -6682,6 +6705,7 @@ export function createAgentController(
     requestId = runtime.activeRequestId,
   ): void => {
     if (!requestId) return;
+    continuationDiagnostic(runtime, requestId, "owner_watcher", "started");
     const filename = `result-${requestId}.json`;
     const path = join(runtime.mailboxPath, filename);
     stopResultWatcher(runtime, requestId);
@@ -6689,7 +6713,16 @@ export function createAgentController(
       if (active && context.isIdle() && runtimes.get(runtime.label) === runtime)
         try {
           const result = readResult(runtime.mailboxPath, requestId);
-          if (result) void deliverResult(runtime, context, result, signal);
+          if (result)
+            void deliverResult(runtime, context, result, signal).then(
+              (delivered) =>
+                continuationDiagnostic(
+                  runtime,
+                  requestId,
+                  "owner_delivery",
+                  delivered ? "delivered" : "not_delivered",
+                ),
+            );
         } catch {}
     };
     const stop = observeMailbox(

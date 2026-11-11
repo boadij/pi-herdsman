@@ -99,6 +99,7 @@ import {
   managerBootstrapDelegationState,
   herdrErrorCode,
   managerDiagnosticLines,
+  continuationDiagnosticLines,
   captureManagerLeadDiagnostics,
   savedSessionHeaderEvidence,
   staffDelegateResults,
@@ -6033,6 +6034,22 @@ test("manager diagnostics retain bounded pane evidence", () => {
         `${prefix}${JSON.stringify(event.event === "project_assignment_send" && event.outcome === "rejected" ? { event: event.event, outcome: event.outcome, triggerTurn: event.triggerTurn } : event)}`,
     ),
   );
+});
+
+test("continuation diagnostics retain only allowlisted boundary outcomes", () => {
+  const prefix = "[pi-herdsman-continuation-diagnostic] ";
+  const lines = continuationDiagnosticLines(
+    [
+      `${prefix}${JSON.stringify({ event: "turn_end", outcome: "completed", requestId: "private" })}`,
+      `${prefix}${JSON.stringify({ event: "owner_delivery", outcome: "delivered", ownerSessionId: "private" })}`,
+      `${prefix}${JSON.stringify({ event: "turn_end", outcome: "private" })}`,
+    ].join("\n"),
+  );
+  assert.deepEqual(lines, [
+    { event: "turn_end", outcome: "completed" },
+    { event: "owner_delivery", outcome: "delivered" },
+  ]);
+  assert.doesNotMatch(JSON.stringify(lines), /private/);
 });
 
 test("manager drain checkpoints are allowlisted, deduplicated and bounded without private fields", () => {

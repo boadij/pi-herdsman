@@ -127,6 +127,24 @@ import {
   type AgentDefinition,
 } from "./agent-definitions.ts";
 
+let continuationDiagnosticCount = 0;
+const continuationDiagnostic = (
+  requestId: string | undefined,
+  event: string,
+  outcome: string,
+): void => {
+  if (
+    process.env.PI_HERDSMAN_CONTINUATION_DIAGNOSTICS !== "1" ||
+    continuationDiagnosticCount >= 32 ||
+    !requestId
+  )
+    return;
+  continuationDiagnosticCount++;
+  console.error(
+    `[pi-herdsman-continuation-diagnostic] ${JSON.stringify({ event, outcome })}`,
+  );
+};
+
 const DELEGATING_AGENT_ROLE_CHARTER = `## Delegating agent role
 ${DELEGATING_AGENT_SCOPE_DESCRIPTION}`;
 
@@ -2226,6 +2244,13 @@ export function registerManagedAgentActivityHandlers(
     options.touchActivity();
     const state = execution.assignment;
     if (!state?.activeRequestId) return;
+    continuationDiagnostic(
+      state.activeRequestId,
+      "turn_end",
+      ["completed", "aborted", "error"].includes(event?.outcome)
+        ? event.outcome
+        : "unknown",
+    );
     if (event?.message?.role === "assistant") {
       const observation =
         execution.observation ??
@@ -2382,15 +2407,12 @@ export function registerManagedAgentSettlementHandlers(
   const settleCurrentAgent = (
     ctx: ExtensionContext,
     aborted: boolean,
-  ): void => {
+  ): string => {
     const state = execution.assignment;
-    if (
-      !state?.activeRequestId ||
-      state.pendingAskId ||
-      execution.pendingResult ||
-      execution.pendingStateTransition
-    )
-      return;
+    if (!state?.activeRequestId) return "no_active_request";
+    if (state.pendingAskId) return "pending_ask";
+    if (execution.pendingResult) return "pending_result";
+    if (execution.pendingStateTransition) return "pending_state_transition";
     if (
       options.delegationEnabled &&
       options.hasUndeliveredDirectChildWork(
@@ -2398,7 +2420,7 @@ export function registerManagedAgentSettlementHandlers(
         ctx.sessionManager.getEntries(),
       )
     )
-      return;
+      return "undelivered_child_work";
     const observation = execution.observation;
     const outcome =
       observation?.requestId === state.activeRequestId
@@ -2487,11 +2509,25 @@ export function registerManagedAgentSettlementHandlers(
         }
         execution.resultWriteAttempts++;
         writeResult(mailbox, current);
+        const persisted = readResult(mailbox, current.requestId);
+        continuationDiagnostic(
+          current.requestId,
+          "result_persisted",
+          persisted?.requestId === current.requestId &&
+            persisted.status === current.status
+            ? "present"
+            : "missing",
+        );
         execution.pendingResult = undefined;
         if (execution.retryTimer) clearInterval(execution.retryTimer);
         execution.retryTimer = undefined;
         finalizeStateTransition(ctx, true);
       } catch (error) {
+        continuationDiagnostic(
+          current.requestId,
+          "result_persisted",
+          "write_error",
+        );
         if (
           current.status === "completed" &&
           String(error).toLowerCase().includes("too large")
@@ -2574,18 +2610,30 @@ export function registerManagedAgentSettlementHandlers(
     flush();
     if (execution.pendingResult && !execution.retryTimer)
       execution.retryTimer = setInterval(flush, 250);
+    return "settlement_queued";
   };
   pi.on(
     "agent_settled",
     async (event: { aborted: boolean }, ctx: ExtensionContext) => {
+      const requestId = execution.assignment?.activeRequestId;
+      continuationDiagnostic(requestId, "agent_settled", "entered");
       if (execution.pendingInterruptReplacement) {
         const replacement = execution.pendingInterruptReplacement;
         execution.pendingInterruptReplacement = undefined;
         execution.latest = "";
         pi.sendUserMessage(replacement);
+        continuationDiagnostic(
+          requestId,
+          "agent_settled",
+          "interrupt_replacement",
+        );
         return;
       }
-      settleCurrentAgent(ctx, event.aborted);
+      continuationDiagnostic(
+        requestId,
+        "agent_settled",
+        settleCurrentAgent(ctx, event.aborted),
+      );
       await options.settleControllerResults(ctx).catch(() => {});
     },
   );
