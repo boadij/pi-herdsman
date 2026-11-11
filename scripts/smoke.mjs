@@ -298,7 +298,7 @@ export function managerDiagnosticLines(contents) {
   return safeLines;
 }
 
-export function continuationDiagnosticLines(contents) {
+export function continuationDiagnosticLines(contents, requestId) {
   if (typeof contents !== "string") return [];
   const outcomes = {
     turn_end: ["completed", "aborted", "error", "unknown"],
@@ -324,7 +324,11 @@ export function continuationDiagnosticLines(contents) {
       const diagnostic = JSON.parse(
         line.slice(index + CONTINUATION_DIAGNOSTIC_PREFIX.length),
       );
-      if (!outcomes[diagnostic?.event]?.includes(diagnostic?.outcome)) continue;
+      if (
+        diagnostic?.requestId !== requestId ||
+        !outcomes[diagnostic?.event]?.includes(diagnostic?.outcome)
+      )
+        continue;
       lines.push({ event: diagnostic.event, outcome: diagnostic.outcome });
       if (lines.length >= 32) break;
     } catch {}
@@ -8857,6 +8861,7 @@ async function runContinuationSmoke(ctx) {
             accepted.request_id,
           "continuation accepted identity is incomplete",
         );
+        ctx.continuationAcceptedRequestId = accepted.request_id;
         if (accepted.owner_session_id !== owner?.id)
           throw new Error("continuation owner session does not match root");
         const selection = await smokeMailbox(
@@ -12643,11 +12648,13 @@ export async function collectDiagnostics(
     diagnostics.continuationRuntimeDiagnostics = {
       owner: continuationDiagnosticLines(
         rootPane.status === "fulfilled" ? (rootPane.value?.stdout ?? "") : "",
+        ctx.continuationAcceptedRequestId,
       ),
       resumedAgent: continuationDiagnosticLines(
         continuationPane.status === "fulfilled"
           ? (continuationPane.value?.stdout ?? "")
           : "",
+        ctx.continuationAcceptedRequestId,
       ),
     };
   if (ctx.scenario === "continuation")

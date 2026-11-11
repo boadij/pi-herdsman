@@ -6054,16 +6054,18 @@ test("continuation diagnostics retain only allowlisted boundary outcomes", () =>
   const prefix = "[pi-herdsman-continuation-diagnostic] ";
   const lines = continuationDiagnosticLines(
     [
-      `${prefix}${JSON.stringify({ event: "turn_end", outcome: "completed", requestId: "private" })}`,
-      `${prefix}${JSON.stringify({ event: "owner_delivery", outcome: "delivered", ownerSessionId: "private" })}`,
-      `${prefix}${JSON.stringify({ event: "turn_end", outcome: "private" })}`,
+      `${prefix}${JSON.stringify({ event: "turn_end", outcome: "completed", requestId: "accepted" })}`,
+      `${prefix}${JSON.stringify({ event: "owner_delivery", outcome: "delivered", requestId: "accepted", ownerSessionId: "private" })}`,
+      `${prefix}${JSON.stringify({ event: "turn_end", outcome: "completed", requestId: "other" })}`,
+      `${prefix}${JSON.stringify({ event: "turn_end", outcome: "private", requestId: "accepted" })}`,
     ].join("\n"),
+    "accepted",
   );
   assert.deepEqual(lines, [
     { event: "turn_end", outcome: "completed" },
     { event: "owner_delivery", outcome: "delivered" },
   ]);
-  assert.doesNotMatch(JSON.stringify(lines), /private/);
+  assert.doesNotMatch(JSON.stringify(lines), /private|accepted|other/);
 });
 
 test("manager drain checkpoints are allowlisted, deduplicated and bounded without private fields", () => {
@@ -10133,6 +10135,7 @@ test("continuation boundary diagnostics survive collection failure without reque
   const ctx = {
     scenario: "continuation",
     stage: "continuation-second-generation",
+    continuationAcceptedRequestId: "accepted-request",
     continuationRuntimeDiagnostics: {
       owner: [
         {
@@ -10173,6 +10176,7 @@ test("continuation runtime boundaries are projected from owner and resumed panes
   const ctx = {
     scenario: "continuation",
     stage: "continuation-second-generation",
+    continuationAcceptedRequestId: "accepted-request",
     sessionName: "smoke-continuation",
     rootPaneId: "root-pane",
     continuationCandidatePaneId: "resumed-pane",
@@ -10185,8 +10189,8 @@ test("continuation runtime boundaries are projected from owner and resumed panes
     {
       execute: async (_file: string, args: string[]) => ({
         stdout: args.includes("root-pane")
-          ? `${prefix}{"event":"owner_delivery","outcome":"delivered","requestId":"PRIVATE_ID"}`
-          : `${prefix}{"event":"result_persisted","outcome":"present","requestId":"PRIVATE_ID"}`,
+          ? `${prefix}{"event":"owner_delivery","outcome":"delivered","requestId":"accepted-request","ownerSessionId":"PRIVATE_ID"}`
+          : `${prefix}{"event":"result_persisted","outcome":"present","requestId":"accepted-request"}`,
       }),
       observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
       snapshot: async () => null,

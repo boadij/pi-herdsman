@@ -144,7 +144,7 @@ const continuationDiagnostic = (
     return;
   continuationDiagnosticCount++;
   console.error(
-    `[pi-herdsman-continuation-diagnostic] ${JSON.stringify({ event, outcome })}`,
+    `[pi-herdsman-continuation-diagnostic] ${JSON.stringify({ requestId, event, outcome })}`,
   );
 };
 
