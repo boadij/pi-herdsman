@@ -104,6 +104,7 @@ import {
   savedSessionHeaderEvidence,
   staffDelegateResults,
   assertNoFailedProjectDelegation,
+  postPromptToolResult,
   assertNoFailedManagerHandoff,
   managerAssignmentDiagnostics,
   managerHandoffSupervisorToolAvailability,
@@ -139,6 +140,7 @@ import {
   terminalFailureEvidence,
   matchPiProvenance,
   assertContinuationFauxEvidence,
+  completedContinuationPid,
   continuationCompletionDiagnostics,
   continuationOwnerCallDiagnostics,
   continuationRuntimeEvidenceDiagnostics,
@@ -6906,6 +6908,70 @@ test("continuation requires configured faux extension and provider evidence for 
   );
 });
 
+test("continuation accepts durable startup identity for a completed second-generation process", () => {
+  const identity = {
+    sessionId: "saved-session",
+    ownerSessionId: "owner-session",
+    label: "smoke-implementer",
+    paneId: "resumed-pane",
+    requestId: "accepted-request",
+    runId: "accepted-run",
+    mailbox: {
+      piSessionId: "saved-session",
+      ownerSessionId: "owner-session",
+      agentLabel: "smoke-implementer",
+      paneId: "resumed-pane",
+      requestId: "accepted-request",
+      runId: "accepted-run",
+    },
+  };
+  const starts = [
+    { sessionId: "saved-session", pid: 202 },
+    { sessionId: "saved-session", pid: 303 },
+  ];
+  const provenance = [
+    {
+      sessionId: "saved-session",
+      pid: 202,
+      model: "continuation",
+      packageName: "@earendil-works/pi-coding-agent",
+      piVersion: "1.5.1",
+    },
+    {
+      sessionId: "saved-session",
+      pid: 303,
+      model: "continuation",
+      packageName: "@earendil-works/pi-coding-agent",
+      piVersion: "1.5.1",
+    },
+  ];
+  assert.equal(
+    completedContinuationPid(starts, provenance, identity, [202], "1.5.1"),
+    303,
+  );
+  assert.throws(
+    () =>
+      completedContinuationPid(
+        starts,
+        provenance,
+        { ...identity, mailbox: { ...identity.mailbox, paneId: "other-pane" } },
+        [202],
+        "1.5.1",
+      ),
+    /other-pane/,
+  );
+  assert.equal(
+    completedContinuationPid(
+      starts,
+      provenance,
+      identity,
+      [202, 303],
+      "1.5.1",
+    ),
+    undefined,
+  );
+});
+
 test("continuation diagnostics distinguish delivered metadata from request correlation", () => {
   const sessionId = "8f1d4bc2-3902-42a8-9a14-c77619d00486";
   const requestId = "private-request-id";
@@ -9519,6 +9585,44 @@ test("failed project delegation is correlated, sanitized, and preserves topology
   );
   assert.equal(ctx.owned.managerWorktreePath, worktree.path);
   assert.equal(ctx.owned.managerWorkspaceId, worktree.open_workspace_id);
+});
+
+test("crash-recovery waits for the reopened owner's current list_agents result", () => {
+  const entry = (role: "assistant" | "toolResult", fields: object) => ({
+    type: "message",
+    message: { role, ...fields },
+  });
+  const oldCall = entry("assistant", {
+    content: [{ type: "toolCall", id: "old-call", name: "list_agents" }],
+  });
+  const oldResult = entry("toolResult", {
+    toolName: "list_agents",
+    toolCallId: "old-call",
+    isError: false,
+  });
+  const prompt = entry("assistant", {
+    content: [{ type: "toolCall", id: "new-call", name: "list_agents" }],
+  });
+  const result = entry("toolResult", {
+    toolName: "list_agents",
+    toolCallId: "new-call",
+    isError: false,
+  });
+
+  assert.equal(postPromptToolResult([oldCall, oldResult], "list_agents", 2), undefined);
+  assert.equal(postPromptToolResult([oldCall, oldResult, prompt], "list_agents", 2), undefined);
+  assert.equal(
+    postPromptToolResult([oldCall, oldResult, prompt, result], "list_agents", 2),
+    result,
+  );
+  assert.equal(
+    postPromptToolResult(
+      [oldCall, oldResult, prompt, { ...result, message: { ...result.message, toolCallId: "other" } }],
+      "list_agents",
+      2,
+    ),
+    undefined,
+  );
 });
 
 test("Manager history recognizes retained project messages by exact identity", () => {

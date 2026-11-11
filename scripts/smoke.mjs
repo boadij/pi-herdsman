@@ -863,6 +863,34 @@ export function assertNoFailedProjectDelegation(contents, branch) {
   throw error;
 }
 
+export function postPromptToolResult(entries, toolName, baselineLength) {
+  const currentEntries = entries.slice(baselineLength);
+  const calls = new Set(
+    currentEntries.flatMap((entry) =>
+      entry.type === "message" &&
+      entry.message?.role === "assistant" &&
+      Array.isArray(entry.message.content)
+        ? entry.message.content
+            .filter(
+              (part) =>
+                part?.type === "toolCall" &&
+                part.name === toolName &&
+                typeof part.id === "string",
+            )
+            .map((part) => part.id)
+        : [],
+    ),
+  );
+  return currentEntries.find(
+    (entry) =>
+      entry.type === "message" &&
+      entry.message?.role === "toolResult" &&
+      entry.message.toolName === toolName &&
+      entry.message.isError !== true &&
+      calls.has(entry.message.toolCallId),
+  );
+}
+
 export function assertNoFailedManagerHandoff(progress) {
   if (progress.supervisorResultState !== "error") return;
 
@@ -4164,6 +4192,47 @@ export function assertContinuationFauxEvidence(
       "missing faux continuation provider request for a generation",
     );
   }
+}
+
+export function completedContinuationPid(
+  sessionStarts,
+  provenance,
+  identity,
+  previousPids,
+  expectedVersion,
+) {
+  assert.ok(identity.sessionId && identity.ownerSessionId && identity.label);
+  assert.ok(identity.paneId && identity.requestId && identity.runId);
+  assert.equal(identity.mailbox.piSessionId, identity.sessionId);
+  assert.equal(identity.mailbox.ownerSessionId, identity.ownerSessionId);
+  assert.equal(identity.mailbox.agentLabel, identity.label);
+  assert.equal(identity.mailbox.paneId, identity.paneId);
+  assert.equal(identity.mailbox.requestId, identity.requestId);
+  assert.equal(identity.mailbox.runId, identity.runId);
+  const rows = provenance.filter(
+    (record) =>
+      record.sessionId === identity.sessionId &&
+      record.model === "continuation",
+  );
+  const resumedRows = rows.filter(
+    (record) =>
+      Number.isSafeInteger(record.pid) &&
+      record.pid > 0 &&
+      !previousPids.includes(record.pid),
+  );
+  if (!resumedRows.length) return undefined;
+  assert.equal(resumedRows.length, 1, "expected one resumed provider request");
+  const [row] = resumedRows;
+  assert.equal(row.packageName, "@earendil-works/pi-coding-agent");
+  assert.equal(row.piVersion, expectedVersion);
+  assert.ok(Number.isSafeInteger(row.pid) && row.pid > 0);
+  const starts = sessionStarts.filter(
+    (record) =>
+      record.sessionId === identity.sessionId && record.pid === row.pid,
+  );
+  if (!starts.length) return undefined;
+  assert.equal(starts.length, 1, "ambiguous resumed session_start identity");
+  return row.pid;
 }
 
 export function continuationOwnerCallDiagnostics(
@@ -7528,6 +7597,11 @@ async function runAgentCrashRecoverySmoke(ctx) {
     },
     { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS, pollMs: 200 },
   );
+  const ownerBeforePrompt = await rootSessionSnapshot(ctx);
+  assert.ok(ownerBeforePrompt, "reopened owner session is unavailable");
+  const ownerEntryCountBeforePrompt = sessionEntries(
+    ownerBeforePrompt.contents,
+  ).length;
   await nestedCommand(ctx, ["agent", "prompt", ctx.rootPaneId, restartPrompt]);
 
   const reopenedOwner = await waitForEvidence(
@@ -7535,26 +7609,21 @@ async function runAgentCrashRecoverySmoke(ctx) {
     "crash-recovery-restored-controller-list",
     async () => {
       const owner = await rootSessionSnapshot(ctx);
-      const found =
-        owner &&
-        sessionEntries(owner.contents).some(
-          (entry) =>
-            entry.type === "message" &&
-            entry.message?.role === "toolResult" &&
-            entry.message.toolName === "list_agents" &&
-            !entry.message.isError,
-        );
+      const found = owner
+        ? postPromptToolResult(
+            sessionEntries(owner.contents),
+            "list_agents",
+            ownerEntryCountBeforePrompt,
+          )
+        : undefined;
       return { done: !!found, value: owner };
     },
     { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS, pollMs: 200 },
   );
-  const ownerEntries = sessionEntries(reopenedOwner.contents);
-  const listResult = ownerEntries.find(
-    (entry) =>
-      entry.type === "message" &&
-      entry.message?.role === "toolResult" &&
-      entry.message.toolName === "list_agents" &&
-      !entry.message.isError,
+  const listResult = postPromptToolResult(
+    sessionEntries(reopenedOwner.contents),
+    "list_agents",
+    ownerEntryCountBeforePrompt,
   );
   const controlledAgents = listResult?.message?.details?.agents;
   assert.ok(
@@ -8728,6 +8797,12 @@ async function runContinuationSmoke(ctx) {
 
   const followup = `Continue the exact saved Pi session at ${firstSession.path}. This is the same implementer you delegated previously. Without rereading package.json, return the package name you were asked to remember, followed by exactly ${secondMarker}. The final answer to me must include that marker.`;
   ctx.continuationFollowupPrompt = followup;
+  const runtimeEvidence = join(ctx.paths.piAgent, "pi-herdsman", "runtime");
+  const readJsonl = async (name) =>
+    (await readFile(join(runtimeEvidence, name), "utf8"))
+      .split(/\r?\n/u)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
   await promptRoot(followup);
   firstGeneration = await waitForEvidence(
     ctx,
@@ -8776,6 +8851,15 @@ async function runContinuationSmoke(ctx) {
             candidateLabel.trim().length > 0,
           "continuation candidate label is missing",
         );
+        assert.ok(
+          accepted.owner_session_id &&
+            accepted.pane_id &&
+            accepted.request_id &&
+            accepted.run_id,
+          "continuation accepted identity is incomplete",
+        );
+        if (accepted.owner_session_id !== owner?.id)
+          throw new Error("continuation owner session does not match root");
         const selection = await smokeMailbox(
           ctx,
           agent,
@@ -8815,30 +8899,37 @@ async function runContinuationSmoke(ctx) {
                   "continuation mailbox request does not match accepted result",
                 );
         }
-        const observed = await tryNestedCommand(ctx, [
-          "pane",
-          "process-info",
-          "--pane",
-          agent.pane_id,
-        ]);
-        if (!observed.ok)
-          return { done: false, observationError: observed.error };
-        const matches = candidateProcess(
-          observed.value,
-          ctx.candidateExtension,
-          ctx.herdrStateExtension,
-        );
-        for (const proc of matches) {
-          if (
-            proc.pid != null &&
-            !firstPids.has(proc.pid) &&
-            agent.pane_id !== firstSession.paneId
-          ) {
-            firstGeneration = proc.pid;
-            ctx.continuationSecondGenerationPid = proc.pid;
-            ctx.continuationSecondPaneId = agent.pane_id;
-            refreshContinuationDiagnostics();
-          }
+        if (accepted.pane_id !== agent.pane_id)
+          throw new Error("continuation accepted pane does not match candidate");
+        sessionStarts = await readJsonl("smoke-faux-session-start.jsonl");
+        provenance = await readJsonl("smoke-faux-provenance.jsonl");
+        if (mailbox) {
+          firstGeneration = completedContinuationPid(
+            sessionStarts,
+            provenance,
+            {
+              sessionId: firstSession.id,
+              ownerSessionId: accepted.owner_session_id,
+              label: candidateLabel,
+              paneId: accepted.pane_id,
+              requestId: accepted.request_id,
+              runId: accepted.run_id,
+              mailbox: {
+                ...mailbox.state,
+                requestId:
+                  mailbox.request?.requestId ??
+                  mailbox.state.completedRequestId ??
+                  mailbox.state.lastAck?.requestId,
+              },
+            },
+            [...firstPids],
+            ctx.expectedPiVersion,
+          );
+        }
+        if (firstGeneration !== undefined) {
+          ctx.continuationSecondGenerationPid = firstGeneration;
+          ctx.continuationSecondPaneId = agent.pane_id;
+          refreshContinuationDiagnostics();
         }
       }
       return {
@@ -8866,12 +8957,6 @@ async function runContinuationSmoke(ctx) {
     },
   );
 
-  const runtimeEvidence = join(ctx.paths.piAgent, "pi-herdsman", "runtime");
-  const readJsonl = async (name) =>
-    (await readFile(join(runtimeEvidence, name), "utf8"))
-      .split(/\r?\n/u)
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
   await waitForEvidence(
     ctx,
     "continuation-second-provider-request",
