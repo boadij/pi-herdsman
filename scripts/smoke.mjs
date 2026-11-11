@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, spawn, spawnSync } from "node:child_process";
+import { lstatSync, readFileSync } from "node:fs";
 import {
   access,
   copyFile,
@@ -6429,6 +6430,91 @@ async function restartNestedHerdr(ctx) {
 
 async function runAgentCrashRecoverySmoke(ctx) {
   const startedAt = Date.now();
+  let diagnosticTargetMailboxDirectory;
+  const diagnosticSalt = randomUUID();
+  const identityTag = (value) =>
+    typeof value === "string"
+      ? createHash("sha256")
+          .update(diagnosticSalt)
+          .update("\0")
+          .update(value)
+          .digest("hex")
+          .slice(0, 12)
+      : null;
+  const resultInfo = (mailboxDirectory, requestId) => {
+    if (!mailboxDirectory || !requestId) return { exists: false, status: null };
+    try {
+      const path = join(mailboxDirectory, `result-${requestId}.json`);
+      const info = lstatSync(path);
+      if (
+        !info.isFile() ||
+        info.isSymbolicLink() ||
+        info.size > 4 * 1024 * 1024
+      )
+        return { exists: false, status: null };
+      const result = JSON.parse(readFileSync(path, "utf8"));
+      return {
+        exists: true,
+        status:
+          result.status === "completed" || result.status === "failed"
+            ? result.status
+            : "unknown",
+      };
+    } catch (error) {
+      return error?.code === "ENOENT"
+        ? { exists: false, status: null }
+        : { exists: "unknown", status: null };
+    }
+  };
+  const captureTargetMailbox = (
+    phase,
+    controllerOwnerId,
+    controllerWorkspaceId,
+    targetListed,
+  ) => {
+    let state;
+    let mailboxReadStatus = "unknown";
+    try {
+      const statePath = join(diagnosticTargetMailboxDirectory, "state.json");
+      const info = lstatSync(statePath);
+      if (!info.isFile() || info.isSymbolicLink() || info.size > 65536) {
+        mailboxReadStatus = "unavailable";
+      } else {
+        state = JSON.parse(readFileSync(statePath, "utf8"));
+        mailboxReadStatus = "present";
+      }
+    } catch (error) {
+      mailboxReadStatus = error?.code === "ENOENT" ? "missing" : "unavailable";
+    }
+    const activeResult = resultInfo(
+      diagnosticTargetMailboxDirectory,
+      state?.activeRequestId,
+    );
+    const completedResult = resultInfo(
+      diagnosticTargetMailboxDirectory,
+      state?.completedRequestId,
+    );
+    console.log(
+      `CRASH_RECOVERY_MAILBOX_DIAGNOSTIC ${JSON.stringify({
+        phase,
+        mailboxPresent: !!state,
+        mailboxReadStatus,
+        mailboxOwner: identityTag(state?.ownerSessionId),
+        controllerOwner: identityTag(controllerOwnerId),
+        ownerMatchesController:
+          !!state && state.ownerSessionId === controllerOwnerId,
+        mailboxWorkspace: identityTag(state?.workspaceId),
+        controllerWorkspace: identityTag(controllerWorkspaceId),
+        workspaceMatchesController:
+          !!state && state.workspaceId === controllerWorkspaceId,
+        activeRequestPresent: !!state?.activeRequestId,
+        completedRequestPresent: !!state?.completedRequestId,
+        activeResult,
+        completedResult,
+        ...(targetListed !== undefined ? { targetListed } : {}),
+      })}`,
+    );
+  };
   assert.ok(
     ctx.paths.root &&
       resolve(ctx.paths.xdgConfig).startsWith(
@@ -6502,6 +6588,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
             childAsk: !!childMailbox.state.pendingAskId,
           },
         };
+      diagnosticTargetMailboxDirectory = targetMailbox.directory;
       const herdrSnapshot = await nestedCommand(ctx, ["api", "snapshot"]);
       const snapshot = herdrSnapshot.snapshot;
       const capturedSessions = new Set([
@@ -6616,8 +6703,18 @@ async function runAgentCrashRecoverySmoke(ctx) {
   );
   assert.ok(ownerHeader?.id, "saved owner session omitted its exact ID");
   ctx.crashRecovery.ownerSessionId = ownerHeader.id;
+  captureTargetMailbox(
+    "before-herdr-shutdown",
+    ownerHeader.id,
+    ctx.rootWorkspaceId,
+  );
   await restartNestedHerdr(ctx);
   ctx.crashRecovery.restartDurationMs = Date.now() - startedAt;
+  captureTargetMailbox(
+    "after-herdr-restart",
+    ownerHeader.id,
+    ctx.rootWorkspaceId,
+  );
 
   const restartedListing = await nestedCommand(ctx, ["agent", "list"]);
   const restartedAgents = restartedListing.agents ?? [];
@@ -6719,15 +6816,30 @@ async function runAgentCrashRecoverySmoke(ctx) {
     "crash-recovery-restored-controller-list",
     async () => {
       const owner = await rootSessionSnapshot(ctx);
-      const found =
-        owner &&
-        sessionEntries(owner.contents).some(
-          (entry) =>
-            entry.type === "message" &&
-            entry.message?.role === "toolResult" &&
-            entry.message.toolName === "list_agents" &&
-            !entry.message.isError,
+      const ownerEntries = owner ? sessionEntries(owner.contents) : [];
+      const listResult = ownerEntries.find(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message?.role === "toolResult" &&
+          entry.message.toolName === "list_agents" &&
+          !entry.message.isError,
+      );
+      const agents = listResult?.message?.details?.agents;
+      if (listResult) {
+        const controller = ownerEntries.find(
+          (entry) => entry.type === "session",
         );
+        captureTargetMailbox(
+          "after-reopened-owner-first-list-agents",
+          controller?.id,
+          ctx.rootWorkspaceId,
+          Array.isArray(agents) &&
+            agents.some(
+              (agent) => smokeAgentLabel(agent) === "smoke-crash-target",
+            ),
+        );
+      }
+      const found = !!listResult;
       return { done: !!found, value: owner };
     },
     { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS, pollMs: 200 },
