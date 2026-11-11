@@ -83,6 +83,10 @@ import support, {
   nativeSessions,
   seedLeadRole,
 } from "./support.ts";
+import {
+  includeFanInMessage,
+  registerRecipientFanIn,
+} from "./recipient-fan-in.ts";
 const { readConfig, updateConfig } = await import("./config.ts");
 
 test("Pi 1.5.0 includes non-triggering startup messages in the first provider request", async () => {
@@ -145,6 +149,133 @@ test("Pi 1.5.0 includes non-triggering startup messages in the first provider re
     );
   } finally {
     await session.dispose();
+  }
+});
+
+test("batched health attention reaches one faux-provider request with startup fan-in", async () => {
+  setLeadEnvironment();
+  const states = ["provider-health-one", "provider-health-two"].map((label) => {
+    const identity = recoveryIdentity(label);
+    const state = managedState(label, undefined, identity);
+    state.ownerSessionId = LEAD_SESSION_ID;
+    state.resultError = {
+      code: "write_failure",
+      message: `${label} result persistence failed`,
+      requestId: randomUUID(),
+      runId: state.runId,
+      ownerSessionId: LEAD_SESSION_ID,
+      workspaceId: WORKSPACE,
+      agentLabel: label,
+      paneId: identity.paneId,
+      originalStatus: "completed",
+      attempts: 8,
+      failedAt: Date.now() - 1_000,
+      retrySafe: false,
+      cleanupSafe: true,
+      nextAction: `Inspect ${label} recovery evidence before intervention.`,
+    };
+    writeAgentState(agentMailboxPath(WORKSPACE, label), state);
+    return state;
+  });
+  const parent = managedState("provider-health-owner");
+  parent.ownerSessionId = LEAD_SESSION_ID;
+  const health = fakePi({ exec: agentControllerExecutor(parent, states) });
+  registerExtension!(health.pi as never);
+  try {
+    await health.events.get("session_start")![0](undefined, fakeContext());
+    await new Promise((resolve) => setImmediate(resolve));
+    const messages = health.sentMessageCalls
+      .filter(({ message }: any) =>
+        [
+          "pi-herdsman-agent-attention",
+          "pi-herdsman-agent-stale",
+          "pi-herdsman-agent-lost",
+        ].includes(message.customType),
+      )
+      .map(({ message }: any) => message);
+    assert.equal(messages.length, 2);
+    assert.deepEqual(
+      health.sentMessageCalls
+        .filter(
+          ({ message }: any) =>
+            message.customType === "pi-herdsman-agent-attention",
+        )
+        .map(({ options }: any) => options.triggerTurn),
+      [false, true],
+    );
+
+    const faux = fauxProvider({
+      provider: "herdsman-health-fan-in-test",
+      models: [{ id: "health", contextWindow: 4096, maxTokens: 128 }],
+    });
+    const modelRuntime = await ModelRuntime.create({
+      modelsPath: null,
+      refreshOnCreate: false,
+    });
+    modelRuntime.registerNativeProvider(faux.provider);
+    const settingsManager = SettingsManager.inMemory();
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: WORKSPACE,
+      agentDir: testTmpRoot,
+      settingsManager,
+      noExtensions: true,
+      noContextFiles: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      extensionFactories: [
+        (api) =>
+          api.on("before_agent_start", async () => {
+            for (const message of messages)
+              await api.sendMessage(message, { triggerTurn: false });
+          }),
+        (api) =>
+          registerRecipientFanIn(api, async (_ctx, phase, budget) => {
+            if (phase !== "startup") return 0;
+            const message = {
+              customType: "startup-sibling",
+              content: "independent startup fan-in sibling",
+              display: "none" as const,
+            };
+            if (!includeFanInMessage(budget, message.content)) return 0;
+            await api.sendMessage(message, { triggerTurn: false });
+            return 1;
+          }),
+      ],
+    });
+    await resourceLoader.reload();
+    const requests: any[][] = [];
+    faux.setResponses([
+      (context) => {
+        requests.push(context.messages as any[]);
+        return fauxAssistantMessage("recovered");
+      },
+    ]);
+    const { session } = await createAgentSession({
+      cwd: WORKSPACE,
+      agentDir: testTmpRoot,
+      modelRuntime,
+      model: faux.getModel()!,
+      settingsManager,
+      resourceLoader,
+      sessionManager: SessionManager.inMemory(WORKSPACE),
+    });
+    try {
+      await session.prompt("start");
+      assert.equal(requests.length, 1);
+      const providerInput = JSON.stringify(requests[0]);
+      for (const state of states) {
+        assert.match(providerInput, new RegExp(state.agentLabel));
+        assert.match(providerInput, new RegExp(state.resultError!.requestId));
+      }
+      assert.match(providerInput, /independent startup fan-in sibling/);
+    } finally {
+      await session.dispose();
+    }
+  } finally {
+    health.events.get("session_shutdown")?.[0]();
+    for (const state of states)
+      resetAgentMailbox(agentMailboxPath(WORKSPACE, state.agentLabel));
+    resetAgentMailbox(agentMailboxPath(WORKSPACE, parent.agentLabel));
   }
 });
 
