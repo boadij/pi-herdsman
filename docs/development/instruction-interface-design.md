@@ -124,6 +124,17 @@ Do not ask the model to infer, remember, reconstruct, or supply information the 
 
 Instructions should describe semantics the system cannot make sufficiently obvious or enforce directly.
 
+## Prefer programmatically composable tools
+
+Expose Herdsman tools through Pi's native `direct` interface when their
+semantics permit, so models can call them individually or compose them through
+native Code Mode. Reserve `model-only` exposure for tools whose required turn
+isolation, lifecycle, or safety constraints cannot be preserved in nested
+execution. Do not weaken these constraints solely for Code Mode compatibility.
+
+This preference applies to Pi's native execution contract; third-party
+integrations may impose additional restrictions.
+
 ## Keep shared instructions roster-agnostic
 
 Shared runtime instructions, tool descriptions, and reusable workflows must not
