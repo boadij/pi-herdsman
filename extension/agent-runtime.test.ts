@@ -148,6 +148,145 @@ test("Pi 1.5.0 includes non-triggering startup messages in the first provider re
   }
 });
 
+test("batched health attention reaches one faux-provider request with startup fan-in", async () => {
+  setLeadEnvironment();
+  const { includeFanInMessage, registerRecipientFanIn } =
+    await import("./recipient-fan-in.ts");
+  const states = ["provider-health-one", "provider-health-two"].map((label) => {
+    const identity = recoveryIdentity(label);
+    const state = managedState(label, undefined, identity);
+    state.ownerSessionId = LEAD_SESSION_ID;
+    state.resultError = {
+      code: "write_failure",
+      message: `${label} result persistence failed`,
+      requestId: randomUUID(),
+      runId: state.runId,
+      ownerSessionId: LEAD_SESSION_ID,
+      workspaceId: WORKSPACE,
+      agentLabel: label,
+      paneId: identity.paneId,
+      originalStatus: "completed",
+      attempts: 8,
+      failedAt: Date.now() - 1_000,
+      retrySafe: false,
+      cleanupSafe: true,
+      nextAction: `Inspect ${label} recovery evidence before intervention.`,
+    };
+    writeAgentState(agentMailboxPath(WORKSPACE, label), state);
+    return state;
+  });
+  const parent = managedState("provider-health-owner");
+  parent.ownerSessionId = LEAD_SESSION_ID;
+  let health: ReturnType<typeof fakePi> | undefined;
+  const deliveries: Promise<void>[] = [];
+  const requests: any[][] = [];
+  const faux = fauxProvider({
+    provider: "herdsman-health-fan-in-test",
+    models: [{ id: "health", contextWindow: 4096, maxTokens: 128 }],
+  });
+  const modelRuntime = await ModelRuntime.create({
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  modelRuntime.registerNativeProvider(faux.provider);
+  const settingsManager = SettingsManager.inMemory();
+  let healthScanStarted = false;
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    settingsManager,
+    noExtensions: true,
+    noContextFiles: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    extensionFactories: [
+      (api) => {
+        health = fakePi({ exec: agentControllerExecutor(parent, states) });
+        const sendToFakePi = health.pi.sendMessage.bind(health.pi);
+        health.pi.sendMessage = (message, options) => {
+          sendToFakePi(message, options);
+          const delivery = api.sendMessage(message, options);
+          deliveries.push(delivery);
+          return delivery;
+        };
+        registerExtension!(health.pi as never);
+        api.on("before_agent_start", async () => {
+          if (healthScanStarted) return;
+          healthScanStarted = true;
+          for (const handler of health!.events.get("session_start") ?? [])
+            await handler(undefined, fakeContext());
+          for (
+            let attempt = 0;
+            attempt < 100 && health!.sentMessageCalls.length < 2;
+            attempt++
+          )
+            await new Promise((resolve) => setImmediate(resolve));
+          await Promise.all(deliveries);
+        });
+        api.on("session_shutdown", () =>
+          health!.events.get("session_shutdown")?.[0](),
+        );
+      },
+      (api) =>
+        registerRecipientFanIn(api, async (_ctx, phase, budget) => {
+          if (phase !== "startup") return 0;
+          const message = {
+            customType: "startup-sibling",
+            content: "independent startup fan-in sibling",
+            display: "none" as const,
+          };
+          if (!includeFanInMessage(budget, message.content)) return 0;
+          await api.sendMessage(message, { triggerTurn: false });
+          return 1;
+        }),
+    ],
+  });
+  await resourceLoader.reload();
+  faux.setResponses([
+    (context) => {
+      requests.push(context.messages as any[]);
+      return fauxAssistantMessage("recovered");
+    },
+  ]);
+  const { session } = await createAgentSession({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    modelRuntime,
+    model: faux.getModel()!,
+    settingsManager,
+    resourceLoader,
+    sessionManager: SessionManager.inMemory(WORKSPACE),
+  });
+  try {
+    await session.prompt("start");
+    assert.equal(health?.sentMessageCalls.length, 2);
+    assert.equal(deliveries.length, 2);
+    assert.deepEqual(
+      health?.sentMessageCalls
+        .filter(
+          ({ message }: any) =>
+            message.customType === "pi-herdsman-agent-attention",
+        )
+        .map(({ options }: any) => options.triggerTurn),
+      [false, true],
+    );
+    for (let attempt = 0; attempt < 100 && requests.length === 0; attempt++)
+      await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(requests.length, 1);
+    const providerInput = JSON.stringify(requests[0]);
+    for (const state of states) {
+      assert.match(providerInput, new RegExp(state.agentLabel));
+      assert.match(providerInput, new RegExp(state.resultError!.requestId));
+    }
+    assert.match(providerInput, /independent startup fan-in sibling/);
+  } finally {
+    await session.dispose();
+    for (const state of states)
+      resetAgentMailbox(agentMailboxPath(WORKSPACE, state.agentLabel));
+    resetAgentMailbox(agentMailboxPath(WORKSPACE, parent.agentLabel));
+  }
+});
+
 test("two Chief inbox records reach one continued provider request from a turn-boundary drain", async () => {
   const { drainCoordinationInbox, supervisionRuntime, writeChiefMessage } =
     await import("./supervision.ts");

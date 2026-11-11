@@ -26,6 +26,7 @@ import { Type } from "typebox";
 import { fail, markRetryAttempted, OperationError } from "./errors.ts";
 import {
   includeFanInMessage,
+  recipientFanInBudget,
   registerRecipientFanIn,
   type DeliveryBudget,
   type DeliveryPhase,
@@ -10567,14 +10568,16 @@ export function createAgentController(
           return [];
       }
     });
-  const publishAgentLoss = (
+  const prepareAgentLoss = (
     ctx: ExtensionContext,
     state: ManagedAgentState,
     snapshotAgentDefinition: string,
     availableActions: string[],
     nextReminderMs: number,
     signal: AbortSignal,
-  ): boolean => {
+  ):
+    | (Parameters<ExtensionAPI["sendMessage"]>[0] & { content: string })
+    | undefined => {
     const mailbox = agentMailboxPath(state.workspaceId, state.agentLabel);
     const current = readAgentState(mailbox);
     if (
@@ -10582,7 +10585,7 @@ export function createAgentController(
       !sameIdentity(current, state) ||
       current.ownerSessionId !== ctx.sessionManager.getSessionId()
     )
-      return false;
+      return undefined;
     const currentHandoff = readUnacknowledgedRequest(mailbox, current);
     const requestIds = [
       current.completedRequestId,
@@ -10591,12 +10594,12 @@ export function createAgentController(
     ].filter((value): value is string => !!value);
     try {
       if (requestIds.some((requestId) => readResult(mailbox, requestId)))
-        return false;
+        return undefined;
     } catch {
-      return false;
+      return undefined;
     }
     const latest = readAgentState(mailbox);
-    if (!latest || !sameIdentity(latest, current)) return false;
+    if (!latest || !sameIdentity(latest, current)) return undefined;
     const latestHandoff = readUnacknowledgedRequest(mailbox, latest);
     const latestRequestId =
       latest.completedRequestId ??
@@ -10609,55 +10612,46 @@ export function createAgentController(
     ].filter((value): value is string => !!value);
     try {
       if (latestRequestIds.some((requestId) => readResult(mailbox, requestId)))
-        return false;
+        return undefined;
     } catch {
-      return false;
+      return undefined;
     }
-    if (signal.aborted || !ctx.isIdle()) return false;
-    try {
-      if (signal.aborted || !ctx.isIdle()) return false;
-      const stopAvailable = availableActions.includes("stop");
-      pi.sendMessage(
-        {
-          customType: "pi-herdsman-agent-lost",
-          content: [
-            `Agent ${current.agentLabel} is still lost and its assignment remains unresolved.`,
-            ...(latestRequestId ? [`Request: ${latestRequestId}`] : []),
-            `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
-            `Next reminder if unresolved: ~${formatHealthAttentionDuration(nextReminderMs)}`,
-            "",
-            "Use read_agent_transcript only when persisted work materially affects the recovery decision.",
-            ...(stopAvailable
-              ? [
-                  "Use stop_agent to stop this lost generation before replacing it or continuing its saved session.",
-                ]
-              : [
-                  "stop_agent is not currently available; resolve the condition blocking its stop preflight before replacing or continuing it.",
-                ]),
-            "Physical disappearance is not task completion.",
-          ].join("\n"),
-          display: true,
-          details: {
-            runId: current.runId,
-            ownerSessionId: current.ownerSessionId,
-            workspaceId: current.workspaceId,
-            agentLabel: current.agentLabel,
-            paneId: current.paneId,
-            piSessionId: current.piSessionId,
-            piSessionFile: current.piSessionFile,
-            agentDefinition:
-              current.agentDefinition ?? snapshotAgentDefinition ?? "unknown",
-            requestId: latestRequestId,
-            availableActions,
-            nextReminderMs,
-          },
-        },
-        { triggerTurn: true },
-      );
-      return true;
-    } catch {
-      return false;
-    }
+    if (signal.aborted || !ctx.isIdle()) return undefined;
+    const stopAvailable = availableActions.includes("stop");
+    return {
+      customType: "pi-herdsman-agent-lost",
+      content: [
+        `Agent ${current.agentLabel} is still lost and its assignment remains unresolved.`,
+        ...(latestRequestId ? [`Request: ${latestRequestId}`] : []),
+        `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
+        `Next reminder if unresolved: ~${formatHealthAttentionDuration(nextReminderMs)}`,
+        "",
+        "Use read_agent_transcript only when persisted work materially affects the recovery decision.",
+        ...(stopAvailable
+          ? [
+              "Use stop_agent to stop this lost generation before replacing it or continuing its saved session.",
+            ]
+          : [
+              "stop_agent is not currently available; resolve the condition blocking its stop preflight before replacing or continuing it.",
+            ]),
+        "Physical disappearance is not task completion.",
+      ].join("\n"),
+      display: true,
+      details: {
+        runId: current.runId,
+        ownerSessionId: current.ownerSessionId,
+        workspaceId: current.workspaceId,
+        agentLabel: current.agentLabel,
+        paneId: current.paneId,
+        piSessionId: current.piSessionId,
+        piSessionFile: current.piSessionFile,
+        agentDefinition:
+          current.agentDefinition ?? snapshotAgentDefinition ?? "unknown",
+        requestId: latestRequestId,
+        availableActions,
+        nextReminderMs,
+      },
+    };
   };
   const scanAgentHealth = async (
     ctx: ExtensionContext,
@@ -10684,7 +10678,28 @@ export function createAgentController(
     );
     for (const runId of attentionReminders.keys())
       if (!ownedRuns.has(runId)) attentionReminders.delete(runId);
-    let published = false;
+    type PendingAttention = {
+      state: ManagedAgentState;
+      condition:
+        | "result_error"
+        | "lost"
+        | "unknown"
+        | "ask"
+        | "blocked"
+        | "handoff"
+        | "stale";
+      message: Parameters<ExtensionAPI["sendMessage"]>[0] & { content: string };
+      stillEligible: () => boolean;
+      onSubmitted: () => void;
+    };
+    const pending: PendingAttention[] = [];
+    const budget = recipientFanInBudget();
+    let initialStaleInspectionUsed = false;
+    const stageAttention = (item: PendingAttention): boolean => {
+      if (!includeFanInMessage(budget, item.message.content)) return false;
+      pending.push(item);
+      return true;
+    };
     for (const agent of snapshot.agents) {
       if (signal.aborted || generation !== healthGeneration || !ctx.isIdle())
         return;
@@ -10699,7 +10714,7 @@ export function createAgentController(
       if (state.resultError) {
         const error = state.resultError;
         const episode = `result-error:${error.failedAt}:${error.requestId}`;
-        if (published || !attentionDue(state.runId, episode, now)) continue;
+        if (!attentionDue(state.runId, episode, now)) continue;
         const intervalMs = nextAttentionInterval(state.runId, episode);
         const current = currentOwnedState(state, ownerSessionId);
         if (
@@ -10709,102 +10724,127 @@ export function createAgentController(
           !ctx.isIdle()
         )
           continue;
-        try {
-          if (!ctx.isIdle()) continue;
-          pi.sendMessage(
-            {
-              customType: "pi-herdsman-agent-attention",
-              content: [
-                `Agent ${current.agentLabel} could not persist its terminal result.`,
-                `Request: ${error.requestId}`,
-                `Failure: ${error.message}`,
-                `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
-                `Next reminder if unresolved: ~${formatHealthAttentionDuration(intervalMs)}`,
-                "",
-                error.nextAction,
-                "Do not start overlapping replacement work while this assignment remains unresolved.",
-              ].join("\n"),
-              display: true,
-              details: {
-                reason: "result_error",
-                summary: error.message,
-                runId: current.runId,
-                requestId: error.requestId,
-                ownerSessionId: current.ownerSessionId,
-                workspaceId: current.workspaceId,
-                agentLabel: current.agentLabel,
-                paneId: current.paneId,
-                piSessionId: current.piSessionId,
-                availableActions,
-                nextReminderMs: intervalMs,
-                nextAction: error.nextAction,
-              },
+        stageAttention({
+          state,
+          condition: "result_error",
+          message: {
+            customType: "pi-herdsman-agent-attention",
+            content: [
+              `Agent ${current.agentLabel} could not persist its terminal result.`,
+              `Request: ${error.requestId}`,
+              `Failure: ${error.message}`,
+              `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
+              `Next reminder if unresolved: ~${formatHealthAttentionDuration(intervalMs)}`,
+              "",
+              error.nextAction,
+              "Do not start overlapping replacement work while this assignment remains unresolved.",
+            ].join("\n"),
+            display: true,
+            details: {
+              reason: "result_error",
+              summary: error.message,
+              runId: current.runId,
+              requestId: error.requestId,
+              ownerSessionId: current.ownerSessionId,
+              workspaceId: current.workspaceId,
+              agentLabel: current.agentLabel,
+              paneId: current.paneId,
+              piSessionId: current.piSessionId,
+              availableActions,
+              nextReminderMs: intervalMs,
+              nextAction: error.nextAction,
             },
-            { triggerTurn: true },
-          );
-          recordAttention(state.runId, episode, intervalMs);
-          published = true;
-        } catch {}
+          },
+          stillEligible: () => {
+            const latest = currentOwnedState(state, ownerSessionId);
+            if (
+              !latest?.resultError ||
+              latest.resultError.failedAt !== error.failedAt ||
+              latest.resultError.requestId !== error.requestId
+            )
+              return false;
+            try {
+              return !readResult(
+                agentMailboxPath(latest.workspaceId, latest.agentLabel),
+                error.requestId,
+              );
+            } catch {
+              return false;
+            }
+          },
+          onSubmitted: () => recordAttention(state.runId, episode, intervalMs),
+        });
         continue;
       }
       if (agent.presence.kind === "lost" && !state.completedRequestId) {
         const episode = "lost";
-        if (published || !attentionDue(state.runId, episode, now)) continue;
+        if (!attentionDue(state.runId, episode, now)) continue;
         const intervalMs = nextAttentionInterval(state.runId, episode);
-        if (
-          publishAgentLoss(
-            ctx,
+        const message = prepareAgentLoss(
+          ctx,
+          state,
+          agent.agentDefinition,
+          availableActions,
+          intervalMs,
+          signal,
+        );
+        if (message)
+          stageAttention({
             state,
-            agent.agentDefinition,
-            availableActions,
-            intervalMs,
-            signal,
-          )
-        ) {
-          recordAttention(state.runId, episode, intervalMs);
-          published = true;
-        }
+            condition: "lost",
+            message,
+            stillEligible: () =>
+              !!prepareAgentLoss(
+                ctx,
+                state,
+                agent.agentDefinition,
+                availableActions,
+                intervalMs,
+                signal,
+              ),
+            onSubmitted: () =>
+              recordAttention(state.runId, episode, intervalMs),
+          });
         continue;
       }
       if (agent.presence.kind === "unknown") {
         const episode = "unknown";
-        if (published || !attentionDue(state.runId, episode, now)) continue;
+        if (!attentionDue(state.runId, episode, now)) continue;
         const current = currentOwnedState(state, ownerSessionId);
         if (!current || !ctx.isIdle()) continue;
-        try {
-          if (!ctx.isIdle()) continue;
-          pi.sendMessage(
-            {
-              customType: "pi-herdsman-agent-attention",
-              content: [
-                `Agent ${current.agentLabel} has unresolved physical identity.`,
-                `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
-                "",
-                "No safe direct control action is currently available.",
-                "Do not infer loss, guess a pane or process, or target ambiguous execution.",
-                "Herdsman will continue reconciling physical identity automatically.",
-              ].join("\n"),
-              display: true,
-              details: {
-                reason: "unknown",
-                runId: current.runId,
-                ownerSessionId: current.ownerSessionId,
-                workspaceId: current.workspaceId,
-                agentLabel: current.agentLabel,
-                paneId: current.paneId,
-                piSessionId: current.piSessionId,
-                availableActions,
-              },
+        stageAttention({
+          state,
+          condition: "unknown",
+          message: {
+            customType: "pi-herdsman-agent-attention",
+            content: [
+              `Agent ${current.agentLabel} has unresolved physical identity.`,
+              `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
+              "",
+              "No safe direct control action is currently available.",
+              "Do not infer loss, guess a pane or process, or target ambiguous execution.",
+              "Herdsman will continue reconciling physical identity automatically.",
+            ].join("\n"),
+            display: true,
+            details: {
+              reason: "unknown",
+              runId: current.runId,
+              ownerSessionId: current.ownerSessionId,
+              workspaceId: current.workspaceId,
+              agentLabel: current.agentLabel,
+              paneId: current.paneId,
+              piSessionId: current.piSessionId,
+              availableActions,
             },
-            { triggerTurn: true },
-          );
-          attentionReminders.set(state.runId, {
-            episode,
-            intervalMs: Number.POSITIVE_INFINITY,
-            nextAt: Number.POSITIVE_INFINITY,
-          });
-          published = true;
-        } catch {}
+          },
+          stillEligible: () => !!currentOwnedState(state, ownerSessionId),
+          onSubmitted: () =>
+            attentionReminders.set(state.runId, {
+              episode,
+              intervalMs: Number.POSITIVE_INFINITY,
+              nextAt: Number.POSITIVE_INFINITY,
+            }),
+        });
         continue;
       }
       if (state.pendingAskId) {
@@ -10826,55 +10866,76 @@ export function createAgentController(
             });
             continue;
           }
-          if (published || !attentionDue(state.runId, episode, now)) continue;
+          if (!attentionDue(state.runId, episode, now)) continue;
           const intervalMs = nextAttentionInterval(state.runId, episode);
           const current = currentOwnedState(state, ownerSessionId);
           if (!current?.pendingAskId || !ctx.isIdle()) continue;
+          let currentAsk: AskRecord | undefined;
           try {
-            const currentAsk = readPendingAsk(
+            currentAsk = readPendingAsk(
               agentMailboxPath(current.workspaceId, current.agentLabel),
               current,
             );
-            if (
-              !currentAsk ||
-              currentAsk.askId !== ask.askId ||
-              !hasDeliveredAsk(ctx.sessionManager.getBranch(), currentAsk)
-            )
-              continue;
-            if (!ctx.isIdle()) continue;
-            pi.sendMessage(
-              {
-                customType: "pi-herdsman-agent-ask",
-                content: [
-                  `Agent ${currentAsk.agentLabel} is still waiting for your answer:`,
-                  "",
-                  currentAsk.question,
-                  "",
-                  `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
-                  `Next reminder if unresolved: ~${formatHealthAttentionDuration(intervalMs)}`,
-                  "",
-                  "Use reply_agent to reply to this exact pending ask if the required decision is available.",
-                  "Do not delegate around or duplicate the blocked assignment.",
-                ].join("\n"),
-                display: true,
-                details: {
-                  askId: currentAsk.askId,
-                  question: currentAsk.question,
-                  requestId: currentAsk.requestId,
-                  runId: currentAsk.runId,
-                  agentLabel: currentAsk.agentLabel,
-                  workspaceId: currentAsk.workspaceId,
-                  paneId: currentAsk.paneId,
-                  piSessionId: currentAsk.piSessionId,
-                  availableActions,
-                  nextReminderMs: intervalMs,
-                },
+          } catch {
+            continue;
+          }
+          if (
+            !currentAsk ||
+            currentAsk.askId !== ask.askId ||
+            !hasDeliveredAsk(ctx.sessionManager.getBranch(), currentAsk)
+          )
+            continue;
+          stageAttention({
+            state,
+            condition: "ask",
+            message: {
+              customType: "pi-herdsman-agent-ask",
+              content: [
+                `Agent ${currentAsk.agentLabel} is still waiting for your answer:`,
+                "",
+                currentAsk.question,
+                "",
+                `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
+                `Next reminder if unresolved: ~${formatHealthAttentionDuration(intervalMs)}`,
+                "",
+                "Use reply_agent to reply to this exact pending ask if the required decision is available.",
+                "Do not delegate around or duplicate the blocked assignment.",
+              ].join("\n"),
+              display: true,
+              details: {
+                askId: currentAsk.askId,
+                question: currentAsk.question,
+                requestId: currentAsk.requestId,
+                runId: currentAsk.runId,
+                agentLabel: currentAsk.agentLabel,
+                workspaceId: currentAsk.workspaceId,
+                paneId: currentAsk.paneId,
+                piSessionId: currentAsk.piSessionId,
+                availableActions,
+                nextReminderMs: intervalMs,
               },
-              { triggerTurn: true },
-            );
-            recordAttention(state.runId, episode, intervalMs);
-            published = true;
-          } catch {}
+            },
+            stillEligible: () => {
+              const latest = currentOwnedState(state, ownerSessionId);
+              if (!latest?.pendingAskId || latest.pendingAskId !== ask.askId)
+                return false;
+              try {
+                const latestAsk = readPendingAsk(
+                  agentMailboxPath(latest.workspaceId, latest.agentLabel),
+                  latest,
+                );
+                return (
+                  !!latestAsk &&
+                  latestAsk.askId === ask.askId &&
+                  hasDeliveredAsk(ctx.sessionManager.getBranch(), latestAsk)
+                );
+              } catch {
+                return false;
+              }
+            },
+            onSubmitted: () =>
+              recordAttention(state.runId, episode, intervalMs),
+          });
         } else {
           attentionReminders.delete(state.runId);
         }
@@ -10886,46 +10947,51 @@ export function createAgentController(
         state.activeRequestId
       ) {
         const episode = `blocked:${state.activeRequestId}`;
-        if (published || !attentionDue(state.runId, episode, now)) continue;
+        if (!attentionDue(state.runId, episode, now)) continue;
         const intervalMs = nextAttentionInterval(state.runId, episode);
         const current = currentOwnedState(state, ownerSessionId);
         if (!current?.activeRequestId || current.pendingAskId || !ctx.isIdle())
           continue;
-        try {
-          if (!ctx.isIdle()) continue;
-          pi.sendMessage(
-            {
-              customType: "pi-herdsman-agent-attention",
-              content: [
-                `Agent ${current.agentLabel} is blocked in its live runtime, but no Herdsman await_owner question exists.`,
-                `Request: ${current.activeRequestId}`,
-                `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
-                `Next reminder if unresolved: ~${formatHealthAttentionDuration(intervalMs)}`,
-                "",
-                "Use read_agent_transcript for persisted conversation/tool evidence.",
-                "Use inspect_agent only when the live blocking state matters.",
-                "Do not invent an owner reply or send guessed terminal input.",
-                "Use stop_agent only when abandoning the assignment is the intended recovery.",
-              ].join("\n"),
-              display: true,
-              details: {
-                reason: "blocked",
-                runId: current.runId,
-                requestId: current.activeRequestId,
-                ownerSessionId: current.ownerSessionId,
-                workspaceId: current.workspaceId,
-                agentLabel: current.agentLabel,
-                paneId: current.paneId,
-                piSessionId: current.piSessionId,
-                availableActions,
-                nextReminderMs: intervalMs,
-              },
+        stageAttention({
+          state,
+          condition: "blocked",
+          message: {
+            customType: "pi-herdsman-agent-attention",
+            content: [
+              `Agent ${current.agentLabel} is blocked in its live runtime, but no Herdsman await_owner question exists.`,
+              `Request: ${current.activeRequestId}`,
+              `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
+              `Next reminder if unresolved: ~${formatHealthAttentionDuration(intervalMs)}`,
+              "",
+              "Use read_agent_transcript for persisted conversation/tool evidence.",
+              "Use inspect_agent only when the live blocking state matters.",
+              "Do not invent an owner reply or send guessed terminal input.",
+              "Use stop_agent only when abandoning the assignment is the intended recovery.",
+            ].join("\n"),
+            display: true,
+            details: {
+              reason: "blocked",
+              runId: current.runId,
+              requestId: current.activeRequestId,
+              ownerSessionId: current.ownerSessionId,
+              workspaceId: current.workspaceId,
+              agentLabel: current.agentLabel,
+              paneId: current.paneId,
+              piSessionId: current.piSessionId,
+              availableActions,
+              nextReminderMs: intervalMs,
             },
-            { triggerTurn: true },
-          );
-          recordAttention(state.runId, episode, intervalMs);
-          published = true;
-        } catch {}
+          },
+          stillEligible: () => {
+            const latest = currentOwnedState(state, ownerSessionId);
+            return (
+              !!latest?.activeRequestId &&
+              latest.activeRequestId === state.activeRequestId &&
+              !latest.pendingAskId
+            );
+          },
+          onSubmitted: () => recordAttention(state.runId, episode, intervalMs),
+        });
         continue;
       }
       let request: RequestRecord | undefined;
@@ -10943,54 +11009,71 @@ export function createAgentController(
         now - request.createdAt >= HEALTH_STALE_AFTER_MS
       ) {
         const episode = `handoff:${request.requestId}`;
-        if (published || !attentionDue(state.runId, episode, now)) continue;
+        if (!attentionDue(state.runId, episode, now)) continue;
         const intervalMs = nextAttentionInterval(state.runId, episode);
         const current = currentOwnedState(state, ownerSessionId);
         if (!current || !ctx.isIdle()) continue;
+        let currentRequest: RequestRecord | undefined;
         try {
-          const currentRequest = readUnacknowledgedRequest(
+          currentRequest = readUnacknowledgedRequest(
             agentMailboxPath(current.workspaceId, current.agentLabel),
             current,
           );
-          if (
-            !currentRequest ||
-            currentRequest.requestId !== request.requestId ||
-            !ctx.isIdle()
-          )
-            continue;
-          pi.sendMessage(
-            {
-              customType: "pi-herdsman-agent-attention",
-              content: [
-                `Agent ${current.agentLabel} still has an unacknowledged ${currentRequest.kind} request.`,
-                `Request: ${currentRequest.requestId}`,
-                `Pending for: ${formatHealthAttentionDuration(now - currentRequest.createdAt)}`,
-                `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
-                `Next reminder if unresolved: ~${formatHealthAttentionDuration(intervalMs)}`,
-                "",
-                "The durable request is still retained.",
-                "Do not submit the same intent again: acknowledgement timeout does not prove non-delivery.",
-                "Herdsman will continue reconciling this exact request.",
-              ].join("\n"),
-              display: true,
-              details: {
-                reason: "handoff",
-                runId: current.runId,
-                requestId: currentRequest.requestId,
-                ownerSessionId: current.ownerSessionId,
-                workspaceId: current.workspaceId,
-                agentLabel: current.agentLabel,
-                paneId: current.paneId,
-                piSessionId: current.piSessionId,
-                availableActions,
-                nextReminderMs: intervalMs,
-              },
+        } catch {
+          continue;
+        }
+        if (
+          !currentRequest ||
+          currentRequest.requestId !== request.requestId ||
+          !ctx.isIdle()
+        )
+          continue;
+        stageAttention({
+          state,
+          condition: "handoff",
+          message: {
+            customType: "pi-herdsman-agent-attention",
+            content: [
+              `Agent ${current.agentLabel} still has an unacknowledged ${currentRequest.kind} request.`,
+              `Request: ${currentRequest.requestId}`,
+              `Pending for: ${formatHealthAttentionDuration(now - currentRequest.createdAt)}`,
+              `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
+              `Next reminder if unresolved: ~${formatHealthAttentionDuration(intervalMs)}`,
+              "",
+              "The durable request is still retained.",
+              "Do not submit the same intent again: acknowledgement timeout does not prove non-delivery.",
+              "Herdsman will continue reconciling this exact request.",
+            ].join("\n"),
+            display: true,
+            details: {
+              reason: "handoff",
+              runId: current.runId,
+              requestId: currentRequest.requestId,
+              ownerSessionId: current.ownerSessionId,
+              workspaceId: current.workspaceId,
+              agentLabel: current.agentLabel,
+              paneId: current.paneId,
+              piSessionId: current.piSessionId,
+              availableActions,
+              nextReminderMs: intervalMs,
             },
-            { triggerTurn: true },
-          );
-          recordAttention(state.runId, episode, intervalMs);
-          published = true;
-        } catch {}
+          },
+          stillEligible: () => {
+            const latest = currentOwnedState(state, ownerSessionId);
+            if (!latest) return false;
+            try {
+              return (
+                readUnacknowledgedRequest(
+                  agentMailboxPath(latest.workspaceId, latest.agentLabel),
+                  latest,
+                )?.requestId === request.requestId
+              );
+            } catch {
+              return false;
+            }
+          },
+          onSubmitted: () => recordAttention(state.runId, episode, intervalMs),
+        });
         continue;
       }
       if (
@@ -11005,7 +11088,7 @@ export function createAgentController(
         continue;
       }
       const episode = `stale:${state.activeRequestId}:${state.lastActivityAt}`;
-      if (published || !attentionDue(state.runId, episode, now)) continue;
+      if (!attentionDue(state.runId, episode, now)) continue;
       const firstAttention =
         attentionReminders.get(state.runId)?.episode !== episode;
       const intervalMs = HEALTH_ATTENTION_FIRST_REPEAT_MS;
@@ -11021,7 +11104,9 @@ export function createAgentController(
       let diagnostic: AgentHealthDiagnostic | undefined;
       const attemptedDiagnostic =
         firstAttention && availableActions.includes("inspect");
+      if (attemptedDiagnostic && initialStaleInspectionUsed) continue;
       if (attemptedDiagnostic) {
+        initialStaleInspectionUsed = true;
         const diagnosticSignal = AbortSignal.any([
           signal,
           AbortSignal.timeout(HEALTH_STALE_DIAGNOSTIC_TIMEOUT_MS),
@@ -11127,63 +11212,134 @@ export function createAgentController(
               "Do not repeat inspect_agent or read_agent_transcript solely because this reminder fired.",
               "Continue waiting only while existing evidence still positively supports a legitimate long-running operation; otherwise use interrupt_agent to stop the current operation and continue the same assignment.",
             ];
-      try {
-        if (signal.aborted || generation !== healthGeneration || !ctx.isIdle())
-          return;
-        pi.sendMessage(
-          {
-            customType: "pi-herdsman-agent-stale",
-            content: [
-              `Agent ${current.agentLabel} has had no qualifying execution progress for ${formatHealthAttentionDuration(inactiveMs)}.`,
-              `Request: ${current.activeRequestId}`,
-              `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
-              `Next reminder if unresolved: ~${formatHealthAttentionDuration(intervalMs)}`,
-              ...diagnosticLines,
-              "",
-              "This is advisory inactivity, not proof of a hang.",
-              "Streaming tool output does not count as qualifying progress.",
-              "steer_agent queues a cooperative correction; it does not preempt the current operation.",
-              "Use interrupt_agent only when the current operation itself must be abandoned; interrupt_agent cancels that operation, supersedes earlier steering Pi has not yet delivered, and continues the same assignment.",
-              "Use stop_agent only to abandon the assignment or as destructive fallback.",
-            ].join("\n"),
-            display: true,
-            details: {
-              runId: latest.runId,
-              requestId: latest.activeRequestId,
-              agentLabel: latest.agentLabel,
-              ownerSessionId: latest.ownerSessionId,
-              workspaceId: latest.workspaceId,
-              paneId: latest.paneId,
-              piSessionId: latest.piSessionId,
-              lastActivityAt: latest.lastActivityAt,
-              inactiveMs,
-              thresholdMs: HEALTH_STALE_AFTER_MS,
-              availableActions,
-              nextReminderMs: intervalMs,
-              ...(diagnostic
-                ? {
-                    captured_at: diagnostic.capturedAt,
-                    recent_output_truncated: diagnostic.recentOutputTruncated,
-                    ...(diagnostic.recentOutput
-                      ? { recent_output: diagnostic.recentOutput }
-                      : {}),
-                    ...(diagnostic.process
-                      ? { process: diagnostic.process }
-                      : {}),
-                  }
-                : {}),
-            },
+      stageAttention({
+        state,
+        condition: "stale",
+        message: {
+          customType: "pi-herdsman-agent-stale",
+          content: [
+            `Agent ${current.agentLabel} has had no qualifying execution progress for ${formatHealthAttentionDuration(inactiveMs)}.`,
+            `Request: ${current.activeRequestId}`,
+            `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
+            `Next reminder if unresolved: ~${formatHealthAttentionDuration(intervalMs)}`,
+            ...diagnosticLines,
+            "",
+            "This is advisory inactivity, not proof of a hang.",
+            "Streaming tool output does not count as qualifying progress.",
+            "steer_agent queues a cooperative correction; it does not preempt the current operation.",
+            "Use interrupt_agent only when the current operation itself must be abandoned; interrupt_agent cancels that operation, supersedes earlier steering Pi has not yet delivered, and continues the same assignment.",
+            "Use stop_agent only to abandon the assignment or as destructive fallback.",
+          ].join("\n"),
+          display: true,
+          details: {
+            runId: latest.runId,
+            requestId: latest.activeRequestId,
+            agentLabel: latest.agentLabel,
+            ownerSessionId: latest.ownerSessionId,
+            workspaceId: latest.workspaceId,
+            paneId: latest.paneId,
+            piSessionId: latest.piSessionId,
+            lastActivityAt: latest.lastActivityAt,
+            inactiveMs,
+            thresholdMs: HEALTH_STALE_AFTER_MS,
+            availableActions,
+            nextReminderMs: intervalMs,
+            ...(diagnostic
+              ? {
+                  captured_at: diagnostic.capturedAt,
+                  recent_output_truncated: diagnostic.recentOutputTruncated,
+                  ...(diagnostic.recentOutput
+                    ? { recent_output: diagnostic.recentOutput }
+                    : {}),
+                  ...(diagnostic.process
+                    ? { process: diagnostic.process }
+                    : {}),
+                }
+              : {}),
           },
-          { triggerTurn: true },
-        );
-        if (generation === healthGeneration && !signal.aborted) {
-          recordAttention(state.runId, episode, intervalMs);
-          published = true;
-        }
+        },
+        stillEligible: () => {
+          const latest = currentOwnedState(state, ownerSessionId);
+          return (
+            !!latest &&
+            latest.activeRequestId === state.activeRequestId &&
+            latest.lastActivityAt === state.lastActivityAt &&
+            !latest.pendingAskId &&
+            !latest.resultError
+          );
+        },
+        onSubmitted: () => recordAttention(state.runId, episode, intervalMs),
+      });
+    }
+    if (!pending.length) return;
+    let finalSnapshot: ManagedAgentSnapshotCollection;
+    try {
+      finalSnapshot = await snapshots(ctx, signal, false, false);
+    } catch {
+      return;
+    }
+    if (signal.aborted || generation !== healthGeneration || !ctx.isIdle())
+      return;
+    const ready = pending.filter((item) => {
+      if (!item.stillEligible()) return false;
+      const latest = finalSnapshot.agents.find(({ state: candidate }) =>
+        sameIdentity(candidate, item.state),
+      );
+      if (!latest || latest.state.ownerSessionId !== ownerSessionId)
+        return false;
+      switch (item.condition) {
+        case "lost":
+          return (
+            latest.presence.kind === "lost" && !latest.state.completedRequestId
+          );
+        case "stale":
+          return (
+            latest.presence.kind === "live" && latest.listed.state === "working"
+          );
+        case "ask":
+          return (
+            latest.presence.kind !== "lost" &&
+            latest.presence.kind !== "unknown"
+          );
+        case "unknown":
+          return latest.presence.kind === "unknown";
+        case "blocked":
+          return (
+            latest.presence.kind === "live" &&
+            latest.lifecycleState === "blocked"
+          );
+        case "handoff":
+          return (
+            latest.presence.kind !== "lost" &&
+            latest.presence.kind !== "unknown"
+          );
+        case "result_error":
+          return true;
+      }
+    });
+    if (!ready.length) return;
+    const submitted: PendingAttention[] = [];
+    let triggerSubmitted = false;
+    for (const [index, item] of ready.entries()) {
+      try {
+        pi.sendMessage(item.message, {
+          triggerTurn: index === ready.length - 1,
+        });
+        submitted.push(item);
+        if (index === ready.length - 1) triggerSubmitted = true;
       } catch {
-        // Publication is best-effort; the next scan retries it.
+        if (index === ready.length - 1) {
+          try {
+            pi.sendMessage(item.message, { triggerTurn: true });
+            submitted.push(item);
+            triggerSubmitted = true;
+          } catch {
+            // Best-effort submission; due reminders remain eligible next scan.
+          }
+        }
       }
     }
+    if (triggerSubmitted) for (const item of submitted) item.onSubmitted();
   };
   const runAgentHealthScanner = (
     ctx: ExtensionContext,
