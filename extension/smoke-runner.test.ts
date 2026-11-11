@@ -10168,6 +10168,45 @@ test("continuation boundary diagnostics survive collection failure without reque
   assert.doesNotMatch(JSON.stringify(evidence), /PRIVATE_REQUEST_ID|private collection error/u);
 });
 
+test("continuation runtime boundaries are projected from owner and resumed panes", async () => {
+  const prefix = "[pi-herdsman-continuation-diagnostic] ";
+  const ctx = {
+    scenario: "continuation",
+    stage: "continuation-second-generation",
+    sessionName: "smoke-continuation",
+    rootPaneId: "root-pane",
+    continuationCandidatePaneId: "resumed-pane",
+    paths: {},
+  };
+  const diagnostics = await collectDiagnostics(
+    ctx,
+    {},
+    null,
+    {
+      execute: async (_file: string, args: string[]) => ({
+        stdout: args.includes("root-pane")
+          ? `${prefix}{"event":"owner_delivery","outcome":"delivered","requestId":"PRIVATE_ID"}`
+          : `${prefix}{"event":"result_persisted","outcome":"present","requestId":"PRIVATE_ID"}`,
+      }),
+      observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
+      snapshot: async () => null,
+    },
+  );
+  const evidence = sanitizedFailureEvidence(
+    ctx,
+    { phase: "scenario", error: new Error("primary failure") },
+    "SCENARIO_FAIL",
+    "PENDING",
+    diagnostics,
+  );
+
+  assert.deepEqual(evidence.diagnostics.continuationRuntimeDiagnostics, {
+    owner: [{ event: "owner_delivery", outcome: "delivered" }],
+    resumedAgent: [{ event: "result_persisted", outcome: "present" }],
+  });
+  assert.doesNotMatch(JSON.stringify(evidence), /PRIVATE_ID/u);
+});
+
 test("collectDiagnostics projects supervisor-agent evidence without private session data", async () => {
   const privatePrompt = "PRIVATE_PROMPT PRIVATE_TOKEN";
   const privatePath = "/PRIVATE_PATH/session.jsonl";

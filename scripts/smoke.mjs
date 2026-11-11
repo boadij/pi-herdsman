@@ -12642,7 +12642,7 @@ export async function collectDiagnostics(
   if (ctx.scenario === "continuation")
     diagnostics.continuationRuntimeDiagnostics = {
       owner: continuationDiagnosticLines(
-        rootPane.status === "fulfilled" ? rootPane.value.stdout : "",
+        rootPane.status === "fulfilled" ? (rootPane.value?.stdout ?? "") : "",
       ),
       resumedAgent: continuationDiagnosticLines(
         continuationPane.status === "fulfilled"
@@ -13016,11 +13016,11 @@ export async function collectDiagnostics(
   }
   diagnostics.root =
     rootPane.status === "fulfilled"
-      ? rootPane.value.stdout.slice(-20_000)
+      ? (rootPane.value?.stdout ?? "").slice(-20_000)
       : { error: rootPane.reason?.message ?? null };
   diagnostics.host =
     hostPane.status === "fulfilled"
-      ? hostPane.value.stdout.slice(-12_000)
+      ? (hostPane.value?.stdout ?? "").slice(-12_000)
       : { error: hostPane.reason?.message ?? null };
   const knownDescendants = [
     ...new Set(
@@ -13104,6 +13104,12 @@ export async function collectDiagnostics(
           continuationCompletion: sanitizedFailureDiagnostics({
             continuationCompletion: diagnostics.continuationCompletion,
           }).continuationCompletion,
+        }
+      : {}),
+    ...(diagnostics.continuationRuntimeDiagnostics
+      ? {
+          continuationRuntimeDiagnostics:
+            diagnostics.continuationRuntimeDiagnostics,
         }
       : {}),
     ...(ctx.scenario === "continuation"
