@@ -1,0 +1,94 @@
+name: Temporary continuation diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Isolated comparison target
+        required: true
+        type: choice
+        options:
+          - main
+          - pi-pins-only
+          - pr-head
+
+permissions:
+  contents: read
+
+concurrency:
+  group: continuation-diagnostic-${{ github.ref }}-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  continuation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: package.json
+          package-manager-cache: false
+      - name: Select isolated comparison target
+        shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          temp="$RUNNER_TEMP/pi-pins-only"
+          if [ "$TARGET" = "pi-pins-only" ]; then
+            mkdir -p "$temp"
+            git show "$SOURCE_SHA:package.json" > "$temp/package.json"
+            git show "$SOURCE_SHA:package-lock.json" > "$temp/package-lock.json"
+            git checkout --detach origin/main
+            cp "$temp/package.json" package.json
+            cp "$temp/package-lock.json" package-lock.json
+          elif [ "$TARGET" = "main" ]; then
+            git checkout --detach origin/main
+          elif [ "$TARGET" = "pr-head" ]; then
+            git checkout --detach "$SOURCE_SHA"
+          else
+            echo "Unsupported comparison target" >&2
+            exit 2
+          fi
+          printf 'comparison_target=%s\n' "$TARGET" >> "$GITHUB_STEP_SUMMARY"
+          printf 'checkout=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+      - run: npm ci
+      - name: Verify exact Pi and Node baselines
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$(node -p "require('./package.json').devDependencies['@earendil-works/pi-coding-agent']")
+          test "$(node_modules/.bin/pi --version)" = "$expected"
+          node -e 'const p=require("./package.json"); const v=p.piHerdsman.runtime.pi; if(v!==p.devDependencies["@earendil-works/pi-coding-agent"]) process.exit(1)'
+          npm ls --depth=0 @earendil-works/pi-ai @earendil-works/pi-coding-agent @earendil-works/pi-tui
+      - name: Install verified Herdr
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').piHerdsman.runtime.herdr.version")
+          sha=$(node -p "require('./package.json').piHerdsman.runtime.herdr.sha256['linux-x86_64']")
+          curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 \
+            "https://github.com/herdrdev/herdr/releases/download/v${version}/herdr-linux-x86_64" \
+            -o "$RUNNER_TEMP/herdr"
+          printf '%s  %s\n' "$sha" "$RUNNER_TEMP/herdr" | sha256sum -c -
+          chmod 0755 "$RUNNER_TEMP/herdr"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Run selected continuation acceptance
+        shell: bash
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: npm run smoke -- continuation --simulated
+      - name: Upload sanitized failure evidence
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: continuation-diagnostic-${{ inputs.target }}
+          path: ${{ runner.temp }}/pi-herdsman-smoke-evidence-*/result.json
+          if-no-files-found: warn
+          retention-days: 3

@@ -166,8 +166,8 @@ let continuationDiagnosticCount = 0;
 const continuationDiagnostic = (
   runtime: Runtime,
   requestId: string,
-  event: "owner_watcher" | "owner_delivery",
-  outcome: "started" | "delivered" | "not_delivered",
+  event: "owner_watcher" | "owner_delivery" | "owner_finalize",
+  outcome: "started" | "delivered" | "not_delivered" | "finalized" | "pending",
 ): void => {
   if (
     process.env.PI_HERDSMAN_CONTINUATION_DIAGNOSTICS !== "1" ||
@@ -181,7 +181,7 @@ const continuationDiagnostic = (
     return;
   continuationDiagnosticCount++;
   console.error(
-    `[pi-herdsman-continuation-diagnostic] ${JSON.stringify({ requestId, event, outcome })}`,
+    `[pi-herdsman-continuation-diagnostic] ${JSON.stringify({ event, outcome, correlated: true })}`,
   );
 };
 
@@ -7813,7 +7813,19 @@ export function createAgentController(
       runtime.contextPercent = undefined;
       if (pendingStarts.get(runtime.label)?.requestId === result.requestId)
         pendingStarts.delete(runtime.label);
-      if (!(await finalizeDeliveredResult(runtime, result, context, signal)))
+      const finalized = await finalizeDeliveredResult(
+        runtime,
+        result,
+        context,
+        signal,
+      );
+      continuationDiagnostic(
+        runtime,
+        result.requestId,
+        "owner_finalize",
+        finalized ? "finalized" : "pending",
+      );
+      if (!finalized)
         scheduleResultCleanupRetry(runtime, result, context, signal);
       clearCleanupError(runtime, "Result delivery failed; retrying:");
       cancelResultRetry(resultDeliveryRetries, runtime, result.requestId);

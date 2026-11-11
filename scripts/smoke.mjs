@@ -298,7 +298,7 @@ export function managerDiagnosticLines(contents) {
   return safeLines;
 }
 
-export function continuationDiagnosticLines(contents, requestId) {
+export function continuationDiagnosticLines(contents) {
   if (typeof contents !== "string") return [];
   const outcomes = {
     turn_end: ["completed", "aborted", "error", "unknown"],
@@ -313,8 +313,15 @@ export function continuationDiagnosticLines(contents, requestId) {
       "settlement_queued",
     ],
     result_persisted: ["present", "missing", "write_error"],
+    state_transition: [
+      "lock_busy",
+      "identity_changed",
+      "completed",
+      "write_error",
+    ],
     owner_watcher: ["started"],
     owner_delivery: ["delivered", "not_delivered"],
+    owner_finalize: ["finalized", "pending"],
   };
   const lines = [];
   for (const line of contents.split(/\r?\n/u)) {
@@ -325,7 +332,7 @@ export function continuationDiagnosticLines(contents, requestId) {
         line.slice(index + CONTINUATION_DIAGNOSTIC_PREFIX.length),
       );
       if (
-        diagnostic?.requestId !== requestId ||
+        diagnostic?.correlated !== true ||
         !outcomes[diagnostic?.event]?.includes(diagnostic?.outcome)
       )
         continue;
@@ -8856,9 +8863,7 @@ async function runContinuationSmoke(ctx) {
           "continuation candidate label is missing",
         );
         assert.ok(
-          accepted.owner_session_id &&
-            accepted.pane_id &&
-            accepted.request_id,
+          accepted.owner_session_id && accepted.pane_id && accepted.request_id,
           "continuation accepted identity is incomplete",
         );
         ctx.continuationAcceptedRequestId = accepted.request_id;
@@ -8908,7 +8913,9 @@ async function runContinuationSmoke(ctx) {
                 );
         }
         if (accepted.pane_id !== agent.pane_id)
-          throw new Error("continuation accepted pane does not match candidate");
+          throw new Error(
+            "continuation accepted pane does not match candidate",
+          );
         sessionStarts = await readJsonl("smoke-faux-session-start.jsonl");
         provenance = await readJsonl("smoke-faux-provenance.jsonl");
         if (mailbox) {
@@ -12648,13 +12655,11 @@ export async function collectDiagnostics(
     diagnostics.continuationRuntimeDiagnostics = {
       owner: continuationDiagnosticLines(
         rootPane.status === "fulfilled" ? (rootPane.value?.stdout ?? "") : "",
-        ctx.continuationAcceptedRequestId,
       ),
       resumedAgent: continuationDiagnosticLines(
         continuationPane.status === "fulfilled"
           ? (continuationPane.value?.stdout ?? "")
           : "",
-        ctx.continuationAcceptedRequestId,
       ),
     };
   if (ctx.scenario === "continuation")
@@ -13162,11 +13167,9 @@ export async function bestEffortDiagnostics(ctx, collect) {
     return {
       stage: ctx.stage ?? null,
       collectionFailed: true,
-      ...(ctx.scenario === "continuation" &&
-      ctx.continuationRuntimeDiagnostics
+      ...(ctx.scenario === "continuation" && ctx.continuationRuntimeDiagnostics
         ? {
-            continuationRuntimeDiagnostics:
-              ctx.continuationRuntimeDiagnostics,
+            continuationRuntimeDiagnostics: ctx.continuationRuntimeDiagnostics,
           }
         : {}),
     };

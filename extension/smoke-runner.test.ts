@@ -6054,18 +6054,24 @@ test("continuation diagnostics retain only allowlisted boundary outcomes", () =>
   const prefix = "[pi-herdsman-continuation-diagnostic] ";
   const lines = continuationDiagnosticLines(
     [
-      `${prefix}${JSON.stringify({ event: "turn_end", outcome: "completed", requestId: "accepted" })}`,
-      `${prefix}${JSON.stringify({ event: "owner_delivery", outcome: "delivered", requestId: "accepted", ownerSessionId: "private" })}`,
-      `${prefix}${JSON.stringify({ event: "turn_end", outcome: "completed", requestId: "other" })}`,
-      `${prefix}${JSON.stringify({ event: "turn_end", outcome: "private", requestId: "accepted" })}`,
+      `${prefix}${JSON.stringify({ event: "turn_end", outcome: "completed", correlated: true, requestId: "synthetic-id" })}`,
+      `${prefix}${JSON.stringify({ event: "owner_delivery", outcome: "delivered", correlated: true, ownerSessionId: "private" })}`,
+      `${prefix}${JSON.stringify({ event: "state_transition", outcome: "completed", correlated: true })}`,
+      `${prefix}${JSON.stringify({ event: "owner_finalize", outcome: "finalized", correlated: true })}`,
+      `${prefix}${JSON.stringify({ event: "turn_end", outcome: "completed", correlated: false })}`,
+      `${prefix}${JSON.stringify({ event: "turn_end", outcome: "private", correlated: true })}`,
     ].join("\n"),
-    "accepted",
   );
   assert.deepEqual(lines, [
     { event: "turn_end", outcome: "completed" },
     { event: "owner_delivery", outcome: "delivered" },
+    { event: "state_transition", outcome: "completed" },
+    { event: "owner_finalize", outcome: "finalized" },
   ]);
-  assert.doesNotMatch(JSON.stringify(lines), /private|accepted|other/);
+  assert.doesNotMatch(
+    JSON.stringify(lines),
+    /private|synthetic-id|accepted|other/,
+  );
 });
 
 test("manager drain checkpoints are allowlisted, deduplicated and bounded without private fields", () => {
@@ -6963,13 +6969,7 @@ test("continuation accepts durable startup identity for a completed second-gener
     /other-pane/,
   );
   assert.equal(
-    completedContinuationPid(
-      starts,
-      provenance,
-      identity,
-      [202, 303],
-      "1.5.1",
-    ),
+    completedContinuationPid(starts, provenance, identity, [202, 303], "1.5.1"),
     undefined,
   );
 });
@@ -9611,15 +9611,30 @@ test("crash-recovery waits for the reopened owner's current list_agents result",
     isError: false,
   });
 
-  assert.equal(postPromptToolResult([oldCall, oldResult], "list_agents", 2), undefined);
-  assert.equal(postPromptToolResult([oldCall, oldResult, prompt], "list_agents", 2), undefined);
   assert.equal(
-    postPromptToolResult([oldCall, oldResult, prompt, result], "list_agents", 2),
+    postPromptToolResult([oldCall, oldResult], "list_agents", 2),
+    undefined,
+  );
+  assert.equal(
+    postPromptToolResult([oldCall, oldResult, prompt], "list_agents", 2),
+    undefined,
+  );
+  assert.equal(
+    postPromptToolResult(
+      [oldCall, oldResult, prompt, result],
+      "list_agents",
+      2,
+    ),
     result,
   );
   assert.equal(
     postPromptToolResult(
-      [oldCall, oldResult, prompt, { ...result, message: { ...result.message, toolCallId: "other" } }],
+      [
+        oldCall,
+        oldResult,
+        prompt,
+        { ...result, message: { ...result.message, toolCallId: "other" } },
+      ],
       "list_agents",
       2,
     ),
@@ -10168,7 +10183,10 @@ test("continuation boundary diagnostics survive collection failure without reque
     owner: [{ event: "owner_delivery", outcome: "delivered" }],
     resumedAgent: [{ event: "result_persisted", outcome: "present" }],
   });
-  assert.doesNotMatch(JSON.stringify(evidence), /PRIVATE_REQUEST_ID|private collection error/u);
+  assert.doesNotMatch(
+    JSON.stringify(evidence),
+    /PRIVATE_REQUEST_ID|private collection error/u,
+  );
 });
 
 test("continuation runtime boundaries are projected from owner and resumed panes", async () => {
@@ -10182,20 +10200,15 @@ test("continuation runtime boundaries are projected from owner and resumed panes
     continuationCandidatePaneId: "resumed-pane",
     paths: {},
   };
-  const diagnostics = await collectDiagnostics(
-    ctx,
-    {},
-    null,
-    {
-      execute: async (_file: string, args: string[]) => ({
-        stdout: args.includes("root-pane")
-          ? `${prefix}{"event":"owner_delivery","outcome":"delivered","requestId":"accepted-request","ownerSessionId":"PRIVATE_ID"}`
-          : `${prefix}{"event":"result_persisted","outcome":"present","requestId":"accepted-request"}`,
-      }),
-      observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
-      snapshot: async () => null,
-    },
-  );
+  const diagnostics = await collectDiagnostics(ctx, {}, null, {
+    execute: async (_file: string, args: string[]) => ({
+      stdout: args.includes("root-pane")
+        ? `${prefix}{"event":"owner_delivery","outcome":"delivered","correlated":true,"requestId":"synthetic-id","ownerSessionId":"PRIVATE_ID"}`
+        : `${prefix}{"event":"result_persisted","outcome":"present","correlated":true,"requestId":"synthetic-id"}`,
+    }),
+    observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
+    snapshot: async () => null,
+  });
   const evidence = sanitizedFailureEvidence(
     ctx,
     { phase: "scenario", error: new Error("primary failure") },

@@ -133,8 +133,8 @@ import {
 let continuationDiagnosticCount = 0;
 const continuationDiagnostic = (
   requestId: string | undefined,
-  event: string,
-  outcome: string,
+  event: "turn_end" | "result_persisted" | "state_transition" | "agent_settled",
+  outcome: string | boolean,
 ): void => {
   if (
     process.env.PI_HERDSMAN_CONTINUATION_DIAGNOSTICS !== "1" ||
@@ -143,8 +143,27 @@ const continuationDiagnostic = (
   )
     return;
   continuationDiagnosticCount++;
+  const allowedOutcomes =
+    event === "turn_end"
+      ? ["completed", "aborted", "error", "unknown"]
+      : event === "result_persisted"
+        ? ["present", "missing", "write_error"]
+        : event === "state_transition"
+          ? ["lock_busy", "identity_changed", "completed", "write_error"]
+          : [
+              "entered",
+              "interrupt_replacement",
+              "no_active_request",
+              "pending_ask",
+              "pending_result",
+              "pending_state_transition",
+              "undelivered_child_work",
+              "settlement_queued",
+            ];
+  if (typeof outcome !== "boolean" && !allowedOutcomes.includes(outcome))
+    return;
   console.error(
-    `[pi-herdsman-continuation-diagnostic] ${JSON.stringify({ requestId, event, outcome })}`,
+    `[pi-herdsman-continuation-diagnostic] ${JSON.stringify({ event, outcome, correlated: true })}`,
   );
 };
 
@@ -2503,6 +2522,11 @@ export function registerManagedAgentSettlementHandlers(
           process.env.PI_HERDSMAN_MAILBOX!,
         );
         if (!release) {
+          continuationDiagnostic(
+            execution.assignment.activeRequestId,
+            "state_transition",
+            "lock_busy",
+          );
           if (!execution.stateRetryTimer)
             execution.stateRetryTimer = setInterval(
               () => finalizeStateTransition(ctx),
@@ -2518,6 +2542,11 @@ export function registerManagedAgentSettlementHandlers(
         !options.sameIdentity(current, execution.assignment) ||
         !current.activeRequestId
       ) {
+        continuationDiagnostic(
+          execution.assignment.activeRequestId,
+          "state_transition",
+          "identity_changed",
+        );
         if (execution.stateRetryTimer) clearInterval(execution.stateRetryTimer);
         execution.stateRetryTimer = undefined;
         return;
@@ -2530,6 +2559,11 @@ export function registerManagedAgentSettlementHandlers(
         updatedAt: Date.now(),
       };
       writeAgentState(mailbox, nextState);
+      continuationDiagnostic(
+        current.activeRequestId,
+        "state_transition",
+        "completed",
+      );
       execution.assignment = nextState;
       execution.agentStartedAt = undefined;
       execution.observation = undefined;
@@ -2549,6 +2583,11 @@ export function registerManagedAgentSettlementHandlers(
         ...(thinking ? { thinking } : {}),
       });
     } catch (error) {
+      continuationDiagnostic(
+        execution.assignment?.activeRequestId,
+        "state_transition",
+        "write_error",
+      );
       if (!execution.stateErrorReported) {
         execution.stateErrorReported = true;
         options.appendStateError(ctx, error);
