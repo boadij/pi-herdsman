@@ -3653,6 +3653,7 @@ export function createManagedAgentRequestState(
     const state = options.state();
     return (
       !!state?.activeRequestId &&
+      !state.pendingAskId &&
       !state.completedRequestId &&
       !options.pendingResult() &&
       !options.pendingStateTransition() &&

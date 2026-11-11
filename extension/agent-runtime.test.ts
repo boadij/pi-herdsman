@@ -2138,6 +2138,22 @@ test("agent await_owner blocks settlement and reply resumes the same assignment"
     readPendingAsk(mailbox, waiting!)?.question ?? "",
     /registered-ask-options\.md/,
   );
+  const originalAsk = readPendingAsk(mailbox, waiting!);
+  await assert.rejects(
+    askTool.execute(
+      "ask-again",
+      { question: "Do not replace the pending question" },
+      undefined,
+      undefined,
+      context,
+    ),
+    /cannot ask its owner: already waiting for an owner reply/i,
+  );
+  assert.equal(readAgentState(mailbox)?.pendingAskId, waiting!.pendingAskId);
+  assert.deepEqual(
+    readPendingAsk(mailbox, readAgentState(mailbox)!),
+    originalAsk,
+  );
   await agent.events.get("agent_settled")![0]({ aborted: false }, context);
   assert.equal(readResult(mailbox, assignment.requestId), undefined);
 
