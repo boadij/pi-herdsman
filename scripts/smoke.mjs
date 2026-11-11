@@ -14320,6 +14320,12 @@ export function sanitizedFailureEvidence(
         }
       : {}),
     ...(managerHandoffProgress ? { managerHandoffProgress } : {}),
+    ...(ctx.scenario === "continuation" &&
+    ["gate_not_reached", "held_unmatched", "released_after_capture"].includes(
+      ctx.continuationResumeGateOutcome,
+    )
+      ? { continuationResumeGateOutcome: ctx.continuationResumeGateOutcome }
+      : {}),
     ...(ctx.scenario === "manager-bootstrap" &&
     ctx.managerBootstrapDelegationProgress
       ? {
@@ -14963,6 +14969,26 @@ async function main() {
       console.log(`authentication: ${ctx.authMechanism}`);
   } catch (error) {
     failure = { phase, error };
+    if (scenario === "continuation" && ctx.simulated) {
+      const runtime = join(paths.piAgent, "pi-herdsman", "runtime");
+      const hasMarker = async (name) => {
+        try {
+          await access(join(runtime, name));
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const [entered, captured] = await Promise.all([
+        hasMarker("continuation-resume-gate-entered"),
+        hasMarker("continuation-resume-observed"),
+      ]);
+      ctx.continuationResumeGateOutcome = !entered
+        ? "gate_not_reached"
+        : captured
+          ? "released_after_capture"
+          : "held_unmatched";
+    }
     const failureKind = classifySmokeFailure(phase, error).replace("_", " ");
     console.error(
       scenario === "continuation"

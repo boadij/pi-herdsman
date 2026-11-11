@@ -6594,6 +6594,9 @@ test("simulated resumed continuation waits for exact live identity observation",
   try {
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(released, false);
+    assert.ok(
+      (await stat(join(runtime, "continuation-resume-gate-entered"))).isFile(),
+    );
     await writeFile(join(runtime, "continuation-resume-observed"), "observed\n");
     await completion;
     assert.equal(released, true);
@@ -10188,6 +10191,7 @@ test("continuation boundary diagnostics survive collection failure without reque
         },
       ],
     },
+    continuationResumeGateOutcome: "released_after_capture",
   };
   const diagnostics = await bestEffortDiagnostics(ctx, async () => {
     throw new Error("private collection error");
@@ -10204,6 +10208,7 @@ test("continuation boundary diagnostics survive collection failure without reque
     owner: [{ event: "owner_delivery", outcome: "delivered" }],
     resumedAgent: [{ event: "result_persisted", outcome: "present" }],
   });
+  assert.equal(evidence.continuationResumeGateOutcome, "released_after_capture");
   assert.doesNotMatch(
     JSON.stringify(evidence),
     /PRIVATE_REQUEST_ID|private collection error/u,

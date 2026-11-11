@@ -1613,6 +1613,11 @@ export function waitForContinuationObservation(directory, signal) {
 }
 
 export function waitForContinuationResumeObservation(directory, signal) {
+  appendFileSync(
+    join(directory, "continuation-resume-gate-entered"),
+    "entered\n",
+    { mode: 0o600 },
+  );
   return waitForSmokeObservation(
     directory,
     "continuation-resume-observed",
