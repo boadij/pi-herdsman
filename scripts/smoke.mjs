@@ -6427,6 +6427,7 @@ async function restartNestedHerdr(ctx) {
   requireNestedHerdrServer(status, ctx.sessionName, ctx.nestedServerVersion);
 }
 
+// Control-only no-op to run the Pi 1.5.0 crash-recovery CI baseline.
 async function runAgentCrashRecoverySmoke(ctx) {
   const startedAt = Date.now();
   assert.ok(
