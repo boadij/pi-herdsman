@@ -4246,6 +4246,42 @@ export function completedContinuationPid(
   return row.pid;
 }
 
+export function continuationProcessPidLink(
+  processInfo,
+  sessionStarts,
+  provenance,
+  sessionId,
+  previousPids,
+  extension,
+  integration,
+) {
+  const providerPids = new Set(
+    provenance
+      .filter(
+        (record) =>
+          record.sessionId === sessionId &&
+          record.model === "continuation" &&
+          Number.isSafeInteger(record.pid) &&
+          record.pid > 0 &&
+          !previousPids.includes(record.pid) &&
+          sessionStarts.some(
+            (start) =>
+              start.sessionId === sessionId && start.pid === record.pid,
+          ),
+      )
+      .map((record) => record.pid),
+  );
+  if (!providerPids.size) return "no_distinct_provider_pid";
+  const candidates = candidateProcess(processInfo, extension, integration);
+  if (!candidates.length) return "no_candidate_process";
+  const matches = candidates.filter(({ pid }) => providerPids.has(pid));
+  return matches.length === 1
+    ? "linked"
+    : matches.length > 1
+      ? "ambiguous_link"
+      : "candidate_pid_unlinked";
+}
+
 export function continuationOwnerCallDiagnostics(
   ownerContents = "",
   savedSessionId,
@@ -8918,6 +8954,23 @@ async function runContinuationSmoke(ctx) {
           );
         sessionStarts = await readJsonl("smoke-faux-session-start.jsonl");
         provenance = await readJsonl("smoke-faux-provenance.jsonl");
+        const processInfo = await tryNestedCommand(ctx, [
+          "pane",
+          "process-info",
+          "--pane",
+          agent.pane_id,
+        ]);
+        ctx.continuationProcessPidLink = processInfo.ok
+          ? continuationProcessPidLink(
+              processInfo.value,
+              sessionStarts,
+              provenance,
+              firstSession.id,
+              [...firstPids],
+              ctx.candidateExtension,
+              ctx.herdrStateExtension,
+            )
+          : "process_info_unavailable";
         if (mailbox) {
           firstGeneration = completedContinuationPid(
             sessionStarts,
@@ -14325,6 +14378,17 @@ export function sanitizedFailureEvidence(
       ctx.continuationResumeGateOutcome,
     )
       ? { continuationResumeGateOutcome: ctx.continuationResumeGateOutcome }
+      : {}),
+    ...(ctx.scenario === "continuation" &&
+    [
+      "linked",
+      "ambiguous_link",
+      "no_distinct_provider_pid",
+      "no_candidate_process",
+      "candidate_pid_unlinked",
+      "process_info_unavailable",
+    ].includes(ctx.continuationProcessPidLink)
+      ? { continuationProcessPidLink: ctx.continuationProcessPidLink }
       : {}),
     ...(ctx.scenario === "manager-bootstrap" &&
     ctx.managerBootstrapDelegationProgress

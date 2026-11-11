@@ -71,6 +71,7 @@ import {
   managerRecoveryReviewPrompt,
   continuationResultsForPrompt,
   continuationSessionEvidence,
+  continuationProcessPidLink,
   activeStopContinuationEvidence,
   correlatedContinuationTask,
   managerChildSessionEvidence,
@@ -11598,6 +11599,80 @@ test("process evidence requires both exact extension paths and excludes root pan
       ["missing-extension", false, null],
       ["missing-pane", false, "pane disappeared"],
     ],
+  );
+});
+
+test("continuation links only a distinct Pi PID with exact session-start and provenance evidence", () => {
+  const sessionId = "saved-session";
+  const extension = "/isolated/extension.js";
+  const integration = "/isolated/herdr-state.js";
+  const processInfo = {
+    process_info: {
+      foreground_processes: [
+        { pid: 200, cmdline: "node wrapper" },
+        {
+          pid: 202,
+          cmdline: `pi --extension ${extension} --extension ${integration}`,
+        },
+      ],
+    },
+  };
+  const starts = [
+    { sessionId, pid: 101 },
+    { sessionId, pid: 202 },
+  ];
+  const provenance = [
+    { sessionId, pid: 101, model: "continuation" },
+    { sessionId, pid: 202, model: "continuation" },
+  ];
+
+  assert.equal(
+    continuationProcessPidLink(
+      processInfo,
+      starts,
+      provenance,
+      sessionId,
+      [101],
+      extension,
+      integration,
+    ),
+    "linked",
+  );
+  assert.equal(
+    continuationProcessPidLink(
+      { process_info: { foreground_processes: [{ pid: 200 }] } },
+      starts,
+      provenance,
+      sessionId,
+      [101],
+      extension,
+      integration,
+    ),
+    "no_candidate_process",
+  );
+  assert.equal(
+    continuationProcessPidLink(
+      processInfo,
+      [{ sessionId, pid: 203 }],
+      [{ sessionId, pid: 203, model: "continuation" }],
+      sessionId,
+      [101],
+      extension,
+      integration,
+    ),
+    "candidate_pid_unlinked",
+  );
+  assert.equal(
+    continuationProcessPidLink(
+      processInfo,
+      starts,
+      provenance.filter((record) => record.pid === 101),
+      sessionId,
+      [101],
+      extension,
+      integration,
+    ),
+    "no_distinct_provider_pid",
   );
 });
 
