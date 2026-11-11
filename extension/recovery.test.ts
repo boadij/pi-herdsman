@@ -454,7 +454,8 @@ test("conflicting same-request entries do not suppress an exact combined result"
       "result persistence details must carry the complete child identity",
     );
 
-    await pi.events.get("agent_settled")![0]({ aborted: false }, context);
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: false }, context);
     assert.equal(queued, 2, "a conflicting entry must not suppress redelivery");
     assert.ok(readResult(childMailbox, REQUEST_ID));
 
@@ -464,7 +465,8 @@ test("conflicting same-request entries do not suppress an exact combined result"
         details: resultEntryDetails(child, REQUEST_ID),
       },
     });
-    await pi.events.get("agent_settled")![0]({ aborted: false }, context);
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: false }, context);
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.ok(
@@ -475,7 +477,8 @@ test("conflicting same-request entries do not suppress an exact combined result"
     assert.equal((pi.sent[0] as any).details.unresolvedDirectChildCount, 0);
     assert.equal((pi.sent[0] as any).details.activeDirectChildCount, 0);
     assert.equal((pi.sent[0] as any).details.pendingDirectResultCount, 0);
-    await pi.events.get("agent_settled")![0]({ aborted: false }, context);
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: false }, context);
     await t.waitFor(() =>
       assert.equal(
         readResult(childMailbox, REQUEST_ID),
@@ -2222,7 +2225,8 @@ test("settlement redelivers an unpersisted child result in the same session", as
       false,
     );
 
-    await pi.events.get("agent_settled")![0]({ aborted: false }, context);
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: false }, context);
 
     await t.waitFor(() =>
       assert.equal(
@@ -2243,7 +2247,8 @@ test("settlement redelivers an unpersisted child result in the same session", as
     assert.equal(deliveries, 2);
     assert.deepEqual(lifecycle.closeOrder, [label]);
 
-    await pi.events.get("agent_settled")![0]({ aborted: false }, context);
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: false }, context);
     await Promise.resolve();
     assert.equal(deliveries, 2);
   } finally {

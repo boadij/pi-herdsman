@@ -199,6 +199,7 @@ import {
   renderStopSummary,
   renderCompletionMessage,
   renderAgentAskMessage,
+  renderAgentOwnerMessage,
   renderAgentStaleMessage,
   renderAgentLostMessage,
   renderAgentAttentionMessage,
@@ -712,6 +713,13 @@ function registerExtensionImpl(
     (message, options, theme) =>
       expandablePresentation(options.expanded, (expanded) =>
         renderAgentAskMessage(message, { ...options, expanded }, theme),
+      ),
+  );
+  pi.registerMessageRenderer(
+    "pi-herdsman-agent-owner-message",
+    (message, options, theme) =>
+      expandablePresentation(options.expanded, (expanded) =>
+        renderAgentOwnerMessage(message, { ...options, expanded }, theme),
       ),
   );
   pi.registerMessageRenderer(
