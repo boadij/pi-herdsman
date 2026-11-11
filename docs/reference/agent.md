@@ -16,6 +16,7 @@ inspect_agent
 read_agent_transcript
 read_evidence
 attach_handoff
+notify_owner
 ```
 
 Each tool accepts only its operation's fields. Schemas require necessary fields
@@ -256,7 +257,7 @@ covers the complete owned descendant cascade at every depth because closing the
 parent closes that cascade child-first. Invocation always reacquires current evidence and revalidates
 identity, ownership, mailbox state, durable results, and lifecycle before
 mutation. Active work may list `steer_agent`; a valid correlated pending
-`ask_owner` may list `reply_agent`. A currently working agent may list
+`await_owner` may list `reply_agent`. A currently working agent may list
 `interrupt_agent`; a delegating agent blocked while waiting on children may
 still list `steer_agent` but not `interrupt_agent`.
 `available_tools` never lists `delegate_agent` or `continue_agent`: these are
@@ -322,14 +323,14 @@ Generic attention reasons are:
 
 - `result_error`: a terminal result could not be durably persisted; follow the
   stored recovery details and `nextAction`;
-- `blocked`: the live Herdr runtime is blocked without a pending `ask_owner`
+- `blocked`: the live Herdr runtime is blocked without a pending `await_owner`
   question;
 - `handoff`: an old durable request remains unacknowledged; do not duplicate or
   resubmit it because non-acknowledgement does not prove non-delivery;
 - `unknown`: physical identity is ambiguous and remains fail-closed, with no
   mutation actions and at most one attention event per episode.
 
-Stale and lost assignments, and delivered `ask_owner` questions, retain their
+Stale and lost assignments, and delivered `await_owner` questions, retain their
 dedicated message types. Stale attention is advisory and does not by itself
 justify intervention. `settling` alone does not generate generic attention.
 The public `blocked` projection can also mean that a delegating parent is
@@ -339,7 +340,7 @@ from a live Herdr runtime reporting `blocked`.
 Initial attention eligibility is: stale after ten minutes without qualifying
 progress; lost, `result_error`, live runtime `blocked`, and physical `unknown`
 immediately; an old retained handoff after ten minutes; and a delivered
-`ask_owner` reminder approximately five minutes after health reconciliation
+`await_owner` reminder approximately five minutes after health reconciliation
 first observes that the original ask was successfully delivered. The reminder
 path never duplicates first ask delivery. Unknown is the exception to repeated
 attention: it is one notification per unresolved physical-identity episode.
@@ -543,6 +544,13 @@ child editor.
 Cancellation uses Pi's native abort mechanism. Non-cooperative third-party
 tools may not stop immediately; `stop_agent` remains the destructive fallback.
 
+## `notify_owner`
+
+Use `notify_owner` to send material information to your exact direct owner
+while continuing the active assignment. It is nonblocking, accepts optional
+evidence files, and does not create a reply obligation. See the
+[`notify_owner` API](notify-owner.md) for acceptance and delivery semantics.
+
 ## `reply_agent`
 
 ```json
@@ -553,10 +561,10 @@ tools may not stop immediately; `stop_agent` remains the destructive fallback.
 ```
 
 Call `reply_agent` only when `available_tools` lists it for a valid correlated
-pending `ask_owner` question. The reply continues the same assignment and
+pending `await_owner` question. The reply continues the same assignment and
 contains its request, ask, assignment, and session correlation evidence.
 
-See [`ask_owner` API](ask-owner.md).
+See [`await_owner` API](await-owner.md).
 
 ## `stop_agent`
 

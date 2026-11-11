@@ -11209,6 +11209,9 @@ test("cross-directory continuation does not inherit parent project trust", async
     setLeadEnvironment();
     nativeSessions.clear();
     const sourceId = randomUUID();
+    const projectDir = realFs.mkdtempSync(
+      join(tmpdir(), "pi-herdsman-continue-project-"),
+    );
     const source = {
       id: sourceId,
       path: join(tmpdir(), `session-delegate-${randomUUID()}.jsonl`),
@@ -11229,7 +11232,7 @@ test("cross-directory continuation does not inherit parent project trust", async
       ownershipResult(source.id, LEAD_SESSION_ID, { path: source.path, label }),
     ]) as any;
     context.model = { provider: "continue-provider", id: "continue-model" };
-    context.cwd = process.cwd();
+    context.cwd = projectDir;
     context.isProjectTrusted = () => true;
     assert.notEqual(source.cwd, context.cwd);
     context.thinkingLevel = "high";
@@ -11271,6 +11274,7 @@ test("cross-directory continuation does not inherit parent project trust", async
       nativeSessions.clear();
       resetAgentMailbox(startup.mailbox);
       realFs.rmSync(source.path, { force: true });
+      realFs.rmSync(projectDir, { recursive: true, force: true });
     }
   };
 
@@ -14777,11 +14781,22 @@ test("managed restricted tool policies add required tools without unrelated tool
   const cases = [
     {
       frontmatter: { noTools: true },
-      expected: ["ask_owner", "read_evidence", "attach_handoff"],
+      expected: [
+        "await_owner",
+        "notify_owner",
+        "read_evidence",
+        "attach_handoff",
+      ],
     },
     {
       frontmatter: { tools: ["read"] },
-      expected: ["read", "ask_owner", "read_evidence", "attach_handoff"],
+      expected: [
+        "read",
+        "await_owner",
+        "notify_owner",
+        "read_evidence",
+        "attach_handoff",
+      ],
     },
   ];
   for (const { frontmatter, expected } of cases) {

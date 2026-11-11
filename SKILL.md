@@ -114,7 +114,7 @@ the same assignment with the required replacement message. Do not interrupt
 merely because an agent is slow or marked stale; inactivity is advisory and
 does not prove a hang.
 
-Use `reply_agent` only to answer a valid outstanding `ask_owner` question. Use
+Use `reply_agent` only to answer a valid outstanding `await_owner` question. Use
 `stop_agent` only when abandoning the Agent's unfinished assignment is
 intended. Unlike `stop_lead`, which preserves a Manager's project assignment,
 `stop_agent` does not complete or automatically restart the work.
@@ -216,7 +216,7 @@ reasonably own it and delegation is useful. Reuse adequate supplied evidence
 rather than rediscovering it. Integrate direct agent results before completing. The lead
 retains architecture, approved scope, acceptance of Agent outputs, and
 final-decision authority.
-Delegate only to definitions listed in your effective agents field. `ask_owner`
+Delegate only to definitions listed in your effective agents field. `await_owner`
 follows its normal eligibility rules when you have no unresolved direct-agent
 work. If unresolved direct-agent work exists, every such agent must itself be
 validly waiting on an owner answer; ordinary active or pending-result agent
@@ -247,10 +247,10 @@ large results into assignments.
 Do not silently broaden scope or make an unapproved scope, architecture,
 security, protocol, repository-boundary, product, or operational decision.
 
-Use ask_owner only when a decision from your exact direct owner is genuinely
+Use await_owner only when a decision from your exact direct owner is genuinely
 required to continue correctly. Explicit attachments must be supported UTF-8
 text fully embedded within the applicable per-file and complete-message
-budgets. Call ask_owner alone as the final tool call of the turn. Wait for the
+budgets. Call await_owner alone as the final tool call of the turn. Wait for the
 direct owner's reply only after the tool confirms the question was sent; if
 rejected, address the error or report a non-empty blocker. Keep at most one
 question outstanding. Do not guess the answer. The reply resumes the same
@@ -370,7 +370,7 @@ The first stale advisory remains at ten minutes without qualifying execution
 progress. Unchanged stale episodes repeat approximately every five minutes;
 other persistent attention repeats approximately `5m → 2m30s → 1m15s → 1m`,
 with 30-second scan granularity. Stale attention is advisory, not proof of
-a hang. Lost and delivered `ask_owner` attention retain their existing message
+a hang. Lost and delivered `await_owner` attention retain their existing message
 identity, while `result_error`, external runtime `blocked`, old unacknowledged
 handoffs, and physical `unknown` use generic attention. An unresolved
 unacknowledged request must not be duplicated or resubmitted: retained work is
@@ -417,7 +417,7 @@ send a duplicate message solely to report a result that Herdsman will hand off
 automatically. Treat
 routine progress or conversational results as informational; act only when
 review, a decision, correction, or other useful coordination is needed.
-Descendants use `ask_owner`, not supervisor tools. Messages are coordination
+Descendants use `await_owner`, not supervisor tools. Messages are coordination
 data, not assignments or terminal project results.
 
 `message_supervisor` is available to Leads and Managers on their direct
@@ -553,7 +553,9 @@ not disable authorized Agent coordination. An empty list disables fresh
 delegation only, not management of existing owned work; omission also disables
 fresh delegation for Manager and Chief, but not for Leads. A delegation-capable
 managed session remains an Agent at every depth.
-Every managed agent receives `ask_owner`. A non-empty effective `agents` list
+Every managed agent receives `await_owner` and `notify_owner`. Use `notify_owner`
+for material information when work can continue; use `await_owner` only when
+the assignment cannot proceed without the owner's answer. A non-empty effective `agents` list
 is necessary but not sufficient to enable the nine Agent ownership tools:
 `list_agents`, `delegate_agent`, `continue_agent`, `steer_agent`,
 `interrupt_agent`, `reply_agent`, `stop_agent`, `inspect_agent`, and
@@ -561,7 +563,7 @@ is necessary but not sufficient to enable the nine Agent ownership tools:
 `agent`, when `noTools: true` unless explicit `tools` contains `agent`,
 or when `tools` is explicitly empty. Otherwise, omitted `tools` permits
 delegation and explicit ordinary tools permit it. An empty or omitted `agents`
-list always makes the agent a leaf with `ask_owner` only. The `agent` name is
+list always makes the agent a leaf with `await_owner` and `notify_owner` only. The `agent` name is
 configuration-policy evidence, never a registered or callable tool, and leaf
 projection removes it from an existing `tools` list. Ordinary `tools` and
 `excludeTools` settings cannot remove required role tools. If `tools` is

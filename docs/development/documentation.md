@@ -39,7 +39,8 @@ disagrees.
 | Operator recovery                                      | [Recovery](../guides/recovery.md)                                   |
 | Container deployment                                   | [Container deployment](../guides/container-deployment.md)           |
 | Agent ownership contract                               | [Agent tools](../reference/agent.md)                                |
-| `ask_owner` contract                                   | [`ask_owner`](../reference/ask-owner.md)                            |
+| `notify_owner` contract                                | [`notify_owner`](../reference/notify-owner.md)                      |
+| `await_owner` contract                                 | [`await_owner`](../reference/await-owner.md)                        |
 | Staff and project-work contract                        | [Staff tools](../reference/staff.md)                                |
 | Supervisor and ask contract                            | [Supervisor tools](../reference/supervisor.md)                      |
 | Peer contract                                          | [Peer tools](../reference/peer.md)                                  |
@@ -151,7 +152,7 @@ When implementation and prose disagree:
 3. stale prose is deleted rather than preserved as another contract
 
 Particularly verify runtime implementation for Agent ownership operations,
-`ask_owner`, staff and project operations, supervisor and ask operations, peer
+`await_owner`, `notify_owner`, staff and project operations, supervisor and ask operations, peer
 operations, `/agents`, `/manager`, `/chief`, states,
 definition composition, project work, recovery, and presentation behavior.
 

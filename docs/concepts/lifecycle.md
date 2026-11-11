@@ -33,6 +33,11 @@ evidence remains `unknown`.
 The authoritative final result is correlated to the accepted assignment request
 ID.
 
+An Agent may send nonblocking material information to its exact owner with
+`notify_owner`; this does not alter assignment completion eligibility. An
+accepted notification remains in the mailbox until the owner's persisted
+session history confirms receipt, and cleanup waits for that confirmation.
+
 An aborted Pi execution is not successful assignment completion, even when the
 conversation contains assistant text. The assignment remains active when an
 accepted interrupt replacement continues the work; otherwise its terminal
@@ -44,7 +49,7 @@ An agent that requires an owner decision stays on the same assignment:
 
 ```text
 working
-  ↓ ask_owner
+  ↓ await_owner
 blocked
   ↓ owner reply
 working

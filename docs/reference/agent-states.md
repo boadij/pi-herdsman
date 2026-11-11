@@ -20,7 +20,7 @@ Use only tools currently listed there; do not infer control eligibility
 from `state` alone. `steer_agent` means active work accepts cooperative steering,
 `interrupt_agent` means a currently working Pi operation may be preempted,
 superseding earlier undelivered steering with replacement direction,
-`reply_agent` means a correlated pending `ask_owner` is valid, and
+`reply_agent` means a correlated pending `await_owner` is valid, and
 `stop_agent` means exact direct ownership and the current applicable stop
 preflight permit teardown. For a
 Lead-owned parent, that preflight includes its owned descendant cascade.
@@ -46,7 +46,7 @@ non-direct descendants remain fail-closed with no actions.
 
 ## `blocked` and owner questions
 
-An agent waiting on a valid `ask_owner` reply projects as `blocked` after its ask
+An agent waiting on a valid `await_owner` reply projects as `blocked` after its ask
 turn settles. Answer through the exact direct owner using `reply_agent` with the exact `agent` identity.
 
 A delegating parent can also project as `blocked` while it waits for direct
@@ -56,7 +56,7 @@ work may advertise `steer_agent` while remaining `blocked`; only the managed
 receiver's acknowledgement confirms acceptance. It does not advertise
 `interrupt_agent` unless a Pi operation is working. Recovery attention for
 `blocked` is reserved for a live Herdr runtime that reports `blocked` while an
-active request exists and no `ask_owner` question is pending.
+active request exists and no `await_owner` question is pending.
 
 ## `settling`
 
@@ -90,7 +90,7 @@ model metadata, missing activity, a guessed session, or an old agent identity.
 
 When physical identity is ambiguous for an otherwise valid direct-owned record,
 Herdsman may emit one generic `unknown` attention event for that unresolved
-episode. It does not add mutation actions, prove loss, or broaden `ask_owner`.
+episode. It does not add mutation actions, prove loss, or broaden `await_owner`.
 When exact physical evidence changes, re-evaluate the record from fresh state.
 
 `lost` is different: a coherent Herdr inventory proves the expected pane,

@@ -11332,7 +11332,7 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
             {
               type: "toolCall",
               id: "child-ask-owner",
-              name: "ask_owner",
+              name: "await_owner",
               arguments: { question: "Which implementation should I use?" },
             },
           ],
@@ -11360,7 +11360,7 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     childContext.sessionManager.getSessionFile = () => child.piSessionFile!;
     await childAgent.events.get("session_start")![0](undefined, childContext);
     const childAskTool = childAgent.tools.find(
-      (tool) => tool.name === "ask_owner",
+      (tool) => tool.name === "await_owner",
     );
     assert.ok(childAskTool);
     await childAskTool.execute(
@@ -11428,7 +11428,7 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
             {
               type: "toolCall",
               id: "parent-ask-owner",
-              name: "ask_owner",
+              name: "await_owner",
               arguments: { question: "Which implementation should I use?" },
             },
           ],
@@ -11462,7 +11462,7 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     );
     parentContext.isIdle = () => true;
     const parentAskTool = parentAgent.tools.find(
-      (tool) => tool.name === "ask_owner",
+      (tool) => tool.name === "await_owner",
     );
     assert.ok(parentAskTool);
     await parentAskTool.execute(
@@ -11527,7 +11527,11 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     t.mock.timers.enable({ apis: ["setTimeout"] });
     await leadAgent.events.get("session_start")![0](undefined, leadContext);
     const askWatcher = watchedMailboxDirectories.get(parentMailbox);
-    assert.equal(askWatcher?.size, 2, "pending ask keeps its mailbox observer");
+    assert.equal(
+      askWatcher?.size,
+      3,
+      "pending ask keeps its mailbox observers",
+    );
     assert.equal(
       failInitialAskDelivery,
       false,
@@ -12562,7 +12566,7 @@ test("fresh assignment transports automatic prompt snapshots and cleans them up"
     assert.equal(launched[0].contents.length, 2);
     assert.match(launched[0].contents[0]!, /definition body/);
     assert.match(launched[0].contents[0]!, /automatic prompt snapshot/);
-    assert.match(launched[0].contents[1]!, /ask_owner/);
+    assert.match(launched[0].contents[1]!, /await_owner/);
     assert.match(
       launched[0].contents[1]!.replaceAll(/\s+/g, " ").trim(),
       /canonical result:<request-id> refs already supplied as file evidence exactly\s+when forwarding them/,
@@ -12695,7 +12699,7 @@ test("caller assignment files suppress canonical-overlapping automatic prompts",
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     assert.equal(launched[0].contents.length, 2);
     assert.match(launched[0].contents[0]!, /definition body/);
-    assert.match(launched[0].contents[1]!, /ask_owner/);
+    assert.match(launched[0].contents[1]!, /await_owner/);
     assert.deepEqual(
       launched[0].args.filter(
         (arg, index, args) =>
@@ -13415,7 +13419,7 @@ test("session continuation starts a new agent generation with current prompt con
     assert.equal(state.piSessionId, session.id);
     assert.match(launched[0].contents[0]!, /definition body/);
     assert.match(launched[0].contents[0]!, /current saved-session prompt/);
-    assert.match(launched[0].contents[1]!, /ask_owner/);
+    assert.match(launched[0].contents[1]!, /await_owner/);
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.ok(continuedRequest);
     assert.notEqual(continuedRequest!.requestId, savedRequestId);

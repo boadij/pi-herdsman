@@ -320,7 +320,7 @@ append-only and rejects `replace`. A custom replacement prompt does not
 automatically preserve Pi's normal system-prompt rules or tool guidelines.
 
 Managed agents additionally receive shared herdr agent guidance at launch,
-including the `ask_owner` contract. This shared guidance is infrastructure and
+including the `notify_owner` and `await_owner` contracts. This shared guidance is infrastructure and
 is not copied into every bundled role body. Managed project Leads instead use
 the effective `managed-lead` body plus the ordinary Lead runtime charter and
 dynamic project coordination context.

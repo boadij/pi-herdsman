@@ -101,7 +101,7 @@ real Pi, Herdsman, and Herdr, that each of levels 1 through 3 holds the
 delegation tool while the level-4 Agent at the limit does not, that each
 Agent's completed result reaches its direct owner, and that the leaf's marker
 bubbles up through every level to the root's final message. The level-4 Agent
-also escalates one `ask_owner` to its level-3 owner, which answers with
+also escalates one `await_owner` to its level-3 owner, which answers with
 `reply_agent`, and the scenario asserts both calls. It asserts
 completion and result delivery. It also samples the root's rendered status
 tree and requires every level to be shown there at some sample before the chain
@@ -326,8 +326,8 @@ Verify:
 Launch a delegating managed agent with an explicit ordinary execution-tool
 allowlist and ask it to delegate one bounded scout task. Verify that it retains
 those ordinary tools and can call all nine coordination tools plus
-`ask_owner`, then verify that the spawned scout is a leaf with its normal tools
-and `ask_owner` but no delegation tools. Also verify that role-required tools
+`await_owner`, then verify that the spawned scout is a leaf with its normal tools
+and `await_owner` but no delegation tools. Also verify that role-required tools
 are not removed by `excludeTools`.
 
 For a definition with `tools` omitted, verify that launch does not add a
@@ -363,7 +363,7 @@ Verify the agent obeys that instruction through the expanded private prompt.
 Afterward remove the temporary definition and referenced file, confirm discovery
 no longer lists the temporary definition, and verify no repository file changed.
 
-## `ask_owner` round trip
+## `await_owner` round trip
 
 Owner ask/reply remains manual, unautomated coverage.
 
@@ -371,7 +371,7 @@ Give an agent a task whose correct continuation requires an owner choice.
 
 Verify:
 
-1. agent calls `ask_owner` alone;
+1. agent calls `await_owner` alone;
 2. owner receives one question;
 3. agent becomes `blocked`;
 4. owner replies with exact `reply_agent`;

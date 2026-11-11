@@ -39,6 +39,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { scanAgentStates } from "./mailbox.ts";
+import type { OwnerMessageRecord } from "./mailbox.ts";
 import {
   prepareMessageInput,
   FILE_HANDOFF_GUIDANCE,
@@ -889,6 +890,35 @@ function registerExtensionImpl(
           },
         },
         { triggerTurn },
+      );
+    },
+    sendOwnerMessage: (
+      ctx,
+      ownerMessage: OwnerMessageRecord,
+      triggerTurn = true,
+    ) => {
+      if (ctx.sessionManager.getSessionId() !== ownerMessage.ownerSessionId)
+        throw new Error("Owner notification recipient session changed");
+      pi.sendMessage(
+        {
+          customType: "pi-herdsman-agent-owner-message",
+          content: `Agent ${ownerMessage.agentLabel} notification:\n\n${ownerMessage.text}`,
+          display: true,
+          details: {
+            messageId: ownerMessage.messageId,
+            requestId: ownerMessage.requestId,
+            runId: ownerMessage.runId,
+            ownerSessionId: ownerMessage.ownerSessionId,
+            workspaceId: ownerMessage.workspaceId,
+            agentLabel: ownerMessage.agentLabel,
+            paneId: ownerMessage.paneId,
+            piSessionId: ownerMessage.piSessionId,
+          },
+        },
+        {
+          triggerTurn,
+          ...(triggerTurn ? { deliverAs: "steer" as const } : {}),
+        },
       );
     },
     sessionRetired: (ctx, runtime) => {

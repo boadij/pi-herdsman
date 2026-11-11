@@ -1184,7 +1184,7 @@ test("message preparation rejects whitespace semantic messages before headings",
     ["assign", "Task"],
     ["steer", "Steer"],
     ["reply", "Reply"],
-    ["ask_owner", "Question"],
+    ["await_owner", "Question"],
   ] as const)
     assert.throws(
       () => prepareMessageInput(" \n", ["evidence"], cwd, operation, heading),

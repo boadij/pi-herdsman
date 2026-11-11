@@ -6,7 +6,8 @@
 assigned project Lead contacts its Manager through project messaging. An
 ordinary Lead in a verified project worktree group contacts its active project
 Manager; otherwise it contacts Chief when available. A Manager contacts Chief.
-Managed Agents use `ask_owner` to contact their exact owner.
+Managed Agents use `notify_owner` for nonblocking material information and
+`await_owner` when they cannot continue without their exact owner's answer.
 
 An ordinary Lead without a verified supervisor continues independently. An
 assigned Lead's Manager role remains its authority even when no Manager process
