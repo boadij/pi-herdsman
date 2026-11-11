@@ -97,6 +97,7 @@ import {
   managerBootstrapDelegationProjection,
   managerBootstrapDelegationState,
   herdrErrorCode,
+  targetPaneAbsentFromSnapshot,
   managerDiagnosticLines,
   captureManagerLeadDiagnostics,
   savedSessionHeaderEvidence,
@@ -6611,6 +6612,37 @@ test("candidate start treats only a structured missing-pane error as impossible"
         "pane-1",
       ),
     /candidate pane pane-1 disappeared/,
+  );
+});
+
+test("pane absence requires a complete Herdr snapshot with no exact target", () => {
+  const target = { paneId: "pane-1", sessionPath: "/sessions/target.jsonl" };
+  assert.equal(targetPaneAbsentFromSnapshot({}, target), false);
+  assert.equal(
+    targetPaneAbsentFromSnapshot({ agents: [], panes: [] }, target),
+    true,
+  );
+  assert.equal(
+    targetPaneAbsentFromSnapshot(
+      {
+        agents: [
+          {
+            pane_id: "pane-2",
+            agent_session: { kind: "path", value: target.sessionPath },
+          },
+        ],
+        panes: [],
+      },
+      target,
+    ),
+    false,
+  );
+  assert.equal(
+    targetPaneAbsentFromSnapshot(
+      { agents: [], panes: [{ pane_id: target.paneId }] },
+      target,
+    ),
+    false,
   );
 });
 
