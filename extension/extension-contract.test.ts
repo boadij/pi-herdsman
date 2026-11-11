@@ -7818,6 +7818,7 @@ for (const delegationEnabled of [false, true]) {
       (refreshTimer as () => void)();
       await t.waitFor(() => assert.doesNotMatch(header(), /\[codemode\]/));
       assert.match(header(), new RegExp(`${role} → agent:${label}`));
+      assert.doesNotMatch(header(), /\bunavailable\b/);
       pi.pi.getActiveTools = getActiveTools;
       if (!delegationEnabled) assert.equal(openCalls, 0);
       const statusIdentity = `${delegationEnabled ? "unknown" : "agent"}:${label}`;
