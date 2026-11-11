@@ -7802,6 +7802,23 @@ for (const delegationEnabled of [false, true]) {
           widget.render(120)[0],
         ),
       );
+      const header = () => widget.render(160)[0]!;
+      assert.equal(typeof refreshTimer, "function");
+      pi.pi.setActiveTools(["read", "codemode"]);
+      (refreshTimer as () => void)();
+      await t.waitFor(() => assert.match(header(), /\[read, codemode\]/));
+      pi.pi.setActiveTools(["codemode"]);
+      (refreshTimer as () => void)();
+      await t.waitFor(() => assert.match(header(), /\[codemode\]/));
+      assert.doesNotMatch(header(), /\[read\b/);
+      const getActiveTools = pi.pi.getActiveTools;
+      pi.pi.getActiveTools = () => {
+        throw new Error("active tools unavailable");
+      };
+      (refreshTimer as () => void)();
+      await t.waitFor(() => assert.doesNotMatch(header(), /\[codemode\]/));
+      assert.match(header(), new RegExp(`${role} → agent:${label}`));
+      pi.pi.getActiveTools = getActiveTools;
       if (!delegationEnabled) assert.equal(openCalls, 0);
       const statusIdentity = `${delegationEnabled ? "unknown" : "agent"}:${label}`;
       if (delegationEnabled) {
