@@ -12639,6 +12639,17 @@ export async function collectDiagnostics(
     panes.status === "fulfilled"
       ? panes.value
       : { ok: false, error: panes.reason?.message };
+  if (ctx.scenario === "continuation")
+    diagnostics.continuationRuntimeDiagnostics = {
+      owner: continuationDiagnosticLines(
+        rootPane.status === "fulfilled" ? rootPane.value.stdout : "",
+      ),
+      resumedAgent: continuationDiagnosticLines(
+        continuationPane.status === "fulfilled"
+          ? (continuationPane.value?.stdout ?? "")
+          : "",
+      ),
+    };
   diagnostics.observedCoreProcesses = ctx.coreProcessEvidence ?? [];
   diagnostics.coreProcessDiagnostics = ctx.coreProcessDiagnostics ?? [];
   const paneIds = diagnostics.panes.ok
@@ -13008,17 +13019,6 @@ export async function collectDiagnostics(
     hostPane.status === "fulfilled"
       ? hostPane.value.stdout.slice(-12_000)
       : { error: hostPane.reason?.message ?? null };
-  if (ctx.scenario === "continuation")
-    diagnostics.continuationRuntimeDiagnostics = {
-      owner: continuationDiagnosticLines(
-        rootPane.status === "fulfilled" ? rootPane.value.stdout : "",
-      ),
-      resumedAgent: continuationDiagnosticLines(
-        continuationPane.status === "fulfilled"
-          ? (continuationPane.value?.stdout ?? "")
-          : "",
-      ),
-    };
   const knownDescendants = [
     ...new Set(
       [
