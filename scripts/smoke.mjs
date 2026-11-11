@@ -8699,7 +8699,11 @@ async function runContinuationSmoke(ctx) {
           owner?.contents ?? "",
           followup,
         );
-        if (!accepted) return;
+        if (!accepted)
+          return {
+            done: false,
+            progress: { matchingSessionSeen, acceptedResultObserved: false },
+          };
         if (accepted.session_id !== firstSession.id)
           throw new Error(
             "continuation accepted session does not match saved session",
@@ -8731,7 +8735,6 @@ async function runContinuationSmoke(ctx) {
           throw new Error("continuation mailbox identity is ambiguous");
         const mailbox = selection.mailbox;
         if (mailbox) {
-          if (!mailbox.request) return;
           secondGenerationMailbox ??= { ...mailbox, candidateLabel };
           ctx.continuationMailboxState = secondGenerationMailbox.state;
           refreshContinuationDiagnostics();
@@ -8742,17 +8745,18 @@ async function runContinuationSmoke(ctx) {
             throw new Error(
               "continuation mailbox identity changed during selection",
             );
-          for (const [key, value] of Object.entries({
-            requestId: accepted.request_id,
-            runId: accepted.run_id,
-            ownerSessionId: accepted.owner_session_id,
-            agentLabel: candidateLabel,
-            paneId: accepted.pane_id,
-          }))
-            if (value !== undefined && mailbox.request[key] !== value)
-              throw new Error(
-                "continuation mailbox request does not match accepted result",
-              );
+          if (mailbox.request)
+            for (const [key, value] of Object.entries({
+              requestId: accepted.request_id,
+              runId: accepted.run_id,
+              ownerSessionId: accepted.owner_session_id,
+              agentLabel: candidateLabel,
+              paneId: accepted.pane_id,
+            }))
+              if (value !== undefined && mailbox.request[key] !== value)
+                throw new Error(
+                  "continuation mailbox request does not match accepted result",
+                );
         }
         const observed = await tryNestedCommand(ctx, [
           "pane",

@@ -7549,6 +7549,46 @@ test("continuation selects the accepted mailbox label, not a Herdr candidate lab
   );
 });
 
+test("continuation evidence progresses while awaiting acceptance and accepts an acknowledged mailbox after request cleanup", async () => {
+  const ctx: { stage?: string } = {};
+  const accepted = { request_id: "accepted-request" };
+  const mailbox = {
+    directory: "acknowledged-mailbox",
+    state: {
+      agentLabel: "smoke-implementer",
+      piSessionId: "saved-session",
+      completedRequestId: accepted.request_id,
+      lastAck: { accepted: true, requestId: accepted.request_id },
+    },
+  };
+  let inspections = 0;
+  const selected = await waitForEvidence(
+    ctx,
+    "continuation-second-generation",
+    async () => {
+      inspections++;
+      const selection = selectContinuationMailbox(
+        [mailbox],
+        "saved-session",
+        inspections === 1 ? undefined : accepted,
+      );
+      return inspections === 1
+        ? {
+            done: false,
+            progress: {
+              matchingSessionSeen: true,
+              acceptedResultObserved: false,
+            },
+          }
+        : { done: !!selection.mailbox, value: selection.mailbox };
+    },
+    { timeoutMs: 1_000, stallMs: 1_000, pollMs: 1 },
+  );
+  assert.equal(selected, mailbox);
+  assert.equal(inspections, 2);
+  assert.equal(ctx.stage, "continuation-second-generation");
+});
+
 test("continuation provider evidence wait polls until the second-generation request is recorded", async () => {
   const ctx: { stage?: string } = {};
   const sessionId = "saved-session";
