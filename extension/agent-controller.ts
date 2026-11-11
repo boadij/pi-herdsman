@@ -6815,6 +6815,7 @@ export function createAgentController(
     stopOwnerMessageWatcher(runtime);
     const check = () => {
       if (!active || runtimes.get(runtime.label) !== runtime) return;
+      if (!context.isIdle()) return;
       try {
         deliverOwnerMessages(runtime, context, signal);
       } catch (error) {
@@ -7224,6 +7225,7 @@ export function createAgentController(
     triggerTurn = true,
     budget?: DeliveryBudget,
     receiptsOnly = false,
+    retryMessageIds?: ReadonlySet<string>,
   ): boolean => {
     if (!active || runtimes.get(runtime.label) !== runtime) return false;
     let submitted = false;
@@ -7290,6 +7292,8 @@ export function createAgentController(
             continue;
           }
           if (receiptsOnly) continue;
+          if (retryMessageIds && !retryMessageIds.has(ownerMessage.messageId))
+            continue;
           if (submittedOwnerMessages.has(messageKey)) continue;
           const content = `Agent ${ownerMessage.agentLabel} notification:\n\n${ownerMessage.text}`;
           if (budget && !includeFanInMessage({ ...budget }, content)) continue;
@@ -11237,7 +11241,7 @@ export function createAgentController(
     registerRecipientFanIn(pi, (ctx, phase, budget) =>
       drainReadyOwnerNotifications(ctx, phase, budget),
     );
-  pi.on("agent_settled", (event, context) => {
+  pi.on("agent_settled", (_event, context) => {
     if (!active) return;
     let ownerId: string;
     try {
@@ -11247,14 +11251,23 @@ export function createAgentController(
     }
     for (const runtime of runtimes.values()) {
       if (runtime.ownerSessionId !== ownerId) continue;
-      if (!event.aborted)
-        for (const key of submittedOwnerMessages)
-          if (key.startsWith(`${runtime.mailboxPath}:`))
-            submittedOwnerMessages.delete(key);
-      // Settlement is notification-only: reconcile receipts, but defer retries
-      // until a later normal delivery boundary. An aborted run may leave queued
-      // steering unconsumed, so retain its guard until a non-aborted settlement.
-      deliverOwnerMessages(runtime, context, undefined, false, undefined, true);
+      const prefix = `${runtime.mailboxPath}:`;
+      const retryMessageIds = new Set<string>();
+      for (const key of submittedOwnerMessages) {
+        if (!key.startsWith(prefix)) continue;
+        retryMessageIds.add(key.slice(prefix.length));
+        submittedOwnerMessages.delete(key);
+      }
+      // Only retry messages previously submitted by this exact owner runtime.
+      deliverOwnerMessages(
+        runtime,
+        context,
+        undefined,
+        true,
+        undefined,
+        false,
+        retryMessageIds,
+      );
     }
   });
   return {

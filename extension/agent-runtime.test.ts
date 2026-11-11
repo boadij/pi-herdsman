@@ -7658,8 +7658,8 @@ test("owner notification is retained until its exact persisted session receipt",
     });
     await pi.events.get("before_agent_start")?.[0](undefined, context);
     assert.equal(readOwnerMessages(mailbox).length, 2);
-    // The exact receipt is persisted before settlement; settlement reconciles
-    // it without resubmitting the other, still-unreceipted notification.
+    // The exact receipt is persisted before settlement; receipt cleanup is
+    // first, then the remaining unconfirmed message is retried at empty queue.
     entries.pop();
     entries.push({ customType: sent.customType, details: sent.details });
     for (const handler of pi.events.get("agent_settled") ?? [])
@@ -7673,8 +7673,8 @@ test("owner notification is retained until its exact persisted session receipt",
       pi.sent.filter(
         (entry: any) => entry.customType === "pi-herdsman-agent-owner-message",
       ).length,
-      2,
-      "settlement checks receipts but does not retry a missing receipt",
+      3,
+      "empty-queue settlement retries the unconfirmed message",
     );
     for (const handler of pi.events.get("turn_end") ?? [])
       await handler({ outcome: "completed" }, context);
@@ -7723,9 +7723,9 @@ test("owner notification is retained until its exact persisted session receipt",
   }
 });
 
-test("aborted owner settlement retains an unconsumed steering notification guard", async () => {
+test("busy owner notifications wait for completed recipient fan-in", async () => {
   setLeadEnvironment();
-  const label = "aborted-owner-notification";
+  const label = "busy-owner-notification";
   const identity = recoveryIdentity(label);
   const mailbox = agentMailboxPath(WORKSPACE, label);
   resetAgentMailbox(mailbox);
@@ -7733,7 +7733,7 @@ test("aborted owner settlement retains an unconsumed steering notification guard
   writeAgentState(mailbox, state);
   const notification = {
     version: 5 as const,
-    messageId: "77777777-7777-4777-8777-777777777777",
+    messageId: "44444444-4444-4444-8444-444444444444",
     requestId: REQUEST_ID,
     runId: state.runId,
     ownerSessionId: state.ownerSessionId,
@@ -7741,7 +7741,80 @@ test("aborted owner settlement retains an unconsumed steering notification guard
     agentLabel: state.agentLabel,
     paneId: state.paneId,
     piSessionId: state.piSessionId,
-    text: "The owner needs this result before I continue.",
+    text: "Deliver this after the active turn reaches a boundary.",
+    createdAt: Date.now(),
+  };
+  writeOwnerMessage(mailbox, notification);
+  const entries: unknown[] = [];
+  const pi = fakePi({
+    exec: leadExec(
+      label,
+      "working",
+      identity.piSessionId,
+      undefined,
+      identity.piSessionId,
+      identity,
+    ),
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(entries, []);
+  context.isIdle = () => false;
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.equal(pi.sentMessageCalls.length, 0);
+    assert.equal(readOwnerMessages(mailbox).length, 1);
+
+    // Aborted boundaries do not fan in the durable, not-yet-submitted record.
+    for (const handler of pi.events.get("turn_end") ?? [])
+      await handler({ outcome: "aborted" }, context);
+    for (const handler of pi.events.get("agent_before_settle") ?? [])
+      await handler({ outcome: "aborted" }, context);
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: true }, context);
+    assert.equal(pi.sentMessageCalls.length, 0);
+    assert.equal(readOwnerMessages(mailbox).length, 1);
+
+    // A completed turn boundary sends without steering and asks Pi to continue.
+    const turnEndResults = [];
+    for (const handler of pi.events.get("turn_end") ?? [])
+      turnEndResults.push(await handler({ outcome: "completed" }, context));
+    assert.equal(pi.sentMessageCalls.length, 1);
+    assert.deepEqual(pi.sentMessageCalls[0]?.options, { triggerTurn: false });
+    assert.ok(turnEndResults.some((result: any) => result?.continue === true));
+    assert.equal(readOwnerMessages(mailbox).length, 1);
+
+    // The exact persisted receipt is cleaned at the next completed fan-in.
+    const sent = pi.sentMessageCalls[0]!.message as any;
+    entries.push({ customType: sent.customType, details: sent.details });
+    for (const handler of pi.events.get("agent_before_settle") ?? [])
+      await handler({ outcome: "completed" }, context);
+    assert.equal(readOwnerMessages(mailbox).length, 0);
+    assert.equal(pi.sentMessageCalls.length, 1);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("aborted idle notification settlement releases its receipt-first retry", async () => {
+  setLeadEnvironment();
+  const label = "aborted-idle-owner-notification";
+  const identity = recoveryIdentity(label);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  const state = managedState(label, REQUEST_ID, identity);
+  writeAgentState(mailbox, state);
+  const notification = {
+    version: 5 as const,
+    messageId: "33333333-3333-4333-8333-333333333333",
+    requestId: REQUEST_ID,
+    runId: state.runId,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    piSessionId: state.piSessionId,
+    text: "Retry this idle trigger if no exact receipt was persisted.",
     createdAt: Date.now(),
   };
   writeOwnerMessage(mailbox, notification);
@@ -7760,33 +7833,34 @@ test("aborted owner settlement retains an unconsumed steering notification guard
   const context = fakeContext(entries, []);
   try {
     await pi.events.get("session_start")![0](undefined, context);
-    assert.equal(pi.sentMessageCalls.length, 1);
     assert.deepEqual(pi.sentMessageCalls[0]?.options, {
       triggerTurn: true,
       deliverAs: "steer",
     });
 
-    // Pi aborts before consuming the submitted steering message.
     for (const handler of pi.events.get("agent_settled") ?? [])
       await handler({ aborted: true }, context);
-    await pi.events.get("before_agent_start")?.[0](undefined, context);
-    assert.equal(pi.sentMessageCalls.length, 1);
+    assert.equal(pi.sentMessageCalls.length, 2);
+    assert.deepEqual(pi.sentMessageCalls[1]?.options, {
+      triggerTurn: true,
+      deliverAs: "steer",
+    });
     assert.equal(readOwnerMessages(mailbox).length, 1);
 
-    // The replacement run consumes the original queued message and persists it.
-    const sent = pi.sentMessageCalls[0]!.message as any;
-    entries.push({ customType: sent.customType, details: sent.details });
+    const retry = pi.sentMessageCalls[1]!.message as any;
+    entries.push({ customType: retry.customType, details: retry.details });
     for (const handler of pi.events.get("agent_settled") ?? [])
       await handler({ aborted: false }, context);
-
-    const persisted = entries.filter(
-      (entry: any) =>
-        entry.customType === "pi-herdsman-agent-owner-message" &&
-        entry.details?.messageId === notification.messageId,
-    );
-    assert.equal(persisted.length, 1);
     assert.equal(readOwnerMessages(mailbox).length, 0);
-    assert.equal(pi.sentMessageCalls.length, 1);
+    assert.equal(pi.sentMessageCalls.length, 2);
+    assert.equal(
+      entries.filter(
+        (entry: any) =>
+          entry.customType === "pi-herdsman-agent-owner-message" &&
+          entry.details?.messageId === notification.messageId,
+      ).length,
+      1,
+    );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
