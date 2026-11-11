@@ -16894,6 +16894,10 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
     },
   };
   runtime.registerWidget(ctx, "manager");
+  t.after(() => {
+    contextAbort.abort();
+    runtime.stopPeriodic();
+  });
   runtime.startPeriodic(ctx);
   await runtime.refresh(ctx);
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -17684,7 +17688,54 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
     "an incompatible Manager generation change during agent get must not focus",
   );
   assert.equal(currentRole, "chief", "nested navigation remains observational");
-  runtime.stopPeriodic();
+
+  const originalSetInterval = globalThis.setInterval;
+  const originalClearInterval = globalThis.clearInterval;
+  const activeIntervals = new Set<NodeJS.Timeout>();
+  await t.test(
+    "Manager timeout teardown clears periodic intervals",
+    async (timeoutTest) => {
+      globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
+        const interval = originalSetInterval(callback, delay);
+        activeIntervals.add(interval);
+        return interval;
+      }) as typeof setInterval;
+      globalThis.clearInterval = ((interval: NodeJS.Timeout | undefined) => {
+        if (interval) activeIntervals.delete(interval);
+        originalClearInterval(interval);
+      }) as typeof clearInterval;
+      timeoutTest.after(() => {
+        runtime.stopPeriodic();
+        globalThis.setInterval = originalSetInterval;
+        globalThis.clearInterval = originalClearInterval;
+      });
+
+      runtime.startPeriodic(ctx);
+      assert.ok(activeIntervals.size > 0, "Manager periodic interval started");
+      const samplingCallStart = gitCalls.length;
+      await assert.rejects(
+        timeoutTest.waitFor(
+          () =>
+            assert.ok(
+              gitCalls
+                .slice(samplingCallStart)
+                .some(
+                  (call) =>
+                    call.cwd === assignedCheckout && call.args.includes("diff"),
+                ),
+              "Manager sampling did not reach assigned-checkout diff",
+            ),
+          { timeout: 50 },
+        ),
+        /waitFor\(\) timed out/u,
+      );
+    },
+  );
+  assert.equal(
+    activeIntervals.size,
+    0,
+    "timeout teardown cleared every interval",
+  );
 });
 
 test("linked worktrees resolve the advancing primary checkout HEAD through main-worktree/HEAD", (t) => {
