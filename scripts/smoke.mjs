@@ -8854,8 +8854,7 @@ async function runContinuationSmoke(ctx) {
         assert.ok(
           accepted.owner_session_id &&
             accepted.pane_id &&
-            accepted.request_id &&
-            accepted.run_id,
+            accepted.request_id,
           "continuation accepted identity is incomplete",
         );
         if (accepted.owner_session_id !== owner?.id)
@@ -8886,6 +8885,10 @@ async function runContinuationSmoke(ctx) {
             throw new Error(
               "continuation mailbox identity changed during selection",
             );
+          assert.ok(
+            typeof mailbox.state.runId === "string" && mailbox.state.runId,
+            "continuation mailbox run identity is missing",
+          );
           if (mailbox.request)
             for (const [key, value] of Object.entries({
               requestId: accepted.request_id,
@@ -8913,7 +8916,7 @@ async function runContinuationSmoke(ctx) {
               label: candidateLabel,
               paneId: accepted.pane_id,
               requestId: accepted.request_id,
-              runId: accepted.run_id,
+              runId: mailbox.state.runId,
               mailbox: {
                 ...mailbox.state,
                 requestId:
