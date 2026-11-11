@@ -569,8 +569,9 @@ function continuationDecision(messages) {
       messages,
       "continue_agent",
       (content) =>
-        content.startsWith("Agent result · agent=") &&
-        content.includes("status=completed"),
+        content.startsWith(
+          "Agent result · agent=smoke-continuation-implementer ·",
+        ) && content.includes("status=completed"),
     );
     if (result) {
       const body = completedResultBody(result);
@@ -581,9 +582,13 @@ function continuationDecision(messages) {
         throw new Error(
           "Second continuation result omitted its completion marker",
         );
-      return lastUser(messages) === result
-        ? fauxAssistantMessage(body)
-        : waitForResult("Continued Agent result already delivered.");
+      return resultAlreadyAcknowledged(
+        messages,
+        result,
+        "PI_HERDSMAN_CONTINUATION_SECOND",
+      )
+        ? waitForResult("Continued Agent result already delivered.")
+        : fauxAssistantMessage(body);
     }
     if (latest?.role === "toolResult")
       return waitForResult(
@@ -610,9 +615,13 @@ function continuationDecision(messages) {
         throw new Error(
           "First continuation result omitted its completion marker",
         );
-      return lastUser(messages) === result
-        ? fauxAssistantMessage("PI_HERDSMAN_CONTINUATION_FIRST")
-        : waitForResult("First continuation Agent result already delivered.");
+      return resultAlreadyAcknowledged(
+        messages,
+        result,
+        "PI_HERDSMAN_CONTINUATION_FIRST",
+      )
+        ? waitForResult("First continuation Agent result already delivered.")
+        : fauxAssistantMessage("PI_HERDSMAN_CONTINUATION_FIRST");
     }
     if (correlatedCall(messages, "delegate_agent"))
       return waitForResult("Waiting for the implementer's completed handoff.");
@@ -676,6 +685,11 @@ export function continuationDecisionDiagnostics(messages, answer) {
   const emittedMarker =
     text(answer).includes("PI_HERDSMAN_CONTINUATION_FIRST") ||
     text(answer).includes("PI_HERDSMAN_CONTINUATION_SECOND");
+  const marker = followup
+    ? "PI_HERDSMAN_CONTINUATION_SECOND"
+    : "PI_HERDSMAN_CONTINUATION_FIRST";
+  const acknowledged =
+    result && resultAlreadyAcknowledged(messages, result, marker);
   const role = ["user", "assistant", "toolResult", "system"].includes(
     latestUser?.role,
   )
@@ -700,9 +714,11 @@ export function continuationDecisionDiagnostics(messages, answer) {
       ? followup
         ? "continued_marker"
         : "first_marker"
-      : result && latestUser !== result
-        ? "result_not_latest_user"
-        : "wait";
+      : acknowledged
+        ? "result_already_acknowledged"
+        : result && latestUser !== result
+          ? "result_not_latest_user"
+          : "wait";
   return {
     resultFound: Boolean(result),
     isLatestUser: Boolean(result && latestUser === result),
@@ -725,6 +741,16 @@ function recordContinuationDecision(messages, answer) {
     `${JSON.stringify(continuationDecisionDiagnostics(messages, answer))}\n`,
     { mode: 0o600 },
   );
+}
+
+function resultAlreadyAcknowledged(messages, result, marker) {
+  return messages
+    .slice(messages.indexOf(result) + 1)
+    .some(
+      (message) =>
+        message.role === "assistant" &&
+        text(message).split(/\s+/u).includes(marker),
+    );
 }
 
 function agentCrashRecoveryDecision(model, context) {
@@ -916,12 +942,8 @@ export function decide(model, context) {
       .match(/\b[0-9a-f]{40,64}\b/gi)
       ?.at(-1);
     if (!sha) throw new Error("Manager merge Lead Git command omitted HEAD");
-    const message = `MANAGER_MERGE_SOURCE_READY ${sha}`;
-    const reported = correlatedCall(messages, "message_supervisor");
-    if (!reported || reported.resultIndex < bash.resultIndex)
-      return call("message_supervisor", { message });
-    return waitForResult(
-      "Waiting for the Manager merge scenario's next Lead instruction.",
+    return fauxAssistantMessage(
+      `MANAGER_MERGE_SOURCE_READY ${sha}. The source commit was created and validated.`,
     );
   }
   if (model === "manager-merge") {
@@ -931,7 +953,7 @@ export function decide(model, context) {
       if (!branch) throw new Error("Manager merge assignment omitted branch");
       return call("delegate_work", {
         branch,
-        task: "Create and commit one source file using bash, then message_supervisor with MANAGER_MERGE_SOURCE_READY and its exact full HEAD. Wait for further Manager direction.",
+        task: "Create and commit one source file using bash, then finish your assignment with a final response containing MANAGER_MERGE_SOURCE_READY and the exact full HEAD, plus validation evidence. Do not send an interim supervisor message.",
       });
     }
     if (!assignment)

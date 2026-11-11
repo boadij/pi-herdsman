@@ -112,7 +112,11 @@ async function invokeBeforeAgentStart(
 ): Promise<BeforeAgentStartEventResult | undefined> {
   const handlers = pi.events.get("before_agent_start");
   assert.ok(handlers?.[0]);
-  const result: unknown = await handlers[0](event, context);
+  let result: unknown;
+  for (const handler of handlers) {
+    const proposal: unknown = await handler(event, context);
+    if (proposal !== undefined) result = proposal;
+  }
   assertBeforeAgentStartResult(result);
   return result;
 }
@@ -1592,15 +1596,17 @@ test("registered failed-turn reporting uses exact Managed session identity befor
     );
 
     pi.events.get("agent_start")![0]({}, context);
-    pi.events.get("turn_end")![0](
-      {
-        outcome: "error",
-        messageEntryId: randomUUID(),
-        message: { role: "assistant", content: "failed" },
-      },
-      context,
-    );
-    pi.events.get("agent_before_settle")![0]({ outcome: "error" }, context);
+    for (const handler of pi.events.get("turn_end") ?? [])
+      void handler(
+        {
+          outcome: "error",
+          messageEntryId: randomUUID(),
+          message: { role: "assistant", content: "failed" },
+        },
+        context,
+      );
+    for (const handler of pi.events.get("agent_before_settle") ?? [])
+      void handler({ outcome: "error" }, context);
     await pi.events.get("agent_settled")![0]({ aborted: false }, context);
 
     const report = entries.find(
@@ -1616,15 +1622,17 @@ test("registered failed-turn reporting uses exact Managed session identity befor
     const otherSessionId = randomUUID();
     context.sessionManager.getSessionId = () => otherSessionId;
     pi.events.get("agent_start")![0]({}, context);
-    pi.events.get("turn_end")![0](
-      {
-        outcome: "error",
-        messageEntryId: randomUUID(),
-        message: { role: "assistant", content: "failed" },
-      },
-      context,
-    );
-    pi.events.get("agent_before_settle")![0]({ outcome: "error" }, context);
+    for (const handler of pi.events.get("turn_end") ?? [])
+      void handler(
+        {
+          outcome: "error",
+          messageEntryId: randomUUID(),
+          message: { role: "assistant", content: "failed" },
+        },
+        context,
+      );
+    for (const handler of pi.events.get("agent_before_settle") ?? [])
+      void handler({ outcome: "error" }, context);
     await pi.events.get("agent_settled")![0]({ aborted: false }, context);
     const mismatchedReport = entries.find(
       (entry: any) =>
@@ -4793,14 +4801,18 @@ test("native managed-Agent restore quarantines the exact session", async () => {
   try {
     await pi.events.get("session_start")![0](undefined, ctx);
     pi.events.get("agent_start")![0]({}, ctx);
-    pi.events.get("turn_end")![0](
-      {
-        outcome: "error",
-        messageEntryId: randomUUID(),
-        message: { role: "assistant", content: "seeded ordinary observation" },
-      },
-      ctx,
-    );
+    for (const handler of pi.events.get("turn_end") ?? [])
+      await handler(
+        {
+          outcome: "error",
+          messageEntryId: randomUUID(),
+          message: {
+            role: "assistant",
+            content: "seeded ordinary observation",
+          },
+        },
+        ctx,
+      );
     currentSessionId = sessionId;
     await pi.events.get("session_start")![0](undefined, ctx);
     assert.ok(
@@ -4817,14 +4829,18 @@ test("native managed-Agent restore quarantines the exact session", async () => {
       false,
     );
     assert.deepEqual(pi.pi.getActiveTools(), []);
-    pi.events.get("turn_end")![0](
-      {
-        outcome: "completed",
-        messageEntryId: randomUUID(),
-        message: { role: "assistant", content: "quarantined response marker" },
-      },
-      ctx,
-    );
+    for (const handler of pi.events.get("turn_end") ?? [])
+      await handler(
+        {
+          outcome: "completed",
+          messageEntryId: randomUUID(),
+          message: {
+            role: "assistant",
+            content: "quarantined response marker",
+          },
+        },
+        ctx,
+      );
     assert.equal(
       entries.some(
         (entry) =>
@@ -4834,7 +4850,8 @@ test("native managed-Agent restore quarantines the exact session", async () => {
       false,
     );
     currentSessionId = ordinarySessionId;
-    pi.events.get("agent_before_settle")![0]({ outcome: "error" }, ctx);
+    for (const handler of pi.events.get("agent_before_settle") ?? [])
+      await handler({ outcome: "error" }, ctx);
     await pi.events.get("agent_settled")![0]({ aborted: false }, ctx);
     const seededRunReport = entries.find(
       (entry: any) =>
@@ -5075,7 +5092,8 @@ test("managed Lead prompt keeps the managed charter with an assigned session", a
       systemPrompt: "base",
       systemPromptOptions: { sections: {}, contextFiles: [] },
     };
-    await pi.events.get("before_agent_start")![0](beforeAgentStart, context);
+    for (const handler of pi.events.get("before_agent_start") ?? [])
+      await handler(beforeAgentStart, context);
     assert.ok(pi.pi.getActiveTools().includes("codemode"));
     assert.ok(!pi.pi.getActiveTools().includes("bash"));
     assert.ok(toolCall({ toolName: "bash" }, context)?.block);

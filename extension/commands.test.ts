@@ -624,6 +624,7 @@ import {
   discoverAgentDefinitions,
   fakeContext,
   fakePi,
+  invokeEventHandlers,
   fakeAgentContext,
   herdrAlias,
   isApiSnapshot,
@@ -1476,7 +1477,7 @@ test("failed ordinary mode rollback invalidates execution and fails closed", asy
       systemPrompt: "base",
       systemPromptOptions: { sections: {}, contextFiles: [] },
     };
-    await pi.events.get("before_agent_start")![0](prompt, context);
+    await invokeEventHandlers(pi, "before_agent_start")(prompt, context);
     assert.equal(
       prompt.systemPromptOptions.sections.pi_herdsman_lead_execution,
       undefined,
@@ -1786,7 +1787,7 @@ test("session tree navigation restores each branch's execution mode, baseline, a
       systemPrompt: "base",
       systemPromptOptions: { sections: {}, contextFiles: [] },
     };
-    await pi.events.get("before_agent_start")![0](event, context);
+    await invokeEventHandlers(pi, "before_agent_start")(event, context);
     assert.match(
       event.systemPromptOptions.sections.pi_herdsman_lead_execution,
       /Delegate bounded execution work when an Agent/u,
@@ -1799,7 +1800,7 @@ test("session tree navigation restores each branch's execution mode, baseline, a
       systemPrompt: "base",
       systemPromptOptions: { sections: {}, contextFiles: [] },
     };
-    await pi.events.get("before_agent_start")![0](event, context);
+    await invokeEventHandlers(pi, "before_agent_start")(event, context);
     assert.match(
       event.systemPromptOptions.sections.pi_herdsman_lead_execution,
       /Do not keep otherwise delegable execution local/u,
@@ -2063,7 +2064,7 @@ test("registered Manager turn_end adapter reconciles late tools in the live poli
 
     pi.pi.registerTool({ name: "late_unallowed" });
     assert.ok(pi.pi.getActiveTools().includes("late_unallowed"));
-    await pi.events.get("before_agent_start")![0](
+    await invokeEventHandlers(pi, "before_agent_start")(
       { systemPromptOptions: { sections: {} } },
       context,
     );
@@ -2083,7 +2084,7 @@ test("registered Manager turn_end adapter reconciles late tools in the live poli
     );
     await pi.commandOptions.get("manager").handler("refresh", context);
     pi.pi.registerTool({ name: "mcp__forgejo__get_issue_by_index" });
-    await pi.events.get("before_agent_start")![0](
+    await invokeEventHandlers(pi, "before_agent_start")(
       { systemPromptOptions: { sections: {} } },
       context,
     );
@@ -2105,10 +2106,10 @@ test("registered Manager turn_end adapter reconciles late tools in the live poli
 
     pi.pi.registerTool({ name: "late_during_continuation" });
     const turnEndHandlers = pi.events.get("turn_end") ?? [];
-    assert.equal(turnEndHandlers.length, 1);
+    assert.ok(turnEndHandlers.length > 0);
     // This handler was installed by registerExtension -> registerLeadRuntime;
     // it must reach the production roleTransitions.reconcileRoleTools adapter.
-    await turnEndHandlers[0]!({}, context);
+    await invokeEventHandlers(pi, "turn_end")({}, context);
     assert.ok(!pi.pi.getActiveTools().includes("late_during_continuation"));
     assert.equal(sessionLeadRoleState(pi.entries)?.role, "manager");
     await pi.commandOptions.get("manager").handler("leave", context);
@@ -2702,7 +2703,7 @@ test("persisted Chief restores the saved ordinary execution profile on exit", as
       systemPrompt: "base",
       systemPromptOptions: { sections: {} as Record<string, string> },
     };
-    await pi.events.get("before_agent_start")![0](promptEvent, context);
+    await invokeEventHandlers(pi, "before_agent_start")(promptEvent, context);
     assert.match(
       promptEvent.systemPromptOptions.sections.pi_herdsman_lead_execution,
       /Do not keep otherwise delegable execution local/,
@@ -3365,7 +3366,7 @@ test("active Manager supervision refreshes serialize and coalesce concurrent req
   refreshSnapshotBase = snapshots;
   maxActive = 0;
   gateRefresh = true;
-  const beforeStart = pi.events.get("before_agent_start")![0];
+  const beforeStart = invokeEventHandlers(pi, "before_agent_start");
   const promptEvents: any[] = [];
   const firstEvent = {
     systemPrompt: "base",
@@ -3781,7 +3782,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
         contextFiles: [],
       },
     };
-    const leadPrompt = await first.events.get("before_agent_start")![0](
+    const leadPrompt = await invokeEventHandlers(first, "before_agent_start")(
       leadPromptEvent,
       ctx1,
     );
@@ -3887,10 +3888,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
         contextFiles: [],
       },
     };
-    const managerPrompt = await first.events.get("before_agent_start")![0](
-      managerPromptEvent,
-      ctx1,
-    );
+    const managerPrompt = await invokeEventHandlers(
+      first,
+      "before_agent_start",
+    )(managerPromptEvent, ctx1);
     assert.equal(
       isRecord(managerPrompt) ? managerPrompt.message : undefined,
       undefined,
@@ -6735,6 +6736,21 @@ async function managerRemovalFixture(
     submoduleMetadataError?: boolean;
     submoduleMetadataOutput?: string;
     retainedSubmoduleMetadata?: boolean;
+    missingCompletionHandoff?: boolean;
+    runningCompletedLead?: boolean;
+    completionKind?: string;
+    completionHead?: string;
+    completionBranch?: string;
+    completionCheckout?: string;
+    newerLeadExecution?: boolean;
+    unresolvedOwnedAgent?: boolean;
+    transitionLeadToWorking?: boolean;
+    newerOutcome?: "execution_failure" | "execution_cancelled";
+    completionSessionId?: string;
+    leadStateUnavailable?: boolean;
+    leadLifecycle?: string;
+    pendingOwnedResult?: boolean;
+    transitionLeadBeforeStop?: boolean;
   } = {},
 ) {
   const repoKey = realFs.mkdtempSync(join(PI_AGENT_ROOT, "remove-repo-"));
@@ -6791,6 +6807,7 @@ async function managerRemovalFixture(
   let mergeTreeReads = 0;
   let targetBranchReads = 0;
   let leadRunning = options.runningLead ?? false;
+  let leadBecameWorking = false;
   let leadPaneId = "child-pane";
   let treeQuiesced = false;
   let stoppedWithHeldLocks = false;
@@ -6806,11 +6823,54 @@ async function managerRemovalFixture(
   const statusUpdates: Array<[string, string | undefined]> = [];
   const sessionEntries: any[] = [];
   let activeBranch: any[] = sessionEntries;
+  const completionReportId = "completion-report";
+  const completionEntries: any[] = options.missingCompletionHandoff
+    ? []
+    : [
+        {
+          type: "custom_message",
+          customType: "pi-herdsman-project_message",
+          details: {
+            id: completionReportId,
+            repoKey,
+            branch,
+            fromSessionId: options.completionSessionId ?? "assigned-lead",
+            kind: options.completionKind ?? "direct_response",
+            senderEnvironment: {
+              cwd: checkoutPath,
+              git: {
+                worktreeRoot: options.completionCheckout ?? checkoutPath,
+                branch: options.completionBranch ?? sourceBranch,
+                head: options.completionHead ?? "2".repeat(40),
+              },
+            },
+          },
+        },
+      ];
+  if (options.newerOutcome)
+    completionEntries.push({
+      type: "custom_message",
+      customType: "pi-herdsman-project_message",
+      details: {
+        id: "newer-outcome",
+        repoKey,
+        branch,
+        fromSessionId: "assigned-lead",
+        kind: options.newerOutcome,
+      },
+    });
   const removals: string[] = [];
   const removalOptions: any[] = [];
   const calls: string[][] = [];
   const gitCommands: string[][] = [];
   const gitMutations: string[][] = [];
+  const pendingResultMailbox = agentMailboxPath(
+    "child-workspace",
+    `merge-pending-${randomUUID()}`,
+  );
+  const pendingResultRequestId = randomUUID();
+  const pendingResultRunId = randomUUID();
+  t.after(() => resetAgentMailbox(pendingResultMailbox));
   let reconciliationAssignmentId: string | undefined;
   let reconciliationProjectWorkLocked: boolean | undefined;
   let liveLeadChecks = 0;
@@ -6951,6 +7011,7 @@ async function managerRemovalFixture(
           return { code: 0, stdout: "", stderr: "" };
         }
         if (args[0] === "merge-tree" && args[1] === "--write-tree") {
+          if (options.transitionLeadBeforeStop) leadBecameWorking = true;
           if (options.revokeDivergenceAfterPreview) allowDivergence = false;
           if (options.targetAdvanceOnPreview)
             currentTargetHead = options.targetAdvanceOnPreview;
@@ -7052,6 +7113,30 @@ async function managerRemovalFixture(
           options.primaryCheckoutAsWorktree
             ? repoKey
             : (persistedCheckoutPath ?? checkoutPath),
+        getBranch: () => [
+          {
+            type: "custom",
+            customType: "pi-herdsman-herd-run",
+            data: {
+              phase: "report_sent",
+              sessionId: "assigned-lead",
+              reportId: completionReportId,
+              kind: options.completionKind ?? "direct_response",
+            },
+          },
+          ...(options.newerLeadExecution
+            ? [
+                {
+                  type: "custom",
+                  customType: "pi-herdsman-herd-run",
+                  data: {
+                    phase: "lead_started",
+                    sessionId: "assigned-lead",
+                  },
+                },
+              ]
+            : []),
+        ],
       }),
     },
     liveLead: async () => {
@@ -7061,13 +7146,29 @@ async function managerRemovalFixture(
         liveLeadChecks === 2
       )
         setWorktreeRemovalPreapproved(repoKey, false);
-      return leadRunning
+      return leadRunning ||
+        options.runningCompletedLead ||
+        options.leadStateUnavailable ||
+        options.leadLifecycle !== undefined ||
+        options.transitionLeadToWorking ||
+        options.transitionLeadBeforeStop
         ? [
             {
               workspace_id: "child-workspace",
               pane_id: leadPaneId,
               tab_id: "child-tab",
               cwd: checkoutPath,
+              ...(options.leadStateUnavailable
+                ? {}
+                : {
+                    agent_status:
+                      options.leadLifecycle ??
+                      (options.runningCompletedLead ||
+                      (options.transitionLeadToWorking && assignmentLockHeld) ||
+                      (options.transitionLeadBeforeStop && leadBecameWorking)
+                        ? "working"
+                        : "idle"),
+                  }),
             },
           ]
         : [];
@@ -7189,10 +7290,64 @@ async function managerRemovalFixture(
     isPiAgent: () => true,
     herdrSessionId: (agent: any) => agent.pi_session_id ?? "assigned-lead",
     scanAgentStates: () => ({
-      states: (options.extraAgentStates ?? []).map((state, index) => ({
-        path: `state-${index}`,
-        state,
-      })),
+      states: [
+        ...(options.extraAgentStates ?? []),
+        ...(options.unresolvedOwnedAgent
+          ? [
+              {
+                version: 5,
+                runId: "child-run",
+                ownerSessionId: "assigned-lead",
+                workspaceId: "child-workspace",
+                agentLabel: "child",
+                paneId: "child-pane",
+                piSessionId: "owned-child",
+                cwd: checkoutPath,
+                projectAssignmentId: "assigned-lead",
+                activeRequestId: "request",
+              },
+            ]
+          : []),
+        ...(options.pendingOwnedResult
+          ? [
+              {
+                version: 5,
+                runId: pendingResultRunId,
+                ownerSessionId: "assigned-lead",
+                workspaceId: "child-workspace",
+                agentLabel: "pending-result-child",
+                paneId: "pending-result-pane",
+                piSessionId: "pending-result-session",
+                cwd: checkoutPath,
+                projectAssignmentId: "assigned-lead",
+                completedRequestId: pendingResultRequestId,
+              },
+            ]
+          : []),
+      ].map((state, index) => {
+        const path =
+          options.pendingOwnedResult &&
+          state.piSessionId === "pending-result-session"
+            ? pendingResultMailbox
+            : `state-${index}`;
+        if (
+          options.pendingOwnedResult &&
+          state.piSessionId === "pending-result-session"
+        )
+          writeResult(pendingResultMailbox, {
+            version: 5,
+            runId: pendingResultRunId,
+            requestId: pendingResultRequestId,
+            ownerSessionId: "assigned-lead",
+            workspaceId: "child-workspace",
+            agentLabel: "pending-result-child",
+            paneId: "pending-result-pane",
+            status: "completed",
+            text: "completed result awaiting delivery",
+            completedAt: Date.now(),
+          });
+        return { path, state };
+      }),
       issues: options.agentStateIssues
         ? [{ path: "unavailable", diagnostic: "test" }]
         : [],
@@ -7274,7 +7429,7 @@ async function managerRemovalFixture(
   const ctx = fakeContext([]) as any;
   ctx.cwd = repoKey;
   ctx.sessionManager.getSessionId = () => "manager-session";
-  ctx.sessionManager.getBranch = () => activeBranch;
+  ctx.sessionManager.getBranch = () => [...activeBranch, ...completionEntries];
   ctx.hasUI = true;
   ctx.ui.setStatus = (key: string, value: string | undefined) =>
     statusUpdates.push([key, value]);
@@ -7571,6 +7726,56 @@ test("Manager merge runtime rejects disabled permission and stale accepted HEAD 
   );
   assert.deepEqual(stale.gitMutations, []);
   assert.deepEqual(stale.removals, []);
+});
+
+test("Manager merge requires a matching completed handoff before stopping or mutating the Lead", async (t) => {
+  for (const options of [
+    { missingCompletionHandoff: true },
+    { completionKind: "supervisor_message" },
+    { completionHead: "3".repeat(40) },
+    { completionBranch: "feat/wrong-branch" },
+    { completionCheckout: join(PI_AGENT_ROOT, "wrong-checkout") },
+    { completionSessionId: "different-lead-session" },
+    { runningCompletedLead: true },
+    { runningCompletedLead: true, leadStateUnavailable: true },
+    { leadLifecycle: "blocked" },
+    { leadLifecycle: "unknown" },
+    { unresolvedOwnedAgent: true },
+    { pendingOwnedResult: true },
+    { newerLeadExecution: true },
+    { newerOutcome: "execution_failure" },
+    { newerOutcome: "execution_cancelled" },
+    { transitionLeadToWorking: true },
+    {
+      transitionLeadBeforeStop: true,
+      allowDivergence: true,
+      integratedTargetCodes: [1, 1, 1, 1],
+    },
+    { agentStateIssues: true },
+  ]) {
+    const fixture = await managerRemovalFixture(t, {
+      targetHead: "1".repeat(40),
+      integratedTargetCodes: [1, 0, 1, 0],
+      ...options,
+    });
+    const result = await fixture.runtime.executeStaff(
+      "merge",
+      {
+        action: "merge",
+        branch: "feat/remove-test",
+        expected_head: "2".repeat(40),
+      },
+      undefined,
+      undefined,
+      fixture.ctx,
+    );
+    assert.equal(result.details.status, "blocked", JSON.stringify(options));
+    assert.equal(fixture.stoppedLeadCount(), 0);
+    assert.deepEqual(fixture.gitMutations, []);
+    assert.deepEqual(fixture.removals, []);
+    assert.ok(fixture.assignment());
+    assert.ok(existsSync(fixture.checkoutPath));
+  }
 });
 
 test("Manager merge runtime reports target divergence without checkout mutation", async (t) => {
@@ -10199,10 +10404,10 @@ async function managerDelegateAssignmentTest(
         linked: true,
       },
     ]);
-    const contextProjection = await pi.events.get("before_agent_start")![0](
-      { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
-      ctx,
-    );
+    const contextProjection = await invokeEventHandlers(
+      pi,
+      "before_agent_start",
+    )({ systemPrompt: "base", systemPromptOptions: { contextFiles: [] } }, ctx);
     assert.equal(
       isRecord(contextProjection) ? contextProjection.message : undefined,
       undefined,
@@ -11407,7 +11612,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
         systemPromptOptions: { contextFiles: [] },
       };
       try {
-        chiefPrompt = await chief.events.get("before_agent_start")![0](
+        chiefPrompt = await invokeEventHandlers(chief, "before_agent_start")(
           chiefPromptEvent,
           chiefCtx,
         );
@@ -11580,7 +11785,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
         /incompatible Herdsman build.*reload those Pi sessions/,
         "a nested-only mismatch still provides reload guidance",
       );
-      await chief.events.get("before_agent_start")![0](
+      await invokeEventHandlers(chief, "before_agent_start")(
         { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
         chiefCtx,
       );
@@ -11930,11 +12135,21 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     leadAgent.cwd = "/tmp";
     writeFileSync(unrelatedStatePath, unrelatedState);
     useLeadIdentity();
+    await invokeEventHandlers(lead!, "turn_end")(
+      { outcome: "completed" },
+      leadCtx,
+    );
     await t.waitFor(() =>
       assert.equal(
         listCoordinationMessagePaths(supervisionRuntime(), leadSession).length,
         0,
       ),
+    );
+    assert.deepEqual(
+      lead!.sentMessageCalls.find(
+        ({ message }: any) => message?.details?.id === queued.details.id,
+      )?.options,
+      { deliverAs: "steer", triggerTurn: false },
     );
     useManagerIdentity();
     omitLeadFromManagerTopology = true;
@@ -12009,15 +12224,17 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     useLeadIdentity();
     const currentLead = lead;
     assert.ok(currentLead);
-    await t.waitFor(() =>
-      assert.ok(
-        currentLead.sent.some(
-          (message: any) =>
-            message?.customType === "pi-herdsman-manager_message" &&
-            message?.details?.id === managerMessage.details.id &&
-            message?.details?.fromSessionId === LEAD_SESSION_ID &&
-            message?.details?.toSessionId === leadSession,
-        ),
+    await invokeEventHandlers(currentLead, "turn_end")(
+      { outcome: "completed" },
+      leadCtx,
+    );
+    assert.ok(
+      currentLead.sent.some(
+        (message: any) =>
+          message?.customType === "pi-herdsman-manager_message" &&
+          message?.details?.id === managerMessage.details.id &&
+          message?.details?.fromSessionId === LEAD_SESSION_ID &&
+          message?.details?.toSessionId === leadSession,
       ),
     );
     assert.deepEqual(
@@ -12025,7 +12242,7 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
         ({ message }: any) =>
           message?.customType === "pi-herdsman-manager_message",
       )?.options,
-      { deliverAs: "steer", triggerTurn: true },
+      { deliverAs: "steer", triggerTurn: false },
     );
     assert.deepEqual(
       listCoordinationMessagePaths(supervisionRuntime(), leadSession),
@@ -14604,7 +14821,10 @@ test("malformed selected branch withdraws stale Chief authority", async () => {
       systemPrompt: "base",
       systemPromptOptions: { sections: {}, contextFiles: [] },
     };
-    await pi.events.get("before_agent_start")![0](ordinaryPrompt, context);
+    await invokeEventHandlers(pi, "before_agent_start")(
+      ordinaryPrompt,
+      context,
+    );
     assert.equal(
       ordinaryPrompt.systemPromptOptions.sections.pi_herdsman_lead_execution,
       undefined,
@@ -15053,7 +15273,10 @@ test("Chief profile drives the turn-start tools, prompt, and tool-call guard", a
       systemPrompt: "base",
       systemPromptOptions: { contextFiles: [] },
     };
-    const prompt = await pi.events.get("before_agent_start")![0](event, ctx);
+    const prompt = await invokeEventHandlers(pi, "before_agent_start")(
+      event,
+      ctx,
+    );
     assert.ok(isRecord(prompt));
     assert.ok(typeof prompt.systemPrompt === "string");
     assert.match(prompt.systemPrompt, /verified workspace-neutral Chief/);
@@ -15115,7 +15338,7 @@ test("Chief profile drives the turn-start tools, prompt, and tool-call guard", a
     await pi.commandOptions.get("chief").handler("refresh", ctx);
     assert.ok(notices.length > 0);
     assert.deepEqual(pi.pi.getActiveTools(), previousTools);
-    const afterInvalid = await pi.events.get("before_agent_start")![0](
+    const afterInvalid = await invokeEventHandlers(pi, "before_agent_start")(
       event,
       ctx,
     );
@@ -24044,7 +24267,7 @@ test("TUI status refresh consumes the coherent Herdr session snapshot", async (t
       contextFiles: [],
     },
   };
-  await pi.events.get("before_agent_start")![0](promptEvent, context);
+  await invokeEventHandlers(pi, "before_agent_start")(promptEvent, context);
   assert.match(
     promptEvent.systemPromptOptions.sections.agent_definitions,
     /"name":\s*"agent"/,

@@ -341,6 +341,13 @@ preflight unavailable on older Git returns `blocked`. Git success does not
 prove tests or semantic acceptance; obtain required combined validation before
 acceptance.
 
+New integration requires a matching completed Lead handoff for the accepted
+source revision and no unresolved assigned execution. A visible Git SHA, idle
+status, or interim supervisor message is insufficient. If completion evidence
+is missing or stale, wait for the normal handoff or request a fresh completion
+report; do not poll staff or integration tools. A completed handoff confirms
+the report boundary, not that tests passed or requirements were met.
+
 The structured result reports `status`, `integrated`, `checkout_removed`, and
 `assignment_retired` independently. `needs_update` leaves both checkouts
 untouched. Successful integration triggers guarded cleanup of the exact
@@ -351,9 +358,10 @@ same accepted SHA rechecks the exact assignment and policy and retries
 guarded cleanup. If the checkout is already absent, it is reconciled only
 after fresh Git evidence proves the accepted SHA is contained in the verified
 primary branch, plus checkout provenance and exact-assignment checks. Absence
-alone never proves integration. Other validation or Git-state uncertainty
-fails closed; a `blocked` result may require inspecting the primary checkout
-before retrying.
+alone never proves integration. An already-integrated accepted SHA follows
+this existing cleanup-recovery path rather than requiring a new completion
+handoff. Other validation or Git-state uncertainty fails closed; a `blocked`
+result may require inspecting the primary checkout before retrying.
 
 ## See also
 

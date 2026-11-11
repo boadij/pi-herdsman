@@ -397,6 +397,20 @@ export function configuredToolPolicy(
   };
 }
 
+export function toolPolicyAllowsName(
+  policy: ReturnType<typeof configuredToolPolicy>,
+  requiredTools: ReadonlySet<string>,
+  name: string,
+): boolean {
+  if (requiredTools.has(name)) return true;
+  if (policy.excluded.some((pattern) => matchesToolPattern(pattern, name)))
+    return false;
+  return (
+    !policy.explicit ||
+    policy.tools.some((pattern) => matchesToolPattern(pattern, name))
+  );
+}
+
 function readOptionalAgentDefinitions(
   root: string,
   category: "agent" | "role",

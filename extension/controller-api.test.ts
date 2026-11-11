@@ -56,6 +56,7 @@ import support, {
   discoverAgent,
   fakeContext,
   fakePi,
+  invokeEventHandlers,
   fakeAgentContext,
   herdrAlias,
   isApiSnapshot,
@@ -536,6 +537,18 @@ test(
         createdAt: Date.now(),
       } as const;
       const managerMessagePath = writeChiefMessage(managerMessage, runtime);
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      assert.equal(
+        pi.sentMessageCalls.some(
+          ({ message }: any) => message?.details?.id === managerMessage.id,
+        ),
+        false,
+        "busy phase-less polling defers the Manager message to a turn boundary",
+      );
+      assert.deepEqual(listChiefMessagePaths(runtime, leadId), [
+        managerMessagePath,
+      ]);
+      await invokeEventHandlers(pi, "turn_end")({ outcome: "completed" }, ctx);
       await waitForStage(t, "first Manager message delivery", () => {
         const call = pi.sentMessageCalls.find(
           ({ message }: any) =>
@@ -545,7 +558,7 @@ test(
         assert.ok(call);
         assert.deepEqual(call.options, {
           deliverAs: "steer",
-          triggerTurn: true,
+          triggerTurn: false,
         });
       });
       await new Promise((resolve) => setTimeout(resolve, 1_100));
@@ -1669,7 +1682,7 @@ test("project Lead observes Manager availability across turnover without exposin
     getSessionFile: () => `/tmp/${leadId}.jsonl`,
   };
   const observe = () =>
-    pi.events.get("before_agent_start")![0](
+    invokeEventHandlers(pi, "before_agent_start")(
       { systemPrompt: "prompt", systemPromptOptions: {} },
       ctx,
     );
@@ -1988,7 +2001,7 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
   };
   try {
     await pi.events.get("session_start")![0](undefined, ctx);
-    const beforeAgentStart = pi.events.get("before_agent_start")![0];
+    const beforeAgentStart = invokeEventHandlers(pi, "before_agent_start");
     const observe = () =>
       beforeAgentStart(
         { systemPrompt: "prompt", systemPromptOptions: {} },
@@ -2423,7 +2436,7 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
       supervisionRuntime(),
     );
 
-    const beforeAgentStart = pi.events.get("before_agent_start")![0];
+    const beforeAgentStart = invokeEventHandlers(pi, "before_agent_start");
     const preflight = () =>
       beforeAgentStart(
         { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
@@ -2777,7 +2790,7 @@ for (const reachable of [true, false]) {
           systemPrompt: "base",
           systemPromptOptions: { contextFiles: [] as string[] },
         };
-        await pi.events.get("before_agent_start")![0](managerStart, ctx);
+        await invokeEventHandlers(pi, "before_agent_start")(managerStart, ctx);
         const managerPrompt =
           managerStart.systemPromptOptions.sections?.pi_herdsman_role;
         assert.match(
@@ -6537,7 +6550,7 @@ async function runManagerStartupScenario(
               ),
             );
           });
-        await pi.events.get("before_agent_start")![0](
+        await invokeEventHandlers(pi, "before_agent_start")(
           { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
           ctx,
         );
@@ -6598,7 +6611,7 @@ async function runManagerStartupScenario(
 
         hideActiveLead = true;
         started = false;
-        await pi.events.get("before_agent_start")![0](
+        await invokeEventHandlers(pi, "before_agent_start")(
           {
             systemPrompt: "base",
             systemPromptOptions: { contextFiles: [] },

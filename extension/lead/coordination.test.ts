@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { fakeContext, HERDSMAN_BUILD, testTmpRoot } from "../support.ts";
-import { supervisionRuntime } from "../supervision.ts";
+import { supervisionRuntime, writeProjectMessage } from "../supervision.ts";
 import { createLeadCoordinationRuntime } from "./coordination.ts";
 
 test("scoped peer presence writes its worktree group", async () => {
@@ -127,6 +127,88 @@ test("empty project-message drain skips assignment listing", async () => {
 
   assert.equal(await runtime.drainProjectMessages(fakeContext() as any), 0);
   assert.equal(assignmentLists, 0);
+});
+
+test("Manager startup fan-in submits every ready project handoff non-triggeringly", async () => {
+  const sessionId = randomUUID();
+  const manager = { id: "manager-generation", repoKey: "repo", createdAt: 10 };
+  const assignment = { id: "lead-session", branch: "branch" };
+  const records = [1, 2, 3].map((index) => ({
+    version: 2 as const,
+    id: randomUUID(),
+    repoKey: manager.repoKey,
+    branch: assignment.branch,
+    fromSessionId: assignment.id,
+    kind: "direct_response" as const,
+    text: `handoff ${index}`,
+    createdAt: 20 + index,
+  }));
+  const sent: any[] = [];
+  const storage = supervisionRuntime(
+    join(testTmpRoot, `fan-in-${randomUUID()}`, "sock"),
+  );
+  for (const record of records) writeProjectMessage(record, storage);
+  const context = fakeContext() as any;
+  context.isIdle = () => true;
+  context.sessionManager.getSessionId = () => sessionId;
+  const runtime = createLeadCoordinationRuntime(
+    new Proxy(
+      {
+        pi: {
+          sendMessage: (message: unknown, options: unknown) =>
+            sent.push({ message, options }),
+        },
+        leadRuntime: {
+          chiefMode: "inactive",
+          roleSuspended: false,
+          managerLease: { descriptor: manager },
+        },
+        processRole: "lead",
+        controllerScope: { kind: "root" },
+        activeRole: () => "manager",
+        supervisionRuntime: () => storage,
+        mightHaveProjectMessages: () => true,
+        currentManager: async () => manager,
+        sameManagerDescriptor: () => true,
+        listProjectAssignments: () => [assignment],
+        listProjectMessageHeaders: () => records,
+        readProjectAssignment: () => assignment,
+        readProjectMessage: (
+          _runtime: unknown,
+          _repo: string,
+          _branch: string,
+          id: string,
+        ) => records.find((record) => record.id === id),
+        importResultBindings: () => {},
+        removeProjectMessage: () => {},
+        appendDurableError: () => {},
+      },
+      {
+        get(target, key: string) {
+          return key in target
+            ? target[key as keyof typeof target]
+            : () => undefined;
+        },
+      },
+    ) as any,
+  );
+  const budget = { count: 0, bytes: 0 };
+  runtime.beginProjectMessageStartup(context);
+  context.isIdle = () => false;
+
+  assert.equal(
+    await runtime.drainProjectMessages(context, "startup", budget),
+    3,
+  );
+  assert.equal(sent.length, 3);
+  assert.deepEqual(
+    sent.map(({ message, options }) => [
+      message.details.id,
+      options.triggerTurn,
+    ]),
+    records.map(({ id }) => [id, false]),
+  );
+  assert.equal(budget.count, 3);
 });
 
 test("Managed supervisor messages never fall through when the active role is not Lead", async () => {

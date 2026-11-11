@@ -6085,14 +6085,10 @@ async function runManagerMergeSmoke(ctx) {
   ctx.owned.managerBranch = branch;
   ctx.managerRecovery = { branch };
   const manager = async () => rootSessionSnapshot(ctx);
-  const reportedSha = (contents, marker) => {
-    const serialized = sessionEntries(contents)
-      .map((entry) => JSON.stringify(entry))
-      .join("\n");
-    return serialized.match(
-      new RegExp(`${marker}[^0-9a-f]*([0-9a-f]{40,64})`, "i"),
-    )?.[1];
-  };
+  const completedHandoffs = (contents, assignmentId) =>
+    projectMessageEntries(contents, branch, assignmentId).filter((entry) =>
+      ["direct_response", "herd_settlement"].includes(entry.details?.kind),
+    );
 
   await run("git", ["add", ".pi/coordinators/managed-lead.md"], {
     cwd: ctx.rootCwd,
@@ -6216,13 +6212,23 @@ async function runManagerMergeSmoke(ctx) {
     "manager-merge-lead-source",
     async () => {
       const session = await manager();
-      const sha =
-        session && reportedSha(session.contents, "MANAGER_MERGE_SOURCE_READY");
-      return { done: !!sha, value: sha };
+      const reports = session
+        ? completedHandoffs(session.contents, assignmentRecord.id)
+        : [];
+      const report = reports.at(-1);
+      const sha = report?.details?.senderEnvironment?.git?.head;
+      return {
+        done: !!sha && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(sha),
+        value: { sha, report },
+      };
     },
     { timeoutMs: DEFAULT_MANAGER_READY_TIMEOUT_MS, stallMs: MODEL_STALL_MS },
   );
-  const initialSha = sourceReport;
+  assert.ok(
+    sourceReport.report,
+    "Manager must receive the Lead's completed handoff before integration",
+  );
+  const initialSha = sourceReport.sha;
   const sourceInitial = await managerMergeCheckoutState(sourcePath);
   assert.equal(sourceInitial.branch, branch);
   assert.equal(sourceInitial.head, initialSha);

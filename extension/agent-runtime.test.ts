@@ -82,6 +82,182 @@ import support, {
   seedLeadRole,
 } from "./support.ts";
 const { readConfig, updateConfig } = await import("./config.ts");
+
+test("Pi 1.5.0 includes non-triggering startup messages in the first provider request", async () => {
+  const faux = fauxProvider({
+    provider: "herdsman-startup-fan-in-test",
+    models: [{ id: "startup", contextWindow: 4096, maxTokens: 128 }],
+  });
+  const modelRuntime = await ModelRuntime.create({
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  modelRuntime.registerNativeProvider(faux.provider);
+  const settingsManager = SettingsManager.inMemory();
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    settingsManager,
+    noExtensions: true,
+    noContextFiles: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    extensionFactories: [
+      (api) =>
+        api.on("before_agent_start", async () => {
+          await api.sendMessage(
+            {
+              customType: "fan-in-test",
+              content: "startup sibling",
+              display: "none",
+            },
+            { triggerTurn: false },
+          );
+        }),
+    ],
+  });
+  await resourceLoader.reload();
+  let request: any[] = [];
+  faux.setResponses([
+    (context) => {
+      request = context.messages as any[];
+      return fauxAssistantMessage("done");
+    },
+  ]);
+  const { session } = await createAgentSession({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    modelRuntime,
+    model: faux.getModel()!,
+    settingsManager,
+    resourceLoader,
+    sessionManager: SessionManager.inMemory(WORKSPACE),
+  });
+  try {
+    await session.prompt("start");
+    assert.match(
+      JSON.stringify(request),
+      /startup sibling/,
+      JSON.stringify(request),
+    );
+  } finally {
+    await session.dispose();
+  }
+});
+
+test("two Chief inbox records reach one continued provider request from a turn-boundary drain", async () => {
+  const { drainCoordinationInbox, supervisionRuntime, writeChiefMessage } =
+    await import("./supervision.ts");
+  const faux = fauxProvider({
+    provider: "herdsman-turn-fan-in-test",
+    models: [{ id: "turn", contextWindow: 4096, maxTokens: 128 }],
+  });
+  const modelRuntime = await ModelRuntime.create({
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  modelRuntime.registerNativeProvider(faux.provider);
+  const settingsManager = SettingsManager.inMemory();
+  const inboxRuntime = supervisionRuntime(
+    join(testTmpRoot, `chief-fan-in-${randomUUID()}.sock`),
+  );
+  const sessionId = randomUUID();
+  const messages = [
+    { id: randomUUID(), text: `Chief downlink one ${randomUUID()}` },
+    { id: randomUUID(), text: `Chief downlink two ${randomUUID()}` },
+  ];
+  for (const { id, text } of messages)
+    writeChiefMessage(
+      {
+        version: 2,
+        build: HERDSMAN_BUILD,
+        id,
+        leaseId: randomUUID(),
+        kind: "chief_message",
+        fromSessionId: randomUUID(),
+        toSessionId: sessionId,
+        leadSessionId: sessionId,
+        text,
+        createdAt: Date.now(),
+      },
+      inboxRuntime,
+    );
+  const delivered = new Set<string>();
+  const submissions: { id: string; triggerTurn: boolean }[] = [];
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    settingsManager,
+    noExtensions: true,
+    noContextFiles: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    extensionFactories: [
+      (api) =>
+        api.on("turn_end", async (event) => {
+          if (event.outcome !== "completed") return;
+          const count = await drainCoordinationInbox({
+            runtime: inboxRuntime,
+            sessionId,
+            isAuthorized: () => true,
+            isDelivered: (id) => delivered.has(id),
+            deliveryMode: (record) =>
+              record.kind === "chief_message" ? "steer" : undefined,
+            forceNonTriggering: true,
+            sendMessage: async (message, options, record) => {
+              await api.sendMessage(message, options);
+              submissions.push({
+                id: record.id,
+                triggerTurn: options.triggerTurn,
+              });
+              delivered.add(record.id);
+            },
+          });
+          return count ? { continue: true } : undefined;
+        }),
+    ],
+  });
+  await resourceLoader.reload();
+  const requests: any[][] = [];
+  faux.setResponses([
+    (context) => {
+      requests.push(context.messages as any[]);
+      return fauxAssistantMessage("first response");
+    },
+    (context) => {
+      requests.push(context.messages as any[]);
+      return fauxAssistantMessage("second response");
+    },
+  ]);
+  const { session } = await createAgentSession({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    modelRuntime,
+    model: faux.getModel()!,
+    settingsManager,
+    resourceLoader,
+    sessionManager: SessionManager.inMemory(WORKSPACE),
+  });
+  try {
+    await session.prompt("start");
+    assert.equal(requests.length, 2);
+    for (const { text } of messages) {
+      assert.doesNotMatch(JSON.stringify(requests[0]), new RegExp(text));
+      assert.match(JSON.stringify(requests[1]), new RegExp(text));
+    }
+    assert.deepEqual(
+      submissions.sort((a, b) => a.id.localeCompare(b.id)),
+      messages
+        .map(({ id }) => ({ id, triggerTurn: false }))
+        .sort((a, b) => a.id.localeCompare(b.id)),
+    );
+  } finally {
+    await session.dispose();
+    realFs.rmSync(inboxRuntime.root, { recursive: true, force: true });
+  }
+});
 const {
   AGENT_REQUIRED_EVIDENCE_ENTRY,
   createManagedAgentEvidenceUpdater,
@@ -8212,6 +8388,145 @@ test("restricted Lead rejects nested tools outside its active profile", async ()
     },
   } as any);
   assert.ok(unavailablePolicy.toolCall({ toolName: "bash" }, ctx)?.block);
+});
+
+test("root role tool_call guard denies unauthorized native nested dispatch before effects", async () => {
+  const { createLeadAgentEventRuntime } = await import("./lead-runtime.ts");
+
+  for (const scenario of [
+    { role: "manager", allowed: ["nested_parent", "allowed_probe"] },
+    { role: "chief", allowed: ["nested_parent", "allowed_probe"] },
+    { role: "lead", allowed: ["nested_parent", "allowed_probe"] },
+    {
+      role: "manager",
+      allowed: ["nested_parent", "allowed_probe", "forbidden_probe"],
+    },
+  ] as const) {
+    const faux = fauxProvider({
+      provider: `nested-role-policy-${randomUUID()}`,
+      models: [{ id: "test", reasoning: false, input: ["text"] }],
+    });
+    const modelRuntime = await ModelRuntime.create({
+      modelsPath: null,
+      refreshOnCreate: false,
+    });
+    modelRuntime.registerNativeProvider(faux.provider);
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: false },
+    });
+    let forbiddenExecutions = 0;
+    let allowedExecutions = 0;
+    let nestedResults: { denied: boolean; allowed: boolean } | undefined;
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: WORKSPACE,
+      agentDir: testTmpRoot,
+      settingsManager,
+      noExtensions: true,
+      noContextFiles: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      extensionFactories: [
+        (api) => {
+          api.registerTool({
+            name: "nested_parent",
+            label: "nested parent",
+            description: "Call two native child tools.",
+            parameters: Type.Object({}),
+            execute: async (_id, _params, signal, _update, ctx) => {
+              const denied = await ctx.executeTool(
+                "forbidden_probe",
+                {},
+                { signal },
+              );
+              const allowed = await ctx.executeTool(
+                "allowed_probe",
+                {},
+                { signal },
+              );
+              nestedResults = {
+                denied: denied.isError,
+                allowed: allowed.isError,
+              };
+              return {
+                content: [
+                  { type: "text", text: JSON.stringify(nestedResults) },
+                ],
+                details: undefined,
+              };
+            },
+          });
+          api.registerTool({
+            name: "forbidden_probe",
+            label: "forbidden probe",
+            description: "Must not execute without role authorization.",
+            exposure: "codemode",
+            parameters: Type.Object({}),
+            execute: async () => {
+              forbiddenExecutions++;
+              return { content: [{ type: "text", text: "forbidden" }] };
+            },
+          });
+          api.registerTool({
+            name: "allowed_probe",
+            label: "allowed probe",
+            description: "An allowed nested tool.",
+            exposure: "codemode",
+            parameters: Type.Object({}),
+            execute: async () => {
+              allowedExecutions++;
+              return { content: [{ type: "text", text: "allowed" }] };
+            },
+          });
+          const events = createLeadAgentEventRuntime({
+            isCurrentChief: () => scenario.role === "chief",
+            chiefTools: ["nested_parent", "allowed_probe"],
+            currentChiefAllowedTools: () => scenario.allowed,
+            isActiveManager: () => scenario.role === "manager",
+            managerTools: ["nested_parent", "allowed_probe"],
+            currentManagerAllowedTools: () => scenario.allowed,
+            currentLeadAllowedTools: () => scenario.allowed,
+          } as any);
+          api.on("tool_call", (event, ctx) =>
+            events.toolCall(event, ctx as any),
+          );
+          api.on("session_start", () => api.setActiveTools(["nested_parent"]));
+        },
+      ],
+    });
+    await resourceLoader.reload();
+    faux.setResponses([
+      () =>
+        fauxAssistantMessage([fauxToolCall("nested_parent", {})], {
+          stopReason: "toolUse",
+        }),
+      () => fauxAssistantMessage("Finished."),
+    ]);
+    const { session } = await createAgentSession({
+      cwd: WORKSPACE,
+      agentDir: testTmpRoot,
+      modelRuntime,
+      model: faux.getModel()!,
+      settingsManager,
+      resourceLoader,
+      sessionManager: SessionManager.inMemory(WORKSPACE),
+    });
+    try {
+      assert.ok(session.getCallableToolNames().includes("forbidden_probe"));
+      await session.prompt("Invoke the nested parent tool.");
+      assert.deepEqual(nestedResults, {
+        denied: !scenario.allowed.includes("forbidden_probe"),
+        allowed: false,
+      });
+      assert.equal(
+        forbiddenExecutions,
+        Number(scenario.allowed.includes("forbidden_probe")),
+      );
+      assert.equal(allowedExecutions, 1);
+    } finally {
+      await session.dispose();
+    }
+  }
 });
 
 for (const concurrentInbox of [false, true]) {

@@ -20,6 +20,8 @@ import {
   writeProjectAssignmentAfter,
   withProjectAssignmentAuthority,
   staffToolName,
+  validSenderEnvironment,
+  normalizeHerdrLifecycleState,
 } from "../supervision.ts";
 import { OperationError } from "../errors.ts";
 import {
@@ -28,6 +30,7 @@ import {
   sameObservedSessionPath,
   resolveAssignmentCheckout,
 } from "../herdr.ts";
+import { readResult, unacknowledgedRequestExists } from "../mailbox.ts";
 import { claimSessionActivationLock } from "../lock.ts";
 import {
   isWorktreeRemovalPreapproved,
@@ -2172,6 +2175,177 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     ctx: ExtensionContext,
     signal?: AbortSignal,
   ): Promise<AgentToolResult<any>> => {
+    const completionRefusal = (reason: string): AgentToolResult<any> => ({
+      content: [
+        {
+          type: "text",
+          text: `Cannot integrate ${branch}: current Lead completion evidence is not eligible (${reason}). Assignment and checkout preserved.`,
+        },
+      ],
+      details: {
+        ok: false,
+        action: "merge",
+        branch,
+        source_head: expectedHead,
+        status: "blocked",
+        reason,
+        integrated: false,
+        checkout_removed: false,
+        assignment_retired: false,
+      },
+    });
+    const completionEligibility = (
+      target: Awaited<ReturnType<typeof inspectRemovalTarget>>,
+      managerBranch: readonly any[],
+    ): string | undefined => {
+      const outcomes = managerBranch.filter((entry: any) => {
+        const details = entry?.details;
+        return (
+          entry?.type === "custom_message" &&
+          entry.customType === "pi-herdsman-project_message" &&
+          details?.repoKey === target.assignment.repoKey &&
+          details?.branch === target.assignment.branch &&
+          details?.fromSessionId === target.assignment.id &&
+          [
+            "direct_response",
+            "herd_settlement",
+            "execution_failure",
+            "execution_cancelled",
+          ].includes(details.kind)
+        );
+      });
+      const report = outcomes.at(-1);
+      if (
+        !report ||
+        report.details.kind === "execution_failure" ||
+        report.details.kind === "execution_cancelled"
+      )
+        return "completion_handoff_missing";
+      const sender = report.details.senderEnvironment;
+      if (
+        !validSenderEnvironment(sender) ||
+        sender.git?.head !== expectedHead ||
+        sender.git?.branch !== target.checkedOutBranch ||
+        !sameDirectory(sender.git?.worktreeRoot, target.checkoutPath)
+      )
+        return "completion_revision_mismatch";
+      try {
+        if (!target.assignment.piSessionFile)
+          return "completion_evidence_unavailable";
+        const session = host.SessionManager.open(
+          target.assignment.piSessionFile,
+        );
+        if (session.getSessionId() !== target.assignment.id)
+          return "completion_evidence_unavailable";
+        const entries = session.getBranch();
+        if (!Array.isArray(entries)) return "completion_evidence_unavailable";
+        const receipt = entries.findIndex(
+          (entry: any) =>
+            entry?.type === "custom" &&
+            entry.customType === "pi-herdsman-herd-run" &&
+            entry.data?.phase === "report_sent" &&
+            entry.data?.reportId === report.details.id &&
+            entry.data?.sessionId === target.assignment.id &&
+            entry.data?.kind === report.details.kind,
+        );
+        if (receipt < 0) return "completion_evidence_unavailable";
+        if (
+          entries
+            .slice(receipt + 1)
+            .some(
+              (entry: any) =>
+                (entry?.type === "custom" &&
+                  entry.customType === "pi-herdsman-herd-run" &&
+                  entry.data?.sessionId === target.assignment.id &&
+                  [
+                    "lead_started",
+                    "lead_start_unpersisted",
+                    "report_pending",
+                  ].includes(entry.data?.phase)) ||
+                (entry?.type === "message" &&
+                  (entry.message?.role === "user" ||
+                    entry.message?.role === "assistant")),
+            )
+        )
+          return "completion_evidence_superseded";
+      } catch {
+        return "completion_evidence_unavailable";
+      }
+      if (
+        target.liveLead &&
+        !["idle", "done"].includes(
+          normalizeHerdrLifecycleState(target.liveLead),
+        )
+      )
+        return "lead_execution_active";
+      return undefined;
+    };
+    const currentExecutionEligibility = async (
+      target: Awaited<ReturnType<typeof inspectRemovalTarget>>,
+    ): Promise<string | undefined> => {
+      let managerBranch: readonly any[];
+      try {
+        managerBranch = ctx.sessionManager.getBranch();
+      } catch {
+        return "completion_evidence_unavailable";
+      }
+      const completion = completionEligibility(target, managerBranch);
+      if (completion) return completion;
+      const inventory = host.scanAgentStates();
+      if (inventory.issues.length) return "owned_work_unresolved";
+      const owned = new Set([target.assignment.id]);
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const { state } of inventory.states) {
+          if (
+            (state.projectAssignmentId === target.assignment.id ||
+              owned.has(state.ownerSessionId)) &&
+            !owned.has(state.piSessionId)
+          ) {
+            owned.add(state.piSessionId);
+            changed = true;
+          }
+        }
+      }
+      for (const { path, state } of inventory.states) {
+        if (
+          !owned.has(state.piSessionId) ||
+          state.piSessionId === target.assignment.id
+        )
+          continue;
+        try {
+          if (
+            state.activeRequestId ||
+            state.pendingAskId ||
+            state.resultError ||
+            state.lastAck?.accepted === false ||
+            state.lastAck?.code === "delivery" ||
+            unacknowledgedRequestExists(path, state) ||
+            (state.completedRequestId &&
+              readResult(path, state.completedRequestId))
+          )
+            return "owned_work_unresolved";
+        } catch {
+          return "owned_work_unresolved";
+        }
+      }
+      const descendants = await host.herdrSessionSnapshot(
+        host.pi,
+        ctx,
+        operationSignal,
+      );
+      if (
+        descendants.agents.some(
+          (agent) =>
+            agent.workspace_id === target.worktree.open_workspace_id &&
+            owned.has(host.herdrSessionId(agent) ?? "") &&
+            !["idle", "done"].includes(normalizeHerdrLifecycleState(agent)),
+        )
+      )
+        return "owned_work_unresolved";
+      return undefined;
+    };
     type Integration =
       | {
           kind: "integrated";
@@ -2645,6 +2819,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                       alreadyIntegrated: true as const,
                     };
                   }
+                  const eligibility =
+                    await currentExecutionEligibility(current);
+                  if (eligibility)
+                    return {
+                      kind: "tool-result",
+                      result: completionRefusal(eligibility),
+                    };
                   const preStopFastForward = await ancestry(
                     preStopTarget,
                     expectedHead,
@@ -2747,10 +2928,35 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                       };
                     expectedMergeTree = tree;
                   }
-                  if (current.liveLead)
+                  const stopTarget = await inspectRemovalTarget(
+                    branch,
+                    ctx,
+                    operationSignal,
+                  );
+                  if (
+                    stopTarget.assignment.id !== current.assignment.id ||
+                    stopTarget.checkoutPath !== current.checkoutPath ||
+                    stopTarget.checkedOutBranch !== sourceBranch ||
+                    stopTarget.sourceCheckoutPath !== targetPath
+                  )
+                    return {
+                      kind: "tool-result",
+                      result: completionRefusal(
+                        "completion_evidence_superseded",
+                      ),
+                    };
+                  assertCandidateLeadUnchanged(current, stopTarget);
+                  const finalEligibility =
+                    await currentExecutionEligibility(stopTarget);
+                  if (finalEligibility)
+                    return {
+                      kind: "tool-result",
+                      result: completionRefusal(finalEligibility),
+                    };
+                  if (stopTarget.liveLead)
                     await stopExecution(
-                      current.assignment.id,
-                      current.liveLead,
+                      stopTarget.assignment.id,
+                      stopTarget.liveLead,
                       ctx,
                       operationSignal,
                       heldLocks,
