@@ -11237,7 +11237,7 @@ export function createAgentController(
     registerRecipientFanIn(pi, (ctx, phase, budget) =>
       drainReadyOwnerNotifications(ctx, phase, budget),
     );
-  pi.on("agent_settled", (_event, context) => {
+  pi.on("agent_settled", (event, context) => {
     if (!active) return;
     let ownerId: string;
     try {
@@ -11247,11 +11247,13 @@ export function createAgentController(
     }
     for (const runtime of runtimes.values()) {
       if (runtime.ownerSessionId !== ownerId) continue;
-      for (const key of submittedOwnerMessages)
-        if (key.startsWith(`${runtime.mailboxPath}:`))
-          submittedOwnerMessages.delete(key);
+      if (!event.aborted)
+        for (const key of submittedOwnerMessages)
+          if (key.startsWith(`${runtime.mailboxPath}:`))
+            submittedOwnerMessages.delete(key);
       // Settlement is notification-only: reconcile receipts, but defer retries
-      // until a later normal delivery boundary.
+      // until a later normal delivery boundary. An aborted run may leave queued
+      // steering unconsumed, so retain its guard until a non-aborted settlement.
       deliverOwnerMessages(runtime, context, undefined, false, undefined, true);
     }
   });

@@ -7723,6 +7723,76 @@ test("owner notification is retained until its exact persisted session receipt",
   }
 });
 
+test("aborted owner settlement retains an unconsumed steering notification guard", async () => {
+  setLeadEnvironment();
+  const label = "aborted-owner-notification";
+  const identity = recoveryIdentity(label);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  const state = managedState(label, REQUEST_ID, identity);
+  writeAgentState(mailbox, state);
+  const notification = {
+    version: 5 as const,
+    messageId: "77777777-7777-4777-8777-777777777777",
+    requestId: REQUEST_ID,
+    runId: state.runId,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    piSessionId: state.piSessionId,
+    text: "The owner needs this result before I continue.",
+    createdAt: Date.now(),
+  };
+  writeOwnerMessage(mailbox, notification);
+  const entries: unknown[] = [];
+  const pi = fakePi({
+    exec: leadExec(
+      label,
+      "working",
+      identity.piSessionId,
+      undefined,
+      identity.piSessionId,
+      identity,
+    ),
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(entries, []);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.equal(pi.sentMessageCalls.length, 1);
+    assert.deepEqual(pi.sentMessageCalls[0]?.options, {
+      triggerTurn: true,
+      deliverAs: "steer",
+    });
+
+    // Pi aborts before consuming the submitted steering message.
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: true }, context);
+    await pi.events.get("before_agent_start")?.[0](undefined, context);
+    assert.equal(pi.sentMessageCalls.length, 1);
+    assert.equal(readOwnerMessages(mailbox).length, 1);
+
+    // The replacement run consumes the original queued message and persists it.
+    const sent = pi.sentMessageCalls[0]!.message as any;
+    entries.push({ customType: sent.customType, details: sent.details });
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: false }, context);
+
+    const persisted = entries.filter(
+      (entry: any) =>
+        entry.customType === "pi-herdsman-agent-owner-message" &&
+        entry.details?.messageId === notification.messageId,
+    );
+    assert.equal(persisted.length, 1);
+    assert.equal(readOwnerMessages(mailbox).length, 0);
+    assert.equal(pi.sentMessageCalls.length, 1);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
 test("owner ask resolved while busy is not delivered after settlement", async () => {
   setLeadEnvironment();
   const label = "busy-resolved-ask";
