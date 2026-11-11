@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.44.0](https://github.com/boadij/pi-herdsman/compare/v0.43.0...v0.44.0) (2026-11-11)
+
+
+### Features
+
+* **coordination:** batch compatible recipient messages and results ([#909](https://github.com/boadij/pi-herdsman/issues/909)) ([258f30f](https://github.com/boadij/pi-herdsman/commit/258f30f011ba345e1ff94b233549e8ea64567916))
+
+
+### Fixes
+
+* **manager:** gate integration on verified Lead handoff ([#914](https://github.com/boadij/pi-herdsman/issues/914)) ([7bead47](https://github.com/boadij/pi-herdsman/commit/7bead4721c99a920c30aa1abcc0331be46e12f5c))
+* **roles:** share tool policy and verify native authorization ([#912](https://github.com/boadij/pi-herdsman/issues/912)) ([e79d9a5](https://github.com/boadij/pi-herdsman/commit/e79d9a5f5181933f69300e2079a8dac821eefd7c))
+* **runtime:** align Chief identity across role transitions ([#906](https://github.com/boadij/pi-herdsman/issues/906)) ([098632b](https://github.com/boadij/pi-herdsman/commit/098632b85451b8299b2a15a659426add3490ccdb))
+* **smoke:** acknowledge continuation results regardless of message order ([#916](https://github.com/boadij/pi-herdsman/issues/916)) ([5f739d6](https://github.com/boadij/pi-herdsman/commit/5f739d6fd06c4561b8d11eeb79eaef7d00610da2)), closes [#522](https://github.com/boadij/pi-herdsman/issues/522)
+
+
+### Other Changes
+
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.11.6 ([#915](https://github.com/boadij/pi-herdsman/issues/915)) ([5b1c2b6](https://github.com/boadij/pi-herdsman/commit/5b1c2b62ddac83a6a5f65e6eef04fea187af3f79))
+
 ## [0.43.0](https://github.com/boadij/pi-herdsman/compare/v0.42.1...v0.43.0) (2026-11-09)
 
 
