@@ -16655,10 +16655,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   let failSupervision = false;
   let sampleRefresh = false;
   const untrackedFile = join(assignedCheckout, "untracked.txt");
-  let markFocusLookupStarted!: () => void;
-  const focusLookupStarted = new Promise<void>(
-    (resolve) => (markFocusLookupStarted = resolve),
-  );
+  let focusLookupStarted = false;
   let resolveFocusLookup!: (value: typeof currentSnapshot) => void;
   let runtime: ReturnType<typeof createLeadSupervisionRuntime>;
   const currentState = {
@@ -16684,8 +16681,6 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   const gitCalls: Array<{ cwd: string; args: string[] }> = [];
   const managerHead = runGit(["rev-parse", "HEAD"], managerCheckout);
   let assignedHead = runGit(["rev-parse", "HEAD"], assignedCheckout);
-  let resolveGitDiff!: () => void;
-  const gitDiff = new Promise<void>((resolve) => (resolveGitDiff = resolve));
   let diffMode:
     "text" | "binary" | "malformed" | "fail" | "deferred" | "cancelDeferred" =
     "text";
@@ -16693,15 +16688,9 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   let wrongStatusBranch = false;
   let detachedStatusHead = false;
   let resolveDeferredDiff!: () => void;
-  let markDeferredDiffStarted!: () => void;
-  const deferredDiffStarted = new Promise<void>(
-    (resolve) => (markDeferredDiffStarted = resolve),
-  );
+  let deferredDiffStarted = false;
   let resolveCancelledDiff!: () => void;
-  let markCancelledDiffStarted!: () => void;
-  const cancelledDiffStarted = new Promise<void>(
-    (resolve) => (markCancelledDiffStarted = resolve),
-  );
+  let cancelledDiffStarted = false;
   let samplerSignal: AbortSignal | undefined;
   const originalDateNow = Date.now;
   let testNow = originalDateNow();
@@ -16723,14 +16712,13 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
         )
           return { code: 0, stdout: assignedHead };
         if (args.includes("diff")) {
-          resolveGitDiff();
           if (diffMode === "binary")
             return { code: 0, stdout: "-\t-\tbinary.dat\0" };
           if (diffMode === "malformed")
             return { code: 0, stdout: "not-numstat\0" };
           if (diffMode === "fail") return { code: 1, stdout: "" };
           if (diffMode === "deferred") {
-            markDeferredDiffStarted();
+            deferredDiffStarted = true;
             return await new Promise<{ code: number; stdout: string }>(
               (resolve) => {
                 resolveDeferredDiff = () =>
@@ -16740,7 +16728,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
           }
           if (diffMode === "cancelDeferred") {
             samplerSignal = options.signal;
-            markCancelledDiffStarted();
+            cancelledDiffStarted = true;
             return await new Promise<{ code: number; stdout: string }>(
               (resolve) => {
                 resolveCancelledDiff = () =>
@@ -16792,7 +16780,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
       loadCount++;
       if (loadCount === 2 || deferNextLookup) {
         deferNextLookup = false;
-        markFocusLookupStarted();
+        focusLookupStarted = true;
         return await new Promise<typeof currentSnapshot>(
           (resolve) => (resolveFocusLookup = resolve),
         );
@@ -16915,7 +16903,16 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
       (call) => call.cwd === assignedCheckout && call.args.includes("status"),
     ),
   );
-  await gitDiff;
+  await t.waitFor(
+    () =>
+      assert.ok(
+        gitCalls.some(
+          (call) => call.cwd === assignedCheckout && call.args.includes("diff"),
+        ),
+        "Manager Git sampling did not reach assigned-checkout diff",
+      ),
+    { timeout: 5_000 },
+  );
   assert.ok(
     gitCalls.some(
       (call) =>
@@ -17347,7 +17344,14 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   testNow += 30_001;
   sampleRefresh = true;
   await runtime.refresh(ctx);
-  await deferredDiffStarted;
+  await t.waitFor(
+    () =>
+      assert.ok(
+        deferredDiffStarted,
+        "Manager sampling did not start deferred diff",
+      ),
+    { timeout: 5_000 },
+  );
   currentState.sessionGeneration++;
   resolveDeferredDiff();
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -17363,7 +17367,10 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   );
   assert.match(widget.render(120).join("\n"), /feat\/standalone · Lead/);
   widget.handleMouse({ type: "click", button: "left", x: 5, y: 2, width: 120 });
-  await focusLookupStarted;
+  await t.waitFor(
+    () => assert.ok(focusLookupStarted, "Manager focus lookup did not start"),
+    { timeout: 5_000 },
+  );
   await runtime.refresh(ctx);
   resolveFocusLookup(currentSnapshot);
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -17391,11 +17398,13 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   await runtime.refresh(ctx);
   mismatch = false;
   deferNextLookup = true;
-  const replacementLookupStarted = new Promise<void>((resolve) => {
-    markFocusLookupStarted = resolve;
-  });
+  focusLookupStarted = false;
   widget.handleMouse({ type: "click", button: "left", x: 5, y: 1, width: 120 });
-  await replacementLookupStarted;
+  await t.waitFor(
+    () =>
+      assert.ok(focusLookupStarted, "Replacement focus lookup did not start"),
+    { timeout: 5_000 },
+  );
   currentState.sessionGeneration++;
   resolveFocusLookup(currentSnapshot);
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -17508,7 +17517,14 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   testNow += 30_001;
   sampleRefresh = true;
   await runtime.refresh(ctx);
-  await cancelledDiffStarted;
+  await t.waitFor(
+    () =>
+      assert.ok(
+        cancelledDiffStarted,
+        "Manager sampling did not start cancellable diff",
+      ),
+    { timeout: 5_000 },
+  );
   try {
     contextAbort.abort();
     assert.equal(
