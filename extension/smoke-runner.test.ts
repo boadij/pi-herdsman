@@ -6616,7 +6616,10 @@ test("candidate start treats only a structured missing-pane error as impossible"
 });
 
 test("pane absence requires a complete Herdr snapshot with no exact target", () => {
-  const target = { paneId: "pane-1", sessionPath: "/sessions/target.jsonl" };
+  const target = {
+    paneId: "pane-1",
+    sessionPath: resolve("/sessions/target.jsonl"),
+  };
   assert.equal(targetPaneAbsentFromSnapshot({}, target), false);
   assert.equal(
     targetPaneAbsentFromSnapshot({ agents: [], panes: [] }, target),
