@@ -6622,6 +6622,58 @@ async function runAgentCrashRecoverySmoke(ctx) {
   const restartedListing = await nestedCommand(ctx, ["agent", "list"]);
   const restartedAgents = restartedListing.agents ?? [];
   const restartedManaged = await smokeManagedAgentRecords(ctx, restartedAgents);
+  const restartedTarget = restartedManaged.find(
+    ({ mailbox }) => mailbox?.state.agentLabel === "smoke-crash-target",
+  );
+  const restartedTargetState = restartedTarget?.mailbox?.state;
+  const diagnosticTag = createHash("sha256")
+    .update(randomUUID())
+    .update(restartedTargetState?.runId ?? "")
+    .update(restartedTargetState?.completedRequestId ?? "")
+    .digest("hex")
+    .slice(0, 12);
+  let shutdownResult;
+  if (restartedTarget?.mailbox && restartedTargetState?.completedRequestId) {
+    try {
+      shutdownResult = JSON.parse(
+        await readFile(
+          join(
+            restartedTarget.mailbox.directory,
+            `result-${restartedTargetState.completedRequestId}.json`,
+          ),
+          "utf8",
+        ),
+      );
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+  const persistedResultMatchesTarget = Boolean(
+    shutdownResult &&
+    restartedTargetState &&
+    shutdownResult.requestId === restartedTargetState.completedRequestId &&
+    shutdownResult.runId === restartedTargetState.runId &&
+    shutdownResult.ownerSessionId === restartedTargetState.ownerSessionId &&
+    shutdownResult.workspaceId === restartedTargetState.workspaceId &&
+    shutdownResult.agentLabel === restartedTargetState.agentLabel &&
+    shutdownResult.paneId === restartedTargetState.paneId,
+  );
+  ctx.crashRecovery.diagnostic = {
+    correlation: diagnosticTag,
+    event: "after-restart-settlement",
+    targetMailboxFound: !!restartedTarget?.mailbox,
+    activeRequestCleared: restartedTargetState
+      ? !restartedTargetState.activeRequestId
+      : null,
+    completedRequestPresent: !!restartedTargetState?.completedRequestId,
+    resultPresent: !!shutdownResult,
+    persistedResultMatchesTarget,
+    status: shutdownResult?.status ?? null,
+    errorCode: shutdownResult?.error?.code ?? null,
+  };
+  console.log(
+    `crash-recovery diagnostic: ${JSON.stringify(ctx.crashRecovery.diagnostic)}`,
+  );
   const restoredParent = restartedManaged.find(
     ({ mailbox }) => mailbox?.state.agentLabel === "smoke-crash-parent",
   );
@@ -6739,6 +6791,65 @@ async function runAgentCrashRecoverySmoke(ctx) {
       entry.message?.role === "toolResult" &&
       entry.message.toolName === "list_agents" &&
       !entry.message.isError,
+  );
+  const deliveredResult = ownerEntries.find((entry) => {
+    const record = entry?.message ?? entry;
+    const details = record?.details;
+    return (
+      record?.customType === "pi-herdsman-agent-result" &&
+      persistedResultMatchesTarget &&
+      details?.requestId === shutdownResult?.requestId &&
+      details?.runId === restartedTargetState?.runId &&
+      details?.ownerSessionId === restartedTargetState?.ownerSessionId &&
+      details?.workspaceId === restartedTargetState?.workspaceId &&
+      details?.agentLabel === restartedTargetState?.agentLabel &&
+      details?.paneId === restartedTargetState?.paneId &&
+      details?.piSessionId === restartedTargetState?.piSessionId &&
+      details?.status === shutdownResult?.status &&
+      details?.error?.code === shutdownResult?.error?.code
+    );
+  });
+  const deliveredDetails =
+    deliveredResult?.message?.details ?? deliveredResult?.details;
+  ctx.crashRecovery.diagnostic = {
+    ...ctx.crashRecovery.diagnostic,
+    event: "after-exact-owner-result",
+    exactResultDelivered: !!deliveredResult,
+    deliveredStatus: deliveredDetails?.status ?? null,
+    deliveredErrorCode: deliveredDetails?.error?.code ?? null,
+  };
+  console.log(
+    `crash-recovery diagnostic: ${JSON.stringify(ctx.crashRecovery.diagnostic)}`,
+  );
+  let mailboxDirectoryPresent = false;
+  let mailboxStatePresent = false;
+  if (restartedTarget?.mailbox) {
+    for (const [path, setPresent] of [
+      [
+        restartedTarget.mailbox.directory,
+        (value) => (mailboxDirectoryPresent = value),
+      ],
+      [
+        join(restartedTarget.mailbox.directory, "state.json"),
+        (value) => (mailboxStatePresent = value),
+      ],
+    ]) {
+      try {
+        await access(path);
+        setPresent(true);
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+  }
+  ctx.crashRecovery.diagnostic = {
+    ...ctx.crashRecovery.diagnostic,
+    event: "after-result-cleanup-observation",
+    mailboxDirectoryPresent,
+    mailboxStatePresent,
+  };
+  console.log(
+    `crash-recovery diagnostic: ${JSON.stringify(ctx.crashRecovery.diagnostic)}`,
   );
   const controlledAgents = listResult?.message?.details?.agents;
   assert.ok(
@@ -13556,14 +13667,16 @@ async function main() {
     if (scenario === "terminal-failure")
       console.log(`terminal-failure: ${JSON.stringify(ctx.terminalFailure)}`);
     if (scenario === "agent-crash-recovery")
-      console.log(`agent-crash-recovery: ${JSON.stringify(ctx.crashRecovery)}`);
+      console.log(
+        `agent-crash-recovery: ${JSON.stringify(ctx.crashRecovery.diagnostic)}`,
+      );
     if (scenario === "deep-chain")
       console.log(`deep-chain: ${JSON.stringify(ctx.deepChain)}`);
     console.log(`authentication: ${ctx.authMechanism}`);
   } catch (error) {
     failure = { phase, error };
     console.error(
-      `smoke ${scenario}: ${classifySmokeFailure(phase, error).replace("_", " ")}\n${formatSmokeFailure(error, ctx.stage)}`,
+      `smoke ${scenario}: ${classifySmokeFailure(phase, error).replace("_", " ")}\n${scenario === "agent-crash-recovery" ? `stage: ${ctx.stage ?? "not recorded"}\nerror: ${error?.name ?? "Error"}` : formatSmokeFailure(error, ctx.stage)}`,
     );
     if (scenario === "manager-bootstrap") {
       try {
