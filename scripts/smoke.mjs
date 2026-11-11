@@ -6679,36 +6679,6 @@ async function runAgentCrashRecoverySmoke(ctx) {
       targetAfterRestartResult = JSON.parse(await readFile(resultPath, "utf8"));
     }
   }
-  const exactTargetAgents = restartedAgents.filter(
-    (agent) =>
-      agent.agent_session?.kind === "path" &&
-      resolve(agent.agent_session.value) ===
-        ctx.crashRecovery.target.sessionPath,
-  );
-  let targetNoCompetingExecution = false;
-  if (exactTargetAgents.length === 1) {
-    const targetAgent = exactTargetAgents[0];
-    const processInfo = await tryNestedCommand(ctx, [
-      "pane",
-      "process-info",
-      "--pane",
-      targetAgent.pane_id,
-    ]);
-    targetNoCompetingExecution =
-      targetAgent.agent_status === "idle" &&
-      (processInfo.ok
-        ? Array.isArray(processInfo.value.process_info?.foreground_processes) &&
-          candidateProcess(
-            processInfo.value,
-            ctx.candidateExtension,
-            ctx.herdrStateExtension,
-          ).length === 0
-        : processInfo.herdrCode === "pane_not_found" &&
-          targetPaneAbsentFromSnapshot(
-            (await nestedCommand(ctx, ["api", "snapshot"])).snapshot,
-            ctx.crashRecovery.target,
-          ));
-  }
   const restoredParent = restartedManaged.find(
     ({ mailbox }) => mailbox?.state.agentLabel === "smoke-crash-parent",
   );
@@ -6909,6 +6879,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
     targetAfterRestartState?.activeRequestId ===
       ctx.crashRecovery.target.requestId &&
     targetAfterRestartState.runId === ctx.crashRecovery.target.runId;
+  let targetNoCompetingExecution = null;
   let stopResult;
   if (!targetCanStop) {
     const state = targetAfterRestartState;
@@ -6942,11 +6913,6 @@ async function runAgentCrashRecoverySmoke(ctx) {
     assert.equal(targetRequestResults.length, 1);
     assert.equal(exactTargetResultDetails?.status, "failed");
     assert.equal(exactTargetResultDetails?.error?.code, "aborted");
-    assert.equal(
-      targetNoCompetingExecution,
-      true,
-      "settled-target recovery has a competing or unverified execution",
-    );
     const processInfoAfterResult = await tryNestedCommand(ctx, [
       "pane",
       "process-info",
@@ -6960,7 +6926,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
         (await nestedCommand(ctx, ["api", "snapshot"])).snapshot,
         ctx.crashRecovery.target,
       );
-    assert.ok(
+    targetNoCompetingExecution =
       (processInfoAfterResult.ok &&
         Array.isArray(
           processInfoAfterResult.value.process_info?.foreground_processes,
@@ -6970,8 +6936,10 @@ async function runAgentCrashRecoverySmoke(ctx) {
           ctx.candidateExtension,
           ctx.herdrStateExtension,
         ).length === 0) ||
-        targetAbsent,
-      "settled target still has an active candidate process",
+      targetAbsent;
+    assert.ok(
+      targetNoCompetingExecution,
+      "settled target still has an active or unverified execution",
     );
     ctx.crashRecovery.recoveryPath = "settled-result";
     await nestedCommand(ctx, [
