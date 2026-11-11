@@ -1,28 +1,23 @@
-name: Temporary continuation diagnostic
+name: Temporary continuation A/B diagnostic
 
 on:
-  workflow_dispatch:
-    inputs:
-      target:
-        description: Isolated comparison target
-        required: true
-        type: choice
-        options:
-          - main
-          - pi-pins-only
-          - pr-head
+  pull_request:
 
 permissions:
   contents: read
 
 concurrency:
-  group: continuation-diagnostic-${{ github.ref }}-${{ inputs.target }}
+  group: continuation-diagnostic-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
   cancel-in-progress: false
 
 jobs:
   continuation:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [main, pi-pins-only, pr-head]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -35,8 +30,8 @@ jobs:
       - name: Select isolated comparison target
         shell: bash
         env:
-          TARGET: ${{ inputs.target }}
-          SOURCE_SHA: ${{ github.sha }}
+          TARGET: ${{ matrix.target }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           git fetch origin main
@@ -88,7 +83,7 @@ jobs:
         if: ${{ failure() }}
         uses: actions/upload-artifact@v7
         with:
-          name: continuation-diagnostic-${{ inputs.target }}
+          name: continuation-diagnostic-${{ matrix.target }}
           path: ${{ runner.temp }}/pi-herdsman-smoke-evidence-*/result.json
           if-no-files-found: warn
           retention-days: 3
