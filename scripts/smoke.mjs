@@ -8905,6 +8905,29 @@ async function runContinuationSmoke(ctx) {
         ctx.continuationAcceptedRequestId = accepted.request_id;
         if (accepted.owner_session_id !== owner?.id)
           throw new Error("continuation owner session does not match root");
+        if (accepted.pane_id !== agent.pane_id)
+          throw new Error(
+            "continuation accepted pane does not match candidate",
+          );
+        sessionStarts = await readJsonl("smoke-faux-session-start.jsonl");
+        provenance = await readJsonl("smoke-faux-provenance.jsonl");
+        const processInfo = await tryNestedCommand(ctx, [
+          "pane",
+          "process-info",
+          "--pane",
+          agent.pane_id,
+        ]);
+        ctx.continuationProcessPidLink = processInfo.ok
+          ? continuationProcessPidLink(
+              processInfo.value,
+              sessionStarts,
+              provenance,
+              firstSession.id,
+              [...firstPids],
+              ctx.candidateExtension,
+              ctx.herdrStateExtension,
+            )
+          : "process_info_unavailable";
         const selection = await smokeMailbox(
           ctx,
           agent,
@@ -8948,29 +8971,6 @@ async function runContinuationSmoke(ctx) {
                   "continuation mailbox request does not match accepted result",
                 );
         }
-        if (accepted.pane_id !== agent.pane_id)
-          throw new Error(
-            "continuation accepted pane does not match candidate",
-          );
-        sessionStarts = await readJsonl("smoke-faux-session-start.jsonl");
-        provenance = await readJsonl("smoke-faux-provenance.jsonl");
-        const processInfo = await tryNestedCommand(ctx, [
-          "pane",
-          "process-info",
-          "--pane",
-          agent.pane_id,
-        ]);
-        ctx.continuationProcessPidLink = processInfo.ok
-          ? continuationProcessPidLink(
-              processInfo.value,
-              sessionStarts,
-              provenance,
-              firstSession.id,
-              [...firstPids],
-              ctx.candidateExtension,
-              ctx.herdrStateExtension,
-            )
-          : "process_info_unavailable";
         if (mailbox) {
           firstGeneration = completedContinuationPid(
             sessionStarts,
