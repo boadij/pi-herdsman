@@ -30,6 +30,7 @@ import {
   readRequest,
   readUnacknowledgedRequest,
   readAsk,
+  readOwnerMessages,
   readPendingAsk,
   readResult,
   readAgentState,
@@ -38,6 +39,7 @@ import {
   removeAgentMailbox,
   removeResult,
   removeAsk,
+  removeOwnerMessage,
   resetAgentMailbox,
   unacknowledgedRequestExists,
   observeMailbox,
@@ -49,12 +51,14 @@ import {
   readAgentStartupOutcome,
   writeRequest,
   writeAsk,
+  writeOwnerMessage,
   writeAgentState,
   writeAgentBootstrap,
   readAgentBootstrap,
   agentMailboxPath,
   type RequestRecord,
   type AskRecord,
+  type OwnerMessageRecord,
   type ManagedAgentState,
   type ResultRecord,
 } from "./mailbox.ts";
@@ -421,6 +425,42 @@ test("asks and reply requests round-trip with strict correlation", () => {
   assert.deepEqual(readRequest(path, request.requestId), request);
   removeAsk(path);
   assert.equal(readAsk(path), undefined);
+});
+test("owner notifications persist independently and are ordered by acceptance", () => {
+  const path = mkdtempSync(join(tmpdir(), "pi-herdsman-owner-notice-"));
+  const message = (
+    messageId: string,
+    createdAt: number,
+  ): OwnerMessageRecord => ({
+    version: 5,
+    messageId,
+    requestId: state.runId,
+    runId: state.runId,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    piSessionId: state.piSessionId,
+    text: `Notice ${createdAt}`,
+    createdAt,
+  });
+  const first = message("44444444-4444-4444-8444-444444444444", 10);
+  const second = message("55555555-5555-4555-8555-555555555555", 20);
+  writeOwnerMessage(path, second);
+  writeOwnerMessage(path, first);
+  assert.deepEqual(readOwnerMessages(path), [first, second]);
+  removeOwnerMessage(path, first.messageId);
+  assert.deepEqual(readOwnerMessages(path), [second]);
+});
+test("malformed owner-message-prefixed files fail closed for cleanup", () => {
+  const path = mkdtempSync(join(tmpdir(), "pi-herdsman-owner-notice-"));
+  const malformed = join(path, "owner-message-not-a-uuid.json");
+  writeFileSync(malformed, "{}");
+  assert.throws(
+    readOwnerMessages.bind(null, path),
+    /Malformed owner message filename/,
+  );
+  assert.equal(existsSync(malformed), true);
 });
 test("request and ask result bindings are strictly validated", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));

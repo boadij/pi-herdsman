@@ -1,15 +1,15 @@
-# `ask_owner` API
+# `await_owner` API
 
 [Documentation index](../README.md)
 
-`ask_owner` is mandatory managed agent infrastructure for one direct-owner
+`await_owner` is mandatory managed agent infrastructure for one direct-owner
 decision required to continue the current assignment.
 
 It is not a generic messaging channel.
 
 ## Availability
 
-Every valid managed agent receives the `ask_owner` tool at launch.
+Every valid managed agent receives the `await_owner` tool at launch.
 
 Normal definition `tools`, `excludeTools`, and `noTools` policy cannot remove
 this infrastructure capability.
@@ -37,7 +37,7 @@ working directory. This does not weaken the sole-final-tool-call rule.
 
 ## Turn rule
 
-`ask_owner` must be:
+`await_owner` must be:
 
 - the agent's only tool call in the turn;
 - the final tool call of the turn.
@@ -59,8 +59,8 @@ An agent can ask only while it has a valid active assignment and:
 
 For a delegation-enabled agent, direct-agent state adds one gate:
 
-- no unresolved direct-agent work leaves normal `ask_owner` eligibility unchanged;
-- if unresolved direct agents exist, every unresolved child must have a valid pending `ask_owner`;
+- no unresolved direct-agent work leaves normal `await_owner` eligibility unchanged;
+- if unresolved direct agents exist, every unresolved child must have a valid pending `await_owner`;
 - ordinary active children, pending results, result errors, or unverifiable child asks block escalation.
 
 ## Durable effect
@@ -88,7 +88,7 @@ delivery path.
 The system does not automatically forward an agent question through an ownership
 chain.
 
-If a delegating agent needs a lead decision, it independently calls `ask_owner`
+If a delegating agent needs a lead decision, it independently calls `await_owner`
 on its own direct ownership edge.
 
 ## Reply
@@ -120,7 +120,7 @@ the same assignment with the owner answer.
 
 ## One outstanding question
 
-Only one `ask_owner` question may be outstanding per assignment at a time.
+Only one `await_owner` question may be outstanding per assignment at a time.
 
 There is no ask timeout.
 

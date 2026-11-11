@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import type {
   RequestRecord,
+  OwnerMessageRecord,
   ManagedAgentState,
   ResultRecord,
 } from "./mailbox.ts";
@@ -42,6 +43,7 @@ import support, {
   agentControllerExecutor,
   readRequest,
   readResult,
+  readOwnerMessages,
   readAgentState,
   realFs,
   recoveryIdentity,
@@ -62,6 +64,7 @@ import support, {
   writeAsk,
   writeRequest,
   writeResult,
+  writeOwnerMessage,
   writeAgentState,
   writeAgentStartupOutcome,
 } from "./support.ts";
@@ -2512,7 +2515,7 @@ test("controller reply submits the normal request and preserves the assignment",
   assert.equal(missingAsk.details.error.category, "agent_busy");
   assert.match(
     missingAsk.details.error.nextAction,
-    /Use reply_agent only for an outstanding ask_owner question/,
+    /Use reply_agent only for an outstanding await_owner question/,
   );
   resetAgentMailbox(mailbox);
   realFs.rmSync(replyFile, { force: true });
@@ -3682,6 +3685,81 @@ test("result is removed after agent state reaches completed", async (t) => {
   );
   assert.equal(settled.details.cleanup_errors?.[label], undefined);
   pi.events.get("session_shutdown")?.[0]();
+});
+
+test("unconfirmed owner notification gates completed-result mailbox cleanup", async (t) => {
+  setLeadEnvironment();
+  const label = "notification-cleanup-gate-agent";
+  const identity = recoveryIdentity(label);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  const state = {
+    ...managedState(label, undefined, identity),
+    completedRequestId: REQUEST_ID,
+  };
+  writeAgentState(mailbox, state);
+  writeResult(mailbox, {
+    version: 5,
+    runId: state.runId,
+    requestId: REQUEST_ID,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    status: "completed",
+    text: "finished normally",
+    completedAt: Date.now(),
+  });
+  const notification: OwnerMessageRecord = {
+    version: 5,
+    messageId: "99999999-9999-4999-8999-999999999999",
+    requestId: REQUEST_ID,
+    runId: state.runId,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    piSessionId: state.piSessionId,
+    text: "An important note accepted before completion.",
+    createdAt: Date.now(),
+  };
+  writeOwnerMessage(mailbox, notification);
+  const entries: unknown[] = [
+    {
+      customType: "pi-herdsman-agent-result",
+      details: resultEntryDetails(state, REQUEST_ID),
+    },
+  ];
+  const lifecycle = cascadeExecutor([state]);
+  const pi = fakePi({ entries, exec: lifecycle.exec });
+  registerExtension!(pi.pi as never);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const context = fakeContext(entries);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const sent = pi.sent.find(
+      (message: any) =>
+        message.customType === "pi-herdsman-agent-owner-message",
+    ) as any;
+    assert.ok(sent);
+    assert.ok(readResult(mailbox, REQUEST_ID));
+    assert.ok(readAgentState(mailbox));
+    assert.equal(readOwnerMessages(mailbox).length, 1);
+
+    entries.push({
+      customType: sent.customType,
+      details: sent.details,
+    });
+    for (const handler of pi.events.get("turn_end") ?? [])
+      await handler({ outcome: "completed" }, context);
+    t.mock.timers.tick(250);
+    for (let index = 0; index < 5; index++) await Promise.resolve();
+    assert.equal(readAgentState(mailbox), undefined);
+    assert.equal(readResult(mailbox, REQUEST_ID), undefined);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
 });
 
 test("live result cleanup keeps a later request owned by the mailbox", async (t) => {
@@ -5124,7 +5202,7 @@ test("health scanner alerts true runtime blocking", async () => {
   assert.equal(sent.length, 1);
   assert.equal(sent[0].customType, "pi-herdsman-agent-attention");
   assert.equal(sent[0].details.reason, "blocked");
-  assert.match(sent[0].content, /no Herdsman ask_owner question exists/);
+  assert.match(sent[0].content, /no Herdsman await_owner question exists/);
   pi.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
 });

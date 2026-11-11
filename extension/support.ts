@@ -325,6 +325,7 @@ export const {
   readPendingAsk,
   readUnacknowledgedRequest,
   readRequest,
+  readOwnerMessages,
   readResult,
   readAgentState,
   readAgentStartupOutcome,
@@ -332,12 +333,14 @@ export const {
   removeAgentBootstrap,
   writeAgentBootstrap,
   removeAsk,
+  removeOwnerMessage,
   removeRequest,
   removeResult,
   MAILBOX_PROTOCOL_LIMIT_BYTES,
   resetAgentMailbox,
   agentMailboxPath,
   writeAsk,
+  writeOwnerMessage,
   writeRequest: writeRequestRecord,
   writeResult: writeResultRecord,
   writeAgentState,
@@ -2399,7 +2402,7 @@ export async function assertRestrictiveManagedDefinition(
   try {
     assert.equal(agent.tools.filter((tool) => tool.name === "agent").length, 0);
     assert.equal(
-      agent.tools.filter((tool) => tool.name === "ask_owner").length,
+      agent.tools.filter((tool) => tool.name === "await_owner").length,
       1,
     );
     await agent.events.get("session_start")![0](

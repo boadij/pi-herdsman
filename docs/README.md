@@ -43,7 +43,8 @@ Start with [Coordination API](coordination-api.md), then use the focused
 references for exact contracts:
 
 - [Agent tools](reference/agent.md)
-- [`ask_owner`](reference/ask-owner.md)
+- [`notify_owner`](reference/notify-owner.md)
+- [`await_owner`](reference/await-owner.md)
 - [Staff tools](reference/staff.md)
 - [Supervisor tools](reference/supervisor.md)
 - [Peer tools](reference/peer.md)

@@ -51,7 +51,7 @@ ordinary Pi tool selection.
 
 Code Mode does not add `bash`, `edit`, or `write` to a role's tool policy.
 Ordinary Lead profiles with explicit tools also enforce that policy during
-nested tool execution. `ask_owner` remains model-only and cannot be called from
+nested tool execution. `await_owner` remains model-only and cannot be called from
 Code Mode scripts. `delegate_agent` and `continue_agent` are direct tools when
 active for the role; they return after acceptance, while completion arrives
 through the normal result-delivery mechanism. Other extensions may have
@@ -267,7 +267,7 @@ the fallback.
 | `thinking`              | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `false` | spawning controller for fresh `delegate`; saved session for `continue` | Explicit value wins; `false` launches as `off`.                                                                                                                                           |
 | `systemPromptMode`      | `append` or `replace`                                                 | `append`                                                               | Controls whether the effective body is appended to or replaces Pi's base system prompt. `replace` is an explicit escape hatch for ordinary custom definitions; `managed-lead` rejects it. |
 | `bodyMode`              | `append` or `replace`                                                 | `replace` for non-empty matching overlay body                          | Valid only when overlaying an existing lower-precedence definition; consumed during body composition.                                                                                     |
-| `noTools`               | boolean                                                               | Pi normal tool policy                                                  | `true` emits `--no-tools`; managed `ask_owner` remains infrastructure.                                                                                                                    |
+| `noTools`               | boolean                                                               | Pi normal tool policy                                                  | `true` emits `--no-tools`; managed `await_owner` and `notify_owner` remain infrastructure.                                                                                                |
 | `noBuiltinTools`        | boolean                                                               | Pi normal built-in tool policy                                         | `true` emits `--no-builtin-tools`.                                                                                                                                                        |
 | `tools`                 | array of non-empty strings                                            | no explicit allowlist                                                  | Passed to Pi as a source-agnostic tool-name allowlist; matching overlay replaces whole array.                                                                                             |
 | `excludeTools`          | array of non-empty strings                                            | no explicit exclusions                                                 | Passed to Pi as source-agnostic tool-name exclusions; matching override replaces whole array.                                                                                             |
@@ -378,7 +378,7 @@ ordinary tools permit it unless one of those opt-outs applies. An omitted or
 empty `agents` list always makes the agent a leaf, as does reaching the
 configured `maxAgentDepth` (see [Configuration](configuration.md)); the depth
 limit applies even to a definition that lists `agents`. Every managed agent
-receives `ask_owner`.
+receives `await_owner` and `notify_owner`.
 
 The tool name `agent` is configuration-policy evidence only; it is not
 registered or callable. In `tools`, it opts into delegation when `noTools: true`
@@ -387,7 +387,7 @@ leaf, `agent` is removed from its `tools` list.
 
 `tools` and `excludeTools` configure ordinary execution tools, not this
 mandatory role infrastructure. They cannot remove required coordination tools
-or `ask_owner`. When `tools` is omitted, Pi Herdsman emits no `--tools` option
+or `await_owner` and `notify_owner`. When `tools` is omitted, Pi Herdsman emits no `--tools` option
 and Pi's configured/default selection remains in effect. An explicit `tools`
 allowlist is augmented with the managed agent's mandatory role tools; the
 configuration-only `agent` name is excluded from that allowlist.
@@ -511,8 +511,8 @@ Additional local review instructions.
 ```
 
 Because `agents` is non-empty, and none of the delegation opt-outs apply, this
-managed agent receives all nine coordination tools and `ask_owner`, in
-addition to the explicitly selected ordinary tools.
+managed agent receives all nine coordination tools and `await_owner` and
+`notify_owner`, in addition to the explicitly selected ordinary tools.
 
 To disable a bundled role without copying its definition, use a minimal global
 override:

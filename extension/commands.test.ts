@@ -23137,7 +23137,7 @@ test("valid managed leaf agents receive identity-only TUI presentation", async (
     activeTools: () => {
       activeToolsCalls++;
       assert.equal(sessionRuntimeInitialized, true);
-      return ["read", "bash", "ask_owner"];
+      return ["read", "bash", "await_owner"];
     },
     exec: (command, args) =>
       command === "herdr" && isApiSnapshot(args)
@@ -23295,7 +23295,7 @@ test("valid managed leaf agents receive identity-only TUI presentation", async (
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.ok(widget);
   assert.deepEqual(widget!.render(160), [
-    "○ lead → agent:leaf-agent  [read, bash, ask_owner]",
+    "○ lead → agent:leaf-agent  [read, bash, await_owner]",
   ]);
   assert.equal(
     widget!.handleMouse({
@@ -23346,7 +23346,10 @@ test("valid managed leaf agents receive identity-only TUI presentation", async (
   await new Promise<void>((resolve) => setImmediate(resolve));
   currentSessionId = DEFAULT_PI_SESSION_ID;
   assert.deepEqual(focused, ["lead-pane"]);
-  assert.equal(pi.tools.filter((tool) => tool.name === "ask_owner").length, 1);
+  assert.equal(
+    pi.tools.filter((tool) => tool.name === "await_owner").length,
+    1,
+  );
   assert.ok(activeToolsCalls > 0);
 });
 
@@ -24125,7 +24128,7 @@ test("TUI status refresh consumes the coherent Herdr session snapshot", async (t
     },
   };
   const pi = fakePi({
-    activeTools: ["read", "bash", "ask_owner"],
+    activeTools: ["read", "bash", "await_owner"],
     exec: (command, args) => {
       calls.push(args);
       if (command === "herdr" && isApiSnapshot(args))
@@ -24259,7 +24262,7 @@ test("TUI status refresh consumes the coherent Herdr session snapshot", async (t
   const rendered = widget.render(160).join("\n");
   assert.match(rendered, /◉ lead\s+● 1/);
   assert.match(rendered, /sleep-smoke-a/);
-  assert.doesNotMatch(rendered, /\[read, bash, ask_owner\]/);
+  assert.doesNotMatch(rendered, /\[read, bash, await_owner\]/);
   const promptEvent = {
     systemPrompt: "base",
     systemPromptOptions: {

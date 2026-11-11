@@ -4119,7 +4119,7 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
     "stop_agent",
     "inspect_agent",
     "read_agent_transcript",
-    "ask_owner",
+    "await_owner",
   ];
   {
     const widget = new StatusWidget();
@@ -4129,17 +4129,17 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
       stale: false,
       unavailable: false,
       breadcrumb: [{ text: "lead" }, { text: "implementer:one" }],
-      ownTools: ["read", "bash", "ask_owner"],
+      ownTools: ["read", "bash", "await_owner"],
       identityOnly: true,
     });
     assert.equal(
       widget.render(160)[0],
-      "? lead → implementer:one  [read, bash, ask_owner]",
+      "? lead → implementer:one  [read, bash, await_owner]",
     );
     const truncated = widget.render(32)[0]!;
     assert.match(truncated, /implementer:one/);
     assert.ok(visibleWidth(truncated) <= 32);
-    assert.doesNotMatch(widget.render(20)[0]!, /\[|read|bash|ask_owner/);
+    assert.doesNotMatch(widget.render(20)[0]!, /\[|read|bash|await_owner/);
     widget.setSnapshot({
       agents: [],
       stale: false,
@@ -4174,10 +4174,13 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
       stale: false,
       unavailable: false,
       breadcrumb: [{ text: "lead" }, { text: "implementer:one" }],
-      ownTools: ["read", "delegate_agent", "ask_owner"],
+      ownTools: ["read", "delegate_agent", "await_owner"],
       identityOnly: true,
     });
-    assert.match(widget.render(160)[0]!, /\[read, delegate_agent, ask_owner\]/);
+    assert.match(
+      widget.render(160)[0]!,
+      /\[read, delegate_agent, await_owner\]/,
+    );
   }
 
   {
