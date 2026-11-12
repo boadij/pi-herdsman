@@ -144,27 +144,29 @@ when Git creates a new linked worktree. It is not enabled automatically. To
 enable it, run these steps from the trusted **primary checkout** (not a linked
 worktree).
 
-First inspect the configured hook directory and its origin:
+For a fresh trusted clone, run this from the **primary checkout** (not a linked
+worktree):
+
+```sh
+npm run setup
+```
+
+This configures the hook and installs dependencies. If dependencies are already
+installed, `npm run setup:hooks` enables only the hook. Setup is idempotent and
+refuses to override an existing `core.hooksPath` pointing elsewhere or active
+executable hooks in Git's default hooks directory. Inspect the current hook
+configuration and its origin with:
 
 ```sh
 git config --show-origin --get core.hooksPath
 ```
 
-Inspect its existing executable hooks as well; if `core.hooksPath` is unset,
-inspect the repository's default hooks directory using
-`git rev-parse --git-path hooks`.
-
 If an existing hook configuration or hook manager would be displaced, retain
-that configuration or integrate the script manually; this repository does not
+it or integrate `.githooks/post-checkout` manually; the repository does not
 install a dispatcher. `core.hooksPath` selects the whole hooks directory, so
-changing it can disable other hooks. If no existing configuration would be
-displaced, enable the repository hook locally:
+changing it can disable other hooks.
 
-```sh
-git config --local core.hooksPath "$(pwd -P)/.githooks"
-```
-
-This local, optional setting affects only this repository. Its absolute path
+When newly configured, this local, optional setting affects only this repository. Its absolute path
 deliberately points all linked worktrees to the same trusted script; ordinary
 worktrees share the repository's common Git configuration. Enabling it is an
 explicit developer trust decision: creating a new linked worktree in this
