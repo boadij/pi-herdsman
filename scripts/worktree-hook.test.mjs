@@ -165,11 +165,11 @@ test("setup:hooks enables hooks without replacing existing hooks", () => {
     mkdirSync(join(repo, ".githooks"));
     writeFileSync(join(repo, ".githooks", "post-checkout"), "#!/bin/sh\n");
     const setup = () =>
-      spawnSync(
-        process.execPath,
-        [join(repoRoot, "scripts/setup-hooks.mjs")],
-        { cwd: repo, env, encoding: "utf8" },
-      );
+      spawnSync(process.execPath, [join(repoRoot, "scripts/setup-hooks.mjs")], {
+        cwd: repo,
+        env,
+        encoding: "utf8",
+      });
 
     assert.equal(setup().status, 0);
     assert.equal(
@@ -181,8 +181,11 @@ test("setup:hooks enables hooks without replacing existing hooks", () => {
     git("config", "--local", "core.hooksPath", join(root, "other-hooks"));
     const conflict = setup();
     assert.notEqual(conflict.status, 0);
-    assert.match(conflict.stderr, /Refusing to replace existing core\\.hooksPath/);
-    assert.equal(git("config", "--get", "core.hooksPath"), join(root, "other-hooks"));
+    assert.match(conflict.stderr, /Refusing to replace existing core\.hooksPath/);
+    assert.equal(
+      git("config", "--get", "core.hooksPath"),
+      join(root, "other-hooks"),
+    );
 
     git("config", "--local", "--unset", "core.hooksPath");
     if (process.platform !== "win32") {
