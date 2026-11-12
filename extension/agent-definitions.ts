@@ -251,6 +251,49 @@ function isPlainObject(value: unknown): value is { [key: string]: unknown } {
 const isArrayModifier = (entry: string): boolean =>
   entry.startsWith("+") || entry.startsWith("-");
 
+function validateArrayFields(
+  frontmatter: Frontmatter,
+  invalid: (field: string, reason: string) => never,
+): void {
+  for (const field of ARRAY_FIELDS) {
+    const value = frontmatter[field];
+    if (
+      value !== undefined &&
+      (!Array.isArray(value) ||
+        value.some(
+          (entry) => typeof entry !== "string" || entry.trim().length === 0,
+        ) ||
+        (field === "agents" &&
+          new Set(value.filter((entry) => !isArrayModifier(entry))).size !==
+            value.filter((entry) => !isArrayModifier(entry)).length))
+    )
+      invalid(
+        field,
+        field === "agents"
+          ? "must be an array with unique explicit names and non-empty modifiers"
+          : "must be an array of non-empty strings",
+      );
+    if (Array.isArray(value)) {
+      const entries =
+        field === "tools"
+          ? normalizedToolNames(value as string[])
+          : (value as string[]);
+      for (const entry of entries)
+        if (
+          isArrayModifier(entry) &&
+          (!entry.slice(1).trim() ||
+            (field === "tools" && entry.slice(1).trim().includes("*")))
+        )
+          invalid(
+            field,
+            field === "tools"
+              ? "modifiers require exact tool names without wildcards"
+              : "modifiers require a non-empty name",
+          );
+    }
+  }
+}
+
 function applyArrayModifiers(
   base: readonly string[],
   entries: readonly string[],
@@ -273,6 +316,9 @@ function composeFrontmatter(
   override: Frontmatter,
   definitionName: string,
 ): Frontmatter {
+  validateArrayFields(override, (field, reason) => {
+    throw new Error(`agent ${definitionName} field ${field}: ${reason}`);
+  });
   const effective: Frontmatter = { ...base, ...override };
   for (const field of ARRAY_FIELDS) {
     const rawEntries = override[field];
@@ -370,43 +416,7 @@ function validateDefinition(
       typeof frontmatter[field] !== "boolean"
     )
       invalid(field, "must be a boolean");
-  for (const field of ARRAY_FIELDS) {
-    const value = frontmatter[field];
-    if (
-      value !== undefined &&
-      (!Array.isArray(value) ||
-        value.some(
-          (entry) => typeof entry !== "string" || entry.trim().length === 0,
-        ) ||
-        (field === "agents" &&
-          new Set(value.filter((entry) => !isArrayModifier(entry))).size !==
-            value.filter((entry) => !isArrayModifier(entry)).length))
-    )
-      invalid(
-        field,
-        field === "agents"
-          ? "must be an array with unique explicit names and non-empty modifiers"
-          : "must be an array of non-empty strings",
-      );
-    if (Array.isArray(value)) {
-      const entries =
-        field === "tools"
-          ? normalizedToolNames(value as string[])
-          : (value as string[]);
-      for (const entry of entries)
-        if (
-          isArrayModifier(entry) &&
-          (!entry.slice(1).trim() ||
-            (field === "tools" && entry.slice(1).trim().includes("*")))
-        )
-          invalid(
-            field,
-            field === "tools"
-              ? "modifiers require exact tool names without wildcards"
-              : "modifiers require a non-empty name",
-          );
-    }
-  }
+  validateArrayFields(frontmatter, invalid);
   if (frontmatter.model !== undefined) {
     if (typeof frontmatter.model !== "string" || !frontmatter.model)
       invalid("model", "must be a non-empty string");

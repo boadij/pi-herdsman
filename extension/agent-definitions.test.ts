@@ -448,6 +448,25 @@ test("array modifiers compose in order, preserve replacement, and retain relativ
   );
 });
 
+test("validates raw modifiers and explicit Agent duplicates before composition", () => {
+  assert.throws(
+    () =>
+      mergeFrontmatter(
+        { name: "sample", skills: ["inherited"] },
+        { name: "sample", skills: ["-"] },
+      ),
+    /field skills: modifiers require a non-empty name/,
+  );
+  assert.throws(
+    () =>
+      mergeFrontmatter(
+        { name: "sample", agents: ["inherited"] },
+        { name: "sample", agents: ["scout", "scout", "+reviewer"] },
+      ),
+    /field agents: must be an array with unique explicit names/,
+  );
+});
+
 test("standalone resource and delegation modifiers resolve from empty defaults", () => {
   const definition = discoverAgentDefinitionsWithContents(`---
 name: standalone-modifiers
