@@ -547,6 +547,85 @@ test("Definitions retains the last selected Agent when returning to its list", a
   );
 });
 
+test("ordinary Agent Details order native and appended context by launch mode", async () => {
+  for (const scenario of [
+    {
+      name: "native",
+      frontmatter: { inheritGlobalContext: true, inheritProjectContext: true },
+      expected: [
+        "definition body",
+        "Herdsman shared guidance",
+        "context sentinel",
+      ],
+    },
+    {
+      name: "selective",
+      frontmatter: { inheritGlobalContext: false, inheritProjectContext: true },
+      expected: [
+        "definition body",
+        "context sentinel",
+        "Herdsman shared guidance",
+      ],
+    },
+  ]) {
+    const choices = ["agents", "reviewer", "details", undefined, undefined];
+    let displayed: string[] | undefined;
+    const notices: string[] = [];
+    const definition = {
+      name: "reviewer",
+      path: "/reviewer.md",
+      extensionSource: "/reviewer.md",
+      frontmatter: { name: "reviewer", ...scenario.frontmatter },
+      body: "definition body",
+    };
+    const runtime = createLeadCommandRuntime({
+      selectMenu: async () => choices.shift(),
+      getThinkingLevel: () => "high",
+      agentDefinitionEnabled: () => true,
+      contextAgentDefinitions: async () => ({ definitions: [definition] }),
+      inspectAgentDefinition: () => ({
+        definition,
+        layers: [],
+        bodyFragments: [{ scope: "global", text: "definition body" }],
+      }),
+      expandDefinitionBodyFragments: () => ["definition body"],
+      selectedAgentContextFiles: () => [
+        { path: "/workspace/AGENTS.md", content: "context sentinel" },
+      ],
+      leadExecutionPresentation: () => ({ managed: false, mode: "flexible" }),
+      roleActive: () => false,
+      isCurrentChief: () => false,
+      agentDefinitionMetadata: () => ({ name: "reviewer" }),
+      formatAgentDefinitions: () => ["reviewer"],
+      showDefinitionDetails: async (
+        _ctx: unknown,
+        _title: string,
+        lines: string[],
+      ) => {
+        displayed = [...lines];
+      },
+    } as any);
+    await runtime.openDefinitionsMenu({
+      mode: "tui",
+      cwd: "/workspace",
+      isProjectTrusted: () => true,
+      ui: { notify: (message: string) => notices.push(message) },
+    } as any);
+    assert.ok(displayed, notices.join("\n"));
+    const prompt = displayed!.join("\n");
+    const positions = scenario.expected.map((item) => prompt.indexOf(item));
+    assert.ok(
+      positions.every((position) => position >= 0),
+      prompt,
+    );
+    assert.deepEqual(
+      positions,
+      [...positions].sort((a, b) => a - b),
+      prompt,
+    );
+  }
+});
+
 test("Coordinator Details show current prompt inputs in composition order", async () => {
   const choices = ["roles", "manager", "details", undefined, undefined];
   const menus: { title: string; value?: string }[] = [];
