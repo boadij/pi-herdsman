@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.45.0](https://github.com/boadij/pi-herdsman/compare/v0.44.0...v0.45.0) (2026-11-12)
+
+
+### Features
+
+* **agent:** distinguish owner notifications from blocking requests ([#917](https://github.com/boadij/pi-herdsman/issues/917)) ([1b96b23](https://github.com/boadij/pi-herdsman/commit/1b96b239b821517f4cb2c4e5f70392e37076d87f))
+
+
+### Fixes
+
+* **agent:** prevent duplicate owner notifications and improve presentation ([#926](https://github.com/boadij/pi-herdsman/issues/926)) ([6933cb5](https://github.com/boadij/pi-herdsman/commit/6933cb5871c6e9dcacaf619c513138153b71b689))
+* **supervision:** restore Chief access to non-Git ordinary Leads ([#937](https://github.com/boadij/pi-herdsman/issues/937)) ([b0e3fa5](https://github.com/boadij/pi-herdsman/commit/b0e3fa5b4850ccd86f9448d6e1bbf1a42512afaf)), closes [#918](https://github.com/boadij/pi-herdsman/issues/918)
+* **ui:** restore live tool metadata in managed Agent status headers ([#929](https://github.com/boadij/pi-herdsman/issues/929)) ([56b1f37](https://github.com/boadij/pi-herdsman/commit/56b1f37b46b45acc9b4906154711ab9aaadd3a59))
+
+
+### Performance
+
+* **agent:** batch concurrent health attention into one owner turn ([#924](https://github.com/boadij/pi-herdsman/issues/924)) ([8a26269](https://github.com/boadij/pi-herdsman/commit/8a26269c52c1da48bae312b877a1b2017a59ad8e))
+
+
+### Documentation
+
+* prefer Code Mode-compatible tool interfaces ([#921](https://github.com/boadij/pi-herdsman/issues/921)) ([eb9ad4d](https://github.com/boadij/pi-herdsman/commit/eb9ad4da6ac946d880ec6d479b9af3bf077e0950))
+* prefer recipient-side fan-in at existing boundaries ([#920](https://github.com/boadij/pi-herdsman/issues/920)) ([2e27a6b](https://github.com/boadij/pi-herdsman/commit/2e27a6bfc97f378d9fd7e6ed5ecd83c20a7e4a6f))
+
+
+### Tests
+
+* **ci:** stabilize supervision and peer federation waits ([#936](https://github.com/boadij/pi-herdsman/issues/936)) ([23b29e1](https://github.com/boadij/pi-herdsman/commit/23b29e181c6eb85bed02c6c4a1b3042bae39af73))
+* stabilize Windows-sensitive test waits ([#931](https://github.com/boadij/pi-herdsman/issues/931)) ([ce0142f](https://github.com/boadij/pi-herdsman/commit/ce0142fd18675f9ee5ba1417219bf0ebe8bc4ebd))
+
+
+### Other Changes
+
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.11.7 ([#938](https://github.com/boadij/pi-herdsman/issues/938)) ([24722dd](https://github.com/boadij/pi-herdsman/commit/24722dd70ba6e64a763a67371bd62519a9b24370))
+* **deps:** update node.js to v26.13.1 ([#932](https://github.com/boadij/pi-herdsman/issues/932)) ([64f94f2](https://github.com/boadij/pi-herdsman/commit/64f94f2a9d21f692076a994d3df14109282f349e))
+* **runtime:** adopt Pi 1.5.1 ([#923](https://github.com/boadij/pi-herdsman/issues/923)) ([ab069a4](https://github.com/boadij/pi-herdsman/commit/ab069a4e3f485427f7b8210c904a9bd2e1609d81))
+* **runtime:** adopt Pi 1.5.2 ([#939](https://github.com/boadij/pi-herdsman/issues/939)) ([de8e9d2](https://github.com/boadij/pi-herdsman/commit/de8e9d297f3b11eefcd7793872cf699d12063844))
+
 ## [0.44.0](https://github.com/boadij/pi-herdsman/compare/v0.43.0...v0.44.0) (2026-11-11)
 
 
