@@ -228,7 +228,7 @@ test("recipient boundary drains preserve steering eligibility and disable extra 
   }
 });
 
-test("busy polling defers supervisor steering until one non-triggering turn drain", async (t) => {
+test("busy polling preserves safe supervisor and peer boundary delivery", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
   const previousSocket = process.env.HERDR_SOCKET_PATH;
   process.env.HERDR_SOCKET_PATH = "/unused-busy-inbox-test-socket";
@@ -237,6 +237,11 @@ test("busy polling defers supervisor steering until one non-triggering turn drai
   const messages = [
     { id: "first", kind: "chief_message" },
     { id: "second", kind: "chief_message" },
+    {
+      id: "busy-peer-reply",
+      kind: "peer_message",
+      peerSource: { role: "manager" },
+    },
   ];
   const submissions: { id: string; mode: unknown; triggerTurn: unknown }[] = [];
   const peerRuntime = {};
@@ -258,16 +263,18 @@ test("busy polling defers supervisor steering until one non-triggering turn drai
     managerDiagnosticEvents: new Set(),
     listChiefMessagePaths: () => [],
     drainCoordinationInbox: async (options: any) => {
-      if (options.runtime !== peerRuntime) {
-        for (const record of messages) {
-          const mode = await options.deliveryMode(record);
-          if (mode)
-            submissions.push({
-              id: record.id,
-              mode,
-              triggerTurn: options.forceNonTriggering ? false : true,
-            });
-        }
+      const candidates =
+        options.runtime === peerRuntime
+          ? messages.filter((record) => record.kind === "peer_message")
+          : messages.filter((record) => record.kind !== "peer_message");
+      for (const record of candidates) {
+        const mode = await options.deliveryMode(record);
+        if (mode)
+          submissions.push({
+            id: record.id,
+            mode,
+            triggerTurn: options.forceNonTriggering ? false : true,
+          });
       }
       return 0;
     },

@@ -1026,9 +1026,11 @@ export function decide(model, context) {
     if (
       messages.some(
         (message) =>
-          message.type === "custom_message" &&
-          message.customType === "pi-herdsman-peer_message" &&
-          text(message).includes("PEER_E2E_SINGLE_REPLY"),
+          (message.role === "user" &&
+            text(message).includes("PEER_E2E_SINGLE_REPLY")) ||
+          (message.type === "custom_message" &&
+            message.customType === "pi-herdsman-peer_message" &&
+            text(message).includes("PEER_E2E_SINGLE_REPLY")),
       )
     )
       return fauxAssistantMessage("PEER_E2E_A_SINGLE_REPLIED");
