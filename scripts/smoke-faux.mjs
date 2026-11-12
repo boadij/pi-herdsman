@@ -764,11 +764,20 @@ function agentCrashRecoveryDecision(model, context) {
             "PI_HERDSMAN_CRASH_RECOVERY_SETTLED_CONTINUE ",
           ),
       );
-      if (!closed && target?.available_tools?.includes("stop_agent"))
+      const stopAuthorization = messages.find(
+        (message) =>
+          message.role === "user" &&
+          text(message) ===
+            `PI_HERDSMAN_CRASH_RECOVERY_STOP_EXACT ${target?.pi_session_path}`,
+      );
+      if (!closed && stopAuthorization) {
+        if (!target?.available_tools?.includes("stop_agent"))
+          throw new Error("Authorized crash-recovery target is not stoppable");
         return call("stop_agent", { agent: "smoke-crash-target" });
+      }
       if (!closed && !settledPrompt)
         return waitForResult(
-          "Waiting for verified settled-target recovery or an eligible stop receipt.",
+          "Waiting for the harness to authorize exact-target recovery.",
         );
       const continuePrompt = messages.find(
         (message) =>

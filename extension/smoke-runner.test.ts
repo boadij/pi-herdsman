@@ -97,7 +97,7 @@ import {
   managerBootstrapDelegationProjection,
   managerBootstrapDelegationState,
   herdrErrorCode,
-  targetPaneAbsentFromSnapshot,
+  classifyOldExecution,
   managerDiagnosticLines,
   captureManagerLeadDiagnostics,
   savedSessionHeaderEvidence,
@@ -5489,6 +5489,7 @@ test("crash-recovery probes an advertised waiting-parent steer and requires reje
           {
             label: "smoke-crash-target",
             available_tools: ["stop_agent"],
+            pi_session_path: "/saved/target.jsonl",
           },
         ],
       },
@@ -5504,8 +5505,23 @@ test("crash-recovery probes an advertised waiting-parent steer and requires reje
     isError: false,
     details: { ok: false, error: { category: "agent_busy" } },
   };
-  const stopped = decideSmokeFaux("agent-crash-root", {
+  const waiting = decideSmokeFaux("agent-crash-root", {
     messages: [...messages, steer, steerResult],
+  });
+  assert.match(
+    firstTextContent(waiting).text,
+    /Waiting for the harness to authorize exact-target recovery/,
+  );
+  const stopped = decideSmokeFaux("agent-crash-root", {
+    messages: [
+      ...messages,
+      steer,
+      steerResult,
+      {
+        role: "user",
+        content: "PI_HERDSMAN_CRASH_RECOVERY_STOP_EXACT /saved/target.jsonl",
+      },
+    ],
   });
   assert.equal(firstToolCall(stopped).name, "stop_agent");
 });
@@ -5606,7 +5622,7 @@ test("crash-recovery accepts only the resumed target's marked completion", () =>
   );
 });
 
-test("crash-recovery does not treat a missing target as closed without verified-settlement authorization", () => {
+test("crash-recovery continues a settled target without issuing stop", () => {
   const messages = [
     {
       role: "user",
@@ -5623,13 +5639,22 @@ test("crash-recovery does not treat a missing target as closed without verified-
       toolName: "list_agents",
       toolCallId: "list",
       isError: false,
-      details: { agents: [{ label: "smoke-crash-parent" }] },
+      details: {
+        agents: [
+          { label: "smoke-crash-parent" },
+          {
+            label: "smoke-crash-target",
+            available_tools: ["stop_agent"],
+            pi_session_path: "/saved/target.jsonl",
+          },
+        ],
+      },
     },
   ];
   const unverified = decideSmokeFaux("agent-crash-root", { messages });
   assert.match(
     firstTextContent(unverified).text,
-    /Waiting for verified settled-target recovery/,
+    /Waiting for the harness to authorize exact-target recovery/,
   );
   const authorized = decideSmokeFaux("agent-crash-root", {
     messages: [
@@ -5645,6 +5670,12 @@ test("crash-recovery does not treat a missing target as closed without verified-
   assert.equal(
     firstToolCall(authorized).arguments.session,
     "/saved/target.jsonl",
+  );
+  assert.equal(
+    authorized.content.some(
+      (part) => part.type === "toolCall" && part.name === "stop_agent",
+    ),
+    false,
   );
 });
 
@@ -6615,20 +6646,42 @@ test("candidate start treats only a structured missing-pane error as impossible"
   );
 });
 
-test("pane absence requires a complete Herdr snapshot with no exact target", () => {
+test("old execution is quiescent only after every exact pane is inspected clear", async () => {
   const target = {
     paneId: "pane-1",
     sessionPath: resolve("/sessions/target.jsonl"),
   };
-  assert.equal(targetPaneAbsentFromSnapshot({}, target), false);
-  assert.equal(
-    targetPaneAbsentFromSnapshot({ agents: [], panes: [] }, target),
-    true,
-  );
-  assert.equal(
-    targetPaneAbsentFromSnapshot(
-      {
+  const exactTarget = {
+    pane_id: target.paneId,
+    agent_session: { kind: "path", value: target.sessionPath },
+  };
+  const cases = [
+    {
+      name: "original pane absent",
+      snapshot: { agents: [], panes: [] },
+      inspect: () => "clear",
+      expected: "quiescent",
+      inspected: [target.paneId],
+    },
+    {
+      name: "stale Agent entry with missing pane",
+      snapshot: { agents: [exactTarget], panes: [] },
+      inspect: () => "clear",
+      expected: "quiescent",
+      inspected: [target.paneId],
+    },
+    {
+      name: "listed pane has no candidate process",
+      snapshot: { agents: [exactTarget], panes: [{ pane_id: target.paneId }] },
+      inspect: () => "clear",
+      expected: "quiescent",
+      inspected: [target.paneId],
+    },
+    {
+      name: "same session has an active candidate on another pane",
+      snapshot: {
         agents: [
+          exactTarget,
           {
             pane_id: "pane-2",
             agent_session: { kind: "path", value: target.sessionPath },
@@ -6636,17 +6689,50 @@ test("pane absence requires a complete Herdr snapshot with no exact target", () 
         ],
         panes: [],
       },
+      inspect: (paneId) => (paneId === "pane-2" ? "active" : "clear"),
+      expected: "active",
+      inspected: [target.paneId, "pane-2"],
+    },
+    {
+      name: "incomplete snapshot",
+      snapshot: { agents: [] },
+      inspect: () => "clear",
+      expected: "unknown",
+      inspected: [],
+    },
+    {
+      name: "inspection failure",
+      snapshot: { agents: [], panes: [] },
+      inspect: () => "unknown",
+      expected: "unknown",
+      inspected: [target.paneId],
+    },
+    {
+      name: "matching session has no pane identity",
+      snapshot: {
+        agents: [
+          { agent_session: { kind: "path", value: target.sessionPath } },
+        ],
+        panes: [],
+      },
+      inspect: () => "clear",
+      expected: "unknown",
+      inspected: [],
+    },
+  ];
+  for (const item of cases) {
+    const inspected = [];
+    const state = await classifyOldExecution(
+      item.snapshot,
       target,
-    ),
-    false,
-  );
-  assert.equal(
-    targetPaneAbsentFromSnapshot(
-      { agents: [], panes: [{ pane_id: target.paneId }] },
-      target,
-    ),
-    false,
-  );
+      async (paneId) => {
+        inspected.push(paneId);
+        return item.inspect(paneId);
+      },
+    );
+    assert.equal(state, item.expected, item.name);
+    assert.deepEqual(inspected, item.inspected, item.name);
+  }
 });
 
 test("smoke model override wins without reading Git config", async () => {

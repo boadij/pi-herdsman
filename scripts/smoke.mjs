@@ -3398,18 +3398,34 @@ export function herdrErrorCode(error) {
   }
 }
 
-export function targetPaneAbsentFromSnapshot(snapshot, target) {
-  return (
-    Array.isArray(snapshot?.agents) &&
-    Array.isArray(snapshot?.panes) &&
-    !snapshot.agents.some(
-      (agent) =>
-        agent.pane_id === target.paneId ||
-        (agent.agent_session?.kind === "path" &&
-          resolve(agent.agent_session.value) === target.sessionPath),
-    ) &&
-    !snapshot.panes.some((pane) => pane.pane_id === target.paneId)
+export async function classifyOldExecution(snapshot, target, inspect) {
+  if (!Array.isArray(snapshot?.agents) || !Array.isArray(snapshot?.panes))
+    return "unknown";
+  const matches = (entry) =>
+    entry?.pane_id === target.paneId ||
+    (entry?.agent_session?.kind === "path" &&
+      typeof entry.agent_session.value === "string" &&
+      resolve(entry.agent_session.value) === target.sessionPath);
+  const matchingEntries = [...snapshot.agents, ...snapshot.panes].filter(
+    matches,
   );
+  if (
+    matchingEntries.some(
+      (entry) => typeof entry.pane_id !== "string" || !entry.pane_id,
+    )
+  )
+    return "unknown";
+  const paneIds = new Set([
+    target.paneId,
+    ...matchingEntries.map((entry) => entry.pane_id),
+  ]);
+  let uncertain = false;
+  for (const paneId of paneIds) {
+    const state = await inspect(paneId);
+    if (state === "active") return "active";
+    if (state !== "clear") uncertain = true;
+  }
+  return uncertain ? "unknown" : "quiescent";
 }
 
 export function candidateStartObservationError(observed, paneId) {
@@ -6652,33 +6668,6 @@ async function runAgentCrashRecoverySmoke(ctx) {
   const restartedListing = await nestedCommand(ctx, ["agent", "list"]);
   const restartedAgents = restartedListing.agents ?? [];
   const restartedManaged = await smokeManagedAgentRecords(ctx, restartedAgents);
-  const targetAfterRestart = restartedManaged.find(
-    ({ session, mailbox }) =>
-      mailbox?.state.agentLabel === "smoke-crash-target" &&
-      session?.id === ctx.crashRecovery.target.sessionId &&
-      session?.path === ctx.crashRecovery.target.sessionPath,
-  );
-  const targetAfterRestartState = targetAfterRestart?.mailbox?.state;
-  let targetAfterRestartResult;
-  if (targetAfterRestartState?.completedRequestId) {
-    const resultPath = join(
-      targetAfterRestart.mailbox.directory,
-      `result-${targetAfterRestartState.completedRequestId}.json`,
-    );
-    const resultStat = await lstat(resultPath).catch((error) => {
-      if (error.code === "ENOENT") return undefined;
-      throw error;
-    });
-    if (resultStat) {
-      if (
-        !resultStat.isFile() ||
-        resultStat.isSymbolicLink() ||
-        resultStat.size > 1024 * 1024
-      )
-        throw new Error("crash-recovery result is not a bounded regular file");
-      targetAfterRestartResult = JSON.parse(await readFile(resultPath, "utf8"));
-    }
-  }
   const restoredParent = restartedManaged.find(
     ({ mailbox }) => mailbox?.state.agentLabel === "smoke-crash-parent",
   );
@@ -6729,7 +6718,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
   );
   ctx.crashRecovery.reopenedOwnerTabId = created.tab?.tab_id;
   ctx.rootPaneId = ownerPane.pane_id;
-  const restartPrompt = `PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART target session: ${ctx.crashRecovery.target.sessionPath}. Inspect list_agents. If smoke-crash-parent lists steer_agent, try steering it once and verify the receiverless request is rejected; do not retry. Stop smoke-crash-target only if it is visible and stop_agent is available. If not, wait for an explicit owner authorization after the owner verifies the exact aborted result and no competing execution. Continue only the exact saved session.`;
+  const restartPrompt = `PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART target session: ${ctx.crashRecovery.target.sessionPath}. Inspect list_agents. If smoke-crash-parent lists steer_agent, try steering it once and verify the receiverless request is rejected; do not retry. Do not stop or continue any Agent until the harness authorizes one exact recovery action.`;
   const args = candidateArgs({
     candidateExtension: ctx.candidateExtension,
     herdrStateExtension: ctx.herdrStateExtension,
@@ -6822,36 +6811,6 @@ async function runAgentCrashRecoverySmoke(ctx) {
   ctx.crashRecovery.parentAfterRestart.state = restoredParentState.state;
   ctx.crashRecovery.parentAfterRestart.availableTools =
     restoredParentState.available_tools ?? [];
-  const targetRequestResults = ownerEntries.filter((entry) => {
-    const message = entry?.message ?? entry;
-    return (
-      message?.customType === "pi-herdsman-agent-result" &&
-      message.details?.requestId === ctx.crashRecovery.target.requestId
-    );
-  });
-  assert.ok(
-    targetRequestResults.length <= 1,
-    "original target result was delivered more than once",
-  );
-  const exactTargetResultDetails =
-    targetRequestResults[0]?.message?.details ??
-    targetRequestResults[0]?.details;
-  if (targetRequestResults.length === 1) {
-    assert.ok(
-      exactTargetResultDetails?.requestId ===
-        ctx.crashRecovery.target.requestId &&
-        exactTargetResultDetails?.runId === ctx.crashRecovery.target.runId &&
-        exactTargetResultDetails?.ownerSessionId ===
-          ctx.crashRecovery.ownerSessionId &&
-        exactTargetResultDetails?.workspaceId ===
-          ctx.crashRecovery.target.workspaceId &&
-        exactTargetResultDetails?.agentLabel === "smoke-crash-target" &&
-        exactTargetResultDetails?.paneId === ctx.crashRecovery.target.paneId &&
-        exactTargetResultDetails?.piSessionId ===
-          ctx.crashRecovery.target.sessionId,
-      "original target result identity mismatch",
-    );
-  }
   const reopenedOwnerHeader = ownerEntries.find(
     (entry) => entry.type === "session",
   );
@@ -6869,87 +6828,87 @@ async function runAgentCrashRecoverySmoke(ctx) {
       "reopened target identity mismatch",
     );
   }
-  const targetCanStop =
-    reopenedTarget?.available_tools?.includes("stop_agent") === true &&
-    reopenedTarget.pi_session_id === ctx.crashRecovery.target.sessionId &&
-    reopenedTarget.pi_session_path === ctx.crashRecovery.target.sessionPath &&
-    reopenedTarget.owner_session_id === ctx.crashRecovery.ownerSessionId &&
-    reopenedTarget.workspace_id === ctx.crashRecovery.target.workspaceId &&
-    reopenedTarget.active_request_id === ctx.crashRecovery.target.requestId &&
-    targetAfterRestartState?.activeRequestId ===
-      ctx.crashRecovery.target.requestId &&
-    targetAfterRestartState.runId === ctx.crashRecovery.target.runId;
-  let targetNoCompetingExecution = null;
   let stopResult;
-  if (!targetCanStop) {
-    const state = targetAfterRestartState;
-    const result = targetAfterRestartResult;
-    assert.ok(
-      state,
-      "settled-target recovery requires the exact persisted mailbox state",
-    );
-    assert.ok(
-      state.activeRequestId === undefined,
-      "settled target still has an active request",
-    );
-    assert.ok(
-      state.completedRequestId === ctx.crashRecovery.target.requestId &&
-        state.runId === ctx.crashRecovery.target.runId &&
-        state.ownerSessionId === ctx.crashRecovery.ownerSessionId &&
-        state.piSessionId === ctx.crashRecovery.target.sessionId &&
-        state.workspaceId === ctx.crashRecovery.target.workspaceId &&
-        state.agentLabel === "smoke-crash-target" &&
-        state.paneId === ctx.crashRecovery.target.paneId &&
-        result?.requestId === ctx.crashRecovery.target.requestId &&
-        result?.runId === ctx.crashRecovery.target.runId &&
-        result?.ownerSessionId === ctx.crashRecovery.ownerSessionId &&
-        result?.workspaceId === ctx.crashRecovery.target.workspaceId &&
-        result?.agentLabel === "smoke-crash-target" &&
-        result?.paneId === ctx.crashRecovery.target.paneId,
-      "persisted aborted-result identity mismatch",
-    );
-    assert.equal(result?.status, "failed");
-    assert.equal(result?.error?.code, "aborted");
-    assert.equal(targetRequestResults.length, 1);
-    assert.equal(exactTargetResultDetails?.status, "failed");
-    assert.equal(exactTargetResultDetails?.error?.code, "aborted");
-    const processInfoAfterResult = await tryNestedCommand(ctx, [
-      "pane",
-      "process-info",
-      "--pane",
-      ctx.crashRecovery.target.paneId,
-    ]);
-    const targetAbsent =
-      !processInfoAfterResult.ok &&
-      processInfoAfterResult.herdrCode === "pane_not_found" &&
-      targetPaneAbsentFromSnapshot(
-        (await nestedCommand(ctx, ["api", "snapshot"])).snapshot,
-        ctx.crashRecovery.target,
+  const recoveryOutcome = await waitForEvidence(
+    ctx,
+    "crash-recovery-outcome",
+    async () => {
+      const owner = await rootSessionSnapshot(ctx);
+      const entries = owner ? sessionEntries(owner.contents) : [];
+      const originalResults = entries.filter((entry) => {
+        const message = entry?.message ?? entry;
+        return (
+          message?.customType === "pi-herdsman-agent-result" &&
+          message.details?.requestId === ctx.crashRecovery.target.requestId
+        );
+      });
+      assert.ok(
+        originalResults.length <= 1,
+        "original target result was delivered more than once",
       );
-    targetNoCompetingExecution =
-      (processInfoAfterResult.ok &&
-        Array.isArray(
-          processInfoAfterResult.value.process_info?.foreground_processes,
-        ) &&
-        candidateProcess(
-          processInfoAfterResult.value,
-          ctx.candidateExtension,
-          ctx.herdrStateExtension,
-        ).length === 0) ||
-      targetAbsent;
-    assert.ok(
-      targetNoCompetingExecution,
-      "settled target still has an active or unverified execution",
-    );
-    ctx.crashRecovery.recoveryPath = "settled-result";
+      if (originalResults.length === 1) {
+        const resultDetails =
+          originalResults[0]?.message?.details ?? originalResults[0]?.details;
+        assert.ok(
+          resultDetails?.requestId === ctx.crashRecovery.target.requestId &&
+            resultDetails?.runId === ctx.crashRecovery.target.runId &&
+            resultDetails?.ownerSessionId ===
+              ctx.crashRecovery.ownerSessionId &&
+            resultDetails?.workspaceId ===
+              ctx.crashRecovery.target.workspaceId &&
+            resultDetails?.agentLabel === "smoke-crash-target" &&
+            resultDetails?.paneId === ctx.crashRecovery.target.paneId &&
+            resultDetails?.piSessionId === ctx.crashRecovery.target.sessionId &&
+            resultDetails?.status === "failed" &&
+            resultDetails?.error?.code === "aborted",
+          "original target aborted-result identity mismatch",
+        );
+        return { done: true, value: { kind: "settled" } };
+      }
+      const latestListResult = entries.find(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message?.role === "toolResult" &&
+          entry.message.toolName === "list_agents" &&
+          !entry.message.isError,
+      );
+      const agents = latestListResult?.message?.details?.agents;
+      const target = Array.isArray(agents)
+        ? agents.find(
+            (agent) => smokeAgentLabel(agent) === "smoke-crash-target",
+          )
+        : undefined;
+      if (target) {
+        assert.ok(
+          target.pi_session_id === ctx.crashRecovery.target.sessionId &&
+            target.pi_session_path === ctx.crashRecovery.target.sessionPath &&
+            target.owner_session_id === ctx.crashRecovery.ownerSessionId &&
+            target.workspace_id === ctx.crashRecovery.target.workspaceId,
+          "reopened target identity mismatch",
+        );
+        if (
+          target.available_tools?.includes("stop_agent") === true &&
+          target.active_request_id === ctx.crashRecovery.target.requestId
+        )
+          return { done: true, value: { kind: "stoppable" } };
+      }
+      return {
+        done: false,
+        progress: {
+          abortedResult: false,
+          exactTargetStoppable: false,
+        },
+      };
+    },
+    { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS, pollMs: 200 },
+  );
+  if (recoveryOutcome.kind === "stoppable") {
     await nestedCommand(ctx, [
       "agent",
       "prompt",
       ctx.rootPaneId,
-      `PI_HERDSMAN_CRASH_RECOVERY_SETTLED_CONTINUE ${ctx.crashRecovery.target.sessionPath}`,
+      `PI_HERDSMAN_CRASH_RECOVERY_STOP_EXACT ${ctx.crashRecovery.target.sessionPath}`,
     ]);
-  } else {
-    ctx.crashRecovery.recoveryPath = "explicit-stop";
     stopResult = await waitForEvidence(
       ctx,
       "crash-recovery-stop-receipt-persisted",
@@ -6970,6 +6929,26 @@ async function runAgentCrashRecoverySmoke(ctx) {
       },
       { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS, pollMs: 200 },
     );
+    const stopDetails = stopResult.message.details;
+    assert.equal(
+      stopDetails?.ok,
+      true,
+      "persisted stop result was not successful",
+    );
+    assert.equal(stopDetails?.action, "stop");
+    const closed = stopDetails?.closed_assignment;
+    assert.ok(
+      closed?.session_path === ctx.crashRecovery.target.sessionPath &&
+        closed?.session_id === ctx.crashRecovery.target.sessionId &&
+        closed?.owner_session_id === ctx.crashRecovery.ownerSessionId &&
+        closed?.run_id === ctx.crashRecovery.target.runId &&
+        closed?.request_id === ctx.crashRecovery.target.requestId &&
+        closed?.agent === "smoke-crash-target" &&
+        closed?.pane_id === ctx.crashRecovery.target.paneId &&
+        closed?.workspace_id === ctx.crashRecovery.target.workspaceId,
+      "stop closure identity mismatch",
+    );
+    ctx.crashRecovery.closeReceipt = closed;
   }
   if (parentSteerAdvertised) {
     const finalOwner = await rootSessionSnapshot(ctx);
@@ -7008,62 +6987,77 @@ async function runAgentCrashRecoverySmoke(ctx) {
       "receiverless steering did not return the expected unsuccessful outcome",
     );
   }
-  if (targetCanStop) {
-    const stopDetails = stopResult.message.details;
-    assert.equal(
-      stopDetails?.ok,
-      true,
-      "persisted stop result was not successful",
-    );
-    assert.equal(stopDetails?.action, "stop");
-    const closed = stopDetails?.closed_assignment;
-    assert.ok(
-      closed?.session_path === ctx.crashRecovery.target.sessionPath &&
-        closed?.session_id === ctx.crashRecovery.target.sessionId &&
-        closed?.owner_session_id === ctx.crashRecovery.ownerSessionId &&
-        closed?.run_id === ctx.crashRecovery.target.runId &&
-        closed?.request_id === ctx.crashRecovery.target.requestId &&
-        closed?.agent === "smoke-crash-target" &&
-        closed?.pane_id === ctx.crashRecovery.target.paneId &&
-        closed?.workspace_id === ctx.crashRecovery.target.workspaceId,
-      "stop closure identity mismatch",
-    );
-    ctx.crashRecovery.closeReceipt = closed;
-    const afterCloseSnapshot = await nestedCommand(ctx, ["api", "snapshot"]);
-    const staleTarget = (afterCloseSnapshot.snapshot?.agents ?? []).find(
-      (agent) =>
-        agent.agent_session?.value === ctx.crashRecovery.target.sessionPath ||
-        agent.agent_session?.value === ctx.crashRecovery.target.sessionId,
-    );
-    let targetProcessAfterClose;
-    if (staleTarget?.pane_id) {
-      const processInfo = await tryNestedCommand(ctx, [
-        "pane",
-        "process-info",
-        "--pane",
-        staleTarget.pane_id,
-      ]);
-      targetProcessAfterClose = processInfo.ok
-        ? { found: true, processInfo: processInfo.value.process_info }
-        : { found: false, error: processInfo.error };
-    }
-    ctx.crashRecovery.staleTargetAfterClose = {
-      agent: staleTarget
-        ? {
-            paneId: staleTarget.pane_id,
-            workspaceId: staleTarget.workspace_id,
-            session: staleTarget.agent_session,
+  const oldExecution = await waitForEvidence(
+    ctx,
+    "crash-recovery-quiescence",
+    async () => {
+      let current;
+      try {
+        current = await tryNestedCommand(ctx, ["api", "snapshot"]);
+      } catch {
+        return { done: false, progress: { execution: "unknown" } };
+      }
+      if (!current.ok)
+        return {
+          done: false,
+          progress: { execution: "unknown" },
+          observationError: current.error,
+        };
+      const state = await classifyOldExecution(
+        current.value.snapshot,
+        ctx.crashRecovery.target,
+        async (paneId) => {
+          let processInfo;
+          try {
+            processInfo = await tryNestedCommand(ctx, [
+              "pane",
+              "process-info",
+              "--pane",
+              paneId,
+            ]);
+          } catch {
+            return "unknown";
           }
-        : null,
-      process: targetProcessAfterClose,
-    };
-    await nestedCommand(ctx, [
-      "agent",
-      "prompt",
-      ctx.rootPaneId,
-      "PI_HERDSMAN_CRASH_RECOVERY_CONTINUE: continue the exact cleanly closed target session without replaying its unfinished task.",
-    ]);
-  }
+          if (!processInfo.ok)
+            return processInfo.herdrCode === "pane_not_found"
+              ? "clear"
+              : "unknown";
+          if (
+            !Array.isArray(processInfo.value.process_info?.foreground_processes)
+          )
+            return "unknown";
+          try {
+            return candidateProcess(
+              processInfo.value,
+              ctx.candidateExtension,
+              ctx.herdrStateExtension,
+            ).length
+              ? "active"
+              : "clear";
+          } catch {
+            return "unknown";
+          }
+        },
+      );
+      return {
+        done: state === "quiescent",
+        value: state,
+        progress: { execution: state },
+      };
+    },
+    { timeoutMs: 30_000, stallMs: MODEL_STALL_MS, pollMs: 200 },
+  );
+  ctx.crashRecovery.oldExecution = oldExecution;
+  ctx.crashRecovery.recoveryPath =
+    recoveryOutcome.kind === "settled" ? "settled-result" : "explicit-stop";
+  await nestedCommand(ctx, [
+    "agent",
+    "prompt",
+    ctx.rootPaneId,
+    recoveryOutcome.kind === "settled"
+      ? `PI_HERDSMAN_CRASH_RECOVERY_SETTLED_CONTINUE ${ctx.crashRecovery.target.sessionPath}`
+      : "PI_HERDSMAN_CRASH_RECOVERY_CONTINUE: continue the exact cleanly closed target session without replaying its unfinished task.",
+  ]);
   const continuationRelease = join(
     ctx.paths.piAgent,
     "pi-herdsman",
@@ -7157,29 +7151,16 @@ async function runAgentCrashRecoverySmoke(ctx) {
     const message = entry?.message ?? entry;
     return message?.customType === "pi-herdsman-agent-result";
   });
-  const originalTargetResults = finalTargetResults.filter(
-    (entry) =>
-      (entry.message?.details ?? entry.details)?.requestId ===
-      ctx.crashRecovery.target.requestId,
-  );
+  const originalTargetResults = finalTargetResults.filter((entry) => {
+    const details = entry.message?.details ?? entry.details;
+    return details?.requestId === ctx.crashRecovery.target.requestId;
+  });
   assert.ok(
     originalTargetResults.length <= 1,
     "original target result was delivered more than once",
   );
-  if (ctx.crashRecovery.recoveryPath === "settled-result")
+  if (recoveryOutcome.kind === "settled")
     assert.equal(originalTargetResults.length, 1);
-  for (const entry of originalTargetResults) {
-    const details = entry.message?.details ?? entry.details;
-    assert.ok(
-      details?.runId === ctx.crashRecovery.target.runId &&
-        details?.ownerSessionId === ctx.crashRecovery.ownerSessionId &&
-        details?.workspaceId === ctx.crashRecovery.target.workspaceId &&
-        details?.agentLabel === "smoke-crash-target" &&
-        details?.paneId === ctx.crashRecovery.target.paneId &&
-        details?.piSessionId === ctx.crashRecovery.target.sessionId,
-      "original target result identity mismatch",
-    );
-  }
   const continuedSession = SessionManager.open(
     ctx.crashRecovery.target.sessionPath,
   );
@@ -7249,48 +7230,13 @@ async function runAgentCrashRecoverySmoke(ctx) {
     0,
     "target session unexpectedly awaited owner authorization",
   );
-  const status = (value) =>
-    ["completed", "failed"].includes(value) ? value : "not_observed";
-  const errorCode = (value) =>
-    [
-      "aborted",
-      "empty_result",
-      "execution_error",
-      "result_too_large",
-      "write_failure",
-    ].includes(value)
-      ? value
-      : "not_observed";
   ctx.crashRecovery.outputSummary = {
-    recoveryPath: ctx.crashRecovery.recoveryPath,
-    parentPaneStatus: ["idle", "working", "blocked", "unknown"].includes(
-      ctx.crashRecovery.parentAfterRestart.agentStatus,
-    )
-      ? ctx.crashRecovery.parentAfterRestart.agentStatus
-      : "not_observed",
-    parentOwnerState: ["blocked", "unknown"].includes(
-      ctx.crashRecovery.parentAfterRestart.state,
-    )
-      ? ctx.crashRecovery.parentAfterRestart.state
-      : "not_observed",
-    originalResultStatus: status(
-      exactTargetResultDetails?.status ?? targetAfterRestartResult?.status,
-    ),
-    originalResultErrorCode: errorCode(
-      exactTargetResultDetails?.error?.code ??
-        targetAfterRestartResult?.error?.code,
-    ),
+    recoveryPath: recoveryOutcome.kind,
+    oldExecution: ctx.crashRecovery.oldExecution,
     originalResultDeliveryCount: originalTargetResults.length,
+    continuationCount: continueCalls.length,
     continuedTargetCompleted,
-    targetDelegationCount: ownerToolCalls.filter(
-      (call) =>
-        call.name === "delegate_agent" &&
-        call.arguments?.label === "smoke-crash-target",
-    ).length,
-    continueCallCount: continueCalls.length,
-    targetAwaitOwnerCallCount: targetAwaitOwnerCalls.length,
-    noCompetingExecution: targetCanStop ? null : targetNoCompetingExecution,
-    savedSessionContinuationVerified: true,
+    pendingParentVerified: true,
   };
   await writeFile(
     join(ctx.paths.piAgent, "pi-herdsman", "runtime", "crash-parent-release"),
