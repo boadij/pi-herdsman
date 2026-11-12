@@ -15,8 +15,11 @@ import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { Box, Container } from "@earendil-works/pi-tui";
 import { prepareMessageInput } from "./core.ts";
+import type { DefinitionLayerTrace, Frontmatter } from "./agent-definitions.ts";
 import {
+  createInstructionInspectorView,
   populateMenuFrame,
+  summarizeDefinitionLayerChanges,
   collapseDisplayText,
   nameSessionIfUnset,
   displayHomePath,
@@ -71,6 +74,143 @@ import type { SupervisedLead } from "./supervision.ts";
 import { workspacePresentationProvenance } from "./index.ts";
 
 initTheme("dark");
+
+test("definition layer summaries show only safe, authoritative field changes", () => {
+  const layer: DefinitionLayerTrace = {
+    scope: "project",
+    path: "/project/.pi/agents/reviewer.md",
+    supplied: {
+      tools: ["read"],
+      thinking: "high",
+      permission: { private: "do not display" },
+    } as Frontmatter,
+    before: {
+      tools: ["read", "grep"],
+      thinking: "low",
+      permission: { old: "secret" },
+    },
+    after: {
+      tools: ["read"],
+      thinking: "high",
+      permission: { private: "do not display" },
+    },
+    body: "Updated",
+    bodyAction: "append",
+  };
+  assert.deepEqual(summarizeDefinitionLayerChanges(layer), [
+    "- tools: grep",
+    "~ thinking: low → high",
+    "+ body: appended",
+  ]);
+
+  assert.deepEqual(
+    summarizeDefinitionLayerChanges({
+      ...layer,
+      supplied: { tools: ["+codemode", "-bash"] },
+      before: { tools: ["read"] },
+      after: { tools: ["read", "codemode"] },
+      body: "",
+      bodyAction: "inherit",
+    }),
+    ["~ tools: relative +codemode -bash"],
+  );
+});
+
+test("instruction inspector toggles compact trees, closes, wraps, and stays transient", () => {
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
+  const events: string[] = [];
+  const view = createInstructionInspectorView(
+    "reviewer · Effective Instructions",
+    [
+      "Context /workspace/subdirectory",
+      "Preview Future Agent launch",
+      "Definition sources 3",
+      "Pi context files 2",
+      "Preview limitation",
+      "Effective configuration",
+      "tools: read",
+      "├─ Appended prompt",
+      "│  ├─ Private · reviewer.md",
+      "│  │  └─ surviving source text that wraps at a narrow width",
+      "└─ Runtime contributions",
+    ],
+    theme,
+    (data) => data === "Escape",
+    (data) => data === "Ctrl+O",
+    () => events.push("close"),
+    () => events.push("render"),
+  );
+  const compact = view.render(24);
+  assert.equal(view.expanded, false);
+  assert.ok(compact.every((line) => visibleWidth(line) <= 24));
+  assert.ok(!compact.join("\n").includes("surviving source text"));
+
+  view.handleInput("Ctrl+O");
+  assert.equal(view.expanded, true);
+  const expanded = view.render(24);
+  assert.ok(expanded.every((line) => visibleWidth(line) <= 24));
+  assert.match(
+    stripVTControlCharacters(expanded.join("\n")),
+    /surviving source text/u,
+  );
+  assert.match(stripVTControlCharacters(expanded.join("\n")), /│  ├─ Private/u);
+  assert.ok(expanded.length > compact.length);
+  assert.ok(events.includes("render"));
+
+  view.handleInput("Ctrl+O");
+  assert.equal(view.expanded, false);
+  view.handleInput("Escape");
+  assert.deepEqual(
+    events.filter((event) => event === "close"),
+    ["close"],
+  );
+});
+
+test("expanded instruction inspector pages through bounded long content", () => {
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
+  const lines = Array.from(
+    { length: 40 },
+    (_, index) => `instruction line ${index + 1}`,
+  );
+  const view = createInstructionInspectorView(
+    "Long instructions",
+    lines,
+    theme,
+    (data) => data === "Escape",
+    (data) => data === "Ctrl+O",
+    () => {},
+    () => {},
+  );
+
+  view.render(80);
+  view.handleInput("Ctrl+O");
+  const firstPage = stripVTControlCharacters(view.render(80).join("\n"));
+  assert.match(firstPage, /instruction line 1/u);
+  assert.doesNotMatch(firstPage, /instruction line 13/u);
+  assert.match(firstPage, /1–12\/40/u);
+
+  view.handleInput("PageDown");
+  const secondPage = stripVTControlCharacters(view.render(80).join("\n"));
+  assert.match(secondPage, /instruction line 13/u);
+  assert.match(secondPage, /instruction line 24/u);
+  assert.doesNotMatch(secondPage, /instruction line 1(?:\D|$)/u);
+
+  view.handleInput("End");
+  const lastPage = stripVTControlCharacters(view.render(80).join("\n"));
+  assert.match(lastPage, /instruction line 40/u);
+  assert.match(lastPage, /29–40\/40/u);
+  view.handleInput("Home");
+  assert.match(
+    stripVTControlCharacters(view.render(80).join("\n")),
+    /instruction line 1/u,
+  );
+});
 
 test("menu frames preserve structural gaps and replace previous content at narrow widths", () => {
   const theme = {

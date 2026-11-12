@@ -642,10 +642,47 @@ function privateRepositoryRoot(projectRoot: string): string | undefined {
 type DefinitionLayerSource =
   "projectSource" | "overrideSource" | "privateRepositorySource";
 
+export type DefinitionLayerTrace = {
+  scope: "bundled" | "global" | "project" | "private";
+  path: string;
+  supplied: Frontmatter;
+  before?: Frontmatter;
+  after: Frontmatter;
+  body: string;
+  bodyAction: "base" | "inherit" | "append" | "replace";
+};
+
+export type DefinitionInspection = {
+  definition: AgentDefinition;
+  layers: DefinitionLayerTrace[];
+  bodyFragments: DefinitionBodyFragment[];
+};
+
+type DefinitionTraceCapture = {
+  name: string;
+  layers: DefinitionLayerTrace[];
+  bodyFragments: Array<{
+    path: string;
+    scope: DefinitionLayerTrace["scope"];
+    body: string;
+  }>;
+};
+
+function sourceScope(
+  field: DefinitionLayerSource,
+): DefinitionLayerTrace["scope"] {
+  return field === "projectSource"
+    ? "project"
+    : field === "overrideSource"
+      ? "global"
+      : "private";
+}
+
 function applyDefinitionLayer(
   definitions: Map<string, AgentDefinition>,
   layer: readonly AgentDefinition[],
   sourceField: DefinitionLayerSource,
+  trace?: DefinitionTraceCapture,
 ): void {
   for (const definition of layer) {
     const base = definitions.get(definition.name);
@@ -660,6 +697,20 @@ function applyDefinitionLayer(
         [sourceField]: definition.path,
       };
       validateDefinition(standalone);
+      if (trace?.name === definition.name) {
+        const scope = sourceScope(sourceField);
+        trace.layers.push({
+          scope,
+          path: definition.path,
+          supplied: definition.frontmatter,
+          after: standalone.frontmatter,
+          body: definition.body,
+          bodyAction: "base",
+        });
+        trace.bodyFragments = definition.body
+          ? [{ path: definition.path, scope, body: definition.body }]
+          : [];
+      }
       definitions.set(definition.name, standalone);
       continue;
     }
@@ -682,6 +733,27 @@ function applyDefinitionLayer(
       [sourceField]: definition.path,
     };
     validateDefinition(effective);
+    if (trace?.name === definition.name) {
+      const scope = sourceScope(sourceField);
+      trace.layers.push({
+        scope,
+        path: definition.path,
+        supplied: definition.frontmatter,
+        before: base.frontmatter,
+        after: effective.frontmatter,
+        body: definition.body,
+        bodyAction: definition.body ? mode : "inherit",
+      });
+      if (definition.body) {
+        trace.bodyFragments =
+          mode === "append" && trace.bodyFragments.length
+            ? [
+                ...trace.bodyFragments,
+                { path: definition.path, scope, body: definition.body },
+              ]
+            : [{ path: definition.path, scope, body: definition.body }];
+      }
+    }
     definitions.set(effective.name, effective);
   }
 }
@@ -751,6 +823,7 @@ function discoverEffectiveDefinitions(
   options: DiscoverAgentDefinitionsOptions = {},
   category: "agent" | "role" = "agent",
   validateReferences = true,
+  trace?: DefinitionTraceCapture,
 ): AgentDefinition[] {
   const role = category === "role";
   const bundled = readAgentDefinitions(
@@ -808,6 +881,19 @@ function discoverEffectiveDefinitions(
     if (!definition.extensionSource)
       definition.extensionSource = definition.path;
     validateDefinition(definition);
+    if (trace?.name === definition.name) {
+      trace.layers.push({
+        scope: "bundled",
+        path: definition.path,
+        supplied: definition.frontmatter,
+        after: definition.frontmatter,
+        body: definition.body,
+        bodyAction: "base",
+      });
+      trace.bodyFragments = definition.body
+        ? [{ path: definition.path, scope: "bundled", body: definition.body }]
+        : [];
+    }
   }
   for (const definition of [
     ...bundled,
@@ -832,18 +918,74 @@ function discoverEffectiveDefinitions(
     throw new Error(
       `${privateChief.path} chief definition: private repository overrides are not supported; configure chief globally instead`,
     );
-  applyDefinitionLayer(definitions, user, "overrideSource");
-  applyDefinitionLayer(definitions, project, "projectSource");
+  applyDefinitionLayer(definitions, user, "overrideSource", trace);
+  applyDefinitionLayer(definitions, project, "projectSource", trace);
   applyDefinitionLayer(
     definitions,
     privateRepository,
     "privateRepositorySource",
+    trace,
   );
   const effective = [...definitions.values()].sort((left, right) =>
     left.name.localeCompare(right.name),
   );
   if (!role && validateReferences) validateEffectiveAgentReferences(effective);
   return effective;
+}
+
+export function inspectAgentDefinition(
+  name: string,
+  options: DiscoverAgentDefinitionsOptions = {},
+): DefinitionInspection {
+  const trace: DefinitionTraceCapture = { name, layers: [], bodyFragments: [] };
+  const definition = discoverEffectiveDefinitions(options, "agent", true, trace)
+    .filter((candidate) => !isReservedRoleDefinition(candidate.name))
+    .map(withDefaultEnabled)
+    .find((candidate) => candidate.name === name);
+  if (!definition) throw new Error(`agent ${name} not found`);
+  if (
+    trace.bodyFragments.map((fragment) => fragment.body).join("\n\n") !==
+    definition.body
+  )
+    throw new Error(
+      `Definition body trace did not reproduce effective body for ${name}`,
+    );
+  return {
+    definition,
+    layers: trace.layers,
+    bodyFragments: trace.bodyFragments,
+  };
+}
+
+export function inspectRoleDefinition(
+  name: RoleDefinitionName,
+  options: DiscoverAgentDefinitionsOptions = {},
+): DefinitionInspection {
+  const trace: DefinitionTraceCapture = { name, layers: [], bodyFragments: [] };
+  const definition = discoverEffectiveDefinitions(
+    options,
+    "role",
+    true,
+    trace,
+  ).find((candidate) => candidate.name === name);
+  if (!definition) throw new Error(`role definition ${name} not found`);
+  if (definition.frontmatter.agents?.length)
+    validateRoleAgentDefinitionReferences(
+      definition,
+      discoverAgentDefinitions(options),
+    );
+  if (
+    trace.bodyFragments.map((fragment) => fragment.body).join("\n\n") !==
+    definition.body
+  )
+    throw new Error(
+      `Definition body trace did not reproduce effective body for ${name}`,
+    );
+  return {
+    definition,
+    layers: trace.layers,
+    bodyFragments: trace.bodyFragments,
+  };
 }
 
 export function discoverAgentDefinitions(
@@ -1407,27 +1549,47 @@ export function writePrivatePromptSnapshots(
   }
 }
 
-export function expandAgentBodyFiles(
-  body: string,
+export type DefinitionBodyFragment = {
+  path: string;
+  scope: DefinitionLayerTrace["scope"];
+  body: string;
+};
+
+export function expandDefinitionBodyFragments(
+  fragments: readonly DefinitionBodyFragment[],
   skipCanonicalPaths: readonly string[],
   operation: string,
-): string {
-  const references = [...body.matchAll(BODY_FILE_REFERENCE)].map(
-    (match) => match[1]!,
+): string[] {
+  const references = fragments.flatMap(({ body }) =>
+    [...body.matchAll(BODY_FILE_REFERENCE)].map((match) => match[1]!),
   );
-  if (references.length === 0) return body;
+  if (references.length === 0) return fragments.map(({ body }) => body);
   const snapshots = snapshotTextFiles(references, process.cwd(), operation, {
     skipCanonicalPaths,
   });
   const remaining = new Map(
     snapshots.map((snapshot) => [snapshot.input, snapshot.text]),
   );
-  return body.replace(BODY_FILE_REFERENCE, (_match, input: string) => {
-    const text = remaining.get(input);
-    if (text === undefined) return "";
-    remaining.delete(input);
-    return text;
-  });
+  return fragments.map(({ body }) =>
+    body.replace(BODY_FILE_REFERENCE, (_match, input: string) => {
+      const text = remaining.get(input);
+      if (text === undefined) return "";
+      remaining.delete(input);
+      return text;
+    }),
+  );
+}
+
+export function expandAgentBodyFiles(
+  body: string,
+  skipCanonicalPaths: readonly string[],
+  operation: string,
+): string {
+  return expandDefinitionBodyFragments(
+    [{ path: "", scope: "bundled", body }],
+    skipCanonicalPaths,
+    operation,
+  )[0]!;
 }
 
 export function agentDefinitionDelegationEnabled(
@@ -1450,6 +1612,31 @@ export function agentDefinitionDelegationEnabled(
   if (policy.mode === "relative")
     return toolPolicyAllowsName(policy, new Set(), "agent");
   return tools.length > 0;
+}
+
+export function contextInheritance(definition: AgentDefinition): {
+  global: boolean;
+  project: boolean;
+} {
+  const project =
+    definition.frontmatter.inheritProjectContext ??
+    definition.name === "delegate";
+  const global = definition.frontmatter.inheritGlobalContext ?? project;
+  return { global, project };
+}
+
+export function selectedAgentContextFiles(
+  definition: AgentDefinition,
+  cwd: string,
+  loader: typeof loadProjectContextFiles = loadProjectContextFiles,
+) {
+  const inheritance = contextInheritance(definition);
+  if (!inheritance.global && !inheritance.project) return [];
+  const agentDir = getAgentDir();
+  return loader({ cwd, agentDir }).filter((context) => {
+    const isGlobal = resolve(dirname(context.path)) === resolve(agentDir);
+    return isGlobal ? inheritance.global : inheritance.project;
+  });
 }
 
 export type AgentLaunchOptions = {
@@ -1525,25 +1712,15 @@ export function agentLaunchArgs(
       mode === "append" ? "--append-system-prompt" : "--system-prompt",
       bodyPromptPathForLaunch,
     );
-  const inheritProjectContext =
-    frontmatter.inheritProjectContext ?? agent.name === "delegate";
-  const inheritGlobalContext =
-    frontmatter.inheritGlobalContext ?? inheritProjectContext;
-  if (inheritProjectContext !== true || inheritGlobalContext !== true) {
+  const inheritance = contextInheritance(agent);
+  if (!inheritance.global || !inheritance.project) {
     args.push("--no-context-files");
-    if (inheritProjectContext === true || inheritGlobalContext === true) {
-      const agentDir = getAgentDir();
-      for (const context of (
-        options.loadProjectContextFiles ?? loadProjectContextFiles
-      )({ cwd, agentDir })) {
-        const isGlobal = resolve(dirname(context.path)) === resolve(agentDir);
-        if (
-          (isGlobal && inheritGlobalContext === true) ||
-          (!isGlobal && inheritProjectContext === true)
-        )
-          args.push("--append-system-prompt", context.path);
-      }
-    }
+    for (const context of selectedAgentContextFiles(
+      agent,
+      cwd,
+      options.loadProjectContextFiles ?? loadProjectContextFiles,
+    ))
+      args.push("--append-system-prompt", context.path);
   }
   if (sharedPromptPath) args.push("--append-system-prompt", sharedPromptPath);
   const requiredTools = [

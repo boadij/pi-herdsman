@@ -41,6 +41,9 @@ import {
   AGENT_COORDINATION_TOOLS,
   discoverAgent,
   discoverAgentDefinitions,
+  inspectAgentDefinition,
+  expandDefinitionBodyFragments,
+  selectedAgentContextFiles,
   contextAgentDefinitions,
   discoverRoleDefinition,
   discoverRoleDefinitions,
@@ -641,6 +644,27 @@ test("selects global and project context independently in native order", () => {
           [...prompt, ...contexts, ...noSkills],
         );
     }
+    const selected = selectedAgentContextFiles(
+      {
+        name: "agent",
+        path: "/agent.md",
+        frontmatter: {
+          inheritProjectContext: true,
+          inheritGlobalContext: false,
+        },
+        body: "",
+      },
+      cwd,
+      () => [
+        { path: global, content: "Global" },
+        { path: outer, content: "Outer" },
+        { path: inner, content: "Inner" },
+      ],
+    );
+    assert.deepEqual(
+      selected.map(({ path }) => path),
+      [outer, inner],
+    );
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -1353,6 +1377,66 @@ test("does not bundle the operator-local MCP runner", () => {
   );
 });
 
+test("captures definition layer provenance and surviving body fragments", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-inspection-"));
+  const agents = join(root, "agents");
+  mkdirSync(agents);
+  const base = withPiAgentDir(root, () => discoverAgent("scout").body);
+  writeFileSync(
+    join(agents, "scout.md"),
+    "---\nname: scout\nbodyMode: append\nthinking: high\n---\nCustom layer.",
+  );
+
+  const appended = withPiAgentDir(root, () => inspectAgentDefinition("scout"));
+  assert.deepEqual(
+    appended.layers.map(({ scope, bodyAction }) => [scope, bodyAction]),
+    [
+      ["bundled", "base"],
+      ["global", "append"],
+    ],
+  );
+  assert.equal(
+    appended.bodyFragments.map(({ body }) => body).join("\n\n"),
+    appended.definition.body,
+  );
+  assert.equal(appended.bodyFragments[0]?.body, base);
+  assert.equal(appended.bodyFragments[1]?.body, "Custom layer.");
+  assert.equal(appended.layers[1]?.before?.thinking, undefined);
+  assert.equal(appended.layers[1]?.after.thinking, "high");
+
+  writeFileSync(
+    join(agents, "scout.md"),
+    "---\nname: scout\nbodyMode: replace\n---\nReplacement.",
+  );
+  const replaced = withPiAgentDir(root, () => inspectAgentDefinition("scout"));
+  assert.deepEqual(
+    replaced.bodyFragments.map(({ body }) => body),
+    ["Replacement."],
+  );
+  assert.equal(replaced.layers[1]?.bodyAction, "replace");
+  assert.equal(
+    replaced.bodyFragments.map(({ body }) => body).join("\n\n"),
+    replaced.definition.body,
+  );
+
+  const standaloneRoot = mkdtempSync(
+    join(tmpdir(), "pi-herdsman-inspection-standalone-"),
+  );
+  mkdirSync(join(standaloneRoot, "agents"));
+  writeFileSync(
+    join(standaloneRoot, "agents", "local.md"),
+    "---\nname: local\n---\nLocal.",
+  );
+  const standalone = withPiAgentDir(standaloneRoot, () =>
+    inspectAgentDefinition("local"),
+  );
+  assert.deepEqual(
+    standalone.layers.map(({ scope }) => scope),
+    ["global"],
+  );
+  assert.equal(standalone.layers[0]?.bodyAction, "base");
+});
+
 test("composes matching bundled bodies with bodyMode", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-body-mode-"));
   const agents = join(root, "agents");
@@ -1652,6 +1736,17 @@ test("private repository definitions overlay trusted linked worktrees without cr
         /Global body\n\nProject body\n\nPrivate body/u,
       );
       assert.equal(effective.privateRepositorySource, privateReviewer);
+      const inspection = withPiAgentDir(global, () =>
+        inspectAgentDefinition("reviewer", { projectRoot: worktree }),
+      );
+      assert.deepEqual(
+        inspection.layers.map(({ scope }) => scope),
+        ["bundled", "global", "project", "private"],
+      );
+      assert.equal(
+        inspection.bodyFragments.map(({ body }) => body).join("\n\n"),
+        inspection.definition.body,
+      );
       assert.ok(discoverAgent("private-only", { projectRoot: worktree }));
       assert.equal(
         discoverAgent("private-only", { projectRoot: worktree }).body,
@@ -2762,6 +2857,26 @@ test("expands body references with caller precedence and no recursion", () => {
   assert.equal(
     expandAgentBodyFiles(`@${included}`, [realpathSync(included)], "assign"),
     "",
+  );
+});
+
+test("expands traced body fragments in one globally deduplicated reference pass", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-fragment-expand-"));
+  const included = join(root, "included.md");
+  writeFileSync(included, "included text");
+  const fragments = [
+    { path: "/one.md", scope: "bundled" as const, body: `@${included}` },
+    { path: "/two.md", scope: "global" as const, body: `@${included}` },
+  ];
+  const expanded = expandDefinitionBodyFragments(fragments, [], "inspect");
+  assert.deepEqual(expanded, ["included text", ""]);
+  assert.equal(
+    expanded.join("\n\n"),
+    expandAgentBodyFiles(
+      fragments.map(({ body }) => body).join("\n\n"),
+      [],
+      "inspect",
+    ),
   );
 });
 

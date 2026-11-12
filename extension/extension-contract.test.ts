@@ -2451,9 +2451,23 @@ test("active chief describes authoritative remote ask projection", async () => {
     "message_staff",
   ]);
   const snapshotsBeforePreparation = pi.calls.filter(isApiSnapshot).length;
+  const globalInstructionPath = join(PI_AGENT_ROOT, "global-instructions.md");
   const beforeStart = await invokeBeforeAgentStart(
     pi,
-    { systemPromptOptions: { contextFiles: [] } },
+    {
+      systemPromptOptions: {
+        contextFiles: [
+          {
+            path: globalInstructionPath,
+            content: "GLOBAL CHIEF INSTRUCTION SENTINEL",
+          },
+          {
+            path: join(context.cwd, "AGENTS.md"),
+            content: "PROJECT CHIEF CONTEXT MUST BE EXCLUDED",
+          },
+        ],
+      },
+    },
     context,
   );
   const chiefPrompt = beforeStart?.systemPrompt;
@@ -2476,6 +2490,18 @@ test("active chief describes authoritative remote ask projection", async () => {
   );
   assert.match(String(chiefPrompt), /verified workspace-neutral Chief/);
   assert.match(String(chiefPrompt), /Custom Chief strategy/);
+  assert.match(String(chiefPrompt), /GLOBAL CHIEF INSTRUCTION SENTINEL/);
+  assert.doesNotMatch(
+    String(chiefPrompt),
+    /PROJECT CHIEF CONTEXT MUST BE EXCLUDED/,
+  );
+  const contractIndex = String(chiefPrompt).indexOf("## Chief role");
+  const bodyIndex = String(chiefPrompt).indexOf("Custom Chief strategy");
+  const globalIndex = String(chiefPrompt).indexOf(
+    "GLOBAL CHIEF INSTRUCTION SENTINEL",
+  );
+  assert.ok(contractIndex >= 0 && contractIndex < bodyIndex);
+  assert.ok(bodyIndex < globalIndex);
   assert.doesNotMatch(String(chiefPrompt), /You are the active chief/);
   const targetSchema = (tool.parameters as any).properties.target;
   assert.equal(targetSchema.pattern, COORDINATOR_TARGET_PATTERN);

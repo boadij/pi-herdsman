@@ -547,6 +547,79 @@ test("Definitions retains the last selected Agent when returning to its list", a
   );
 });
 
+test("Coordinator Details show current prompt inputs in composition order", async () => {
+  const choices = ["roles", "manager", "details", undefined, undefined];
+  const menus: { title: string; value?: string }[] = [];
+  let displayed: string[] | undefined;
+  const runtime = createLeadCommandRuntime({
+    selectMenu: async (_ctx: unknown, title: string) => {
+      const value = choices.shift();
+      menus.push({ title, value });
+      return value;
+    },
+    getThinkingLevel: () => "high",
+    agentDefinitionEnabled: () => true,
+    getSystemPromptOptions: () => ({
+      contextFiles: [
+        { path: "/workspace/AGENTS.md", content: "Current project context" },
+      ],
+    }),
+    inspectRoleDefinition: () => ({
+      definition: {
+        name: "manager",
+        path: "/profile.md",
+        frontmatter: { name: "manager" },
+        body: "Manager profile",
+      },
+      layers: [],
+      bodyFragments: [],
+    }),
+    expandDefinitionBodyFragments: () => [],
+    roleActive: (role: string) => role === "manager",
+    isCurrentChief: () => false,
+    roleCharter: () => "Verified manager contract",
+    leadExecutionPresentation: () => ({
+      managed: false,
+      mode: "flexible",
+    }),
+    leadExecutionDefinition: () => undefined,
+    executionPrompt: () => undefined,
+    selectedAgentContextFiles: () => [],
+    agentDefinitionMetadata: () => ({ name: "manager" }),
+    formatAgentDefinitions: () => ["Manager metadata"],
+    showDefinitionDetails: async (
+      _ctx: unknown,
+      _title: string,
+      lines: string[],
+    ) => {
+      displayed = [...lines];
+    },
+  } as any);
+  await runtime.openDefinitionsMenu({
+    mode: "tui",
+    cwd: "/workspace",
+    isProjectTrusted: () => true,
+    ui: { notify: () => undefined },
+  } as any);
+  assert.deepEqual(
+    menus.slice(0, 3).map(({ value }) => value),
+    ["roles", "manager", "details"],
+  );
+  const lines = displayed!.join("\n");
+  const base = lines.indexOf("Pi base prompt · native and not reconstructed");
+  const context = lines.indexOf("Current project context");
+  const contract = lines.indexOf("Verified manager contract");
+  const profile = lines.indexOf("Effective Manager profile on disk");
+  const cwd = lines.indexOf("Working directory");
+  const runtimeSection = lines.indexOf(
+    "Runtime contributions · session-dependent",
+  );
+  assert.ok(base >= 0 && base < context);
+  assert.ok(context < contract && contract < profile);
+  assert.ok(profile < cwd && cwd < runtimeSection);
+  assert.match(lines, /Preview: active-session inputs/u);
+});
+
 test("Definitions lists and displays misplaced-definition warnings without editing them", async () => {
   const first = { name: "first", frontmatter: { name: "first" } } as any;
   const warning =

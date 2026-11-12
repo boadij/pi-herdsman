@@ -4482,6 +4482,8 @@ export function registerLeadRuntime(
       leadExecution && !leadExecution.managed && leadExecution.valid
         ? leadExecution.definition.body
         : undefined,
+    leadExecutionDefinition: () =>
+      leadExecution?.valid ? leadExecution.definition : undefined,
     leadInboxRuntime: inboxRuntime,
     herdRun: herdRunRuntime,
     controller,
