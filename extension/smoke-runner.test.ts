@@ -848,6 +848,41 @@ test("core failure retains bounded process observation without raw errors", () =
   assert.doesNotMatch(JSON.stringify(evidence), /PRIVATE/);
 });
 
+test("crash-recovery failure evidence bounds continuation category and recovery path", () => {
+  const evidence = sanitizedFailureEvidence(
+    {
+      scenario: "agent-crash-recovery",
+      crashRecovery: {
+        recoveryPath: "explicit-stop",
+        continueAgentRejectionCategory: "agent_busy",
+      },
+    },
+    null,
+    "SCENARIO_FAIL",
+    "PASS",
+  );
+  assert.deepEqual(evidence.crashRecovery, {
+    recoveryPath: "explicit-stop",
+    continueAgentRejectionCategory: "agent_busy",
+  });
+  const rejected = sanitizedFailureEvidence(
+    {
+      scenario: "agent-crash-recovery",
+      crashRecovery: {
+        recoveryPath: "unexpected-value",
+        continueAgentRejectionCategory: "sensitive raw error text",
+      },
+    },
+    null,
+    "SCENARIO_FAIL",
+    "PASS",
+  );
+  assert.deepEqual(rejected.crashRecovery, {
+    recoveryPath: "unknown",
+    continueAgentRejectionCategory: "unknown",
+  });
+});
+
 test("core correlation summary retains bounded membership and match counts without session IDs", () => {
   const observed = new Set([
     42,

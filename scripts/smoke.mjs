@@ -7056,6 +7056,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
     { timeoutMs: 30_000, stallMs: MODEL_STALL_MS, pollMs: 200 },
   );
   ctx.crashRecovery.oldExecution = oldExecution;
+  ctx.crashRecovery.recoveryOutcome = recoveryOutcome.kind;
   ctx.crashRecovery.recoveryPath =
     recoveryOutcome.kind === "settled" ? "settled-result" : "explicit-stop";
   await nestedCommand(ctx, [
@@ -7092,6 +7093,17 @@ async function runAgentCrashRecoverySmoke(ctx) {
           entry.message.toolName === "continue_agent" &&
           entry.message.isError,
       );
+      const continuationDetails = (failedContinuation ?? continueResult)
+        ?.message?.details;
+      if (
+        failedContinuation ||
+        (continueResult && continuationDetails?.ok !== true)
+      ) {
+        const category =
+          continuationDetails?.error?.category ?? continuationDetails?.category;
+        ctx.crashRecovery.continueAgentRejectionCategory =
+          STRUCTURED_TOOL_ERROR_CATEGORIES.has(category) ? category : "unknown";
+      }
       if (failedContinuation)
         throw new Error("continue_agent failed during crash recovery");
       if (!continueResult)
@@ -7118,7 +7130,11 @@ async function runAgentCrashRecoverySmoke(ctx) {
         session?.path === ctx.crashRecovery.target.sessionPath &&
           session?.id === ctx.crashRecovery.target.sessionId &&
           mailbox.state.ownerSessionId === ctx.crashRecovery.ownerSessionId &&
+          typeof mailbox.state.runId === "string" &&
+          mailbox.state.runId.length > 0 &&
           mailbox.state.runId !== ctx.crashRecovery.target.runId &&
+          typeof mailbox.state.activeRequestId === "string" &&
+          mailbox.state.activeRequestId.length > 0 &&
           mailbox.state.activeRequestId !== ctx.crashRecovery.target.requestId,
         "continued generation identity mismatch",
       );
@@ -7169,6 +7185,34 @@ async function runAgentCrashRecoverySmoke(ctx) {
   );
   if (recoveryOutcome.kind === "settled")
     assert.equal(originalTargetResults.length, 1);
+  const continuedTargetResults = finalTargetResults.filter(
+    (entry) =>
+      (entry.message?.details ?? entry.details)?.requestId ===
+      ctx.crashRecovery.continuedGeneration.requestId,
+  );
+  assert.equal(
+    continuedTargetResults.length,
+    1,
+    "continued target result was not delivered exactly once",
+  );
+  const continuedResultDetails =
+    continuedTargetResults[0]?.message?.details ??
+    continuedTargetResults[0]?.details;
+  assert.ok(
+    continuedResultDetails?.runId ===
+      ctx.crashRecovery.continuedGeneration.runId &&
+      continuedResultDetails?.ownerSessionId ===
+        ctx.crashRecovery.ownerSessionId &&
+      continuedResultDetails?.workspaceId ===
+        ctx.crashRecovery.continuedGeneration.workspaceId &&
+      continuedResultDetails?.agentLabel === "smoke-crash-target" &&
+      continuedResultDetails?.paneId ===
+        ctx.crashRecovery.continuedGeneration.paneId &&
+      continuedResultDetails?.piSessionId ===
+        ctx.crashRecovery.continuedGeneration.sessionId &&
+      continuedResultDetails?.status === "completed",
+    "continued target result identity mismatch",
+  );
   const continuedSession = SessionManager.open(
     ctx.crashRecovery.target.sessionPath,
   );
@@ -13248,6 +13292,25 @@ export function sanitizedFailureEvidence(
       : {}),
     ...(diagnostics
       ? { diagnostics: sanitizedFailureDiagnostics(diagnostics) }
+      : {}),
+    ...(ctx.scenario === "agent-crash-recovery"
+      ? {
+          crashRecovery: {
+            recoveryPath: ["settled-result", "explicit-stop"].includes(
+              ctx.crashRecovery?.recoveryPath,
+            )
+              ? ctx.crashRecovery.recoveryPath
+              : "unknown",
+            continueAgentRejectionCategory:
+              ctx.crashRecovery?.continueAgentRejectionCategory === undefined
+                ? "not_observed"
+                : STRUCTURED_TOOL_ERROR_CATEGORIES.has(
+                      ctx.crashRecovery.continueAgentRejectionCategory,
+                    )
+                  ? ctx.crashRecovery.continueAgentRejectionCategory
+                  : "unknown",
+          },
+        }
       : {}),
     ...(ctx.managerBootstrapFailureDiagnostics
       ? {
