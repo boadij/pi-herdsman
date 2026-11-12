@@ -4478,6 +4478,10 @@ export function registerLeadRuntime(
         ? executionTools()
         : undefined;
     },
+    executionPrompt: () =>
+      leadExecution && !leadExecution.managed && leadExecution.valid
+        ? leadExecution.definition.body
+        : undefined,
     leadInboxRuntime: inboxRuntime,
     herdRun: herdRunRuntime,
     controller,

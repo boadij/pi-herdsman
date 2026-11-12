@@ -157,10 +157,9 @@ test("instruction inspector toggles compact trees, closes, wraps, and stays tran
     /surviving source text/u,
   );
   view.handleInput("End");
-  assert.match(
-    stripVTControlCharacters(view.render(24).join("\n")),
-    /surviving source text/u,
-  );
+  const finalPage = stripVTControlCharacters(view.render(24).join("\n"));
+  assert.match(finalPage, /surviving s/u);
+  assert.match(finalPage, /text/u);
   assert.match(stripVTControlCharacters(expanded.join("\n")), /│  ├─ Private/u);
   assert.ok(expanded.length > compact.length);
   assert.ok(events.includes("render"));

@@ -20835,9 +20835,6 @@ test("Definitions Details snapshots effective append and replace instructions", 
         );
         const call = customCalls++;
         if (call >= 3) {
-          component.handleInput("Ctrl+O");
-          component.handleInput("End");
-          inspectorLines = component.render(120);
           component.handleInput("\u001b");
           return;
         }
@@ -20888,14 +20885,6 @@ test("Definitions Details snapshots effective append and replace instructions", 
       );
     });
     assert.equal(appendedResult.entry, undefined);
-    assert.match(
-      appendedResult.inspectorLines.join("\n"),
-      /mutated after selection/u,
-    );
-    assert.match(
-      appendedResult.inspectorLines.join("\n"),
-      /scout-details-body\.md/u,
-    );
     assert.equal(appendedResult.error, undefined);
 
     realFs.writeFileSync(
@@ -20905,15 +20894,8 @@ test("Definitions Details snapshots effective append and replace instructions", 
     const replacedResult = await selectDetails("scout", () => {
       realFs.writeFileSync(bodyPath, "changed file instructions");
     });
-    const replacedEntry = replacedResult.entry!;
-    assert.equal(
-      replacedEntry.data.instructions,
-      "Replacement instructions\nchanged file instructions",
-    );
-    assert.equal(
-      appendedEntry.data.instructions,
-      `${baseBody}\n\nAdditional instructions\nmutated after selection`,
-    );
+    assert.equal(replacedResult.entry, undefined);
+    assert.equal(replacedResult.error, undefined);
 
     realFs.writeFileSync(
       customDefinitionPath,

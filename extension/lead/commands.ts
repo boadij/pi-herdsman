@@ -21,6 +21,7 @@ import {
   discoverRoleDefinitions,
   expandDefinitionBodyFragments,
   expandDefinitionBodyFragmentsWithSources,
+  type ExpandedDefinitionBodyPart,
   selectedAgentContextFiles,
   contextInheritance,
   type DefinitionInspection,
@@ -656,7 +657,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                         current.name,
                         ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
                       );
-                  const expandedFragments =
+                  const expandedFragments: ExpandedDefinitionBodyPart[][] =
                     host.expandDefinitionBodyFragmentsWithSources?.(
                       inspection.bodyFragments,
                       [],

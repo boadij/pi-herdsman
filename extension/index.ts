@@ -12,7 +12,7 @@ import {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { readFileSync, statSync, unlinkSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
+import { basename } from "node:path";
 import {
   chiefGlobalInstructions as selectChiefGlobalInstructions,
   chiefSystemPrompt as buildChiefSystemPrompt,
@@ -1193,12 +1193,7 @@ function registerExtensionImpl(
     options: BuildSystemPromptOptions | undefined,
     body: string,
   ): string =>
-    buildChiefSystemPrompt(
-      options,
-      body,
-      CHIEF_ROLE_CONTRACT,
-      getAgentDir(),
-    );
+    buildChiefSystemPrompt(options, body, CHIEF_ROLE_CONTRACT, getAgentDir());
   const roleCharter = (ctx: ExtensionContext): string => {
     const role = activeRole();
     if (
@@ -1684,14 +1679,19 @@ function registerExtensionImpl(
       ) => {
         if (ctx.mode !== "tui") return;
         await ctx.ui.custom(
-          (tui, theme, _keybindings, done) =>
+          (
+            tui: any,
+            theme: any,
+            _keybindings: any,
+            done: (value: unknown) => void,
+          ) =>
             createInstructionInspectorView(
               `${title} · Effective Instructions`,
               lines,
               theme,
               (data) => matchesKey(data, Key.escape),
               (data) => matchesKey(data, Key.ctrl("o")),
-              () => done(),
+              () => done(undefined),
               () => tui.requestRender(),
             ),
           {

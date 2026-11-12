@@ -621,9 +621,8 @@ test("Coordinator Details show current prompt inputs in composition order", asyn
 });
 
 test("Chief Details use the forced prompt producer with global-only context", async () => {
-  const { chiefGlobalInstructions, chiefSystemPrompt } = await import(
-    "../chief-prompt.ts"
-  );
+  const { chiefGlobalInstructions, chiefSystemPrompt } =
+    await import("../chief-prompt.ts");
   const choices = ["roles", "chief", "details", undefined, undefined];
   let displayed: string[] | undefined;
   const promptOptions = {

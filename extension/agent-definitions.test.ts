@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert";
 import {
   mkdtempSync,
   mkdirSync,
+  existsSync,
   rmSync,
   readFileSync,
   realpathSync,
@@ -43,6 +44,7 @@ import {
   discoverAgentDefinitions,
   inspectAgentDefinition,
   expandDefinitionBodyFragments,
+  expandDefinitionBodyFragmentsWithSources,
   selectedAgentContextFiles,
   contextAgentDefinitions,
   discoverRoleDefinition,
@@ -604,6 +606,11 @@ test("selects global and project context independently in native order", () => {
       );
     const noContext = ["--no-context-files"];
     const append = (path: string) => ["--append-system-prompt", path];
+    const projectContextPaths = [
+      ...(existsSync("/AGENTS.md") ? ["/AGENTS.md"] : []),
+      outer,
+      inner,
+    ];
     const noSkills = ["--no-skills"];
 
     assert.deepEqual(launch("agent", {}), [
@@ -628,7 +635,7 @@ test("selects global and project context independently in native order", () => {
         [{ inheritProjectContext: true, inheritGlobalContext: true }, []],
         [
           { inheritProjectContext: true, inheritGlobalContext: false },
-          [...noContext, ...append(outer), ...append(inner)],
+          [...noContext, ...projectContextPaths.flatMap(append)],
         ],
         [
           { inheritProjectContext: false, inheritGlobalContext: true },
@@ -2870,6 +2877,10 @@ test("expands traced body fragments in one globally deduplicated reference pass"
   ];
   const expanded = expandDefinitionBodyFragments(fragments, [], "inspect");
   assert.deepEqual(expanded, ["included text", ""]);
+  assert.deepEqual(
+    expandDefinitionBodyFragmentsWithSources(fragments, [], "inspect"),
+    [[{ text: "included text", filePath: included }], []],
+  );
   assert.equal(
     expanded.join("\n\n"),
     expandAgentBodyFiles(
