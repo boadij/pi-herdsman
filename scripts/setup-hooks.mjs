@@ -33,10 +33,16 @@ if (configured !== null) {
     readdirSync(defaultHooks).some((name) => {
       const file = join(defaultHooks, name);
       const entry = statSync(file);
-      return (\n        !name.endsWith(".sample") &&\n        entry.isFile() &&\n        (entry.mode & 0o111) !== 0\n      );
+      return (
+        !name.endsWith(".sample") &&
+        entry.isFile() &&
+        (entry.mode & 0o111) !== 0
+      );
     })
   ) {
-    throw new Error(\n      `Refusing to replace executable hooks in ${defaultHooks}`,\n    );
+    throw new Error(
+      `Refusing to replace executable hooks in ${defaultHooks}`,
+    );
   }
   git("config", "--local", "core.hooksPath", hooksPath);
 }
