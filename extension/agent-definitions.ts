@@ -275,8 +275,12 @@ function composeFrontmatter(
 ): Frontmatter {
   const effective: Frontmatter = { ...base, ...override };
   for (const field of ARRAY_FIELDS) {
-    const entries = override[field];
-    if (!Array.isArray(entries)) continue;
+    const rawEntries = override[field];
+    if (!Array.isArray(rawEntries)) continue;
+    const entries =
+      field === "tools"
+        ? normalizedToolNames(rawEntries as string[])
+        : rawEntries;
     const baseEntries = base?.[field];
     if (!entries.some((entry) => isArrayModifier(entry as string))) continue;
     if (field === "tools") {
@@ -1557,6 +1561,13 @@ export function agentLaunchArgs(
     const operations = [...normalizedToolNames(frontmatter.tools)];
     for (const tool of requiredTools)
       if (!operations.includes(`+${tool}`)) operations.push(`+${tool}`);
+    if (
+      noTools &&
+      !operations.some((operation) => operation.startsWith("+mcp__"))
+    ) {
+      operations.push("+mcp__");
+      if (!excluded.includes("mcp__")) excluded.push("mcp__");
+    }
     if (operations.length) args.push("--tools", operations.join(","));
   } else if (noTools || policy.mode === "explicit") {
     const configured = policy.tools.filter(

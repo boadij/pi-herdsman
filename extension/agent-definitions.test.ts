@@ -395,6 +395,20 @@ test("array modifiers compose in order, preserve replacement, and retain relativ
   );
   assert.deepEqual(
     mergeFrontmatter(
+      { name: "sample" },
+      { name: "sample", tools: ["read,+bash"] },
+    ).tools,
+    ["read", "bash"],
+  );
+  assert.deepEqual(
+    mergeFrontmatter(
+      { name: "sample", tools: ["read", "write"] },
+      { name: "sample", tools: ["read,-write"] },
+    ).tools,
+    ["read"],
+  );
+  assert.deepEqual(
+    mergeFrontmatter(
       { name: "sample", tools: ["+codemode", "-bash"] },
       { name: "sample", tools: ["+write"] },
     ).tools,
@@ -2212,6 +2226,31 @@ test("bundled noExtensions Agent loads and executes native Code Mode", () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("noTools relative launch filters MCP tools unless an MCP tool is selected", () => {
+  const launch = (tools: string[]) =>
+    agentLaunchArgs(
+      {
+        name: "restricted",
+        path: "/restricted.md",
+        frontmatter: { name: "restricted", noTools: true, tools },
+        body: "",
+      },
+      { bodyPromptPath: "/prompt", cwd: process.cwd() },
+    );
+  const restricted = launch(["+codemode"]);
+  assert.equal(
+    restricted[restricted.indexOf("--tools") + 1],
+    "+codemode,+mcp__",
+  );
+  assert.equal(restricted[restricted.indexOf("--exclude-tools") + 1], "mcp__");
+  const explicitlySelected = launch(["+codemode", "+mcp__probe__secret"]);
+  assert.equal(
+    explicitlySelected[explicitlySelected.indexOf("--tools") + 1],
+    "+codemode,+mcp__probe__secret",
+  );
+  assert.equal(explicitlySelected.includes("--exclude-tools"), false);
 });
 
 test("managed launch policy always includes await_owner and attach_handoff", () => {
