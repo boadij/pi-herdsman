@@ -2691,6 +2691,25 @@ test("read staff transcript advertises persisted candidates and revalidates the 
     cwd: "/tmp",
     agent_status: "idle",
   };
+  const leadPeerRuntime = peerRuntime();
+  const leadPeerLease = acquireProcessLock(
+    peerLeadLockPath(leadPeerRuntime, leadId),
+    { name: "Lead peer presence" },
+  );
+  writePeerLeadRecord(leadPeerRuntime, {
+    version: 2,
+    build: HERDSMAN_BUILD,
+    sessionKind: "ordinary",
+    role: "lead",
+    piSessionId: leadId,
+    paneId: leadAgent.pane_id,
+    tabId: leadAgent.tab_id,
+    workspaceId: leadAgent.workspace_id,
+    socket: process.env.HERDR_SOCKET_PATH!,
+    group: null,
+    claim: leadPeerLease.claim,
+    updatedAt: Date.now(),
+  });
   const chiefAgent = {
     agent_session: {
       source: "herdr:pi",
@@ -2943,6 +2962,8 @@ test("read staff transcript advertises persisted candidates and revalidates the 
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
+    removePeerLeadRecord(leadPeerRuntime, leadId);
+    leadPeerLease.release();
     invalidateLeadCoordinationState(supervisionRuntime(), leadId);
     nativeSessions.delete(leadPath);
     realFs.rmSync(sessionRoot, { recursive: true, force: true });

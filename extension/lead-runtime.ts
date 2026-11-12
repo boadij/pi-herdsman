@@ -38,6 +38,7 @@ import type {
   SupervisionPresentationSnapshot,
   SupervisedLead,
   SupervisedManager,
+  GlobalProjectAssignment,
 } from "./supervision.ts";
 import {
   listPendingRetirements,
@@ -61,6 +62,7 @@ import {
   verifyRemoteChiefAuthority,
   writePeerDeliveryReceipt,
   COORDINATION_INBOX_SCAN_LIMIT,
+  peerRuntime,
 } from "./supervision.ts";
 
 import { OperationError } from "./errors.ts";
@@ -4684,6 +4686,32 @@ export function createLeadIdentityRuntime(host: LeadIdentityHost) {
   return { liveAgent, remoteChiefAgent, liveLead };
 }
 
+function verifiedOrdinaryLead(
+  candidate: {
+    sessionId: string;
+    workspaceId: string;
+    paneId: string;
+    tabId: string;
+  },
+  assignments: Map<string, GlobalProjectAssignment[]>,
+): boolean {
+  const socket = process.env.HERDR_SOCKET_PATH;
+  if (!socket) return false;
+  try {
+    const peer = readPeerLeadRecord(peerRuntime(), candidate.sessionId);
+    return (
+      !!peer &&
+      peer.socket === socket &&
+      peer.workspaceId === candidate.workspaceId &&
+      peer.paneId === candidate.paneId &&
+      peer.tabId === candidate.tabId &&
+      isRemoteOrdinaryLead(peer, assignments)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
   type DirectReport =
     | (SupervisedManager & { role: "manager" })
@@ -5185,40 +5213,41 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     ).agents;
     const managerLeadSessions = new Set<string>();
     const descriptors = host.listManagerDescriptors(host.supervisionRuntime());
+    const assignments = globalProjectAssignmentSnapshot();
     for (const lead of allLeads) {
+      if (
+        !verifiedOrdinaryLead(
+          {
+            sessionId: lead.lead,
+            workspaceId: lead.workspaceId,
+            paneId: lead.paneId,
+            tabId: lead.tabId,
+          },
+          assignments,
+        )
+      ) {
+        managerLeadSessions.add(lead.lead);
+        continue;
+      }
       try {
-        const scope = await host.worktreeGroupScope(
-          host.pi,
-          ctx,
-          lead.workspaceId,
-          ctx.signal,
-        );
         const supervisor = await host.resolveEffectiveSupervisor(
           ctx,
           lead.lead,
           lead.workspaceId,
-          scope,
         );
         if (supervisor.kind !== "chief") managerLeadSessions.add(lead.lead);
       } catch {
-        // Unverifiable worktree scope cannot produce Chief direct authority.
+        // Unknown authority cannot produce Chief direct authority.
         managerLeadSessions.add(lead.lead);
       }
     }
     for (const lead of allLeadSnapshot.incompatible ?? []) {
       if (lead.role !== "lead") continue;
       try {
-        const scope = await host.worktreeGroupScope(
-          host.pi,
-          ctx,
-          lead.workspaceId,
-          ctx.signal,
-        );
         const supervisor = await host.resolveEffectiveSupervisor(
           ctx,
           lead.session,
           lead.workspaceId,
-          scope,
         );
         if (supervisor.kind === "manager") {
           managerLeadSessions.add(lead.session);
@@ -8109,12 +8138,25 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       if (record.kind === "lead_message") {
         const leads = await liveLead(ctx, record.fromSessionId);
         if (leads.length !== 1) return false;
+        const sender = leads[0];
+        if (
+          !verifiedOrdinaryLead(
+            {
+              sessionId: record.fromSessionId,
+              workspaceId: sender.workspace_id,
+              paneId: sender.pane_id,
+              tabId: sender.tab_id,
+            },
+            globalProjectAssignmentSnapshot(),
+          )
+        )
+          return false;
         let scope: Awaited<ReturnType<typeof worktreeGroupScope>> | undefined;
         try {
           scope = await worktreeGroupScope(
             pi,
             ctx,
-            leads[0].workspace_id,
+            sender.workspace_id,
             ctx.signal,
           );
         } catch (error) {
@@ -8131,7 +8173,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         const supervisor = await host.resolveEffectiveSupervisor(
           ctx,
           record.fromSessionId,
-          leads[0].workspace_id,
+          sender.workspace_id,
           scope,
         );
         return (
@@ -8231,6 +8273,11 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
     }
     if (activeRole() !== "lead" || leadRuntime.roleSuspended) return false;
     if (record.kind === "chief_message") {
+      if (
+        readSessionKind(ctx.sessionManager.getEntries(), sessionId)?.kind !==
+        "ordinary"
+      )
+        return false;
       const chief = await currentChiefAuthority(ctx);
       const workspaceId = host.workspaceId();
       if (!workspaceId) return false;
