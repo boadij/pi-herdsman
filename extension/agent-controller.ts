@@ -8178,6 +8178,25 @@ export function createAgentController(
             ctx.sessionManager.getSessionId(),
             resumed,
           );
+          const matchingLiveAgents = snapshot.liveAgents.filter((agent) =>
+            herdrSessionsMatch(
+              agent,
+              expectedSession(resumed.id, resumed.path),
+            ),
+          );
+          const matchingLiveHerdrEntryCount = matchingLiveAgents.length;
+          const savedStateCoveredLiveEntryCount = matchingLiveAgents.filter(
+            (agent) =>
+              statePanes.has(
+                `${agent.workspace_id ?? ""}\0${agent.pane_id ?? ""}`,
+              ),
+          ).length;
+          const completedSavedStatePresent = savedStates.some(
+            ({ state }) =>
+              !state.activeRequestId && state.completedRequestId,
+          );
+          let closedReceiptMatchedLiveEntryCount = 0;
+          let closedReceiptPaneNotFoundCount = 0;
           for (const agent of snapshot.liveAgents)
             if (
               herdrSessionsMatch(
@@ -8198,6 +8217,7 @@ export function createAgentController(
                 closedReceipt.pane_id === agent.pane_id &&
                 typeof agent.pane_id === "string"
               ) {
+                closedReceiptMatchedLiveEntryCount++;
                 try {
                   await paneProcess(pi, ctx, agent.pane_id, signal);
                 } catch (error) {
@@ -8205,8 +8225,10 @@ export function createAgentController(
                     error instanceof OperationError &&
                     error.detail.operation === "herdr pane process-info" &&
                     error.detail.details?.herdrCode === "pane_not_found"
-                  )
+                  ) {
+                    closedReceiptPaneNotFoundCount++;
                     continue;
+                  }
                   throw error;
                 }
               }
@@ -8214,6 +8236,17 @@ export function createAgentController(
                 `${agent.workspace_id ?? ""}\0${agent.name ?? ""}\0${agent.pane_id ?? ""}`,
               );
             }
+          console.info("[continuation-preflight-probe]", {
+            matchingSavedStateCount: savedStates.length,
+            activeSavedStateCount: states.length,
+            acceptedCompletedAck: !!reusableCompletedState,
+            matchingLiveHerdrEntryCount,
+            savedStateCoveredLiveEntryCount,
+            completedSavedStatePresent,
+            closedReceiptMatchedLiveEntryCount,
+            closedReceiptPaneNotFoundCount,
+            finalRepresentationCount: representations.size,
+          });
           if (representations.size > 1)
             fail(
               "target_ambiguous",
