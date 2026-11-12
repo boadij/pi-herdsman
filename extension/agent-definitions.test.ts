@@ -187,14 +187,18 @@ Prompt`).find(({ name }) => name === "custom")!;
   );
 });
 
-test("explicit tools are closed allowlists without Pi modifiers", () => {
-  for (const tools of [["+read"], ["-write"], ["read,+bash"], ["read,-write"]])
+test("tool modifiers are validated while plain entries remain valid", () => {
+  const definition = discoverAgentDefinitionsWithContents(
+    '---\nname: custom\ntools: ["+codemode", "-bash"]\n---',
+  ).find(({ name }) => name === "custom")!;
+  assert.deepEqual(definition.frontmatter.tools, ["+codemode", "-bash"]);
+  for (const tools of [["+ "], ["-"], ["+*"]])
     assert.throws(
       () =>
         discoverAgentDefinitionsWithContents(
           `---\nname: custom\ntools: [${tools.map((tool) => JSON.stringify(tool)).join(", ")}]\n---`,
         ),
-      /must be an allowlist without \+name\/-name modifiers/,
+      /modifiers require/,
     );
 });
 
@@ -349,6 +353,85 @@ test("leaves unsupported home and shell-looking references unchanged", () => {
   );
 });
 
+test("array modifiers compose in order, preserve replacement, and retain relative tools", () => {
+  assert.deepEqual(
+    mergeFrontmatter(
+      {
+        name: "sample",
+        tools: ["read", "bash"],
+        skills: ["one", "two"],
+        extensions: ["a"],
+        agents: ["scout"],
+      },
+      {
+        name: "sample",
+        tools: ["+codemode", "-bash"],
+        skills: ["+three", "-one"],
+        extensions: ["-missing", "+b"],
+        agents: ["-scout", "+reviewer"],
+      },
+    ),
+    {
+      name: "sample",
+      tools: ["read", "codemode"],
+      skills: ["two", "three"],
+      extensions: ["a", "b"],
+      agents: ["reviewer"],
+    },
+  );
+  assert.deepEqual(
+    mergeFrontmatter(
+      { name: "sample", skills: ["one", "two"] },
+      { name: "sample", skills: ["replacement", "+extra"] },
+    ).skills,
+    ["replacement", "extra"],
+  );
+  assert.deepEqual(
+    mergeFrontmatter(
+      { name: "sample" },
+      { name: "sample", tools: ["read", "+write"] },
+    ).tools,
+    ["read", "write"],
+  );
+  assert.deepEqual(
+    mergeFrontmatter(
+      { name: "sample", tools: ["+codemode", "-bash"] },
+      { name: "sample", tools: ["+write"] },
+    ).tools,
+    ["+codemode", "-bash", "+write"],
+  );
+  assert.deepEqual(
+    mergeFrontmatter(
+      { name: "sample", tools: ["+codemode", "-bash"] },
+      { name: "sample", tools: ["read", "+write"] },
+    ).tools,
+    ["read", "write"],
+  );
+  assert.throws(
+    () =>
+      mergeFrontmatter(
+        { name: "flexible-lead" },
+        { name: "flexible-lead", agents: ["+scout"] },
+      ),
+    /require an explicit agents allowlist/,
+  );
+});
+
+test("standalone resource and delegation modifiers resolve from empty defaults", () => {
+  const definition = discoverAgentDefinitionsWithContents(`---
+name: standalone-modifiers
+skills: ["+/skills/review/SKILL.md"]
+extensions: ["+/extensions/review.ts"]
+agents: ["+scout", "+scout"]
+---
+`).find(({ name }) => name === "standalone-modifiers")!;
+  assert.deepEqual(definition.frontmatter.skills, ["/skills/review/SKILL.md"]);
+  assert.deepEqual(definition.frontmatter.extensions, [
+    "/extensions/review.ts",
+  ]);
+  assert.deepEqual(definition.frontmatter.agents, ["scout"]);
+});
+
 test("merges scalars, arrays, and false values", () => {
   assert.deepEqual(
     mergeFrontmatter(
@@ -394,7 +477,7 @@ test("rejects malformed capability fields", () => {
     [
       "agents",
       '["scout", "scout"]',
-      /must be an array of unique non-empty strings/,
+      /must be an array with unique explicit names/,
     ],
     ["noTools", '"true"', /must be a boolean/],
     ["noBuiltinTools", "yes", /must be a boolean/],
@@ -429,7 +512,7 @@ test("rejects malformed capability fields", () => {
     [
       "agents",
       "[\n  scout,\n  scout,\n]",
-      /must be an array of unique non-empty strings/,
+      /must be an array with unique explicit names/,
     ],
   ] as const)
     assert.throws(
@@ -3258,6 +3341,44 @@ test("wildcard exclusions reject mandatory overlap and escape regex syntax", () 
   assert.equal(
     args[args.indexOf("--exclude-tools") + 1],
     "ask.?*,agent,xask_*",
+  );
+});
+
+test("relative tool policy preserves Pi selection while terminal removals remain denied", () => {
+  const definition: AgentDefinition = {
+    name: "flexible",
+    path: "/flexible.md",
+    body: "",
+    frontmatter: { tools: ["-bash", "+codemode", "-write", "+write"] },
+  };
+  const policy = configuredToolPolicy(definition, ["message_supervisor"]);
+  assert.equal(policy.mode, "relative");
+  assert.deepEqual(policy.excluded, ["bash"]);
+  assert.equal(toolPolicyAllowsName(policy, new Set(), "read"), true);
+  assert.equal(toolPolicyAllowsName(policy, new Set(), "bash"), false);
+  assert.equal(toolPolicyAllowsName(policy, new Set(), "codemode"), true);
+  assert.equal(
+    agentDefinitionDelegationEnabled({
+      ...definition,
+      frontmatter: { agents: ["scout"], tools: ["-bash"] },
+    }),
+    true,
+  );
+  const args = agentLaunchArgs(definition, {
+    requiredTools: ["message_supervisor"],
+  });
+  assert.deepEqual(
+    args.slice(args.indexOf("--tools"), args.indexOf("--tools") + 2),
+    ["--tools", "-bash,+codemode,-write,+write,+message_supervisor"],
+  );
+  assert.equal(args[args.indexOf("--exclude-tools") + 1], "bash");
+  assert.throws(
+    () =>
+      configuredToolPolicy(
+        { ...definition, frontmatter: { tools: ["-message_supervisor"] } },
+        ["message_supervisor"],
+      ),
+    /cannot remove required tool/,
   );
 });
 

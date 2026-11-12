@@ -248,11 +248,95 @@ function isPlainObject(value: unknown): value is { [key: string]: unknown } {
   return prototype === Object.prototype || prototype === null;
 }
 
+const isArrayModifier = (entry: string): boolean =>
+  entry.startsWith("+") || entry.startsWith("-");
+
+function applyArrayModifiers(
+  base: readonly string[],
+  entries: readonly string[],
+): string[] {
+  const plain = entries.filter((entry) => !isArrayModifier(entry));
+  const result =
+    plain.length > 0 || entries.length === 0 ? [...new Set(plain)] : [...base];
+  for (const entry of entries) {
+    if (!isArrayModifier(entry)) continue;
+    const value = entry.slice(1);
+    const index = result.indexOf(value);
+    if (entry[0] === "+" && index < 0) result.push(value);
+    if (entry[0] === "-" && index >= 0) result.splice(index, 1);
+  }
+  return result;
+}
+
+function composeFrontmatter(
+  base: Frontmatter | undefined,
+  override: Frontmatter,
+  definitionName: string,
+): Frontmatter {
+  const effective: Frontmatter = { ...base, ...override };
+  for (const field of ARRAY_FIELDS) {
+    const entries = override[field];
+    if (!Array.isArray(entries)) continue;
+    const baseEntries = base?.[field];
+    if (!entries.some((entry) => isArrayModifier(entry as string))) continue;
+    if (field === "tools") {
+      const normalized = normalizedToolNames(entries as string[]);
+      if (baseEntries === undefined) {
+        effective.tools =
+          normalized.length > 0 && normalized.every(isArrayModifier)
+            ? normalized
+            : applyArrayModifiers([], normalized);
+        continue;
+      }
+      const inheritedTools = normalizedToolNames(baseEntries as string[]);
+      const inheritedRelative =
+        inheritedTools.length > 0 && inheritedTools.every(isArrayModifier);
+      if (
+        inheritedRelative &&
+        normalized.length > 0 &&
+        normalized.every(isArrayModifier)
+      ) {
+        effective.tools = [...inheritedTools, ...normalized];
+        continue;
+      }
+    }
+    if (
+      field === "agents" &&
+      baseEntries === undefined &&
+      [
+        FLEXIBLE_LEAD_DEFINITION_NAME,
+        ORCHESTRATOR_LEAD_DEFINITION_NAME,
+        MANAGED_LEAD_DEFINITION_NAME,
+      ].includes(
+        definitionName as (typeof RESERVED_ROLE_DEFINITION_NAMES)[number],
+      ) &&
+      entries.every((entry) => isArrayModifier(entry as string))
+    )
+      throw new Error(
+        `agent ${definitionName} field agents: modifier-only overlays require an explicit agents allowlist`,
+      );
+    const inherited =
+      field === "tools"
+        ? normalizedToolNames(baseEntries as string[] | undefined)
+        : ((baseEntries as string[] | undefined) ?? []);
+    const normalized =
+      field === "tools"
+        ? normalizedToolNames(entries as string[])
+        : (entries as string[]);
+    effective[field] = applyArrayModifiers(inherited, normalized);
+  }
+  return effective;
+}
+
 export function mergeFrontmatter(
   base: Frontmatter,
   override: Frontmatter,
 ): Frontmatter {
-  return { ...base, ...override };
+  return composeFrontmatter(
+    base,
+    override,
+    String(override.name ?? base.name ?? ""),
+  );
 }
 
 function validateDefinition(
@@ -290,20 +374,35 @@ function validateDefinition(
         value.some(
           (entry) => typeof entry !== "string" || entry.trim().length === 0,
         ) ||
-        (field === "agents" && new Set(value).size !== value.length))
+        (field === "agents" &&
+          new Set(value.filter((entry) => !isArrayModifier(entry))).size !==
+            value.filter((entry) => !isArrayModifier(entry)).length))
     )
       invalid(
         field,
         field === "agents"
-          ? "must be an array of unique non-empty strings"
+          ? "must be an array with unique explicit names and non-empty modifiers"
           : "must be an array of non-empty strings",
       );
+    if (Array.isArray(value)) {
+      const entries =
+        field === "tools"
+          ? normalizedToolNames(value as string[])
+          : (value as string[]);
+      for (const entry of entries)
+        if (
+          isArrayModifier(entry) &&
+          (!entry.slice(1).trim() ||
+            (field === "tools" && entry.slice(1).trim().includes("*")))
+        )
+          invalid(
+            field,
+            field === "tools"
+              ? "modifiers require exact tool names without wildcards"
+              : "modifiers require a non-empty name",
+          );
+    }
   }
-  if (
-    frontmatter.tools !== undefined &&
-    normalizedToolNames(frontmatter.tools).some((tool) => /^[+-]/u.test(tool))
-  )
-    invalid("tools", "must be an allowlist without +name/-name modifiers");
   if (frontmatter.model !== undefined) {
     if (typeof frontmatter.model !== "string" || !frontmatter.model)
       invalid("model", "must be a non-empty string");
@@ -369,13 +468,47 @@ export function matchesToolPattern(pattern: string, name: string): boolean {
   return new RegExp(`^${source}$`, "u").test(name);
 }
 
+export type ConfiguredToolPolicy = {
+  mode: "inherit" | "relative" | "explicit";
+  explicit: boolean;
+  tools: string[];
+  excluded: string[];
+};
+
 export function configuredToolPolicy(
   definition: AgentDefinition,
   requiredTools: readonly string[],
-): { explicit: boolean; tools: string[]; excluded: string[] } {
+): ConfiguredToolPolicy {
   const configured = normalizedToolNames(definition.frontmatter.tools);
+  const relative =
+    definition.frontmatter.tools !== undefined &&
+    configured.length > 0 &&
+    configured.every(isArrayModifier);
+  const mode: ConfiguredToolPolicy["mode"] =
+    definition.frontmatter.tools === undefined
+      ? "inherit"
+      : relative
+        ? "relative"
+        : "explicit";
   const required = new Set(requiredTools);
-  const excluded = normalizedToolNames(definition.frontmatter.excludeTools)
+  const terminal = new Map<string, boolean>();
+  if (relative)
+    for (const operation of configured) {
+      const name = operation.slice(1);
+      terminal.set(name, operation[0] === "-");
+    }
+  const removed = [...terminal]
+    .filter(([, isRemoved]) => isRemoved)
+    .map(([name]) => name);
+  const forbiddenRequired = removed.find((name) => required.has(name));
+  if (forbiddenRequired)
+    throw new Error(
+      `agent ${definition.name} tools modifier cannot remove required tool ${JSON.stringify(forbiddenRequired)}`,
+    );
+  const excluded = [
+    ...normalizedToolNames(definition.frontmatter.excludeTools),
+    ...removed,
+  ]
     .filter((pattern) => !required.has(pattern))
     .filter((pattern, index, all) => all.indexOf(pattern) === index);
   for (const pattern of excluded) {
@@ -391,8 +524,11 @@ export function configuredToolPolicy(
       );
   }
   return {
-    explicit: definition.frontmatter.tools !== undefined,
-    tools: configured.filter((tool) => !required.has(tool)),
+    mode,
+    explicit: mode === "explicit",
+    tools: configured.filter(
+      (tool) => !isArrayModifier(tool) && !required.has(tool),
+    ),
     excluded,
   };
 }
@@ -406,7 +542,7 @@ export function toolPolicyAllowsName(
   if (policy.excluded.some((pattern) => matchesToolPattern(pattern, name)))
     return false;
   return (
-    !policy.explicit ||
+    policy.mode !== "explicit" ||
     policy.tools.some((pattern) => matchesToolPattern(pattern, name))
   );
 }
@@ -500,9 +636,17 @@ function applyDefinitionLayer(
   for (const definition of layer) {
     const base = definitions.get(definition.name);
     if (!base) {
-      definition[sourceField] = definition.path;
-      validateDefinition(definition);
-      definitions.set(definition.name, definition);
+      const standalone: AgentDefinition = {
+        ...definition,
+        frontmatter: composeFrontmatter(
+          undefined,
+          definition.frontmatter,
+          definition.name,
+        ),
+        [sourceField]: definition.path,
+      };
+      validateDefinition(standalone);
+      definitions.set(definition.name, standalone);
       continue;
     }
     const mode = overrideBodyMode(definition);
@@ -511,7 +655,11 @@ function applyDefinitionLayer(
     const effective: AgentDefinition = {
       name: base.name,
       path: definition.path,
-      frontmatter: mergeFrontmatter(base.frontmatter, overrideFrontmatter),
+      frontmatter: composeFrontmatter(
+        base.frontmatter,
+        overrideFrontmatter,
+        definition.name,
+      ),
       body: mergeDefinitionBody(base.body, definition.body, mode),
       extensionSource: base.extensionSource,
       projectSource: base.projectSource,
@@ -1281,8 +1429,13 @@ export function agentDefinitionDelegationEnabled(
 
   const tools = normalizedToolNames(configured);
   if (normalizedToolNames(excludeTools).includes("agent")) return false;
-  if (noTools === true && !tools.includes("agent")) return false;
-  return configured === undefined || tools.length > 0;
+  if (noTools === true && !tools.includes("+agent") && !tools.includes("agent"))
+    return false;
+  if (configured === undefined) return true;
+  const policy = configuredToolPolicy(definition, []);
+  if (policy.mode === "relative")
+    return toolPolicyAllowsName(policy, new Set(), "agent");
+  return tools.length > 0;
 }
 
 export type AgentLaunchOptions = {
@@ -1400,7 +1553,12 @@ export function agentLaunchArgs(
   if (noTools) args.push("--no-tools");
   if (frontmatter.noBuiltinTools) args.push("--no-builtin-tools");
   const excluded = policy.excluded;
-  if (noTools || policy.explicit) {
+  if (policy.mode === "relative") {
+    const operations = [...normalizedToolNames(frontmatter.tools)];
+    for (const tool of requiredTools)
+      if (!operations.includes(`+${tool}`)) operations.push(`+${tool}`);
+    if (operations.length) args.push("--tools", operations.join(","));
+  } else if (noTools || policy.mode === "explicit") {
     const configured = policy.tools.filter(
       (tool) => !managedAgent || tool !== "agent",
     );

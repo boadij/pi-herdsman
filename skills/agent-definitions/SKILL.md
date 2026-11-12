@@ -85,9 +85,13 @@ repository`), including which files contribute to the effective
      definition.
    - Preserve unrelated frontmatter, body content, and existing source files.
    - The frontmatter `name` is the definition identity; the filename is not.
-   - Array fields replace the whole lower-precedence array. Before adding or
-     removing one array value, inspect the effective array and write the desired
-     complete replacement.
+   - Plain array values replace the inherited array, including `[]`. Use
+     `+name` and `-name` entries to add or remove individual inherited values;
+     mixed lists use their plain entries as a replacement base before modifiers.
+     Modifier-only `tools` lists remain relative to Pi's ordinary selection,
+     while plain `tools` lists are closed allowlists. Leads with unrestricted
+     implicit `agents` defaults need a concrete allowlist before using
+     modifiers.
    - For additive prompt instructions, prefer an overlay body with
      `bodyMode: append`; replace the body only when replacement is intended.
    - Express capability restrictions structurally through definition fields
