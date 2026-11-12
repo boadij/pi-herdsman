@@ -36,7 +36,8 @@ ARG TARGETARCH
 ARG MISE_VERSION
 
 ENV LANG=C.UTF-8 \
-    NPM_CONFIG_UPDATE_NOTIFIER=false
+    NPM_CONFIG_UPDATE_NOTIFIER=false \
+    PI_SELF_UPDATE_COMMAND="/usr/local/bin/pi-container-update {version}"
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -111,9 +112,13 @@ RUN set -eu; \
     (cd /tmp && grep -F "  $asset" SHA256SUMS | sha256sum -c -); \
     mkdir -p /opt/pi; \
     tar -xzf "/tmp/$asset" -C /opt/pi --strip-components=1; \
-    ln -s /opt/pi/pi /usr/local/bin/pi; \
-    test "$(pi --version)" = "$pi_version"; \
+    test "$(/opt/pi/pi --version)" = "$pi_version"; \
     rm -f /tmp/SHA256SUMS "/tmp/$asset"
+
+COPY --chmod=0755 docker/pi /usr/local/bin/pi
+COPY --chmod=0755 docker/pi-container-update /usr/local/bin/pi-container-update
+
+RUN test "$(pi --version)" = "$(node -p 'require("/tmp/runtime.json").pi')"
 
 RUN set -eu; \
     case "$TARGETARCH" in \

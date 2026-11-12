@@ -1,0 +1,35 @@
+#!/bin/sh
+set -eu
+
+if [ "$(id -un)" != herdsman ]; then
+  exec /opt/pi/pi "$@"
+fi
+
+root=/home/herdsman/.local/share/pi-herdsman/pi
+selection="$root/current"
+
+if [ -L "$selection" ]; then
+  release="$(readlink -f "$selection")" || {
+    echo "pi: invalid persistent release selection" >&2
+    exit 1
+  }
+  case "$release" in
+    "$root"/releases/*) ;;
+    *)
+      echo "pi: invalid persistent release selection" >&2
+      exit 1
+      ;;
+  esac
+  if [ ! -d "$release" ] || [ ! -x "$release/pi" ]; then
+    echo "pi: selected persistent release is unusable" >&2
+    exit 1
+  fi
+  exec "$release/pi" "$@"
+fi
+
+if [ -e "$selection" ]; then
+  echo "pi: invalid persistent release selection" >&2
+  exit 1
+fi
+
+exec /opt/pi/pi "$@"
