@@ -6672,6 +6672,7 @@ test("candidate start treats only a structured missing-pane error as impossible"
 test("old execution classifies exact session panes as quiescent, active, or unknown", async () => {
   const target = {
     paneId: "pane-1",
+    sessionId: "target-session",
     sessionPath: resolve("/sessions/target.jsonl"),
   };
   const cases = [
@@ -6683,6 +6684,21 @@ test("old execution classifies exact session panes as quiescent, active, or unkn
           {
             pane_id: "pane-2",
             agent_session: { kind: "path", value: target.sessionPath },
+          },
+        ],
+        panes: [],
+      },
+      "active",
+      (paneId) => (paneId === "pane-2" ? "active" : "clear"),
+      [target.paneId, "pane-2"],
+    ],
+    [
+      {
+        agents: [
+          { pane_id: target.paneId },
+          {
+            pane_id: "pane-2",
+            agent_session: { kind: "id", value: target.sessionId },
           },
         ],
         panes: [],
