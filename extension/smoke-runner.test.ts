@@ -5739,20 +5739,22 @@ test("crash-recovery uses the latest successful list_agents result after restart
     ).name,
     "list_agents",
   );
-  assert.equal(
-    latestPostRestartListAgentsResult([
-      stale,
-      {
-        type: "message",
-        message: {
-          role: "user",
-          content: "PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART",
-        },
+  const latest = latestPostRestartListAgentsResult([
+    stale,
+    {
+      type: "message",
+      message: {
+        role: "user",
+        content: "PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART",
       },
-      current,
-    ]),
+    },
     current,
+  ]);
+  assert.equal(latest, current);
+  const target = latest.message.details.agents.find(
+    (agent) => agent.label === "smoke-crash-target",
   );
+  assert.equal(target, undefined);
 });
 
 test("installed faux provider requeues decisions and emits its terminal failure through native error events", async () => {

@@ -6873,13 +6873,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
         );
         return { done: true, value: { kind: "settled" } };
       }
-      const latestListResult = entries.find(
-        (entry) =>
-          entry.type === "message" &&
-          entry.message?.role === "toolResult" &&
-          entry.message.toolName === "list_agents" &&
-          !entry.message.isError,
-      );
+      const latestListResult = latestPostRestartListAgentsResult(entries);
       const agents = latestListResult?.message?.details?.agents;
       const target = Array.isArray(agents)
         ? agents.find(
