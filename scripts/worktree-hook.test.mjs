@@ -181,7 +181,10 @@ test("setup:hooks enables hooks without replacing existing hooks", () => {
     git("config", "--local", "core.hooksPath", join(root, "other-hooks"));
     const conflict = setup();
     assert.notEqual(conflict.status, 0);
-    assert.match(conflict.stderr, /Refusing to replace existing core\.hooksPath/);
+    assert.match(
+      conflict.stderr,
+      /Refusing to replace existing core\.hooksPath/,
+    );
     assert.equal(
       git("config", "--get", "core.hooksPath"),
       join(root, "other-hooks"),
