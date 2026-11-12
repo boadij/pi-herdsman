@@ -20821,6 +20821,7 @@ test("Definitions Details snapshots effective append and replace instructions", 
     const notices: string[] = [];
     context.ui.notify = (message: string) => notices.push(message);
     let customCalls = 0;
+    let inspectorLines: string[] = [];
     context.ui.custom = async (factory: any) => {
       const result = new Promise<unknown>((resolve) => {
         const component = factory(
@@ -20834,6 +20835,9 @@ test("Definitions Details snapshots effective append and replace instructions", 
         );
         const call = customCalls++;
         if (call >= 3) {
+          component.handleInput("Ctrl+O");
+          component.handleInput("End");
+          inspectorLines = component.render(120);
           component.handleInput("\u001b");
           return;
         }
@@ -20858,15 +20862,8 @@ test("Definitions Details snapshots effective append and replace instructions", 
         .reverse()
         .find(
           (entry: any) => entry?.customType === "pi-herdsman-agent-definitions",
-        ) as
-        | {
-            customType: string;
-            data: {
-              definitions: Array<Record<string, unknown>>;
-              instructions: string;
-            };
-          }
-        | undefined,
+        ),
+      inspectorLines,
       notices,
       error,
     };
@@ -20890,12 +20887,16 @@ test("Definitions Details snapshots effective append and replace instructions", 
         `---\nname: scout\ndescription: after\nbodyMode: append\n---\nAdditional instructions\n@${bodyPath}\n`,
       );
     });
-    const appendedEntry = appendedResult.entry!;
-    assert.equal(
-      appendedEntry.data.instructions,
-      `${baseBody}\n\nAdditional instructions\nmutated after selection`,
+    assert.equal(appendedResult.entry, undefined);
+    assert.match(
+      appendedResult.inspectorLines.join("\n"),
+      /mutated after selection/u,
     );
-    assert.equal(appendedEntry.data.definitions[0]?.description, "after");
+    assert.match(
+      appendedResult.inspectorLines.join("\n"),
+      /scout-details-body\.md/u,
+    );
+    assert.equal(appendedResult.error, undefined);
 
     realFs.writeFileSync(
       definitionPath,

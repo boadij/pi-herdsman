@@ -1555,29 +1555,55 @@ export type DefinitionBodyFragment = {
   body: string;
 };
 
+export type ExpandedDefinitionBodyPart = {
+  text: string;
+  filePath?: string;
+};
+
+export function expandDefinitionBodyFragmentsWithSources(
+  fragments: readonly DefinitionBodyFragment[],
+  skipCanonicalPaths: readonly string[],
+  operation: string,
+): ExpandedDefinitionBodyPart[][] {
+  const references = fragments.flatMap(({ body }) =>
+    [...body.matchAll(BODY_FILE_REFERENCE)].map((match) => match[1]!),
+  );
+  const snapshots = references.length
+    ? snapshotTextFiles(references, process.cwd(), operation, {
+        skipCanonicalPaths,
+      })
+    : [];
+  const remaining = new Map(
+    snapshots.map((snapshot) => [snapshot.input, snapshot]),
+  );
+  return fragments.map(({ body }) => {
+    const parts: ExpandedDefinitionBodyPart[] = [];
+    let cursor = 0;
+    for (const match of body.matchAll(BODY_FILE_REFERENCE)) {
+      const index = match.index!;
+      if (index > cursor) parts.push({ text: body.slice(cursor, index) });
+      const snapshot = remaining.get(match[1]!);
+      if (snapshot) {
+        parts.push({ text: snapshot.text, filePath: snapshot.path });
+        remaining.delete(match[1]!);
+      }
+      cursor = index + match[0].length;
+    }
+    if (cursor < body.length) parts.push({ text: body.slice(cursor) });
+    return parts;
+  });
+}
+
 export function expandDefinitionBodyFragments(
   fragments: readonly DefinitionBodyFragment[],
   skipCanonicalPaths: readonly string[],
   operation: string,
 ): string[] {
-  const references = fragments.flatMap(({ body }) =>
-    [...body.matchAll(BODY_FILE_REFERENCE)].map((match) => match[1]!),
-  );
-  if (references.length === 0) return fragments.map(({ body }) => body);
-  const snapshots = snapshotTextFiles(references, process.cwd(), operation, {
+  return expandDefinitionBodyFragmentsWithSources(
+    fragments,
     skipCanonicalPaths,
-  });
-  const remaining = new Map(
-    snapshots.map((snapshot) => [snapshot.input, snapshot.text]),
-  );
-  return fragments.map(({ body }) =>
-    body.replace(BODY_FILE_REFERENCE, (_match, input: string) => {
-      const text = remaining.get(input);
-      if (text === undefined) return "";
-      remaining.delete(input);
-      return text;
-    }),
-  );
+    operation,
+  ).map((parts) => parts.map(({ text }) => text).join(""));
 }
 
 export function expandAgentBodyFiles(
@@ -1619,9 +1645,12 @@ export function contextInheritance(definition: AgentDefinition): {
   project: boolean;
 } {
   const project =
-    definition.frontmatter.inheritProjectContext ??
-    definition.name === "delegate";
-  const global = definition.frontmatter.inheritGlobalContext ?? project;
+    definition.frontmatter.inheritProjectContext === true ||
+    (definition.frontmatter.inheritProjectContext === undefined &&
+      definition.name === "delegate");
+  const global =
+    definition.frontmatter.inheritGlobalContext === true ||
+    (definition.frontmatter.inheritGlobalContext === undefined && project);
   return { global, project };
 }
 

@@ -98,8 +98,8 @@ test("definition layer summaries show only safe, authoritative field changes", (
     bodyAction: "append",
   };
   assert.deepEqual(summarizeDefinitionLayerChanges(layer), [
-    "- tools: grep",
     "~ thinking: low → high",
+    "- tools: grep",
     "+ body: appended",
   ]);
 
@@ -152,8 +152,13 @@ test("instruction inspector toggles compact trees, closes, wraps, and stays tran
   assert.equal(view.expanded, true);
   const expanded = view.render(24);
   assert.ok(expanded.every((line) => visibleWidth(line) <= 24));
-  assert.match(
+  assert.doesNotMatch(
     stripVTControlCharacters(expanded.join("\n")),
+    /surviving source text/u,
+  );
+  view.handleInput("End");
+  assert.match(
+    stripVTControlCharacters(view.render(24).join("\n")),
     /surviving source text/u,
   );
   assert.match(stripVTControlCharacters(expanded.join("\n")), /│  ├─ Private/u);

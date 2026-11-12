@@ -615,8 +615,8 @@ test("Coordinator Details show current prompt inputs in composition order", asyn
     "Runtime contributions · session-dependent",
   );
   assert.ok(base >= 0 && base < context);
-  assert.ok(context < contract && contract < profile);
-  assert.ok(profile < cwd && cwd < runtimeSection);
+  assert.ok(cwd >= 0 && cwd < contract && contract < profile);
+  assert.ok(profile < runtimeSection);
   assert.match(lines, /Preview: active-session inputs/u);
 });
 

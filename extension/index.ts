@@ -62,6 +62,7 @@ import {
   inspectRoleDefinition,
   expandAgentBodyFiles,
   expandDefinitionBodyFragments,
+  expandDefinitionBodyFragmentsWithSources,
   selectedAgentContextFiles,
   updateAgentOverride,
   VALID_THINKING_LEVELS,
@@ -1666,6 +1667,7 @@ function registerExtensionImpl(
       inspectAgentDefinition,
       inspectRoleDefinition,
       expandDefinitionBodyFragments,
+      expandDefinitionBodyFragmentsWithSources,
       expandAgentBodyFiles,
       selectedAgentContextFiles,
       setLeadExecutionMode: (
@@ -1682,7 +1684,7 @@ function registerExtensionImpl(
       ) => {
         if (ctx.mode !== "tui") return;
         await ctx.ui.custom(
-          (tui: any, theme: any, _keybindings: any, done: () => void) =>
+          (tui, theme, _keybindings, done) =>
             createInstructionInspectorView(
               `${title} · Effective Instructions`,
               lines,

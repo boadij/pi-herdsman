@@ -20,6 +20,7 @@ import {
   notifyDefinitionWarning,
   discoverRoleDefinitions,
   expandDefinitionBodyFragments,
+  expandDefinitionBodyFragmentsWithSources,
   selectedAgentContextFiles,
   contextInheritance,
   type DefinitionInspection,
@@ -124,6 +125,7 @@ type LeadCommandHost = {
     options?: { projectRoot?: string; onWarning?: (message: string) => void },
   ): DefinitionInspection;
   expandDefinitionBodyFragments: typeof expandDefinitionBodyFragments;
+  expandDefinitionBodyFragmentsWithSources?: typeof expandDefinitionBodyFragmentsWithSources;
   expandAgentBodyFiles: typeof import("../agent-definitions.ts").expandAgentBodyFiles;
   selectedAgentContextFiles: typeof selectedAgentContextFiles;
   setLeadExecutionMode(
@@ -654,10 +656,21 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                         current.name,
                         ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
                       );
-                  const fragments = host.expandDefinitionBodyFragments(
-                    inspection.bodyFragments,
-                    [],
-                    "definition details",
+                  const expandedFragments =
+                    host.expandDefinitionBodyFragmentsWithSources?.(
+                      inspection.bodyFragments,
+                      [],
+                      "definition details",
+                    ) ??
+                    host
+                      .expandDefinitionBodyFragments(
+                        inspection.bodyFragments,
+                        [],
+                        "definition details",
+                      )
+                      .map((text) => [{ text }]);
+                  const fragments = expandedFragments.map((parts) =>
+                    parts.map(({ text }) => text).join(""),
                   );
                   const sources = inspection.layers.map(({ scope }) => scope);
                   const roleProfile = isReservedRoleDefinition(current.name);
@@ -797,7 +810,12 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       tree.push(
                         `│  └─ ${fragment.scope} · surviving body text`,
                       );
-                      appendText("│     ", fragments[index] ?? "");
+                      for (const part of expandedFragments[index] ?? []) {
+                        if (part.filePath) {
+                          tree.push(`│     └─ ${part.filePath}`);
+                          appendText("│        ", part.text);
+                        } else appendText("│     ", part.text);
+                      }
                     }
                   };
                   const promptMode =
@@ -820,10 +838,17 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                         ? "├─ Replacement body · Herdsman definition"
                         : "├─ Appended prompt · Herdsman definition",
                     );
-                    appendContexts(`Pi context · ${contextMode}`);
-                    tree.push(
-                      "├─ Herdsman shared guidance · managed launch input",
-                    );
+                    if (inheritance?.global && inheritance.project) {
+                      tree.push(
+                        "├─ Herdsman shared guidance · managed launch input",
+                      );
+                      appendContexts(`Pi context · ${contextMode}`);
+                    } else {
+                      appendContexts(`Pi context · ${contextMode}`);
+                      tree.push(
+                        "├─ Herdsman shared guidance · managed launch input",
+                      );
+                    }
                     tree.push(
                       "├─ Pi skills/extensions · configured selections; load status unknown",
                     );
@@ -884,6 +909,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       "├─ Pi base prompt · native and not reconstructed",
                     );
                     appendContexts(`Pi context · ${contextMode}`);
+                    tree.push("├─ Working directory");
+                    tree.push(`│  ${ctx.cwd}`);
                     tree.push(
                       "├─ Herdsman role contract/profile · current verified producer",
                     );
@@ -907,8 +934,6 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                         "├─ Effective Manager profile on disk · active prompt is a session snapshot",
                       );
                     }
-                    tree.push("├─ Working directory");
-                    tree.push(`│  ${ctx.cwd}`);
                     tree.push("└─ Runtime contributions · session-dependent");
                   } else {
                     appendDefinition(
