@@ -6882,38 +6882,79 @@ async function runAgentCrashRecoverySmoke(ctx) {
     "crash-recovery-ready",
     async () => {
       const unknown = { done: false, progress: { ready: false } };
+      const readinessProbe = {
+        selectedOutcome: ["settled", "stoppable"].includes(recoveryOutcome.kind)
+          ? recoveryOutcome.kind
+          : "unknown",
+        mailboxReadSucceeded: false,
+        mailboxStatus: "pending",
+        mailboxAbsent: false,
+        mailboxOwnerMatches: null,
+        mailboxWorkspaceMatches: null,
+        mailboxAgentMatches: null,
+        mailboxRunMatches: null,
+        activeRequestAbsent: null,
+        completedRequestMatches: null,
+        ackAccepted: null,
+        ackRequestMatches: null,
+        outcomeStateReady: null,
+        snapshotAvailable: null,
+        snapshotComplete: null,
+        targetRepresentationPresent: null,
+        targetRepresentationConflict: null,
+        physicalClassifier: "not-reached",
+      };
+      ctx.crashRecovery.readinessProbe = readinessProbe;
       const mailboxDirectory = ctx.crashRecovery.target.mailboxDirectory;
       let mailboxState;
       let mailboxAbsent = false;
       try {
         const directory = await lstat(mailboxDirectory);
-        if (!directory.isDirectory() || directory.isSymbolicLink())
+        if (!directory.isDirectory() || directory.isSymbolicLink()) {
+          readinessProbe.mailboxStatus = "invalid-directory";
           return unknown;
+        }
         const statePath = join(mailboxDirectory, "state.json");
         const stat = await lstat(statePath);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536)
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536) {
+          readinessProbe.mailboxStatus = "invalid-state";
           return unknown;
+        }
         mailboxState = JSON.parse(await readFile(statePath, "utf8"));
+        readinessProbe.mailboxReadSucceeded = true;
+        readinessProbe.mailboxStatus = "present";
       } catch (error) {
-        if (error.code !== "ENOENT") return unknown;
+        if (error.code !== "ENOENT") {
+          readinessProbe.mailboxStatus = "read-or-parse-error";
+          return unknown;
+        }
         try {
           await lstat(mailboxDirectory);
+          readinessProbe.mailboxStatus = "state-missing";
           return unknown;
         } catch (directoryError) {
-          if (directoryError.code !== "ENOENT") return unknown;
+          if (directoryError.code !== "ENOENT") {
+            readinessProbe.mailboxStatus = "directory-inspection-error";
+            return unknown;
+          }
           mailboxAbsent = true;
+          readinessProbe.mailboxAbsent = true;
+          readinessProbe.mailboxStatus = "absent";
         }
       }
       let current;
       try {
         current = await tryNestedCommand(ctx, ["api", "snapshot"]);
       } catch {
+        readinessProbe.snapshotAvailable = false;
         return unknown;
       }
+      readinessProbe.snapshotAvailable = current.ok;
       if (!current.ok) return unknown;
       const snapshot = current.value.snapshot;
-      if (!Array.isArray(snapshot?.agents) || !Array.isArray(snapshot?.panes))
-        return unknown;
+      readinessProbe.snapshotComplete =
+        Array.isArray(snapshot?.agents) && Array.isArray(snapshot?.panes);
+      if (!readinessProbe.snapshotComplete) return unknown;
       const target = ctx.crashRecovery.target;
       const matchingRepresentations = [
         ...snapshot.agents,
@@ -6927,12 +6968,40 @@ async function runAgentCrashRecoverySmoke(ctx) {
           resolve(session.value) === target.sessionPath
         );
       });
+      readinessProbe.targetRepresentationPresent =
+        matchingRepresentations.length > 0;
+      readinessProbe.targetRepresentationConflict =
+        mailboxAbsent && readinessProbe.targetRepresentationPresent;
       const identityMatches =
         mailboxAbsent ||
         (mailboxState?.agentLabel === "smoke-crash-target" &&
           mailboxState.runId === target.runId &&
           mailboxState.ownerSessionId === ctx.crashRecovery.ownerSessionId &&
           mailboxState.workspaceId === target.workspaceId);
+      readinessProbe.mailboxOwnerMatches = mailboxAbsent
+        ? null
+        : mailboxState?.ownerSessionId === ctx.crashRecovery.ownerSessionId;
+      readinessProbe.mailboxWorkspaceMatches = mailboxAbsent
+        ? null
+        : mailboxState?.workspaceId === target.workspaceId;
+      readinessProbe.mailboxAgentMatches = mailboxAbsent
+        ? null
+        : mailboxState?.agentLabel === "smoke-crash-target";
+      readinessProbe.mailboxRunMatches = mailboxAbsent
+        ? null
+        : mailboxState?.runId === target.runId;
+      readinessProbe.activeRequestAbsent = mailboxAbsent
+        ? null
+        : !mailboxState.activeRequestId;
+      readinessProbe.completedRequestMatches = mailboxAbsent
+        ? null
+        : mailboxState.completedRequestId === target.requestId;
+      readinessProbe.ackAccepted = mailboxAbsent
+        ? null
+        : mailboxState.lastAck?.accepted === true;
+      readinessProbe.ackRequestMatches = mailboxAbsent
+        ? null
+        : mailboxState.lastAck?.requestId === target.requestId;
       const stateSettled = mailboxAbsent
         ? matchingRepresentations.length === 0
         : recoveryOutcome.kind === "settled"
@@ -6941,6 +7010,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
             mailboxState.lastAck?.accepted === true &&
             mailboxState.lastAck.requestId === target.requestId
           : !mailboxState.activeRequestId;
+      readinessProbe.outcomeStateReady = stateSettled;
       if (!identityMatches || !stateSettled) return unknown;
       const execution = await classifyOldExecution(
         snapshot,
@@ -6976,6 +7046,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
           }
         },
       );
+      readinessProbe.physicalClassifier = execution;
       return {
         done: execution === "quiescent",
         value: execution,
@@ -13157,6 +13228,109 @@ export function sanitizedFailureEvidence(
             )
               ? ctx.crashRecovery.recoveryPath
               : "unknown",
+            readinessProbe: ctx.crashRecovery?.readinessProbe
+              ? {
+                  selectedOutcome: ["settled", "stoppable"].includes(
+                    ctx.crashRecovery.readinessProbe.selectedOutcome,
+                  )
+                    ? ctx.crashRecovery.readinessProbe.selectedOutcome
+                    : "unknown",
+                  mailboxReadSucceeded:
+                    ctx.crashRecovery.readinessProbe.mailboxReadSucceeded ===
+                    true,
+                  mailboxStatus: [
+                    "pending",
+                    "present",
+                    "absent",
+                    "invalid-directory",
+                    "invalid-state",
+                    "read-or-parse-error",
+                    "state-missing",
+                    "directory-inspection-error",
+                  ].includes(ctx.crashRecovery.readinessProbe.mailboxStatus)
+                    ? ctx.crashRecovery.readinessProbe.mailboxStatus
+                    : "unknown",
+                  mailboxAbsent:
+                    ctx.crashRecovery.readinessProbe.mailboxAbsent === true,
+                  mailboxOwnerMatches:
+                    typeof ctx.crashRecovery.readinessProbe
+                      .mailboxOwnerMatches === "boolean"
+                      ? ctx.crashRecovery.readinessProbe.mailboxOwnerMatches
+                      : null,
+                  mailboxWorkspaceMatches:
+                    typeof ctx.crashRecovery.readinessProbe
+                      .mailboxWorkspaceMatches === "boolean"
+                      ? ctx.crashRecovery.readinessProbe.mailboxWorkspaceMatches
+                      : null,
+                  mailboxAgentMatches:
+                    typeof ctx.crashRecovery.readinessProbe
+                      .mailboxAgentMatches === "boolean"
+                      ? ctx.crashRecovery.readinessProbe.mailboxAgentMatches
+                      : null,
+                  mailboxRunMatches:
+                    typeof ctx.crashRecovery.readinessProbe
+                      .mailboxRunMatches === "boolean"
+                      ? ctx.crashRecovery.readinessProbe.mailboxRunMatches
+                      : null,
+                  activeRequestAbsent:
+                    typeof ctx.crashRecovery.readinessProbe
+                      .activeRequestAbsent === "boolean"
+                      ? ctx.crashRecovery.readinessProbe.activeRequestAbsent
+                      : null,
+                  completedRequestMatches:
+                    typeof ctx.crashRecovery.readinessProbe
+                      .completedRequestMatches === "boolean"
+                      ? ctx.crashRecovery.readinessProbe.completedRequestMatches
+                      : null,
+                  ackAccepted:
+                    typeof ctx.crashRecovery.readinessProbe.ackAccepted ===
+                    "boolean"
+                      ? ctx.crashRecovery.readinessProbe.ackAccepted
+                      : null,
+                  ackRequestMatches:
+                    typeof ctx.crashRecovery.readinessProbe
+                      .ackRequestMatches === "boolean"
+                      ? ctx.crashRecovery.readinessProbe.ackRequestMatches
+                      : null,
+                  outcomeStateReady:
+                    typeof ctx.crashRecovery.readinessProbe
+                      .outcomeStateReady === "boolean"
+                      ? ctx.crashRecovery.readinessProbe.outcomeStateReady
+                      : null,
+                  snapshotAvailable:
+                    typeof ctx.crashRecovery.readinessProbe
+                      .snapshotAvailable === "boolean"
+                      ? ctx.crashRecovery.readinessProbe.snapshotAvailable
+                      : null,
+                  snapshotComplete:
+                    typeof ctx.crashRecovery.readinessProbe.snapshotComplete ===
+                    "boolean"
+                      ? ctx.crashRecovery.readinessProbe.snapshotComplete
+                      : null,
+                  targetRepresentationPresent:
+                    typeof ctx.crashRecovery.readinessProbe
+                      .targetRepresentationPresent === "boolean"
+                      ? ctx.crashRecovery.readinessProbe
+                          .targetRepresentationPresent
+                      : null,
+                  targetRepresentationConflict:
+                    typeof ctx.crashRecovery.readinessProbe
+                      .targetRepresentationConflict === "boolean"
+                      ? ctx.crashRecovery.readinessProbe
+                          .targetRepresentationConflict
+                      : null,
+                  physicalClassifier: [
+                    "not-reached",
+                    "active",
+                    "quiescent",
+                    "unknown",
+                  ].includes(
+                    ctx.crashRecovery.readinessProbe.physicalClassifier,
+                  )
+                    ? ctx.crashRecovery.readinessProbe.physicalClassifier
+                    : "unknown",
+                }
+              : null,
             continueAgentRejectionCategory:
               ctx.crashRecovery?.continueAgentRejectionCategory === undefined
                 ? "not_observed"
