@@ -13,6 +13,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { readFileSync, statSync, unlinkSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
+import {
+  chiefGlobalInstructions as selectChiefGlobalInstructions,
+  chiefSystemPrompt as buildChiefSystemPrompt,
+} from "./chief-prompt.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import packageMetadata from "../package.json" with { type: "json" };
@@ -1183,31 +1187,17 @@ function registerExtensionImpl(
       ctx.sessionManager.getSessionId();
   const chiefGlobalInstructions = (
     options: BuildSystemPromptOptions | undefined,
-  ) =>
-    (options?.contextFiles ?? []).filter(
-      (file): file is { path: string; content: string } =>
-        typeof file.path === "string" &&
-        typeof file.content === "string" &&
-        resolve(dirname(file.path)) === resolve(getAgentDir()) &&
-        file.content.length > 0,
-    );
+  ) => selectChiefGlobalInstructions(options, getAgentDir());
   const chiefSystemPrompt = (
     options: BuildSystemPromptOptions | undefined,
     body: string,
-  ): string => {
-    const globalInstructions = chiefGlobalInstructions(options)
-      .map(({ content }) => content)
-      .join("\n\n");
-    return [
+  ): string =>
+    buildChiefSystemPrompt(
+      options,
+      body,
       CHIEF_ROLE_CONTRACT,
-      body || undefined,
-      globalInstructions
-        ? `## global user instructions\n\n<global_instructions>\n${globalInstructions}\n</global_instructions>`
-        : undefined,
-    ]
-      .filter((section): section is string => section !== undefined)
-      .join("\n\n");
-  };
+      getAgentDir(),
+    );
   const roleCharter = (ctx: ExtensionContext): string => {
     const role = activeRole();
     if (

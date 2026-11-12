@@ -620,6 +620,97 @@ test("Coordinator Details show current prompt inputs in composition order", asyn
   assert.match(lines, /Preview: active-session inputs/u);
 });
 
+test("Chief Details use the forced prompt producer with global-only context", async () => {
+  const { chiefGlobalInstructions, chiefSystemPrompt } = await import(
+    "../chief-prompt.ts"
+  );
+  const choices = ["roles", "chief", "details", undefined, undefined];
+  let displayed: string[] | undefined;
+  const promptOptions = {
+    contextFiles: [
+      {
+        path: "/home/user/.pi/agent/AGENTS.md",
+        content: "Global user instruction sentinel",
+      },
+      {
+        path: "/workspace/AGENTS.md",
+        content: "Project context sentinel must be excluded",
+      },
+    ],
+  };
+  const runtime = createLeadCommandRuntime({
+    selectMenu: async () => choices.shift(),
+    getThinkingLevel: () => "high",
+    agentDefinitionEnabled: () => true,
+    getSystemPromptOptions: () => promptOptions,
+    inspectRoleDefinition: () => ({
+      definition: {
+        name: "chief",
+        path: "/profile.md",
+        frontmatter: { name: "chief" },
+        body: "Chief profile sentinel",
+      },
+      layers: [],
+      bodyFragments: [
+        {
+          path: "/profile.md",
+          scope: "bundled",
+          body: "Chief profile sentinel",
+        },
+      ],
+    }),
+    expandDefinitionBodyFragments: (fragments: Array<{ body: string }>) =>
+      fragments.map(({ body }) => body),
+    roleActive: () => false,
+    isCurrentChief: () => false,
+    chiefGlobalInstructions: (options: typeof promptOptions) =>
+      chiefGlobalInstructions(options, "/home/user/.pi/agent"),
+    chiefSystemPrompt: (options: typeof promptOptions, body: string) =>
+      chiefSystemPrompt(
+        options,
+        body,
+        "Chief role contract sentinel",
+        "/home/user/.pi/agent",
+      ),
+    leadExecutionPresentation: () => ({
+      managed: false,
+      mode: "flexible",
+    }),
+    leadExecutionDefinition: () => undefined,
+    executionPrompt: () => undefined,
+    selectedAgentContextFiles: () => [],
+    agentDefinitionMetadata: () => ({ name: "chief" }),
+    formatAgentDefinitions: () => ["Chief metadata"],
+    showDefinitionDetails: async (
+      _ctx: unknown,
+      _title: string,
+      lines: string[],
+    ) => {
+      displayed = [...lines];
+    },
+  } as any);
+  await runtime.openDefinitionsMenu({
+    mode: "tui",
+    cwd: "/workspace",
+    isProjectTrusted: () => true,
+    ui: { notify: () => undefined },
+  } as any);
+
+  const details = displayed!.join("\n");
+  assert.match(details, /Prospective Chief forced prompt/u);
+  assert.match(details, /Global user instruction sentinel/u);
+  assert.doesNotMatch(details, /Project context sentinel/u);
+  assert.match(details, /project context excluded/u);
+  assert.ok(
+    details.indexOf("Chief role contract sentinel") <
+      details.indexOf("Chief profile sentinel"),
+  );
+  assert.ok(
+    details.indexOf("Chief profile sentinel") <
+      details.indexOf("Global user instruction sentinel"),
+  );
+});
+
 test("Definitions lists and displays misplaced-definition warnings without editing them", async () => {
   const first = { name: "first", frontmatter: { name: "first" } } as any;
   const warning =
