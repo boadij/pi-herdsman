@@ -140,9 +140,7 @@ worktree. If `node_modules` is absent, run `npm ci` from that checkout.
 ### Optional setup for newly created worktrees
 
 The repository includes a `post-checkout` hook that runs `npm ci` synchronously
-when Git creates a new linked worktree. It is not enabled automatically. To
-enable it, run these steps from the trusted **primary checkout** (not a linked
-worktree).
+when Git creates a new linked worktree. It is not enabled automatically.
 
 For a fresh trusted clone, run this from the **primary checkout** (not a linked
 worktree):
@@ -166,7 +164,8 @@ it or integrate `.githooks/post-checkout` manually; the repository does not
 install a dispatcher. `core.hooksPath` selects the whole hooks directory, so
 changing it can disable other hooks.
 
-When newly configured, this local, optional setting affects only this repository. Its absolute path
+When newly configured, this local, optional setting affects only this
+repository. Its absolute path
 deliberately points all linked worktrees to the same trusted script; ordinary
 worktrees share the repository's common Git configuration. Enabling it is an
 explicit developer trust decision: creating a new linked worktree in this
