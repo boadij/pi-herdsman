@@ -6836,6 +6836,49 @@ async function runAgentCrashRecoverySmoke(ctx) {
       "reopened target identity mismatch",
     );
   }
+  if (parentSteerAdvertised) {
+    const steerResult = await waitForEvidence(
+      ctx,
+      "crash-recovery-parent-steer-result",
+      async () => {
+        const owner = await rootSessionSnapshot(ctx);
+        const entries = owner ? sessionEntries(owner.contents) : [];
+        const steerCall = entries
+          .filter(
+            (entry) =>
+              entry.type === "message" && entry.message?.role === "assistant",
+          )
+          .flatMap((entry) => entry.message.content ?? [])
+          .find(
+            (part) =>
+              part.type === "toolCall" &&
+              part.name === "steer_agent" &&
+              part.arguments?.agent === "smoke-crash-parent",
+          );
+        const result =
+          steerCall &&
+          entries.find(
+            (entry) =>
+              entry.type === "message" &&
+              entry.message?.role === "toolResult" &&
+              entry.message.toolName === "steer_agent" &&
+              entry.message.toolCallId === steerCall.id,
+          )?.message;
+        return { done: !!result, value: result };
+      },
+      { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS, pollMs: 200 },
+    );
+    assert.equal(
+      steerResult.details?.ok,
+      false,
+      "receiverless steering unexpectedly succeeded",
+    );
+    assert.equal(
+      steerResult.details?.error?.category,
+      "agent_busy",
+      "receiverless steering did not return the expected unsuccessful outcome",
+    );
+  }
   let stopResult;
   const recoveryOutcome = await waitForEvidence(
     ctx,
@@ -6951,43 +6994,6 @@ async function runAgentCrashRecoverySmoke(ctx) {
       "stop closure identity mismatch",
     );
     ctx.crashRecovery.closeReceipt = closed;
-  }
-  if (parentSteerAdvertised) {
-    const finalOwner = await rootSessionSnapshot(ctx);
-    const finalEntries = sessionEntries(finalOwner.contents);
-    const steerCall = finalEntries
-      .filter(
-        (entry) =>
-          entry.type === "message" && entry.message?.role === "assistant",
-      )
-      .flatMap((entry) => entry.message.content ?? [])
-      .find(
-        (part) =>
-          part.type === "toolCall" &&
-          part.name === "steer_agent" &&
-          part.arguments?.agent === "smoke-crash-parent",
-      );
-    assert.ok(
-      steerCall,
-      "restored receiverless parent advertised steering but was not tested",
-    );
-    const steerResult = finalEntries.find(
-      (entry) =>
-        entry.type === "message" &&
-        entry.message?.role === "toolResult" &&
-        entry.message.toolName === "steer_agent" &&
-        entry.message.toolCallId === steerCall.id,
-    )?.message;
-    assert.equal(
-      steerResult?.details?.ok,
-      false,
-      "receiverless steering unexpectedly succeeded",
-    );
-    assert.equal(
-      steerResult.details?.error?.category,
-      "agent_busy",
-      "receiverless steering did not return the expected unsuccessful outcome",
-    );
   }
   const oldExecution = await waitForEvidence(
     ctx,

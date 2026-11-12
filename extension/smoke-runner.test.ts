@@ -5499,6 +5499,13 @@ test("crash-recovery probes an advertised waiting-parent steer and requires reje
   const steer = decideSmokeFaux("agent-crash-root", { messages });
   assert.equal(firstToolCall(steer).name, "steer_agent");
   const steerCallId = firstToolCall(steer).id;
+  const pendingSteer = decideSmokeFaux("agent-crash-root", {
+    messages: [...messages, steer],
+  });
+  assert.match(
+    firstTextContent(pendingSteer).text,
+    /Waiting for steer acknowledgement outcome/,
+  );
   const steerResult = {
     role: "toolResult",
     toolName: "steer_agent",
