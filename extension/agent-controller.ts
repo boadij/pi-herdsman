@@ -132,6 +132,7 @@ import {
   rollbackHerdrStart,
   startHerdrAgent,
   paneProcess,
+  settledShell,
   HerdrStartFailure,
   watchHerdrLifecycle,
   parseHerdrVersion,
@@ -8178,6 +8179,44 @@ export function createAgentController(
             ctx.sessionManager.getSessionId(),
             resumed,
           );
+          const ownerEntries = ctx.sessionManager.getBranch();
+          const latestAccepted = acceptedAssignmentReceipts(
+            ownerEntries,
+            ctx.sessionManager.getSessionId(),
+            resumed,
+          ).at(-1);
+          const terminalResults = latestAccepted
+            ? ownerEntries.flatMap((entry, index) => {
+                const details = agentResultDetails(entry);
+                return details?.requestId === latestAccepted.requestId
+                  ? [{ index, details }]
+                  : [];
+              })
+            : [];
+          const terminal = terminalResults[0];
+          const historicalTerminal =
+            states.length === 0 &&
+            latestAccepted !== undefined &&
+            terminalResults.length === 1 &&
+            terminal!.index > latestAccepted.index &&
+            terminal!.details.status === "failed" &&
+            (terminal!.details.error as Record<string, unknown> | undefined)
+              ?.code === "aborted" &&
+            terminal!.details.ownerSessionId ===
+              ctx.sessionManager.getSessionId() &&
+            terminal!.details.piSessionId === resumed.id &&
+            typeof terminal!.details.piSessionFile === "string" &&
+            samePersistedSessionPath(
+              terminal!.details.piSessionFile,
+              resumed.path,
+            ) &&
+            terminal!.details.agentLabel === resumed.label &&
+            terminal!.details.agentDefinition === resumed.definition &&
+            validId(terminal!.details.runId as string) &&
+            typeof terminal!.details.workspaceId === "string" &&
+            terminal!.details.workspaceId.length > 0 &&
+            typeof terminal!.details.paneId === "string" &&
+            terminal!.details.paneId.length > 0;
           for (const agent of snapshot.liveAgents)
             if (
               herdrSessionsMatch(
@@ -8192,6 +8231,38 @@ export function createAgentController(
                 `${agent.workspace_id ?? ""}\0${agent.pane_id ?? ""}`,
               )
             ) {
+              if (
+                historicalTerminal &&
+                terminal!.details.workspaceId === agent.workspace_id &&
+                terminal!.details.paneId === agent.pane_id &&
+                agent.name ===
+                  herdrAgentAlias(
+                    terminal!.details.workspaceId as string,
+                    resumed.label,
+                    terminal!.details.runId as string,
+                  ) &&
+                typeof agent.pane_id === "string"
+              ) {
+                try {
+                  const observed = await paneProcess(
+                    pi,
+                    ctx,
+                    agent.pane_id,
+                    signal,
+                    undefined,
+                    true,
+                  );
+                  if (observed && settledShell(observed, observed)) continue;
+                } catch (error) {
+                  if (
+                    error instanceof OperationError &&
+                    error.detail.operation === "herdr pane process-info" &&
+                    error.detail.details?.herdrCode === "pane_not_found"
+                  )
+                    continue;
+                  throw error;
+                }
+              }
               if (
                 closedReceipt &&
                 closedReceipt.workspace_id === agent.workspace_id &&

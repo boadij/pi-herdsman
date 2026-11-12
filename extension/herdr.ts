@@ -921,7 +921,7 @@ function terminalOccupierGone(
   return !terminalOccupierSurvived(occupier, observed);
 }
 
-function settledShell(
+export function settledShell(
   expected: PaneProcess,
   observed: PaneProcess,
   occupier?: PaneProcess,
