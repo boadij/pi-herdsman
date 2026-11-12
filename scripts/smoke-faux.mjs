@@ -1843,15 +1843,6 @@ export default function install(pi) {
         _options?.signal,
       ).then(() => answer);
     if (
-      model.id === "agent-crash-target" &&
-      text(lastUser(context.messages)).includes("SMOKE_CRASH_CONTINUE:")
-    )
-      return waitForSmokeObservation(
-        join(process.env.PI_CODING_AGENT_DIR, "pi-herdsman", "runtime"),
-        "crash-continuation-release",
-        _options?.signal,
-      ).then(() => answer);
-    if (
       model.id === "agent-crash-parent" &&
       answer.stopReason === "stop" &&
       correlatedCall(context.messages, "delegate_agent", "smoke-crash-child")

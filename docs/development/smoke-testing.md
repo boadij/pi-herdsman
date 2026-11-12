@@ -81,20 +81,16 @@ provider accepts only expected transcript states and requires actual correlated
 tool results before producing completion responses. It cannot produce
 successful tool results or directly mutate Herdsman or Herdr state. The
 simulated-only scenarios use real Pi, Herdsman, and Herdr; they do not replace
-live-model acceptance. `agent-crash-recovery` fully stops and restarts its
-generated named Herdr server, reopens the exact owner Pi session, and verifies
-that the restored pending-child parent remains `blocked`. If that live parent
-advertises `steer_agent`, the scripted owner tries it once and the scenario
-requires the receiverless request to be rejected; listing the tool alone does
-not prove receiver readiness. Recovery accepts either the exact persisted
-terminal-aborted result or a harness-authorized stop receipt for the exact
-unresolved target. Before continuing, it inspects the original pane and any
-current pane associated with the saved session, and proceeds only when all
-observations show no candidate process (or the pane is reported absent); an
-incomplete snapshot or ambiguous process inspection fails closed. It then
-continues the exact saved target session as a new generation. Model decisions
-are scripted; the process/server lifecycle and controller tools are real. The
-scenario never uses the default Herdr server.
+live-model acceptance. `agent-crash-recovery` restarts its isolated Herdr server
+and reopens the exact owner session with its pending-child parent safely
+blocked or unknown. It resolves the original target through an exact persisted aborted
+result or one authorized stop receipt, then waits read-only for the persisted
+acknowledgment/absence of active work and physical quiescence before one exact
+session continuation. It verifies one correlated completed result and fails
+closed on incomplete state or process evidence. An advertised receiverless
+parent steer is attempted once and must be rejected. The process/server
+lifecycle and controller tools are real; the scenario never uses the default
+Herdr server.
 Simulated runs do not require model credentials or inference, but retain runtime
 compatibility checks, build, isolation, Herdr setup, and cleanup. They are
 integration checks, not replacements for real-model acceptance.
