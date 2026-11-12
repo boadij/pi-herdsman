@@ -87,9 +87,11 @@ agents: [scout, reviewer]
 ```
 
 An omitted `agents` field leaves Leads unrestricted; `agents: []` disables
-fresh delegation. Overlay arrays replace lower-layer arrays, including with
-`[]`. Existing owned Agents remain manageable. The policy covers direct
-children only and is independent of ordinary tool selection.
+fresh delegation. Existing owned Agents remain manageable. The policy covers
+direct children only and is independent of ordinary tool selection. For
+concrete inherited lists, `agents: [+scout, -reviewer]` modifies the list.
+Leads with an unrestricted implicit default must first use a plain
+`agents: [scout, reviewer]` allowlist before applying modifiers.
 
 Ordinary Leads persist their execution mode separately from role/authority
 state and retain their ordinary tool baseline while a restrictive profile is
@@ -238,7 +240,9 @@ For a matching higher-precedence definition:
 
 - omitted fields inherit;
 - strings and booleans replace;
-- arrays replace wholesale, including `[]`;
+- arrays with plain entries replace wholesale, including `[]`;
+- `+name` and `-name` entries modify inherited arrays; in a mixed list,
+  plain entries establish the replacement base before ordered modifiers;
 - the complete effective definition is validated after composition.
 
 `enabled` is a boolean that defaults to `true`. Use it in a minimal override to
@@ -407,8 +411,23 @@ The same diagnostic's no-network negative probe can be run with
 deterministic forbidden `exec_command` call into an empty tool context and
 asserts Pi returns `Tool exec_command not found` without execution.
 
-Remember that arrays replace the bundled array rather than append to it.
-Explicitly include every value you want in the effective array.
+Plain arrays replace the inherited array. Use modifiers to add or remove
+individual values without copying the inherited list. For example, a project
+overlay can adjust an Agent's skills and a private repository overlay can
+remove one inherited extension:
+
+```yaml
+# .pi/agents/reviewer.md
+skills: ["+/absolute/path/to/review/SKILL.md"]
+
+# <git-common-dir>/pi-herdsman/agents/reviewer.md
+extensions: ["-./extensions/legacy.ts"]
+```
+
+For tools, a modifier-only list such as `tools: [+codemode, -write]` is
+relative to Pi's ordinary tool selection, not a closed allowlist. Use a plain
+list when a closed allowlist is intended. Tool modifiers accept exact names;
+put wildcard patterns in `excludeTools`.
 
 Skill and extension paths are passed to Pi unchanged; unlike body `@file`
 references, herdr does not resolve them relative to the definition file.

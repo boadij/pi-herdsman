@@ -38,8 +38,33 @@ skills:
 
 Unknown frontmatter fields fail validation.
 
-An explicit `tools` list is a closed allowlist. Tool entries cannot use Pi's
-`+name` or `-name` modifier syntax, including inside comma-separated values.
+Array fields (`tools`, `excludeTools`, `skills`, `extensions`, and
+`agents`) replace the inherited array when they contain only plain values.
+An empty array explicitly clears the inherited values. A list containing
+`+name` or `-name` entries modifies an inherited array: additions are
+appended once, removals delete matching values, and removing a missing value is
+a no-op. In a mixed list, plain values form the replacement base before the
+modifiers are applied. Tool entries continue to accept comma-separated names;
+the other array fields treat each item as one complete path or name.
+
+For example, a matching Agent overlay can add a skill without copying inherited
+skills:
+
+```yaml
+skills: ["+/absolute/path/to/review/SKILL.md"]
+```
+
+A modifier-only `tools` list with no explicit inherited tool list remains
+relative to Pi's normal or active tool selection. It does not create a closed
+allowlist. Explicit removals are enforced at dispatch, including nested Code
+Mode calls; `excludeTools` remains an additional exclusion policy. Tool
+modifiers require exact names (no wildcards). Use a plain `tools` list for a
+closed allowlist, and `excludeTools` for wildcard exclusions.
+
+An omitted `agents` field retains each profile's default. Leads remain
+unrestricted when omitted, so a modifier-only `agents` overlay requires an
+explicit inherited allowlist; Manager, Chief, and ordinary Agents default to no
+direct Agent delegation and can add names from that empty default.
 
 Bundled Agents and the managed Lead enable Pi's native `codemode` by default.
 Definitions that specify `noExtensions: true` also load only

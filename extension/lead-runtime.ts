@@ -317,11 +317,21 @@ type LeadRoleTransitionHost = LeadTransitionHost & {
   invalidateManagerRemovalRequests?(ctx: ExtensionContext): void;
   captureInheritedTools?(): void;
   inheritedProjection?():
-    { mode: LeadExecutionMode; excluded: readonly string[] } | undefined;
+    | {
+        mode: LeadExecutionMode;
+        excluded: readonly string[];
+        injected: readonly string[];
+      }
+    | undefined;
   isManagedSession?(): boolean;
   setInheritedProjection?(
     projection:
-      { mode: LeadExecutionMode; excluded: readonly string[] } | undefined,
+      | {
+          mode: LeadExecutionMode;
+          excluded: readonly string[];
+          injected: readonly string[];
+        }
+      | undefined,
   ): void;
   ownedAgentManagementTools(ctx: ExtensionContext): string[];
   supervisoryTools(
@@ -849,13 +859,26 @@ export function createLeadToolState(
   ) => {
     const policy = configuredToolPolicy(definition, requiredTools);
     const required = new Set(requiredTools);
-    const selected = policy.explicit
-      ? policy.tools.flatMap((pattern) =>
-          [...registeredToolNames()].filter((name) =>
-            matchesToolPattern(pattern, name),
-          ),
-        )
-      : [...baseline];
+    const selected =
+      policy.mode === "explicit"
+        ? policy.tools.flatMap((pattern) =>
+            [...registeredToolNames()].filter((name) =>
+              matchesToolPattern(pattern, name),
+            ),
+          )
+        : policy.mode === "relative"
+          ? ((): string[] => {
+              const result = [...baseline];
+              for (const operation of definition.frontmatter.tools ?? []) {
+                const name = operation.slice(1);
+                const index = result.indexOf(name);
+                if (operation.startsWith("+") && index < 0) result.push(name);
+                if (operation.startsWith("-") && index >= 0)
+                  result.splice(index, 1);
+              }
+              return result;
+            })()
+          : [...baseline];
     return appendRegisteredTools(
       normalizeBaseTools(
         selected.filter((name) => toolPolicyAllowsName(policy, required, name)),
@@ -1586,6 +1609,13 @@ export function createLeadAgentEventRuntime(host: {
     ctx: ExtensionContext,
   ): readonly string[] | undefined;
   currentLeadAllowedTools?(): readonly string[] | undefined;
+  currentLeadRelativePolicy?():
+    | {
+        excluded: readonly string[];
+        owned: ReadonlySet<string>;
+        allowedOwned: ReadonlySet<string>;
+      }
+    | undefined;
   reconcileRoleTools?(): void;
   supervisoryProfileBody(
     ctx: ExtensionContext,
@@ -1653,7 +1683,10 @@ export function createLeadAgentEventRuntime(host: {
         return;
       }
       try {
-        if (host.currentLeadAllowedTools?.() !== undefined)
+        if (
+          host.currentLeadAllowedTools?.() !== undefined ||
+          host.currentLeadRelativePolicy?.() !== undefined
+        )
           host.reconcileRoleTools?.();
       } catch (error) {
         host.setActiveTools([]);
@@ -1719,6 +1752,27 @@ export function createLeadAgentEventRuntime(host: {
       }
       if (!host.isActiveManager()) {
         try {
+          const relative = host.currentLeadRelativePolicy?.();
+          if (relative) {
+            if (
+              relative.excluded.some((pattern) =>
+                matchesToolPattern(pattern, event.toolName),
+              )
+            )
+              return {
+                block: true,
+                reason: "Tool is excluded by the active Lead profile.",
+              };
+            if (
+              relative.owned.has(event.toolName) &&
+              !relative.allowedOwned.has(event.toolName)
+            )
+              return {
+                block: true,
+                reason: "Tool is unavailable in the active Lead profile.",
+              };
+            return undefined;
+          }
           const allowed = host.currentLeadAllowedTools?.();
           if (!allowed || allowed.includes(event.toolName)) return undefined;
         } catch {
@@ -1798,7 +1852,12 @@ export function registerLeadRuntime(
     (!ctx || ctx.sessionManager.getSessionId() === quarantinedSessionId);
   let supervisoryProfile: SupervisoryProfile | undefined;
   let inheritedProjection:
-    { mode: LeadExecutionMode; excluded: readonly string[] } | undefined;
+    | {
+        mode: LeadExecutionMode;
+        excluded: readonly string[];
+        injected: readonly string[];
+      }
+    | undefined;
   const prepareSupervisoryProfile = (
     ctx: ExtensionContext,
     role: "manager" | "chief",
@@ -2069,6 +2128,22 @@ export function registerLeadRuntime(
       leadTools: [...tools],
     });
   };
+  const inheritedProjectionFor = (
+    mode: LeadExecutionMode,
+    definition: AgentDefinition,
+    baseline: readonly string[],
+    projected: readonly string[],
+  ) => {
+    const policy = configuredToolPolicy(definition, []);
+    if (policy.mode === "explicit") return undefined;
+    return {
+      mode,
+      excluded: policy.excluded,
+      injected: leadToolState
+        .normalizeBaseTools(projected)
+        .filter((name) => !baseline.includes(name)),
+    };
+  };
   const captureInheritedTools = (): void => {
     const projection = inheritedProjection;
     if (!projection) return;
@@ -2082,7 +2157,7 @@ export function registerLeadRuntime(
       projection.excluded.some((pattern) => matchesToolPattern(pattern, name));
     const active = leadToolState
       .normalizeBaseTools(pi.getActiveTools())
-      .filter((name) => !excluded(name));
+      .filter((name) => !excluded(name) && !projection.injected.includes(name));
     const next = leadToolState.normalizeBaseTools([
       ...active,
       ...saved.filter(excluded),
@@ -2613,10 +2688,7 @@ export function registerLeadRuntime(
         return managedRecoveryTools();
       const definition = leadExecution.definition;
       const managedBaseline =
-        definition.frontmatter.noTools === true &&
-        definition.frontmatter.tools === undefined
-          ? []
-          : baseline;
+        definition.frontmatter.noTools === true ? [] : baseline;
       return restrict(
         leadToolState.appendRegisteredTools(
           leadToolState.projectLeadTools(managedBaseline, definition),
@@ -2674,17 +2746,22 @@ export function registerLeadRuntime(
       sessionKind?.kind === "ordinary" &&
       !leadExecutionPending &&
       leadExecution?.valid &&
-      !leadExecution.managed &&
-      leadExecution.definition.frontmatter.tools === undefined
-        ? {
-            mode: leadExecution.mode,
-            excluded: configuredToolPolicy(leadExecution.definition, [])
-              .excluded,
-          }
+      !leadExecution.managed
+        ? inheritedProjectionFor(
+            leadExecution.mode,
+            leadExecution.definition,
+            leadToolState.getLeadTools() ?? [],
+            executionTools(),
+          )
         : undefined,
     setInheritedProjection: (
       projection:
-        { mode: LeadExecutionMode; excluded: readonly string[] } | undefined,
+        | {
+            mode: LeadExecutionMode;
+            excluded: readonly string[];
+            injected: readonly string[];
+          }
+        | undefined,
     ) => {
       inheritedProjection = projection;
     },
@@ -4274,13 +4351,8 @@ export function registerLeadRuntime(
       leadToolState.setLeadTools(baseline);
       leadExecution = { mode, definition, valid: true, managed: false };
       inheritedProjection =
-        shouldActivate &&
-        definition.frontmatter.tools === undefined &&
-        sameToolSelection(pi.getActiveTools(), targetTools)
-          ? {
-              mode,
-              excluded: configuredToolPolicy(definition, []).excluded,
-            }
+        shouldActivate && sameToolSelection(pi.getActiveTools(), targetTools)
+          ? inheritedProjectionFor(mode, definition, baseline, targetTools)
           : undefined;
       statusRuntime.requestRefresh();
     } catch (error) {
@@ -4291,13 +4363,13 @@ export function registerLeadRuntime(
           shouldActivate &&
           previousExecution?.valid &&
           !previousExecution.managed &&
-          previousExecution.definition.frontmatter.tools === undefined &&
           sameToolSelection(pi.getActiveTools(), previousTools)
-            ? {
-                mode: previousExecution.mode,
-                excluded: configuredToolPolicy(previousExecution.definition, [])
-                  .excluded,
-              }
+            ? inheritedProjectionFor(
+                previousExecution.mode,
+                previousExecution.definition,
+                leadToolState.getLeadTools() ?? [],
+                previousTools,
+              )
             : undefined;
       } catch {
         inheritedProjection = undefined;
@@ -4351,6 +4423,28 @@ export function registerLeadRuntime(
   };
   const agentEvents = createLeadAgentEventRuntime({
     ...options.agentEventOptions,
+    currentLeadRelativePolicy: () => {
+      if (
+        !leadExecution?.valid ||
+        configuredToolPolicy(leadExecution.definition, []).mode !==
+          "relative" ||
+        (sessionKind?.kind === "managed" &&
+          (managedLifecycle !== "assigned" ||
+            leadExecutionPending ||
+            leadRuntime.roleSuspended ||
+            leadRuntime.chiefMode === "suspended" ||
+            !leadExecution.managed))
+      )
+        return undefined;
+      const required = executionTools();
+      return {
+        excluded: configuredToolPolicy(leadExecution.definition, []).excluded,
+        owned: leadToolState.ownedTools,
+        allowedOwned: new Set(
+          required.filter((name) => leadToolState.ownedTools.has(name)),
+        ),
+      };
+    },
     currentLeadAllowedTools: () => {
       if (sessionKind?.kind === "managed") {
         if (
@@ -4363,7 +4457,8 @@ export function registerLeadRuntime(
         )
           return executionTools();
         const policy = leadExecution.definition.frontmatter;
-        return policy.tools !== undefined ||
+        return configuredToolPolicy(leadExecution.definition, []).mode ===
+          "explicit" ||
           (policy.excludeTools?.length ?? 0) > 0 ||
           policy.noTools === true
           ? executionTools()
@@ -4378,8 +4473,8 @@ export function registerLeadRuntime(
         return undefined;
       if (!leadExecution.valid) return executionTools();
       const policy = leadExecution.definition.frontmatter;
-      return policy.tools !== undefined ||
-        (policy.excludeTools?.length ?? 0) > 0
+      return configuredToolPolicy(leadExecution.definition, []).mode ===
+        "explicit" || (policy.excludeTools?.length ?? 0) > 0
         ? executionTools()
         : undefined;
     },

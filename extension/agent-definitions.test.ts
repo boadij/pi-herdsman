@@ -14,6 +14,23 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
+import {
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxToolCall,
+  getCurrentTools,
+} from "@earendil-works/pi-ai";
+import {
+  createAgentSession,
+  createCodemodeExtension,
+  createMcpExtension,
+  DefaultResourceLoader,
+  ModelRuntime,
+  SessionManager,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import {
   agentDefinitionDelegationEnabled,
   agentDefinitionMetadata,
@@ -187,14 +204,18 @@ Prompt`).find(({ name }) => name === "custom")!;
   );
 });
 
-test("explicit tools are closed allowlists without Pi modifiers", () => {
-  for (const tools of [["+read"], ["-write"], ["read,+bash"], ["read,-write"]])
+test("tool modifiers are validated while plain entries remain valid", () => {
+  const definition = discoverAgentDefinitionsWithContents(
+    '---\nname: custom\ntools: ["+codemode", "-bash"]\n---',
+  ).find(({ name }) => name === "custom")!;
+  assert.deepEqual(definition.frontmatter.tools, ["+codemode", "-bash"]);
+  for (const tools of [["+ "], ["-"], ["+*"]])
     assert.throws(
       () =>
         discoverAgentDefinitionsWithContents(
           `---\nname: custom\ntools: [${tools.map((tool) => JSON.stringify(tool)).join(", ")}]\n---`,
         ),
-      /must be an allowlist without \+name\/-name modifiers/,
+      /modifiers require/,
     );
 });
 
@@ -349,6 +370,118 @@ test("leaves unsupported home and shell-looking references unchanged", () => {
   );
 });
 
+test("array modifiers compose in order, preserve replacement, and retain relative tools", () => {
+  assert.deepEqual(
+    mergeFrontmatter(
+      {
+        name: "sample",
+        tools: ["read", "bash"],
+        skills: ["one", "two"],
+        extensions: ["a"],
+        agents: ["scout"],
+      },
+      {
+        name: "sample",
+        tools: ["+codemode", "-bash"],
+        skills: ["+three", "-one"],
+        extensions: ["-missing", "+b"],
+        agents: ["-scout", "+reviewer"],
+      },
+    ),
+    {
+      name: "sample",
+      tools: ["read", "codemode"],
+      skills: ["two", "three"],
+      extensions: ["a", "b"],
+      agents: ["reviewer"],
+    },
+  );
+  assert.deepEqual(
+    mergeFrontmatter(
+      { name: "sample", skills: ["one", "two"] },
+      { name: "sample", skills: ["replacement", "+extra"] },
+    ).skills,
+    ["replacement", "extra"],
+  );
+  assert.deepEqual(
+    mergeFrontmatter(
+      { name: "sample" },
+      { name: "sample", tools: ["read", "+write"] },
+    ).tools,
+    ["read", "write"],
+  );
+  assert.deepEqual(
+    mergeFrontmatter(
+      { name: "sample" },
+      { name: "sample", tools: ["read,+bash"] },
+    ).tools,
+    ["read", "bash"],
+  );
+  assert.deepEqual(
+    mergeFrontmatter(
+      { name: "sample", tools: ["read", "write"] },
+      { name: "sample", tools: ["read,-write"] },
+    ).tools,
+    ["read"],
+  );
+  assert.deepEqual(
+    mergeFrontmatter(
+      { name: "sample", tools: ["+codemode", "-bash"] },
+      { name: "sample", tools: ["+write"] },
+    ).tools,
+    ["+codemode", "-bash", "+write"],
+  );
+  assert.deepEqual(
+    mergeFrontmatter(
+      { name: "sample", tools: ["+codemode", "-bash"] },
+      { name: "sample", tools: ["read", "+write"] },
+    ).tools,
+    ["read", "write"],
+  );
+  assert.throws(
+    () =>
+      mergeFrontmatter(
+        { name: "flexible-lead" },
+        { name: "flexible-lead", agents: ["+scout"] },
+      ),
+    /require an explicit agents allowlist/,
+  );
+});
+
+test("validates raw modifiers and explicit Agent duplicates before composition", () => {
+  assert.throws(
+    () =>
+      mergeFrontmatter(
+        { name: "sample", skills: ["inherited"] },
+        { name: "sample", skills: ["-"] },
+      ),
+    /field skills: modifiers require a non-empty name/,
+  );
+  assert.throws(
+    () =>
+      mergeFrontmatter(
+        { name: "sample", agents: ["inherited"] },
+        { name: "sample", agents: ["scout", "scout", "+reviewer"] },
+      ),
+    /field agents: must be an array with unique explicit names/,
+  );
+});
+
+test("standalone resource and delegation modifiers resolve from empty defaults", () => {
+  const definition = discoverAgentDefinitionsWithContents(`---
+name: standalone-modifiers
+skills: ["+/skills/review/SKILL.md"]
+extensions: ["+/extensions/review.ts"]
+agents: ["+scout", "+scout"]
+---
+`).find(({ name }) => name === "standalone-modifiers")!;
+  assert.deepEqual(definition.frontmatter.skills, ["/skills/review/SKILL.md"]);
+  assert.deepEqual(definition.frontmatter.extensions, [
+    "/extensions/review.ts",
+  ]);
+  assert.deepEqual(definition.frontmatter.agents, ["scout"]);
+});
+
 test("merges scalars, arrays, and false values", () => {
   assert.deepEqual(
     mergeFrontmatter(
@@ -394,7 +527,7 @@ test("rejects malformed capability fields", () => {
     [
       "agents",
       '["scout", "scout"]',
-      /must be an array of unique non-empty strings/,
+      /must be an array with unique explicit names/,
     ],
     ["noTools", '"true"', /must be a boolean/],
     ["noBuiltinTools", "yes", /must be a boolean/],
@@ -429,7 +562,7 @@ test("rejects malformed capability fields", () => {
     [
       "agents",
       "[\n  scout,\n  scout,\n]",
-      /must be an array of unique non-empty strings/,
+      /must be an array with unique explicit names/,
     ],
   ] as const)
     assert.throws(
@@ -2131,6 +2264,215 @@ test("bundled noExtensions Agent loads and executes native Code Mode", () => {
   }
 });
 
+test("noTools relative launch filters MCP tools unless an MCP tool is selected", () => {
+  const launch = (tools: string[]) =>
+    agentLaunchArgs(
+      {
+        name: "restricted",
+        path: "/restricted.md",
+        frontmatter: { name: "restricted", noTools: true, tools },
+        body: "",
+      },
+      { bodyPromptPath: "/prompt", cwd: process.cwd() },
+    );
+  const restricted = launch(["+codemode"]);
+  assert.equal(
+    restricted[restricted.indexOf("--tools") + 1],
+    "+codemode,+mcp__",
+  );
+  assert.equal(restricted[restricted.indexOf("--exclude-tools") + 1], "mcp__");
+  const explicitlySelected = launch(["+codemode", "+mcp__probe__secret"]);
+  assert.equal(
+    explicitlySelected[explicitlySelected.indexOf("--tools") + 1],
+    "+codemode,+mcp__probe__secret",
+  );
+  assert.equal(explicitlySelected.includes("--exclude-tools"), false);
+});
+
+// Pi's MCP transport exposes listener methods; the MCP SDK server transport uses callback properties.
+function asSdkMcpServerTransport(
+  transport: ReturnType<typeof createInMemoryTransportPair>["server"],
+): Parameters<McpServer["connect"]>[0] {
+  let onMessage: ((message: unknown) => void) | undefined;
+  let onError: ((error: Error) => void) | undefined;
+  let onClose: (() => void) | undefined;
+  const sdkTransport = {
+    start: () => transport.start(),
+    send: (message: unknown) => transport.send(message as never),
+    close: () => transport.close(),
+  } as unknown as Parameters<McpServer["connect"]>[0];
+  Object.defineProperties(sdkTransport, {
+    onmessage: {
+      get: () => onMessage,
+      set: (handler) => {
+        onMessage = handler;
+      },
+    },
+    onerror: {
+      get: () => onError,
+      set: (handler) => {
+        onError = handler;
+      },
+    },
+    onclose: {
+      get: () => onClose,
+      set: (handler) => {
+        onClose = handler;
+      },
+    },
+  });
+  transport.onMessage((message) => onMessage?.(message));
+  transport.onError((error) => onError?.(error));
+  transport.onClose(() => onClose?.());
+  return sdkTransport;
+}
+
+test("native Code Mode cannot discover or call unselected registered MCP tools", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-mcp-codemode-"));
+  try {
+    const runProbe = async (tools: string[]) => {
+      const explicitlySelected = tools.includes("+mcp__probe__secret");
+      const providerName = explicitlySelected
+        ? "mcp-codemode-allowed"
+        : "mcp-codemode-restricted";
+      const faux = fauxProvider({
+        provider: providerName,
+        models: [{ id: "test", reasoning: false, input: ["text"] }],
+      });
+      const modelRuntime = await ModelRuntime.create({
+        modelsPath: null,
+        refreshOnCreate: false,
+      });
+      modelRuntime.registerNativeProvider(faux.provider);
+      const settingsManager = SettingsManager.inMemory({
+        compaction: { enabled: false },
+      });
+      let mcpServerReady = 0;
+      let mcpToolCalls = 0;
+      const resourceLoader = new DefaultResourceLoader({
+        cwd: root,
+        agentDir: root,
+        settingsManager,
+        noExtensions: true,
+        noContextFiles: true,
+        noSkills: true,
+        noPromptTemplates: true,
+        noThemes: true,
+        extensionFactories: [
+          createCodemodeExtension(),
+          createMcpExtension({
+            createTransport: () => {
+              const { client, server } = createInMemoryTransportPair();
+              const mcpServer = new McpServer({
+                name: "probe",
+                version: "1.0.0",
+              });
+              mcpServer.registerTool(
+                "secret",
+                {
+                  description: "Restricted probe tool",
+                  inputSchema: {},
+                },
+                async () => {
+                  mcpToolCalls++;
+                  return {
+                    content: [{ type: "text", text: "MCP_SECRET_TOOL_CALLED" }],
+                  };
+                },
+              );
+              void mcpServer
+                .connect(asSdkMcpServerTransport(server))
+                .then(() => mcpServerReady++);
+              return client;
+            },
+          }),
+          (pi) =>
+            pi.registerMcpServer("probe", {
+              command: "in-memory-mcp-probe",
+              exposure: "codemode",
+            }),
+        ],
+      });
+      await resourceLoader.reload();
+      const configured = agentLaunchArgs(
+        {
+          name: "restricted",
+          path: join(root, "restricted.md"),
+          frontmatter: { name: "restricted", noTools: true, tools },
+          body: "",
+        },
+        { bodyPromptPath: join(root, "prompt.md"), cwd: root },
+      );
+      const toolArgs = configured.indexOf("--tools");
+      const excludeArgs = configured.indexOf("--exclude-tools");
+      const selectedTools = configured[toolArgs + 1].split(",");
+      const selectedExclusions =
+        excludeArgs < 0 ? undefined : configured[excludeArgs + 1].split(",");
+      const expectedOutput = explicitlySelected
+        ? "MCP_TOOL_ALLOWED"
+        : "MCP_TOOL_BLOCKED";
+      const code = explicitlySelected
+        ? 'const matches = await searchTools("restricted probe tool"); if (!matches.some((tool) => tool.name === "mcp__probe__secret")) throw new Error("explicitly selected MCP tool was not discoverable"); const result = await tools.mcp__probe__secret({}); if (!result.content.some((part) => part.text === "MCP_SECRET_TOOL_CALLED")) throw new Error("explicitly selected MCP tool did not execute"); text("MCP_TOOL_ALLOWED");'
+        : 'const matches = await searchTools("restricted probe tool"); if (matches.some((tool) => tool.name === "mcp__probe__secret")) throw new Error("unselected MCP tool was discoverable"); let blocked = false; try { await tools.mcp__probe__secret({}); } catch { blocked = true; } if (!blocked) throw new Error("unselected MCP tool was callable"); text("MCP_TOOL_BLOCKED");';
+      const requests: any[][] = [];
+      faux.setResponses([
+        (context) => {
+          requests.push(context.messages as any[]);
+          assert.ok(
+            getCurrentTools(context.messages).some(
+              (tool) => tool.name === "codemode",
+            ),
+          );
+          return fauxAssistantMessage([fauxToolCall("codemode", { code })], {
+            stopReason: "toolUse",
+          });
+        },
+        (context) => {
+          requests.push(context.messages as any[]);
+          return fauxAssistantMessage("MCP_CODEMODE_PROBE_OK");
+        },
+      ]);
+      const { session } = await createAgentSession({
+        cwd: root,
+        agentDir: root,
+        modelRuntime,
+        model: faux.getModel()!,
+        settingsManager,
+        resourceLoader,
+        sessionManager: SessionManager.inMemory(root),
+        noTools: "all",
+        tools: selectedTools,
+        excludeTools: selectedExclusions,
+      });
+      try {
+        await session.bindExtensions({});
+        assert.ok(session.getActiveToolNames().includes("codemode"));
+        await session.prompt("Probe registered MCP access through Code Mode.");
+        const toolResult = requests[1]?.find(
+          (message) =>
+            message.role === "toolResult" && message.toolName === "codemode",
+        );
+        assert.ok(toolResult, JSON.stringify(requests));
+        assert.equal(toolResult.isError, false, JSON.stringify(toolResult));
+        assert.match(
+          JSON.stringify(toolResult.content),
+          new RegExp(expectedOutput),
+          JSON.stringify(toolResult.content),
+        );
+      } finally {
+        await session.dispose();
+      }
+      assert.equal(mcpServerReady, 1);
+      assert.equal(mcpToolCalls, explicitlySelected ? 1 : 0);
+    };
+
+    await runProbe(["+codemode", "+mcp__probe__secret"]);
+    await runProbe(["+codemode"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("managed launch policy always includes await_owner and attach_handoff", () => {
   const launch = (frontmatter: Frontmatter) =>
     agentLaunchArgs(
@@ -3258,6 +3600,44 @@ test("wildcard exclusions reject mandatory overlap and escape regex syntax", () 
   assert.equal(
     args[args.indexOf("--exclude-tools") + 1],
     "ask.?*,agent,xask_*",
+  );
+});
+
+test("relative tool policy preserves Pi selection while terminal removals remain denied", () => {
+  const definition: AgentDefinition = {
+    name: "flexible",
+    path: "/flexible.md",
+    body: "",
+    frontmatter: { tools: ["-bash", "+codemode", "-write", "+write"] },
+  };
+  const policy = configuredToolPolicy(definition, ["message_supervisor"]);
+  assert.equal(policy.mode, "relative");
+  assert.deepEqual(policy.excluded, ["bash"]);
+  assert.equal(toolPolicyAllowsName(policy, new Set(), "read"), true);
+  assert.equal(toolPolicyAllowsName(policy, new Set(), "bash"), false);
+  assert.equal(toolPolicyAllowsName(policy, new Set(), "codemode"), true);
+  assert.equal(
+    agentDefinitionDelegationEnabled({
+      ...definition,
+      frontmatter: { agents: ["scout"], tools: ["-bash"] },
+    }),
+    true,
+  );
+  const args = agentLaunchArgs(definition, {
+    requiredTools: ["message_supervisor"],
+  });
+  assert.deepEqual(
+    args.slice(args.indexOf("--tools"), args.indexOf("--tools") + 2),
+    ["--tools", "-bash,+codemode,-write,+write,+message_supervisor"],
+  );
+  assert.equal(args[args.indexOf("--exclude-tools") + 1], "bash");
+  assert.throws(
+    () =>
+      configuredToolPolicy(
+        { ...definition, frontmatter: { tools: ["-message_supervisor"] } },
+        ["message_supervisor"],
+      ),
+    /cannot remove required tool/,
   );
 });
 

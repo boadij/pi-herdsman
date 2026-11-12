@@ -8871,6 +8871,49 @@ test("Manager event boundaries enforce actual faux-provider declarations on firs
   }
 });
 
+test("relative Lead policy denies only terminal removals and protected owned tools", async () => {
+  const { createLeadAgentEventRuntime, createLeadToolState } =
+    await import("./lead-runtime.ts");
+  const registered = ["read", "bash", "edit", "write", "codemode"];
+  const toolState = createLeadToolState(
+    () => registered.map((name) => ({ name })),
+    [],
+    [],
+  );
+  assert.deepEqual(
+    toolState.projectLeadTools(["read", "bash", "edit", "write"], {
+      name: "flexible-lead",
+      path: "/flexible.md",
+      body: "",
+      frontmatter: { tools: ["+codemode", "-write"] },
+    }),
+    ["read", "bash", "edit", "codemode"],
+  );
+  const events = createLeadAgentEventRuntime({
+    isCurrentChief: () => false,
+    isActiveManager: () => false,
+    currentLeadRelativePolicy: () => ({
+      excluded: ["write", "secret_*"],
+      owned: new Set(["delegate_agent", "message_supervisor"]),
+      allowedOwned: new Set(["message_supervisor"]),
+    }),
+    currentLeadAllowedTools: () => undefined,
+  } as any);
+  const ctx = {} as any;
+  assert.equal(
+    events.toolCall({ toolName: "late_native_tool" }, ctx),
+    undefined,
+  );
+  assert.equal(events.toolCall({ toolName: "codemode" }, ctx), undefined);
+  assert.equal(
+    events.toolCall({ toolName: "message_supervisor" }, ctx),
+    undefined,
+  );
+  assert.ok(events.toolCall({ toolName: "write" }, ctx)?.block);
+  assert.ok(events.toolCall({ toolName: "secret_probe" }, ctx)?.block);
+  assert.ok(events.toolCall({ toolName: "delegate_agent" }, ctx)?.block);
+});
+
 test("restricted Lead rejects nested tools outside its active profile", async () => {
   const { createLeadAgentEventRuntime } = await import("./lead-runtime.ts");
   const events = createLeadAgentEventRuntime({
