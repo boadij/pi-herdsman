@@ -454,7 +454,8 @@ test("conflicting same-request entries do not suppress an exact combined result"
       "result persistence details must carry the complete child identity",
     );
 
-    await pi.events.get("agent_settled")![0]({ aborted: false }, context);
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: false }, context);
     assert.equal(queued, 2, "a conflicting entry must not suppress redelivery");
     assert.ok(readResult(childMailbox, REQUEST_ID));
 
@@ -464,7 +465,8 @@ test("conflicting same-request entries do not suppress an exact combined result"
         details: resultEntryDetails(child, REQUEST_ID),
       },
     });
-    await pi.events.get("agent_settled")![0]({ aborted: false }, context);
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: false }, context);
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.ok(
@@ -475,7 +477,8 @@ test("conflicting same-request entries do not suppress an exact combined result"
     assert.equal((pi.sent[0] as any).details.unresolvedDirectChildCount, 0);
     assert.equal((pi.sent[0] as any).details.activeDirectChildCount, 0);
     assert.equal((pi.sent[0] as any).details.pendingDirectResultCount, 0);
-    await pi.events.get("agent_settled")![0]({ aborted: false }, context);
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: false }, context);
     await t.waitFor(() =>
       assert.equal(
         readResult(childMailbox, REQUEST_ID),
@@ -2222,7 +2225,8 @@ test("settlement redelivers an unpersisted child result in the same session", as
       false,
     );
 
-    await pi.events.get("agent_settled")![0]({ aborted: false }, context);
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: false }, context);
 
     await t.waitFor(() =>
       assert.equal(
@@ -2243,7 +2247,8 @@ test("settlement redelivers an unpersisted child result in the same session", as
     assert.equal(deliveries, 2);
     assert.deepEqual(lifecycle.closeOrder, [label]);
 
-    await pi.events.get("agent_settled")![0]({ aborted: false }, context);
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: false }, context);
     await Promise.resolve();
     assert.equal(deliveries, 2);
   } finally {
@@ -4519,11 +4524,19 @@ test("stale scanner starts immediately, reschedules, deduplicates, and retries f
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
   await Promise.resolve();
-  assert.equal(attempts, 1, "the controller performs an immediate scan");
+  assert.equal(
+    attempts,
+    2,
+    "the failed wake-up is retried before the scan ends",
+  );
 
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(attempts, 2, "a failed advisory is retried on the next scan");
+  assert.equal(
+    attempts,
+    2,
+    "a successfully retried advisory waits for its reminder",
+  );
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(attempts, 2, "a successful episode waits for its reminder");
@@ -5062,7 +5075,11 @@ test("stale diagnostic failure refreshes physical state before publication", asy
     await pi.events.get("session_start")![0](undefined, fakeContext());
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(diagnosisFailed, true);
-    assert.equal(snapshots, 2, "failure triggers a fresh physical snapshot");
+    assert.equal(
+      snapshots,
+      3,
+      "diagnostic refresh and final validation re-read physical state",
+    );
     assert.equal(
       pi.sent.filter(
         (message: any) => message.customType === "pi-herdsman-agent-stale",
@@ -5536,16 +5553,17 @@ test("old unacknowledged requests get attention without being resubmitted", asyn
   resetAgentMailbox(mailbox);
 });
 
-test("health reconciliation publishes at most one attention per scan", async (t) => {
+test("health reconciliation batches independent attention and preserves episode timing", async (t) => {
   setLeadEnvironment();
   const states = ["first-health-error", "second-health-error"].map((label) => {
     const identity = recoveryIdentity(label);
+    const requestId = randomUUID();
     return {
       ...managedState(label, undefined, identity),
       resultError: {
         code: "write_failure" as const,
         message: `${label} failed`,
-        requestId: REQUEST_ID,
+        requestId,
         runId: AGENT_ID,
         ownerSessionId: LEAD_SESSION_ID,
         workspaceId: WORKSPACE,
@@ -5556,13 +5574,14 @@ test("health reconciliation publishes at most one attention per scan", async (t)
         failedAt: Date.now() - 1_000,
         retrySafe: false as const,
         cleanupSafe: true as const,
-        nextAction:
-          "Use inspect_agent to inspect the stored result error, then use stop_agent to close this agent.",
+        nextAction: `Inspect ${label}, then use stop_agent only if recovery requires it.`,
       },
     };
   });
-  states[1]!.runId = randomUUID();
-  states[1]!.resultError!.runId = states[1]!.runId;
+  for (const state of states) {
+    state.runId = randomUUID();
+    state.resultError!.runId = state.runId;
+  }
   for (const state of states)
     writeAgentState(agentMailboxPath(WORKSPACE, state.agentLabel), state);
   const pi = fakePi({
@@ -5583,20 +5602,90 @@ test("health reconciliation publishes at most one attention per scan", async (t)
   t.mock.timers.enable({ apis: ["setTimeout"] });
   await pi.events.get("session_start")![0](undefined, fakeContext());
   await new Promise((resolve) => setImmediate(resolve));
+  const attentions = pi.sentMessageCalls.filter(
+    ({ message }: any) => message.customType === "pi-herdsman-agent-attention",
+  );
+  assert.equal(attentions.length, 2);
+  assert.deepEqual(
+    attentions.map(({ message }: any) => message.details.runId).sort(),
+    states.map((state) => state.runId).sort(),
+  );
+  for (const state of states) {
+    const item = attentions.find(
+      ({ message }: any) => message.details.runId === state.runId,
+    ) as any;
+    assert.equal(item.message.details.requestId, state.resultError!.requestId);
+    assert.match(
+      item.message.content,
+      new RegExp(state.resultError!.nextAction),
+    );
+  }
+  assert.deepEqual(
+    attentions.map(({ options }: any) => (options as any).triggerTurn),
+    [false, true],
+  );
+  t.mock.timers.tick(30_000);
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(
+    pi.sentMessageCalls.filter(
+      ({ message }: any) =>
+        message.customType === "pi-herdsman-agent-attention",
+    ).length,
+    2,
+  );
+  pi.events.get("session_shutdown")?.[0]();
+  for (const state of states)
+    resetAgentMailbox(agentMailboxPath(WORKSPACE, state.agentLabel));
+});
+
+test("health attention defers candidates beyond the recipient fan-in cap", async (t) => {
+  setLeadEnvironment();
+  const states = Array.from({ length: 33 }, (_, index) => {
+    const label = `health-cap-${index.toString().padStart(2, "0")}`;
+    const identity = recoveryIdentity(label);
+    const state = {
+      ...managedState(label, undefined, identity),
+      resultError: {
+        code: "write_failure" as const,
+        message: "result persistence failed",
+        requestId: randomUUID(),
+        runId: randomUUID(),
+        ownerSessionId: LEAD_SESSION_ID,
+        workspaceId: WORKSPACE,
+        agentLabel: label,
+        paneId: identity.paneId,
+        originalStatus: "completed" as const,
+        attempts: 8,
+        failedAt: Date.now() - 1_000,
+        retrySafe: false as const,
+        cleanupSafe: true as const,
+        nextAction: "Inspect the stored result error before recovery.",
+      },
+    };
+    state.runId = randomUUID();
+    state.resultError.runId = state.runId;
+    writeAgentState(agentMailboxPath(WORKSPACE, label), state);
+    return state;
+  });
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  await pi.events.get("session_start")![0](undefined, fakeContext());
+  await new Promise((resolve) => setImmediate(resolve));
+  const attentions = () =>
     pi.sent.filter(
       (message: any) => message.customType === "pi-herdsman-agent-attention",
+    );
+  assert.equal(attentions().length, 32);
+  assert.equal(
+    pi.sentMessageCalls.filter(
+      ({ options }: any) => (options as any).triggerTurn === true,
     ).length,
     1,
   );
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(
-    pi.sent.filter(
-      (message: any) => message.customType === "pi-herdsman-agent-attention",
-    ).length,
-    2,
-  );
+  assert.equal(attentions().length, 33);
   pi.events.get("session_shutdown")?.[0]();
   for (const state of states)
     resetAgentMailbox(agentMailboxPath(WORKSPACE, state.agentLabel));

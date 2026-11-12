@@ -148,6 +148,145 @@ test("Pi 1.5.0 includes non-triggering startup messages in the first provider re
   }
 });
 
+test("batched health attention reaches one faux-provider request with startup fan-in", async () => {
+  setLeadEnvironment();
+  const { includeFanInMessage, registerRecipientFanIn } =
+    await import("./recipient-fan-in.ts");
+  const states = ["provider-health-one", "provider-health-two"].map((label) => {
+    const identity = recoveryIdentity(label);
+    const state = managedState(label, undefined, identity);
+    state.ownerSessionId = LEAD_SESSION_ID;
+    state.resultError = {
+      code: "write_failure",
+      message: `${label} result persistence failed`,
+      requestId: randomUUID(),
+      runId: state.runId,
+      ownerSessionId: LEAD_SESSION_ID,
+      workspaceId: WORKSPACE,
+      agentLabel: label,
+      paneId: identity.paneId,
+      originalStatus: "completed",
+      attempts: 8,
+      failedAt: Date.now() - 1_000,
+      retrySafe: false,
+      cleanupSafe: true,
+      nextAction: `Inspect ${label} recovery evidence before intervention.`,
+    };
+    writeAgentState(agentMailboxPath(WORKSPACE, label), state);
+    return state;
+  });
+  const parent = managedState("provider-health-owner");
+  parent.ownerSessionId = LEAD_SESSION_ID;
+  let health: ReturnType<typeof fakePi> | undefined;
+  const deliveries: Promise<void>[] = [];
+  const requests: any[][] = [];
+  const faux = fauxProvider({
+    provider: "herdsman-health-fan-in-test",
+    models: [{ id: "health", contextWindow: 4096, maxTokens: 128 }],
+  });
+  const modelRuntime = await ModelRuntime.create({
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  modelRuntime.registerNativeProvider(faux.provider);
+  const settingsManager = SettingsManager.inMemory();
+  let healthScanStarted = false;
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    settingsManager,
+    noExtensions: true,
+    noContextFiles: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    extensionFactories: [
+      (api) => {
+        health = fakePi({ exec: agentControllerExecutor(parent, states) });
+        const sendToFakePi = health.pi.sendMessage.bind(health.pi);
+        health.pi.sendMessage = (message, options) => {
+          sendToFakePi(message, options);
+          const delivery = api.sendMessage(message, options);
+          deliveries.push(delivery);
+          return delivery;
+        };
+        registerExtension!(health.pi as never);
+        api.on("before_agent_start", async () => {
+          if (healthScanStarted) return;
+          healthScanStarted = true;
+          for (const handler of health!.events.get("session_start") ?? [])
+            await handler(undefined, fakeContext());
+          for (
+            let attempt = 0;
+            attempt < 100 && health!.sentMessageCalls.length < 2;
+            attempt++
+          )
+            await new Promise((resolve) => setImmediate(resolve));
+          await Promise.all(deliveries);
+        });
+        api.on("session_shutdown", () =>
+          health!.events.get("session_shutdown")?.[0](),
+        );
+      },
+      (api) =>
+        registerRecipientFanIn(api, async (_ctx, phase, budget) => {
+          if (phase !== "startup") return 0;
+          const message = {
+            customType: "startup-sibling",
+            content: "independent startup fan-in sibling",
+            display: "none" as const,
+          };
+          if (!includeFanInMessage(budget, message.content)) return 0;
+          await api.sendMessage(message, { triggerTurn: false });
+          return 1;
+        }),
+    ],
+  });
+  await resourceLoader.reload();
+  faux.setResponses([
+    (context) => {
+      requests.push(context.messages as any[]);
+      return fauxAssistantMessage("recovered");
+    },
+  ]);
+  const { session } = await createAgentSession({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    modelRuntime,
+    model: faux.getModel()!,
+    settingsManager,
+    resourceLoader,
+    sessionManager: SessionManager.inMemory(WORKSPACE),
+  });
+  try {
+    await session.prompt("start");
+    assert.equal(health?.sentMessageCalls.length, 2);
+    assert.equal(deliveries.length, 2);
+    assert.deepEqual(
+      health?.sentMessageCalls
+        .filter(
+          ({ message }: any) =>
+            message.customType === "pi-herdsman-agent-attention",
+        )
+        .map(({ options }: any) => options.triggerTurn),
+      [false, true],
+    );
+    for (let attempt = 0; attempt < 100 && requests.length === 0; attempt++)
+      await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(requests.length, 1);
+    const providerInput = JSON.stringify(requests[0]);
+    for (const state of states) {
+      assert.match(providerInput, new RegExp(state.agentLabel));
+      assert.match(providerInput, new RegExp(state.resultError!.requestId));
+    }
+    assert.match(providerInput, /independent startup fan-in sibling/);
+  } finally {
+    await session.dispose();
+    for (const state of states)
+      resetAgentMailbox(agentMailboxPath(WORKSPACE, state.agentLabel));
+    resetAgentMailbox(agentMailboxPath(WORKSPACE, parent.agentLabel));
+  }
+});
+
 test("two Chief inbox records reach one continued provider request from a turn-boundary drain", async () => {
   const { drainCoordinationInbox, supervisionRuntime, writeChiefMessage } =
     await import("./supervision.ts");
@@ -2914,7 +3053,10 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       { message: { role: "assistant", content: "premature answer" } },
       context,
     );
-    const settle = pi.events.get("agent_settled")![0];
+    const settle = async (event: unknown, ctx: typeof context) => {
+      for (const handler of pi.events.get("agent_settled") ?? [])
+        await handler(event, ctx);
+    };
     await settle({ aborted: false }, context);
     assert.equal(readResult(parentMailbox, parentRequestId), undefined);
     assert.equal(
@@ -4142,8 +4284,17 @@ test("agent registers native activity events and coalesces activity writes", asy
   agent.events.get("session_shutdown")?.[0]();
 });
 
-test("shared Agent instructions do not advertise optional shell tools", () => {
+test("shared Agent instructions preserve shell and owner-communication guidance", () => {
   assert.doesNotMatch(SHARED_AGENT_INSTRUCTIONS, /\b(?:bash|powershell)\b/u);
+  assert.match(
+    SHARED_AGENT_INSTRUCTIONS,
+    /notify_owner only for material information your direct owner needs before\s+the normal final handoff, or for an explicitly requested meaningful\s+checkpoint/u,
+  );
+  assert.match(
+    SHARED_AGENT_INSTRUCTIONS,
+    /await_owner only for a required owner decision that prevents further\s+correct progress/u,
+  );
+  assert.match(SHARED_AGENT_INSTRUCTIONS, /normal final handoff/u);
 });
 
 test("managed agents cap direct built-in shell calls without explicit timeouts", async () => {
@@ -7607,6 +7758,7 @@ test("owner notification is retained until its exact persisted session receipt",
       identity,
     ),
   });
+  let restartedPi: ReturnType<typeof fakePi> | undefined;
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries, []);
   try {
@@ -7624,37 +7776,230 @@ test("owner notification is retained until its exact persisted session receipt",
       deliverAs: "steer",
     });
     assert.deepEqual(pi.sentMessageCalls[1]?.options, { triggerTurn: false });
-    // A repeated reconciliation within this delivery episode must not enqueue
-    // duplicates; a later completed recipient boundary may retry unreceipted work.
+    // Startup and turn fan-in must not release submissions still in flight.
     pi.events.get("session_tree")?.[0](undefined, context);
+    await pi.events.get("before_agent_start")?.[0](undefined, context);
+    await pi.events.get("agent_before_settle")?.[0](
+      { outcome: "completed" },
+      context,
+    );
+    for (const handler of pi.events.get("turn_end") ?? [])
+      await handler({ outcome: "completed" }, context);
     assert.equal(
       pi.sent.filter(
         (entry: any) => entry.customType === "pi-herdsman-agent-owner-message",
       ).length,
       2,
     );
+    entries.push({
+      customType: sent.customType,
+      details: { ...sent.details, paneId: "wrong-pane" },
+    });
+    await pi.events.get("before_agent_start")?.[0](undefined, context);
+    assert.equal(readOwnerMessages(mailbox).length, 2);
+    // The exact receipt is persisted before settlement; receipt cleanup is
+    // first, then the remaining unconfirmed message is retried at empty queue.
+    entries.pop();
+    entries.push({ customType: sent.customType, details: sent.details });
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: false }, context);
+    // Receipt cleanup is identity-specific; the second message remains durable.
+    assert.deepEqual(
+      readOwnerMessages(mailbox).map(({ messageId }) => messageId),
+      ["88888888-8888-4888-8888-888888888888"],
+    );
+    assert.equal(
+      pi.sent.filter(
+        (entry: any) => entry.customType === "pi-herdsman-agent-owner-message",
+      ).length,
+      3,
+      "empty-queue settlement retries the unconfirmed message",
+    );
     for (const handler of pi.events.get("turn_end") ?? [])
       await handler({ outcome: "completed" }, context);
     const retried = pi.sent.filter(
       (entry: any) => entry.customType === "pi-herdsman-agent-owner-message",
     );
-    assert.equal(retried.length, 4);
-    assert.equal(readOwnerMessages(mailbox).length, 2);
-    entries.push({
-      customType: sent.customType,
-      details: { ...sent.details, paneId: "wrong-pane" },
+    assert.equal(retried.length, 3);
+    assert.equal(readOwnerMessages(mailbox).length, 1);
+    pi.events.get("session_shutdown")?.[0]();
+    restartedPi = fakePi({
+      exec: leadExec(
+        label,
+        "working",
+        identity.piSessionId,
+        undefined,
+        identity.piSessionId,
+        identity,
+      ),
     });
-    for (const handler of pi.events.get("turn_end") ?? [])
-      await handler({ outcome: "completed" }, context);
-    assert.equal(readOwnerMessages(mailbox).length, 2);
-    entries.push({ customType: sent.customType, details: sent.details });
-    entries.push({
+    registerExtension!(restartedPi.pi as never);
+    const restartedEntries: unknown[] = [];
+    const restartedContext = fakeContext(restartedEntries, []);
+    await restartedPi.events.get("session_start")![0](
+      undefined,
+      restartedContext,
+    );
+    assert.equal(
+      restartedPi.sent.filter(
+        (entry: any) => entry.customType === "pi-herdsman-agent-owner-message",
+      ).length,
+      1,
+      "a new controller can recover the durable unreceipted notification",
+    );
+    assert.equal(readOwnerMessages(mailbox).length, 1);
+    restartedEntries.push({
       customType: sentMessages[1]!.customType,
       details: sentMessages[1]!.details,
     });
+    for (const handler of restartedPi.events.get("turn_end") ?? [])
+      await handler({ outcome: "completed" }, restartedContext);
+    assert.equal(readOwnerMessages(mailbox).length, 0);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    restartedPi?.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("busy owner notifications wait for completed recipient fan-in", async () => {
+  setLeadEnvironment();
+  const label = "busy-owner-notification";
+  const identity = recoveryIdentity(label);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  const state = managedState(label, REQUEST_ID, identity);
+  writeAgentState(mailbox, state);
+  const notification = {
+    version: 5 as const,
+    messageId: "44444444-4444-4444-8444-444444444444",
+    requestId: REQUEST_ID,
+    runId: state.runId,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    piSessionId: state.piSessionId,
+    text: "Deliver this after the active turn reaches a boundary.",
+    createdAt: Date.now(),
+  };
+  writeOwnerMessage(mailbox, notification);
+  const entries: unknown[] = [];
+  const pi = fakePi({
+    exec: leadExec(
+      label,
+      "working",
+      identity.piSessionId,
+      undefined,
+      identity.piSessionId,
+      identity,
+    ),
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(entries, []);
+  context.isIdle = () => false;
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.equal(pi.sentMessageCalls.length, 0);
+    assert.equal(readOwnerMessages(mailbox).length, 1);
+
+    // Aborted boundaries do not fan in the durable, not-yet-submitted record.
     for (const handler of pi.events.get("turn_end") ?? [])
+      await handler({ outcome: "aborted" }, context);
+    for (const handler of pi.events.get("agent_before_settle") ?? [])
+      await handler({ outcome: "aborted" }, context);
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: true }, context);
+    assert.equal(pi.sentMessageCalls.length, 0);
+    assert.equal(readOwnerMessages(mailbox).length, 1);
+
+    // A completed turn boundary sends without steering and asks Pi to continue.
+    const turnEndResults = [];
+    for (const handler of pi.events.get("turn_end") ?? [])
+      turnEndResults.push(await handler({ outcome: "completed" }, context));
+    assert.equal(pi.sentMessageCalls.length, 1);
+    assert.deepEqual(pi.sentMessageCalls[0]?.options, { triggerTurn: false });
+    assert.ok(turnEndResults.some((result: any) => result?.continue === true));
+    assert.equal(readOwnerMessages(mailbox).length, 1);
+
+    // The exact persisted receipt is cleaned at the next completed fan-in.
+    const sent = pi.sentMessageCalls[0]!.message as any;
+    entries.push({ customType: sent.customType, details: sent.details });
+    for (const handler of pi.events.get("agent_before_settle") ?? [])
       await handler({ outcome: "completed" }, context);
     assert.equal(readOwnerMessages(mailbox).length, 0);
+    assert.equal(pi.sentMessageCalls.length, 1);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("aborted idle notification settlement releases its receipt-first retry", async () => {
+  setLeadEnvironment();
+  const label = "aborted-idle-owner-notification";
+  const identity = recoveryIdentity(label);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  const state = managedState(label, REQUEST_ID, identity);
+  writeAgentState(mailbox, state);
+  const notification = {
+    version: 5 as const,
+    messageId: "33333333-3333-4333-8333-333333333333",
+    requestId: REQUEST_ID,
+    runId: state.runId,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    piSessionId: state.piSessionId,
+    text: "Retry this idle trigger if no exact receipt was persisted.",
+    createdAt: Date.now(),
+  };
+  writeOwnerMessage(mailbox, notification);
+  const entries: unknown[] = [];
+  const pi = fakePi({
+    exec: leadExec(
+      label,
+      "working",
+      identity.piSessionId,
+      undefined,
+      identity.piSessionId,
+      identity,
+    ),
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(entries, []);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.deepEqual(pi.sentMessageCalls[0]?.options, {
+      triggerTurn: true,
+      deliverAs: "steer",
+    });
+
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: true }, context);
+    assert.equal(pi.sentMessageCalls.length, 2);
+    assert.deepEqual(pi.sentMessageCalls[1]?.options, {
+      triggerTurn: true,
+      deliverAs: "steer",
+    });
+    assert.equal(readOwnerMessages(mailbox).length, 1);
+
+    const retry = pi.sentMessageCalls[1]!.message as any;
+    entries.push({ customType: retry.customType, details: retry.details });
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: false }, context);
+    assert.equal(readOwnerMessages(mailbox).length, 0);
+    assert.equal(pi.sentMessageCalls.length, 2);
+    assert.equal(
+      entries.filter(
+        (entry: any) =>
+          entry.customType === "pi-herdsman-agent-owner-message" &&
+          entry.details?.messageId === notification.messageId,
+      ).length,
+      1,
+    );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);

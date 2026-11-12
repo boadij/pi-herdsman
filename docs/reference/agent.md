@@ -305,6 +305,15 @@ attention event is an advisory snapshot of current authority; every later
 `steer_agent`, `interrupt_agent`, `reply_agent`, or `stop_agent` call revalidates identity, ownership,
 mailbox state, and lifecycle.
 
+When several attention conditions are due in one scan, Herdsman submits their
+original, independently identifiable messages together, with one triggering
+message to wake the idle owner. Collection is limited by the existing
+recipient fan-in message and byte budgets; overflow remains eligible for a
+later scan. This scan-local budget is separate from the subsequent startup
+fan-in budget. A scan attempts at most one first-time stale live diagnostic,
+so additional initial stale inspections wait for another scan. Submission is
+best-effort and is not an acknowledgment that the owner consumed a message.
+
 Persistent actionable attention may repeat while the same condition remains
 unresolved. Reminder timing is process-local and advisory, not a mailbox API;
 restarting may cause an unresolved condition to be reminded again. The normal

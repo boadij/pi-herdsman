@@ -990,6 +990,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
       "pi-herdsman-agent-ask",
       "pi-herdsman-agent-attention",
       "pi-herdsman-agent-lost",
+      "pi-herdsman-agent-owner-message",
       "pi-herdsman-agent-result",
       "pi-herdsman-agent-stale",
       "pi-herdsman-project_message",
@@ -1609,6 +1610,7 @@ test("registered failed-turn reporting uses exact Managed session identity befor
           entry.data?.kind === "managed",
       ),
     );
+    await starting;
 
     pi.events.get("agent_start")![0]({}, context);
     for (const handler of pi.events.get("turn_end") ?? [])
@@ -1622,7 +1624,8 @@ test("registered failed-turn reporting uses exact Managed session identity befor
       );
     for (const handler of pi.events.get("agent_before_settle") ?? [])
       void handler({ outcome: "error" }, context);
-    await pi.events.get("agent_settled")![0]({ aborted: false }, context);
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: false }, context);
 
     const report = entries.find(
       (entry: any) =>
@@ -1648,7 +1651,8 @@ test("registered failed-turn reporting uses exact Managed session identity befor
       );
     for (const handler of pi.events.get("agent_before_settle") ?? [])
       void handler({ outcome: "error" }, context);
-    await pi.events.get("agent_settled")![0]({ aborted: false }, context);
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: false }, context);
     const mismatchedReport = entries.find(
       (entry: any) =>
         entry?.customType === "pi-herdsman-herd-run" &&
@@ -4867,7 +4871,8 @@ test("native managed-Agent restore quarantines the exact session", async () => {
     currentSessionId = ordinarySessionId;
     for (const handler of pi.events.get("agent_before_settle") ?? [])
       await handler({ outcome: "error" }, ctx);
-    await pi.events.get("agent_settled")![0]({ aborted: false }, ctx);
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: false }, ctx);
     const seededRunReport = entries.find(
       (entry: any) =>
         entry.customType === "pi-herdsman-herd-run" &&
@@ -7797,6 +7802,24 @@ for (const delegationEnabled of [false, true]) {
           widget.render(120)[0],
         ),
       );
+      const header = () => widget.render(160)[0]!;
+      assert.equal(typeof refreshTimer, "function");
+      pi.pi.setActiveTools(["read", "codemode"]);
+      (refreshTimer as () => void)();
+      await t.waitFor(() => assert.match(header(), /\[read, codemode\]/));
+      pi.pi.setActiveTools(["codemode"]);
+      (refreshTimer as () => void)();
+      await t.waitFor(() => assert.match(header(), /\[codemode\]/));
+      assert.doesNotMatch(header(), /\[read\b/);
+      const getActiveTools = pi.pi.getActiveTools;
+      pi.pi.getActiveTools = () => {
+        throw new Error("active tools unavailable");
+      };
+      (refreshTimer as () => void)();
+      await t.waitFor(() => assert.doesNotMatch(header(), /\[codemode\]/));
+      assert.match(header(), new RegExp(`${role} → agent:${label}`));
+      assert.doesNotMatch(header(), /\bunavailable\b/);
+      pi.pi.getActiveTools = getActiveTools;
       if (!delegationEnabled) assert.equal(openCalls, 0);
       const statusIdentity = `${delegationEnabled ? "unknown" : "agent"}:${label}`;
       if (delegationEnabled) {

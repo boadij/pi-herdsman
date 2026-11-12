@@ -1173,6 +1173,7 @@ export function createManagedAgentLeafStatus(options: {
     ctx: ExtensionContext,
     signal?: AbortSignal,
   ): Promise<ManagedAgentSnapshotCollection>;
+  ownToolsSnapshot(): { ownTools?: string[] };
   identity(ctx: ExtensionContext): ManagedAgentState | undefined;
   sameIdentity(left: ManagedAgentState, right: ManagedAgentState): boolean;
   signal(): AbortSignal | undefined;
@@ -1194,8 +1195,6 @@ export function createManagedAgentLeafStatus(options: {
   let inFlight = false;
   let focusInFlight = false;
   let breadcrumb: ReturnType<typeof statusBreadcrumb> | undefined;
-  let ownTools: string[] | undefined;
-  const ownToolsSnapshot = () => (ownTools ? { ownTools } : {});
   const reset = () => {
     generation++;
     if (timer) clearInterval(timer);
@@ -1237,7 +1236,7 @@ export function createManagedAgentLeafStatus(options: {
         stale: false,
         unavailable: false,
         breadcrumb,
-        ...ownToolsSnapshot(),
+        ...options.ownToolsSnapshot(),
         identityOnly: true,
         refreshedAt: Date.now(),
       });
@@ -1263,7 +1262,7 @@ export function createManagedAgentLeafStatus(options: {
                 : {}),
             },
           ],
-          ...ownToolsSnapshot(),
+          ...options.ownToolsSnapshot(),
           identityOnly: true,
         });
     } finally {
@@ -1274,9 +1273,6 @@ export function createManagedAgentLeafStatus(options: {
     reset,
     invalidate() {
       widget?.invalidate();
-    },
-    captureOwnTools(tools: string[] | undefined) {
-      ownTools = tools;
     },
     start(ctx: ExtensionContext) {
       const activeGeneration = generation;
@@ -1337,7 +1333,7 @@ export function createManagedAgentLeafStatus(options: {
                 : {}),
             },
           ],
-          ...ownToolsSnapshot(),
+          ...options.ownToolsSnapshot(),
           identityOnly: true,
         });
         if (activeGeneration === generation && ctx === context) widget = next;
@@ -2834,6 +2830,13 @@ export function registerManagedAgentRuntime(
   const allowedAgentDefinitions = allowedAgentDefinitionsFromEnv();
   const agentDepth = agentDepthFromEnv();
   const delegationEnabled = allowedAgentDefinitions.length > 0;
+  const ownToolsSnapshot = (): { ownTools?: string[] } => {
+    try {
+      return { ownTools: pi.getActiveTools() };
+    } catch {
+      return {};
+    }
+  };
   let startupDefinitionRoster:
     { sessionId: string; definitions: Record<string, unknown>[] } | undefined;
   const controller = delegationEnabled
@@ -2870,7 +2873,7 @@ export function registerManagedAgentRuntime(
       clearPendingStart: (label, expected) =>
         controller.clearPendingStart(label, expected),
       runtimeForLabel: (label) => controller.runtimeForLabel(label),
-      ownToolsSnapshot: () => ({}),
+      ownToolsSnapshot,
       focusTarget: async (ctx, intent, isCurrent) => {
         if (intent.kind !== "session")
           throw new Error("Manager navigation is unavailable from an Agent.");
@@ -2895,7 +2898,7 @@ export function registerManagedAgentRuntime(
             label: process.env.PI_HERDSMAN_LABEL,
           }),
           sameIdentity: sameManagedAgentIdentity,
-          ownToolsSnapshot: () => ({}),
+          ownToolsSnapshot,
         });
         const currentIdentity = managedAgentEnvironmentIdentity(
           ctx,
@@ -2985,7 +2988,7 @@ export function registerManagedAgentRuntime(
             label: process.env.PI_HERDSMAN_LABEL,
           }),
           sameIdentity: sameManagedAgentIdentity,
-          ownToolsSnapshot: () => ({}),
+          ownToolsSnapshot,
         });
       },
     });
@@ -3030,6 +3033,7 @@ export function registerManagedAgentRuntime(
     identity: (ctx) => managedAgentEnvironmentIdentity(ctx, options.build),
     sameIdentity: sameManagedAgentIdentity,
     signal: () => metadataPublisher.signal,
+    ownToolsSnapshot,
     getLocalActivity: (ctx) => getLocalActivity(ctx),
     focusTarget: async (ctx, intent, isCurrent) => {
       if (intent.kind !== "session")
@@ -3382,8 +3386,6 @@ export function registerManagedAgentRuntime(
     },
     resetRequestPump,
     resetLeafStatus: leafStatus.reset,
-    captureOwnTools: leafStatus.captureOwnTools,
-    getActiveTools: () => pi.getActiveTools(),
     clearControllerRuntimes: clearAgentRuntimes,
     setControllerReady: (ready) => controller?.setReady(ready),
     beginMetadataSession: metadataPublisher.beginSession,
@@ -3979,8 +3981,6 @@ export function registerManagedAgentSessionStartHandler(
     startControllerSession(): void;
     resetRequestPump(): void;
     resetLeafStatus(): void;
-    captureOwnTools(tools: string[] | undefined): void;
-    getActiveTools(): string[];
     clearControllerRuntimes(): void;
     setControllerReady(ready: boolean): void;
     beginMetadataSession(): AbortSignal;
@@ -4027,7 +4027,6 @@ export function registerManagedAgentSessionStartHandler(
       options.startControllerSession();
       options.resetRequestPump();
       options.resetLeafStatus();
-      options.captureOwnTools(undefined);
       if (options.delegationEnabled) options.clearControllerRuntimes();
       execution.initialized = false;
       options.setControllerReady(false);
@@ -4040,8 +4039,6 @@ export function registerManagedAgentSessionStartHandler(
       execution.agentContext = ctx;
       const candidate = options.environmentIdentity(ctx);
       if (!candidate) throw new Error("invalid agent environment");
-      if (!options.delegationEnabled)
-        options.captureOwnTools(options.getActiveTools());
       options.ensureAgentIdentity(ctx);
       verified = candidate;
       const restoreModel = process.env.PI_HERDSMAN_RESTORE_MODEL;

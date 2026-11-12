@@ -3438,6 +3438,9 @@ test("cascade close keeps the parent when descendant mailbox cleanup is unresolv
 
 test("staged fresh assignment bridges pending start through working", async (t) => {
   const fixture = createStagedAssignmentFixture("agent");
+  const abort = new AbortController();
+  let starting:
+    ReturnType<ReturnType<typeof registeredAgentTool>["execute"]> | undefined;
   const list = () =>
     registeredAgentTool(fixture.pi, "list").execute(
       "id",
@@ -3447,31 +3450,36 @@ test("staged fresh assignment bridges pending start through working", async (t) 
       fixture.context,
     );
   try {
-    await t.waitFor(() =>
-      assert.equal(
-        fixture.initialStatusStarted,
-        true,
-        "session status must start its initial snapshot before delegation",
-      ),
+    await t.waitFor(
+      () =>
+        assert.equal(
+          fixture.initialStatusStarted,
+          true,
+          "session status must start its initial snapshot before delegation",
+        ),
+      { timeout: 5_000 },
     );
     await fixture.sessionStart;
-    const starting = registeredAgentTool(fixture.pi, "delegate").execute(
+    starting = registeredAgentTool(fixture.pi, "delegate").execute(
       "id",
       {
         definition: "agent",
         task: "bridge the staged lifecycle",
       },
-      undefined,
+      abort.signal,
       undefined,
       fixture.context,
     );
-    await t.waitFor(() =>
-      assert.ok(
-        fixture.pi.calls.some(
-          (args) => args[0] === "agent" && args[1] === "start",
+    void starting.catch(() => {});
+    await t.waitFor(
+      () =>
+        assert.ok(
+          fixture.pi.calls.some(
+            (args) => args[0] === "agent" && args[1] === "start",
+          ),
+          "pending assignment did not reach the gated startup",
         ),
-        "assignment did not reach the gated startup",
-      ),
+      { timeout: 5_000 },
     );
     fixture.releaseInitialStatus();
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -3482,11 +3490,13 @@ test("staged fresh assignment bridges pending start through working", async (t) 
     );
 
     fixture.releaseStart();
-    await t.waitFor(() =>
-      assert.ok(
-        fixture.preSubmitValidationReady,
-        "assignment did not reach pre-submit validation",
-      ),
+    await t.waitFor(
+      () =>
+        assert.ok(
+          fixture.preSubmitValidationReady,
+          "assignment did not reach pre-submit validation",
+        ),
+      { timeout: 5_000 },
     );
     const beforeAck = await list();
     assert.equal(fixture.requestObserved, false);
@@ -3497,11 +3507,13 @@ test("staged fresh assignment bridges pending start through working", async (t) 
     assert.match(renderedBeforeAck, /agent/);
 
     fixture.releasePreSubmitValidation();
-    await t.waitFor(() =>
-      assert.ok(
-        fixture.requestObserved,
-        "assignment did not reach the gated request handoff",
-      ),
+    await t.waitFor(
+      () =>
+        assert.ok(
+          fixture.requestObserved,
+          "assignment did not reach the gated request handoff",
+        ),
+      { timeout: 5_000 },
     );
     fixture.releaseAcknowledgement();
     const result = await starting;
@@ -3548,6 +3560,15 @@ test("staged fresh assignment bridges pending start through working", async (t) 
     assert.equal(settling.details.agents[0].state, "working");
     assert.doesNotMatch(fixture.widgetValue.render(160).join("\n"), /ready/);
   } finally {
+    abort.abort();
+    fixture.releaseInitialStatus();
+    fixture.releaseStart();
+    fixture.releasePreSubmitValidation();
+    fixture.releaseAcknowledgement();
+    await Promise.allSettled([
+      fixture.sessionStart,
+      ...(starting ? [starting] : []),
+    ]);
     fixture.shutdown();
   }
 });
@@ -3725,46 +3746,58 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
 
 test("staged fresh assignment removes a fast completion during the initial result check", async (t) => {
   const fixture = createStagedAssignmentFixture("agent", true);
+  const abort = new AbortController();
+  let starting:
+    ReturnType<ReturnType<typeof registeredAgentTool>["execute"]> | undefined;
   try {
-    await t.waitFor(() =>
-      assert.equal(
-        fixture.initialStatusStarted,
-        true,
-        "session status must start its initial snapshot before delegation",
-      ),
+    await t.waitFor(
+      () =>
+        assert.equal(
+          fixture.initialStatusStarted,
+          true,
+          "session status must start its initial snapshot before delegation",
+        ),
+      { timeout: 5_000 },
     );
     await fixture.sessionStart;
-    const starting = registeredAgentTool(fixture.pi, "delegate").execute(
+    starting = registeredAgentTool(fixture.pi, "delegate").execute(
       "id",
       {
         definition: "agent",
         task: "complete before the working snapshot",
       },
-      undefined,
+      abort.signal,
       undefined,
       fixture.context,
     );
-    await t.waitFor(() =>
-      assert.ok(
-        fixture.pi.calls.some(
-          (args) => args[0] === "agent" && args[1] === "start",
+    void starting.catch(() => {});
+    await t.waitFor(
+      () =>
+        assert.ok(
+          fixture.pi.calls.some(
+            (args) => args[0] === "agent" && args[1] === "start",
+          ),
+          "fast assignment did not reach the gated startup",
         ),
-        "fast assignment did not reach the gated startup",
-      ),
+      { timeout: 5_000 },
     );
     fixture.releaseStart();
-    await t.waitFor(() =>
-      assert.ok(
-        fixture.preSubmitValidationReady,
-        "fast assignment did not reach pre-submit validation",
-      ),
+    await t.waitFor(
+      () =>
+        assert.ok(
+          fixture.preSubmitValidationReady,
+          "fast assignment did not reach pre-submit validation",
+        ),
+      { timeout: 5_000 },
     );
     fixture.releasePreSubmitValidation();
-    await t.waitFor(() =>
-      assert.ok(
-        fixture.requestObserved,
-        "fast assignment did not reach the gated request handoff",
-      ),
+    await t.waitFor(
+      () =>
+        assert.ok(
+          fixture.requestObserved,
+          "fast assignment did not reach the gated request handoff",
+        ),
+      { timeout: 5_000 },
     );
     fixture.releaseAcknowledgement();
     const result = await starting;
@@ -3788,46 +3821,93 @@ test("staged fresh assignment removes a fast completion during the initial resul
     assert.equal(watchedMailboxDirectories.has(fixture.mailbox), false);
     assert.equal(requestId, fixture.requestId);
     assert.equal(fixture.workingObservations, 0);
-    await t.waitFor(() =>
-      assert.doesNotMatch(
-        fixture.widgetValue.render(160).join("\n"),
-        /starting/,
-      ),
+    await t.waitFor(
+      () =>
+        assert.doesNotMatch(
+          fixture.widgetValue.render(160).join("\n"),
+          /starting/,
+          "fast completion remained in starting state during the initial result check",
+        ),
+      { timeout: 5_000 },
     );
   } finally {
+    abort.abort();
+    fixture.releaseInitialStatus();
+    fixture.releaseStart();
+    fixture.releasePreSubmitValidation();
+    fixture.releaseAcknowledgement();
+    await Promise.allSettled([
+      fixture.sessionStart,
+      ...(starting ? [starting] : []),
+    ]);
     fixture.shutdown();
   }
 });
 
 test("staged fresh assignment ignores a mismatched completion before delivery", async (t) => {
   const fixture = createStagedAssignmentFixture("agent", true, true);
+  const abort = new AbortController();
+  let starting:
+    ReturnType<ReturnType<typeof registeredAgentTool>["execute"]> | undefined;
   try {
-    await t.waitFor(() => assert.equal(fixture.initialStatusStarted, true));
+    await t.waitFor(
+      () =>
+        assert.equal(
+          fixture.initialStatusStarted,
+          true,
+          "mismatched completion did not reach initial status",
+        ),
+      { timeout: 5_000 },
+    );
     fixture.releaseInitialStatus();
     await fixture.sessionStart;
-    const starting = registeredAgentTool(fixture.pi, "delegate").execute(
+    starting = registeredAgentTool(fixture.pi, "delegate").execute(
       "id",
       { definition: "agent", task: "reject mismatched completion" },
-      undefined,
+      abort.signal,
       undefined,
       fixture.context,
     );
-    await t.waitFor(() =>
-      assert.ok(
-        fixture.pi.calls.some(
-          (args) => args[0] === "agent" && args[1] === "start",
+    void starting.catch(() => {});
+    await t.waitFor(
+      () =>
+        assert.ok(
+          fixture.pi.calls.some(
+            (args) => args[0] === "agent" && args[1] === "start",
+          ),
+          "mismatched completion did not reach gated startup",
         ),
-      ),
+      { timeout: 5_000 },
     );
     fixture.releaseStart();
-    await t.waitFor(() => assert.ok(fixture.preSubmitValidationReady));
+    await t.waitFor(
+      () =>
+        assert.ok(
+          fixture.preSubmitValidationReady,
+          "mismatched assignment did not reach pre-submit validation",
+        ),
+      { timeout: 5_000 },
+    );
     fixture.releasePreSubmitValidation();
-    await t.waitFor(() => assert.ok(fixture.requestObserved));
+    await t.waitFor(
+      () =>
+        assert.ok(
+          fixture.requestObserved,
+          "mismatched assignment did not reach request handoff",
+        ),
+      { timeout: 5_000 },
+    );
     fixture.releaseAcknowledgement();
     const result = await starting;
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
-    await t.waitFor(() =>
-      assert.match(fixture.widgetValue.render(160).join("\n"), /● 1/),
+    await t.waitFor(
+      () =>
+        assert.match(
+          fixture.widgetValue.render(160).join("\n"),
+          /● 1/,
+          "mismatched completion did not reach the working widget state",
+        ),
+      { timeout: 5_000 },
     );
     assert.equal(
       fixture.pi.sent.some(
@@ -3836,6 +3916,15 @@ test("staged fresh assignment ignores a mismatched completion before delivery", 
       false,
     );
   } finally {
+    abort.abort();
+    fixture.releaseInitialStatus();
+    fixture.releaseStart();
+    fixture.releasePreSubmitValidation();
+    fixture.releaseAcknowledgement();
+    await Promise.allSettled([
+      fixture.sessionStart,
+      ...(starting ? [starting] : []),
+    ]);
     fixture.shutdown();
   }
 });
@@ -11894,10 +11983,8 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       );
     for (const handler of parentAgent.events.get("agent_before_settle") ?? [])
       await handler({ outcome: "completed" }, parentResultContext);
-    await parentAgent.events.get("agent_settled")![0](
-      { aborted: false },
-      parentResultContext,
-    );
+    for (const handler of parentAgent.events.get("agent_settled") ?? [])
+      await handler({ aborted: false }, parentResultContext);
     assert.equal(
       readResult(parentMailbox, parentRequestId)?.text,
       "Parent completed.",
