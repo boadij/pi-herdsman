@@ -40,9 +40,7 @@ if (configured !== null) {
       );
     })
   ) {
-    throw new Error(
-      `Refusing to replace executable hooks in ${defaultHooks}`,
-    );
+    throw new Error(`Refusing to replace executable hooks in ${defaultHooks}`);
   }
   git("config", "--local", "core.hooksPath", hooksPath);
 }
