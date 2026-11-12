@@ -14,6 +14,23 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
+import {
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxToolCall,
+  getCurrentTools,
+} from "@earendil-works/pi-ai";
+import {
+  createAgentSession,
+  createCodemodeExtension,
+  createMcpExtension,
+  DefaultResourceLoader,
+  ModelRuntime,
+  SessionManager,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import {
   agentDefinitionDelegationEnabled,
   agentDefinitionMetadata,
@@ -2251,6 +2268,190 @@ test("noTools relative launch filters MCP tools unless an MCP tool is selected",
     "+codemode,+mcp__probe__secret",
   );
   assert.equal(explicitlySelected.includes("--exclude-tools"), false);
+});
+
+// Pi's MCP transport exposes listener methods; the MCP SDK server transport uses callback properties.
+function asSdkMcpServerTransport(
+  transport: ReturnType<typeof createInMemoryTransportPair>["server"],
+): Parameters<McpServer["connect"]>[0] {
+  let onMessage: ((message: unknown) => void) | undefined;
+  let onError: ((error: Error) => void) | undefined;
+  let onClose: (() => void) | undefined;
+  const sdkTransport = {
+    start: () => transport.start(),
+    send: (message: unknown) => transport.send(message as never),
+    close: () => transport.close(),
+  } as unknown as Parameters<McpServer["connect"]>[0];
+  Object.defineProperties(sdkTransport, {
+    onmessage: {
+      get: () => onMessage,
+      set: (handler) => {
+        onMessage = handler;
+      },
+    },
+    onerror: {
+      get: () => onError,
+      set: (handler) => {
+        onError = handler;
+      },
+    },
+    onclose: {
+      get: () => onClose,
+      set: (handler) => {
+        onClose = handler;
+      },
+    },
+  });
+  transport.onMessage((message) => onMessage?.(message));
+  transport.onError((error) => onError?.(error));
+  transport.onClose(() => onClose?.());
+  return sdkTransport;
+}
+
+test("native Code Mode cannot discover or call unselected registered MCP tools", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-mcp-codemode-"));
+  try {
+    const runProbe = async (tools: string[]) => {
+      const explicitlySelected = tools.includes("+mcp__probe__secret");
+      const providerName = explicitlySelected
+        ? "mcp-codemode-allowed"
+        : "mcp-codemode-restricted";
+      const faux = fauxProvider({
+        provider: providerName,
+        models: [{ id: "test", reasoning: false, input: ["text"] }],
+      });
+      const modelRuntime = await ModelRuntime.create({
+        modelsPath: null,
+        refreshOnCreate: false,
+      });
+      modelRuntime.registerNativeProvider(faux.provider);
+      const settingsManager = SettingsManager.inMemory({
+        compaction: { enabled: false },
+      });
+      let mcpServerReady = 0;
+      let mcpToolCalls = 0;
+      const resourceLoader = new DefaultResourceLoader({
+        cwd: root,
+        agentDir: root,
+        settingsManager,
+        noExtensions: true,
+        noContextFiles: true,
+        noSkills: true,
+        noPromptTemplates: true,
+        noThemes: true,
+        extensionFactories: [
+          createCodemodeExtension(),
+          createMcpExtension({
+            createTransport: () => {
+              const { client, server } = createInMemoryTransportPair();
+              const mcpServer = new McpServer({
+                name: "probe",
+                version: "1.0.0",
+              });
+              mcpServer.registerTool(
+                "secret",
+                {
+                  description: "Restricted probe tool",
+                  inputSchema: {},
+                },
+                async () => {
+                  mcpToolCalls++;
+                  return {
+                    content: [{ type: "text", text: "MCP_SECRET_TOOL_CALLED" }],
+                  };
+                },
+              );
+              void mcpServer
+                .connect(asSdkMcpServerTransport(server))
+                .then(() => mcpServerReady++);
+              return client;
+            },
+          }),
+          (pi) =>
+            pi.registerMcpServer("probe", {
+              command: "in-memory-mcp-probe",
+              exposure: "codemode",
+            }),
+        ],
+      });
+      await resourceLoader.reload();
+      const configured = agentLaunchArgs(
+        {
+          name: "restricted",
+          path: join(root, "restricted.md"),
+          frontmatter: { name: "restricted", noTools: true, tools },
+          body: "",
+        },
+        { bodyPromptPath: join(root, "prompt.md"), cwd: root },
+      );
+      const toolArgs = configured.indexOf("--tools");
+      const excludeArgs = configured.indexOf("--exclude-tools");
+      const selectedTools = configured[toolArgs + 1].split(",");
+      const selectedExclusions =
+        excludeArgs < 0 ? undefined : configured[excludeArgs + 1].split(",");
+      const expectedOutput = explicitlySelected
+        ? "MCP_TOOL_ALLOWED"
+        : "MCP_TOOL_BLOCKED";
+      const code = explicitlySelected
+        ? 'const matches = await searchTools("restricted probe tool"); if (!matches.some((tool) => tool.name === "mcp__probe__secret")) throw new Error("explicitly selected MCP tool was not discoverable"); const result = await tools.mcp__probe__secret({}); if (!result.content.some((part) => part.text === "MCP_SECRET_TOOL_CALLED")) throw new Error("explicitly selected MCP tool did not execute"); text("MCP_TOOL_ALLOWED");'
+        : 'const matches = await searchTools("restricted probe tool"); if (matches.some((tool) => tool.name === "mcp__probe__secret")) throw new Error("unselected MCP tool was discoverable"); let blocked = false; try { await tools.mcp__probe__secret({}); } catch { blocked = true; } if (!blocked) throw new Error("unselected MCP tool was callable"); text("MCP_TOOL_BLOCKED");';
+      const requests: any[][] = [];
+      faux.setResponses([
+        (context) => {
+          requests.push(context.messages as any[]);
+          assert.ok(
+            getCurrentTools(context.messages).some(
+              (tool) => tool.name === "codemode",
+            ),
+          );
+          return fauxAssistantMessage([fauxToolCall("codemode", { code })], {
+            stopReason: "toolUse",
+          });
+        },
+        (context) => {
+          requests.push(context.messages as any[]);
+          return fauxAssistantMessage("MCP_CODEMODE_PROBE_OK");
+        },
+      ]);
+      const { session } = await createAgentSession({
+        cwd: root,
+        agentDir: root,
+        modelRuntime,
+        model: faux.getModel()!,
+        settingsManager,
+        resourceLoader,
+        sessionManager: SessionManager.inMemory(root),
+        noTools: "all",
+        tools: selectedTools,
+        excludeTools: selectedExclusions,
+      });
+      try {
+        await session.bindExtensions({});
+        assert.ok(session.getActiveToolNames().includes("codemode"));
+        await session.prompt("Probe registered MCP access through Code Mode.");
+        const toolResult = requests[1]?.find(
+          (message) =>
+            message.role === "toolResult" && message.toolName === "codemode",
+        );
+        assert.ok(toolResult, JSON.stringify(requests));
+        assert.equal(toolResult.isError, false, JSON.stringify(toolResult));
+        assert.match(
+          JSON.stringify(toolResult.content),
+          new RegExp(expectedOutput),
+          JSON.stringify(toolResult.content),
+        );
+      } finally {
+        await session.dispose();
+      }
+      assert.equal(mcpServerReady, 1);
+      assert.equal(mcpToolCalls, explicitlySelected ? 1 : 0);
+    };
+
+    await runProbe(["+codemode", "+mcp__probe__secret"]);
+    await runProbe(["+codemode"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("managed launch policy always includes await_owner and attach_handoff", () => {
