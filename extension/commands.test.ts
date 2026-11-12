@@ -17279,6 +17279,7 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
     contextAbort.abort();
     runtime.stopPeriodic();
   });
+  t.mock.timers.enable({ apis: ["setInterval"] });
   runtime.startPeriodic(ctx);
   await runtime.refresh(ctx);
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -18069,6 +18070,9 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
     "an incompatible Manager generation change during agent get must not focus",
   );
   assert.equal(currentRole, "chief", "nested navigation remains observational");
+
+  runtime.stopPeriodic();
+  t.mock.timers.reset();
 
   const originalSetInterval = globalThis.setInterval;
   const originalClearInterval = globalThis.clearInterval;
