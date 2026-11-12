@@ -2,6 +2,7 @@
 // Disposable, explicitly owned Docker fixture for the real peer-federation smoke.
 // Run with `node scripts/peer-federation-smoke.mjs`; set PEER_SMOKE_KEEP=1 to
 // retain resources for diagnosis (the printed manifest is the cleanup authority).
+import assert from "node:assert/strict";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -69,10 +70,11 @@ const stage = (name, details = {}) => {
   console.log(`[peer-smoke-stage] ${JSON.stringify(resources.stages.at(-1))}`);
 };
 
-function command(bin, args, { allowFailure = false, input } = {}) {
+function command(bin, args, { allowFailure = false, input, timeout } = {}) {
   const result = spawnSync(bin, args, {
     encoding: "utf8",
     input,
+    timeout,
     stdio: [input ? "pipe" : "ignore", "pipe", "pipe"],
   });
   if (result.error || (!allowFailure && result.status !== 0))
@@ -92,6 +94,116 @@ function sanitizeStartupDiagnostics(value) {
     .replace(/(?:\/[\w.@+-]+){2,}/gu, "[path]");
   return Buffer.from(sanitized).subarray(0, 2048).toString("utf8");
 }
+
+function managerAuthorityStatus(probe, expected) {
+  if (
+    !probe ||
+    typeof probe.dataRoot !== "string" ||
+    !Array.isArray(probe.peers) ||
+    probe.peers.some(
+      (peer) =>
+        !peer ||
+        typeof peer.role !== "string" ||
+        typeof peer.piSessionId !== "string" ||
+        typeof peer.paneId !== "string" ||
+        typeof peer.workspaceId !== "string" ||
+        (peer.claim !== undefined &&
+          (!peer.claim || typeof peer.claim.id !== "string")),
+    )
+  )
+    return "invalid-probe-response";
+  if (probe.dataRoot !== expected.dataRoot) return "wrong-data-root";
+  const matches = probe.peers.filter(
+    (peer) =>
+      peer.role === "manager" && peer.piSessionId === expected.sessionId,
+  );
+  if (matches.length > 1) return "ambiguous-manager-records";
+  if (matches.length === 0) return "manager-record-absent";
+  const [peer] = matches;
+  return peer.paneId === expected.paneId &&
+    peer.workspaceId === expected.workspaceId &&
+    peer.claim?.id
+    ? "established"
+    : "manager-identity-mismatch";
+}
+
+function managerReplyCompletion(entries, progressId, finalId) {
+  const progressIndex = entries.findIndex(
+    (entry) =>
+      entry.type === "custom_message" &&
+      entry.customType === "pi-herdsman-peer_message" &&
+      entry.details?.id === progressId &&
+      entry.content.includes("PEER_E2E_REPLY_PROGRESS"),
+  );
+  const finalIndex = entries.findIndex(
+    (entry) =>
+      entry.type === "custom_message" &&
+      entry.customType === "pi-herdsman-peer_message" &&
+      entry.details?.id === finalId &&
+      entry.content.includes("PEER_E2E_REPLY_FINAL"),
+  );
+  const finalReceived = finalIndex >= 0;
+  return {
+    progressReceived: progressIndex >= 0,
+    finalReceived,
+    assistantCompleted:
+      finalReceived &&
+      entries
+        .slice(finalIndex + 1)
+        .some(
+          (entry) =>
+            entry.type === "message" &&
+            entry.message?.role === "assistant" &&
+            entry.message.content?.some(
+              (part) =>
+                part.type === "text" &&
+                part.text?.includes("PEER_E2E_A_RECEIVED_REPLY"),
+            ),
+        ),
+  };
+}
+
+const expectedManager = {
+  dataRoot: "/fixture",
+  sessionId: "session",
+  paneId: "pane",
+  workspaceId: "workspace",
+};
+const managerRecord = {
+  role: "manager",
+  piSessionId: "session",
+  paneId: "pane",
+  workspaceId: "workspace",
+  claim: { id: "claim" },
+};
+for (const [probe, expectedStatus] of [
+  [{ dataRoot: "/fixture", peers: [] }, "manager-record-absent"],
+  [
+    { dataRoot: "/fixture", peers: [{ ...managerRecord, paneId: "other" }] },
+    "manager-identity-mismatch",
+  ],
+])
+  assert.equal(managerAuthorityStatus(probe, expectedManager), expectedStatus);
+assert.deepEqual(
+  managerReplyCompletion(
+    [
+      ["progress-id", "PEER_E2E_REPLY_PROGRESS"],
+      ["final-id", "PEER_E2E_REPLY_FINAL"],
+    ].map(([id, content]) => ({
+      type: "custom_message",
+      customType: "pi-herdsman-peer_message",
+      details: { id },
+      content,
+    })),
+    "progress-id",
+    "final-id",
+  ),
+  {
+    progressReceived: true,
+    finalReceived: true,
+    assistantCompleted: false,
+  },
+);
 
 function cleanup() {
   const inspectResource = (kind, id) => {
@@ -903,18 +1015,22 @@ try {
     save();
   }
 
-  const herdr = (side, args) =>
-    command("docker", [
-      "exec",
-      "--user",
-      "herdsman",
-      ...herdrEnv(side),
-      resources[side].container,
-      "herdr",
-      "--session",
-      resources[side].herdrSession,
-      ...args,
-    ]);
+  const herdr = (side, args, options) =>
+    command(
+      "docker",
+      [
+        "exec",
+        "--user",
+        "herdsman",
+        ...herdrEnv(side),
+        resources[side].container,
+        "herdr",
+        "--session",
+        resources[side].herdrSession,
+        ...args,
+      ],
+      options,
+    );
   const startPeerPi = (side, pane, role) => {
     try {
       herdr(side, [
@@ -1039,44 +1155,50 @@ try {
       ["--user", "herdsman"],
     );
     startPeerPi(side, pane, "manager");
-    herdr(side, ["pane", "send-text", pane, "/manager"]);
-    herdr(side, ["pane", "send-keys", pane, "Enter"]);
-    try {
-      herdr(side, [
-        "pane",
-        "wait-output",
-        pane,
-        "--match",
-        "Manager mode active.",
-        "--timeout",
-        "45000",
-      ]);
-    } catch (error) {
-      const diag = spawnSync(
-        "docker",
-        [
-          "exec",
-          "--user",
-          "herdsman",
-          ...herdrEnv(side),
-          resources[side].container,
-          "herdr",
-          "--session",
-          resources[side].herdrSession,
-          "pane",
-          "read",
-          pane,
-          "--source",
-          "recent",
-          "--lines",
-          "100",
-        ],
-        { encoding: "utf8" },
-      );
+    const submission = JSON.parse(
+      herdr(side, ["agent", "prompt", pane, "/manager"], { timeout: 30_000 }),
+    );
+    const sessionFile = submission.result?.agent?.agent_session?.value;
+    const sessionId =
+      typeof sessionFile === "string"
+        ? sessionFile.match(/_([0-9a-f-]{36})\.jsonl$/u)?.[1]
+        : undefined;
+    if (!sessionId)
       throw new Error(
-        `${side}: Manager activation failed; pane=${pane}; output=${diag.stdout}; error=${error.message}`,
+        `${side}: Manager activation omitted exact Pi session identity`,
       );
+    resources[side].managerSessionFile = sessionFile;
+    const expectedRoot = `${resources[side].runtime.piAgentDir}/pi-herdsman`;
+    const deadline = Date.now() + 45_000;
+    let authority = "absent";
+    let activated = false;
+    while (Date.now() < deadline) {
+      const probe = JSON.parse(
+        exec(
+          side,
+          ["pi-herdsman-peer", "probe"],
+          ["--user", "herdsman", ...herdrEnv(side)],
+        ),
+      );
+      authority = managerAuthorityStatus(probe, {
+        dataRoot: expectedRoot,
+        sessionId,
+        paneId: pane,
+        workspaceId: resources[side].workspaceId,
+      });
+      if (authority === "invalid-probe-response")
+        throw new Error(`${side}: invalid Manager authority probe response`);
+      if (authority === "established") {
+        activated = true;
+        break;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
     }
+    if (!activated)
+      throw new Error(
+        `${side}: exact Manager authority not established (${authority})`,
+      );
+    resources[side].managerSessionId = sessionId;
     resources[side].managerActivated = true;
     save();
   }
@@ -3099,15 +3221,46 @@ try {
   resources.a.recoveredOriginGeneration = resumedManager.claim.id;
   resources.a.staleGenerationRejected = true;
   save();
-  const replyCompletion = herdr("a", [
-    "pane",
-    "wait-output",
-    resources.a.paneId,
-    "--match",
-    "PEER_E2E_A_RECEIVED_REPLY",
-    "--timeout",
-    "240000",
-  ]);
+  const expectedProgressReply = correspondence.replies[0].id;
+  const expectedFinalReply = correspondence.replies[1].id;
+  const readManagerSession = () => {
+    const session = exec("a", ["cat", resources.a.managerSessionFile]);
+    const lines = session.split("\n");
+    if (session.endsWith("\n")) lines.pop();
+    return lines.flatMap((line, index) => {
+      try {
+        return [JSON.parse(line)];
+      } catch (error) {
+        if (index === lines.length - 1 && !session.endsWith("\n")) return [];
+        throw error;
+      }
+    });
+  };
+  const replyDeadline = Date.now() + 240_000;
+  let aReplyEntries = [];
+  let progressReceived = false;
+  let finalReceived = false;
+  let assistantCompleted = false;
+  while (Date.now() < replyDeadline) {
+    aReplyEntries = readManagerSession();
+    ({ progressReceived, finalReceived, assistantCompleted } =
+      managerReplyCompletion(
+        aReplyEntries,
+        expectedProgressReply,
+        expectedFinalReply,
+      ));
+    if (progressReceived && finalReceived && assistantCompleted) break;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+  }
+  if (!progressReceived || !finalReceived || !assistantCompleted)
+    throw new Error(
+      `Manager reply incomplete: progress=${progressReceived}, final=${finalReceived}, assistant=${assistantCompleted}`,
+    );
+  const replyCompletion = {
+    progressReceived,
+    finalReceived,
+    assistantCompleted,
+  };
   const autoRecovery = JSON.parse(
     exec("a", [
       "cat",
@@ -3130,10 +3283,7 @@ try {
     "--lines",
     "240",
   ]);
-  const aReplyEntries = exec("a", ["cat", resources.a.managerSessionFile])
-    .split("\n")
-    .filter(Boolean)
-    .map(JSON.parse)
+  aReplyEntries = aReplyEntries
     .filter((entry) =>
       /PEER_E2E_REPLY|researcher#1|canonical|peer_message/iu.test(
         JSON.stringify(entry),
@@ -3343,7 +3493,7 @@ try {
   save();
 
   console.log(
-    `Fixture acceptance evidence: ${JSON.stringify({ runId, image: resources.image, network: resources.network, containers: resources.containers, volumes: resources.volumes, messageId: resources.acceptanceMessageId, replyId: resources.replyId, managers: { recipientBeforeRestart: resources.a.remoteProbe, recipientRecoveredSession: resources.b.recoveredSession, recipientRecoveredGeneration: resources.b.recoveredGeneration, originBeforeRestart: resources.b.remoteProbe, originRecoveredSession: resources.a.recoveredOriginSession, originRecoveredGeneration: resources.a.recoveredOriginGeneration }, evidence: resources.evidence, assertions: { duplicateAcceptance: resources.duplicateAcceptance, replyRetries: resources.replyRetryAssertions, sameExactSessionRecovery: resources.b.recoveredSession === resources.a.remoteProbe.session, generationChanged: resources.b.recoveredGeneration !== resources.a.remoteProbe.generation, finalReplyCompletion: resources.exchange.replyCompletionMarker, disconnectedAndReconnected: resources.exchange.disconnectedAndReconnected, replacementRejected: resources.b.replacementRejected !== undefined }, replyCompletion: replyCompletion.slice(-300) })}`,
+    `Fixture acceptance evidence: ${JSON.stringify({ runId, image: resources.image, network: resources.network, containers: resources.containers, volumes: resources.volumes, messageId: resources.acceptanceMessageId, replyId: resources.replyId, managers: { recipientBeforeRestart: resources.a.remoteProbe, recipientRecoveredSession: resources.b.recoveredSession, recipientRecoveredGeneration: resources.b.recoveredGeneration, originBeforeRestart: resources.b.remoteProbe, originRecoveredSession: resources.a.recoveredOriginSession, originRecoveredGeneration: resources.a.recoveredOriginGeneration }, evidence: resources.evidence, assertions: { duplicateAcceptance: resources.duplicateAcceptance, replyRetries: resources.replyRetryAssertions, sameExactSessionRecovery: resources.b.recoveredSession === resources.a.remoteProbe.session, generationChanged: resources.b.recoveredGeneration !== resources.a.remoteProbe.generation, finalReplyCompletion: resources.exchange.replyCompletionMarker, disconnectedAndReconnected: resources.exchange.disconnectedAndReconnected, replacementRejected: resources.b.replacementRejected !== undefined }, replyCompletion })}`,
   );
   if (process.env.PEER_SMOKE_KEEP === "1")
     console.log(`Retained exact resource manifest: ${manifestPath}`);
