@@ -1023,6 +1023,15 @@ export function decide(model, context) {
       )
     )
       return fauxAssistantMessage("PEER_E2E_A_LEAD_REPLY_RECEIVED");
+    if (
+      messages.some(
+        (message) =>
+          message.type === "custom_message" &&
+          message.customType === "pi-herdsman-peer_message" &&
+          text(message).includes("PEER_E2E_SINGLE_REPLY"),
+      )
+    )
+      return fauxAssistantMessage("PEER_E2E_A_SINGLE_REPLIED");
     if (prompt.includes("PEER_E2E_A_SINGLE_SEND")) {
       const listed = correlatedCall(messages, "list_peers");
       if (!listed) return call("list_peers", {});
@@ -1270,14 +1279,25 @@ export function decide(model, context) {
       });
       return fauxAssistantMessage("PEER_E2E_B_CAPTURED");
     }
-    if (
-      messages.some(
-        (message) =>
-          message.role === "user" &&
-          text(message).includes("PEER_E2E_SINGLE_REQUEST"),
-      )
-    )
-      return fauxAssistantMessage("PEER_E2E_B_SINGLE_RECEIVED");
+    const singleRequest = messages.find(
+      (message) =>
+        (message.role === "user" || message.type === "custom_message") &&
+        text(message).includes("PEER_E2E_SINGLE_REQUEST"),
+    );
+    if (singleRequest) {
+      const origin = text(singleRequest).match(
+        /Peer message from (manager:[0-9a-hjkmnp-tv-z]{10}):/u,
+      )?.[1];
+      if (!origin) throw new Error("Missing origin Manager");
+      const reply = correlatedCall(currentTurn(messages), "message_peer");
+      if (!reply)
+        return call("message_peer", {
+          target: origin,
+          message: "PEER_E2E_SINGLE_REPLY",
+        });
+      if (reply.result.isError) throw new Error("Manager reply failed");
+      return fauxAssistantMessage("PEER_E2E_B_SINGLE_REPLIED");
+    }
     const inbounds = messages.filter(
       (message) =>
         (message.role === "user" || message.type === "custom_message") &&
@@ -1286,12 +1306,6 @@ export function decide(model, context) {
     const inbound =
       inbounds.find((message) => forwardableRefs(message).length >= 2) ??
       inbounds[0];
-    if (
-      inbounds.some((message) =>
-        text(message).includes("PEER_E2E_SINGLE_REQUEST"),
-      )
-    )
-      return fauxAssistantMessage("PEER_E2E_B_SINGLE_RECEIVED");
     const origin = text(inbound).match(
       /Peer message from (manager:[0-9a-hjkmnp-tv-z]{10}):/u,
     )?.[1];
@@ -1561,8 +1575,43 @@ export function waitForContinuationObservation(directory, signal) {
 export default function install(pi) {
   let terminalErrorRequests = 0;
   let sessionId;
+  const logPeerCoreLifecycle = (event) => {
+    if (process.env.PEER_FEDERATION_CORE_DIAGNOSTICS !== "1") return;
+    appendFileSync(
+      join(
+        process.env.PI_CODING_AGENT_DIR,
+        "pi-herdsman",
+        "runtime",
+        "peer-core-lifecycle.jsonl",
+      ),
+      `${JSON.stringify({
+        at: new Date().toISOString(),
+        sessionId,
+        ...event,
+      })}\n`,
+    );
+  };
   let peerImportedBindingVisible = false;
   const recordedSessions = new Set();
+  if (process.env.PEER_FEDERATION_CORE_DIAGNOSTICS === "1") {
+    pi.on("before_agent_start", (event) => {
+      logPeerCoreLifecycle({
+        event: "before_agent_start",
+        messageType: event.messageType,
+        customType:
+          event.messageType === "custom"
+            ? event.message?.customType
+            : undefined,
+      });
+    });
+    pi.on("agent_settled", (event, context) => {
+      logPeerCoreLifecycle({
+        event: "agent_settled",
+        aborted: event.aborted === true,
+        errored: Boolean(event.error ?? context.error),
+      });
+    });
+  }
   if (process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS === "1") {
     pi.on("before_agent_start", (event, context) => {
       const message =
@@ -1596,6 +1645,11 @@ export default function install(pi) {
   });
   function response(context, _options, _state, model) {
     faux.appendResponses([response]);
+    logPeerCoreLifecycle({
+      event: "faux_provider_invocation",
+      model: model.id,
+      messageCount: context.messages.length,
+    });
     const currentSessionId = sessionId;
     if (typeof currentSessionId !== "string" || !currentSessionId)
       throw new Error("Faux provider request has no Pi session identity");
