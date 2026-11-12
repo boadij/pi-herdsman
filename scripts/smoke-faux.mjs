@@ -708,12 +708,20 @@ function agentCrashRecoveryDecision(model, context) {
       );
     }
     if (postRestart) {
-      const list = correlatedCall(messages, "list_agents");
+      const list = correlatedCall(
+        messages.slice(messages.indexOf(postRestart)),
+        "list_agents",
+      );
       if (!list) return call("list_agents", {});
       const parent = list.result?.details?.agents?.find(
         (agent) =>
           (agent.label ?? agent.agent_label ?? agent.agent) ===
           "smoke-crash-parent",
+      );
+      const target = list.result?.details?.agents?.find(
+        (agent) =>
+          (agent.label ?? agent.agent_label ?? agent.agent) ===
+          "smoke-crash-target",
       );
       if (parent?.available_tools?.includes("steer_agent")) {
         const steerCall = messages
@@ -752,17 +760,42 @@ function agentCrashRecoveryDecision(model, context) {
         "stop_agent",
         "smoke-crash-target",
       );
-      if (!closed) return call("stop_agent", { agent: "smoke-crash-target" });
+      const settledPrompt = messages.find(
+        (message) =>
+          message.role === "user" &&
+          text(message).startsWith(
+            "PI_HERDSMAN_CRASH_RECOVERY_SETTLED_CONTINUE ",
+          ),
+      );
+      const stopAuthorization = messages.find(
+        (message) =>
+          message.role === "user" &&
+          text(message) ===
+            `PI_HERDSMAN_CRASH_RECOVERY_STOP_EXACT ${target?.pi_session_path}`,
+      );
+      if (!closed && !settledPrompt && stopAuthorization) {
+        if (!target?.available_tools?.includes("stop_agent"))
+          throw new Error("Authorized crash-recovery target is not stoppable");
+        return call("stop_agent", { agent: "smoke-crash-target" });
+      }
+      if (!closed && !settledPrompt)
+        return waitForResult(
+          "Waiting for the harness to authorize exact-target recovery.",
+        );
       const continuePrompt = messages.find(
         (message) =>
           message.role === "user" &&
           text(message).includes("PI_HERDSMAN_CRASH_RECOVERY_CONTINUE"),
       );
-      if (!continuePrompt)
+      if (!settledPrompt && !continuePrompt)
         return fauxAssistantMessage("PI_HERDSMAN_CRASH_RECOVERY_CLOSED");
-      const session = closed.result?.details?.closed_assignment?.session_path;
+      const session = settledPrompt
+        ? text(settledPrompt).slice(
+            "PI_HERDSMAN_CRASH_RECOVERY_SETTLED_CONTINUE ".length,
+          )
+        : closed.result?.details?.closed_assignment?.session_path;
       if (!session)
-        throw new Error("Restart prompt omitted exact target session path");
+        throw new Error("Crash recovery omitted exact target session path");
       const continued = correlatedCall(messages, "continue_agent");
       if (!continued)
         return call("continue_agent", {
@@ -1807,15 +1840,6 @@ export default function install(pi) {
       return waitForSmokeObservation(
         join(process.env.PI_CODING_AGENT_DIR, "pi-herdsman", "runtime"),
         "crash-target-release",
-        _options?.signal,
-      ).then(() => answer);
-    if (
-      model.id === "agent-crash-target" &&
-      text(lastUser(context.messages)).includes("SMOKE_CRASH_CONTINUE:")
-    )
-      return waitForSmokeObservation(
-        join(process.env.PI_CODING_AGENT_DIR, "pi-herdsman", "runtime"),
-        "crash-continuation-release",
         _options?.signal,
       ).then(() => answer);
     if (

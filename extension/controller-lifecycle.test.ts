@@ -15041,6 +15041,261 @@ test("ordinary unscoped accepted session continues after mailbox cleanup", async
   }
 });
 
+async function continueAfterTerminalResult(
+  physical:
+    | "pane_not_found"
+    | "settled_shell"
+    | "active"
+    | "incomplete"
+    | "active_saved"
+    | "newer_request",
+): Promise<void> {
+  setLeadEnvironment();
+  const name = `terminal-live-${randomUUID().slice(0, 8)}`;
+  const sessionId = DEFAULT_PI_SESSION_ID;
+  const sessionPath = join(PI_AGENT_ROOT, `${name}-session.jsonl`);
+  const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
+  const promptPath = join(PI_AGENT_ROOT, `${name}-prompt.md`);
+  const requestId = randomUUID();
+  const state = managedState(name);
+  const savedMailbox = agentMailboxPath(WORKSPACE, name);
+  const session = {
+    id: sessionId,
+    path: sessionPath,
+    cwd: "/tmp",
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId, definition: name, label: name },
+      },
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-required-evidence",
+        data: {
+          version: 1,
+          sessionId,
+          requestId,
+          runId: state.runId,
+          ownerSessionId: state.ownerSessionId,
+          workspaceId: state.workspaceId,
+          agentLabel: name,
+          paneId: state.paneId,
+          inheritedEvidence: [],
+          localEvidence: [],
+        },
+      },
+    ],
+  };
+  const liveAgent = {
+    ...agentFromState(state),
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "path",
+      value: sessionPath,
+    },
+  };
+  const history = [
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "delegate_agent",
+        details: {
+          ok: true,
+          owner_session_id: state.ownerSessionId,
+          session_id: sessionId,
+          session_path: sessionPath,
+          request_id: requestId,
+          agent: name,
+          definition: name,
+        },
+      },
+    },
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-result",
+      details: {
+        ownerSessionId: state.ownerSessionId,
+        piSessionId: sessionId,
+        piSessionFile: sessionPath,
+        runId: state.runId,
+        requestId,
+        agentLabel: name,
+        agentDefinition: name,
+        workspaceId: state.workspaceId,
+        paneId: state.paneId,
+        status: "failed",
+        error: { code: "aborted", message: "Agent execution was cancelled" },
+      },
+    },
+  ];
+  if (physical === "newer_request")
+    history.push({
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "continue_agent",
+        details: {
+          ok: true,
+          owner_session_id: state.ownerSessionId,
+          session_id: sessionId,
+          session_path: sessionPath,
+          request_id: randomUUID(),
+          agent: name,
+          definition: name,
+        },
+      },
+    });
+  writeValidPiSessionFile(session);
+  realFs.writeFileSync(promptPath, "saved prompt", "utf8");
+  writePromptDefinition(definitionPath, name, promptPath);
+  nativeSessions.set(sessionId, session);
+  resetAgentMailbox(savedMailbox);
+  const startup = startupExecutor(name, () => sessionId);
+  let paneObservations = 0;
+  const pi = fakePi({
+    exec: (command, args, options) => {
+      if (command === "herdr" && isApiSnapshot(args))
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              snapshot: { agents: [liveAgent], panes: [], workspaces: [] },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (
+        command === "herdr" &&
+        args[0] === "pane" &&
+        args[1] === "process-info" &&
+        paneObservations++ === 0
+      ) {
+        if (physical === "active")
+          return {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                process_info: {
+                  pane_id: state.paneId,
+                  shell_pid: 123,
+                  foreground_processes: [
+                    { pid: 123, argv0: "/bin/zsh" },
+                    { pid: 456, argv0: "/usr/local/bin/pi" },
+                  ],
+                },
+              },
+            }),
+            stderr: "",
+            code: 0,
+          };
+        if (physical === "settled_shell")
+          return {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                process_info: {
+                  pane_id: state.paneId,
+                  shell_pid: 123,
+                  foreground_processes: [{ pid: 123, argv0: "/bin/zsh" }],
+                },
+              },
+            }),
+            stderr: "",
+            code: 0,
+          };
+        if (physical === "incomplete")
+          return {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                process_info: { pane_id: state.paneId, shell_pid: 123 },
+              },
+            }),
+            stderr: "",
+            code: 0,
+          };
+        return {
+          stdout: JSON.stringify({
+            id: "cli:pane:process_info",
+            error: { code: "pane_not_found", message: "pane not found" },
+          }),
+          stderr: "",
+          code: 1,
+        };
+      }
+      return startup.exec(command, args, options);
+    },
+  });
+  pi.entries.push(...history);
+  registerExtension!(pi.pi as never);
+  seedLeadRole(fakeContext(pi.entries));
+  await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
+  try {
+    if (physical === "active_saved")
+      writeAgentState(savedMailbox, {
+        ...state,
+        piSessionId: sessionId,
+        piSessionFile: sessionPath,
+        activeRequestId: randomUUID(),
+      });
+    const matchingSavedStates = listAgentStates().filter(
+      ({ state: saved }) =>
+        saved.piSessionId === sessionId || saved.piSessionFile === sessionPath,
+    );
+    assert.equal(
+      matchingSavedStates.length,
+      physical === "active_saved" ? 1 : 0,
+    );
+    if (physical === "active_saved")
+      assert.ok(matchingSavedStates[0]!.state.activeRequestId);
+    const result = await registeredAgentTool(pi, "continue").execute(
+      "terminal-live",
+      { session: sessionPath, task: "continue after terminal result" },
+      undefined,
+      undefined,
+      fakeContext(pi.entries),
+    );
+    assert.equal(
+      result.details.ok,
+      (physical === "pane_not_found" || physical === "settled_shell") &&
+        physical !== "active_saved",
+      JSON.stringify(result.details),
+    );
+    if (physical === "pane_not_found" || physical === "settled_shell")
+      assert.equal(result.details.session_id, sessionId);
+    else if (physical === "active" || physical === "incomplete")
+      assert.equal(result.details.error?.category, "agent_busy");
+    else assert.equal(result.details.ok, false);
+    assert.equal(
+      pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
+      (physical === "pane_not_found" || physical === "settled_shell") &&
+        physical !== "active_saved",
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    nativeSessions.delete(sessionId);
+    resetAgentMailbox(startup.mailbox);
+    resetAgentMailbox(savedMailbox);
+    realFs.rmSync(sessionPath, { force: true });
+    realFs.rmSync(definitionPath, { force: true });
+    realFs.rmSync(promptPath, { force: true });
+  }
+}
+
+test("terminal result excludes only an exact Herdr record with proven physical absence", async () => {
+  await continueAfterTerminalResult("pane_not_found");
+  await continueAfterTerminalResult("settled_shell");
+  await continueAfterTerminalResult("active");
+  await continueAfterTerminalResult("incomplete");
+  await continueAfterTerminalResult("active_saved");
+  await continueAfterTerminalResult("newer_request");
+});
+
 test("session continuation ignores an unrelated missing live session path", async () => {
   setLeadEnvironment();
   const name = `stale-live-resume-${randomUUID().slice(0, 8)}`;

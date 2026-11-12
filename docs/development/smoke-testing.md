@@ -81,15 +81,16 @@ provider accepts only expected transcript states and requires actual correlated
 tool results before producing completion responses. It cannot produce
 successful tool results or directly mutate Herdsman or Herdr state. The
 simulated-only scenarios use real Pi, Herdsman, and Herdr; they do not replace
-live-model acceptance. `agent-crash-recovery` fully stops and restarts its
-generated named Herdr server, reopens the exact owner Pi session, and verifies
-that the restored pending-child parent remains `blocked`. If that live parent
-advertises `steer_agent`, the scripted owner tries it once and the scenario
-requires the receiverless request to be rejected; listing the tool alone does
-not prove receiver readiness. It then persists a successful close tool result
-and continues the exact saved target session as a new generation. Model
-decisions are scripted; the process/server lifecycle and controller tools are
-real. The scenario never uses the default Herdr server.
+live-model acceptance. `agent-crash-recovery` restarts its isolated Herdr server
+and reopens the exact owner session with its pending-child parent safely
+blocked or unknown. It resolves the original target through an exact persisted aborted
+result or one authorized stop receipt, then waits read-only for the persisted
+acknowledgment/absence of active work and physical quiescence before one exact
+session continuation. It verifies one correlated completed result and fails
+closed on incomplete state or process evidence. An advertised receiverless
+parent steer is attempted once and must be rejected. The process/server
+lifecycle and controller tools are real; the scenario never uses the default
+Herdr server.
 Simulated runs do not require model credentials or inference, but retain runtime
 compatibility checks, build, isolation, Herdr setup, and cleanup. They are
 integration checks, not replacements for real-model acceptance.

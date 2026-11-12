@@ -97,6 +97,8 @@ import {
   managerBootstrapDelegationProjection,
   managerBootstrapDelegationState,
   herdrErrorCode,
+  classifyOldExecution,
+  latestPostRestartListAgentsResult,
   managerDiagnosticLines,
   captureManagerLeadDiagnostics,
   savedSessionHeaderEvidence,
@@ -844,6 +846,41 @@ test("core failure retains bounded process observation without raw errors", () =
     correlation: null,
   });
   assert.doesNotMatch(JSON.stringify(evidence), /PRIVATE/);
+});
+
+test("crash-recovery failure evidence bounds continuation category and recovery path", () => {
+  const evidence = sanitizedFailureEvidence(
+    {
+      scenario: "agent-crash-recovery",
+      crashRecovery: {
+        recoveryPath: "explicit-stop",
+        continueAgentRejectionCategory: "agent_busy",
+      },
+    },
+    null,
+    "SCENARIO_FAIL",
+    "PASS",
+  );
+  assert.deepEqual(evidence.crashRecovery, {
+    recoveryPath: "explicit-stop",
+    continueAgentRejectionCategory: "agent_busy",
+  });
+  const rejected = sanitizedFailureEvidence(
+    {
+      scenario: "agent-crash-recovery",
+      crashRecovery: {
+        recoveryPath: "unexpected-value",
+        continueAgentRejectionCategory: "sensitive raw error text",
+      },
+    },
+    null,
+    "SCENARIO_FAIL",
+    "PASS",
+  );
+  assert.deepEqual(rejected.crashRecovery, {
+    recoveryPath: "unknown",
+    continueAgentRejectionCategory: "unknown",
+  });
 });
 
 test("core correlation summary retains bounded membership and match counts without session IDs", () => {
@@ -5462,17 +5499,13 @@ test("supervisor completion harness accepts semantic and exact-session headers o
   );
 });
 
-test("crash-recovery probes an advertised waiting-parent steer and requires rejection", () => {
+test("crash recovery faux performs only authorized stop or settled continuation", () => {
+  const session = "/saved/target.jsonl";
   const messages = [
-    {
-      role: "user",
-      content: "PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART",
-    },
+    { role: "user", content: "PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART" },
     {
       role: "assistant",
-      content: [
-        { type: "toolCall", id: "list", name: "list_agents", arguments: {} },
-      ],
+      content: [{ type: "toolCall", id: "list", name: "list_agents" }],
     },
     {
       role: "toolResult",
@@ -5481,116 +5514,192 @@ test("crash-recovery probes an advertised waiting-parent steer and requires reje
       isError: false,
       details: {
         agents: [
+          { label: "smoke-crash-parent", available_tools: ["steer_agent"] },
           {
-            label: "smoke-crash-parent",
-            available_tools: ["steer_agent"],
+            label: "smoke-crash-target",
+            available_tools: ["stop_agent"],
+            pi_session_path: session,
           },
         ],
       },
     },
   ];
-  const steer = decideSmokeFaux("agent-crash-root", { messages });
-  assert.equal(firstToolCall(steer).name, "steer_agent");
-  const steerCallId = firstToolCall(steer).id;
-  const steerResult = {
-    role: "toolResult",
-    toolName: "steer_agent",
-    toolCallId: steerCallId,
-    isError: false,
-    details: { ok: false, error: { category: "agent_busy" } },
+  const decide = (messages: any[]) =>
+    decideSmokeFaux("agent-crash-root", { messages });
+  const steer = firstToolCall(decide(messages));
+  assert.equal(steer.name, "steer_agent");
+  const pendingSteer = decide([
+    ...messages,
+    { role: "assistant", content: [steer] },
+  ]);
+  assert.match(
+    firstTextContent(pendingSteer).text,
+    /Waiting for steer acknowledgement outcome/,
+  );
+  const afterSteer = [
+    ...messages,
+    { role: "assistant", content: [steer] },
+    {
+      role: "toolResult",
+      toolName: "steer_agent",
+      toolCallId: steer.id,
+      isError: false,
+      details: { ok: false, error: { category: "agent_busy" } },
+    },
+  ];
+  const unverified = decide(afterSteer);
+  assert.match(
+    firstTextContent(unverified).text,
+    /Waiting for the harness to authorize exact-target recovery/,
+  );
+  assert.equal(
+    unverified.content.some((part) => part.type === "toolCall"),
+    false,
+  );
+  const settled = decide([
+    ...afterSteer,
+    {
+      role: "user",
+      content: `PI_HERDSMAN_CRASH_RECOVERY_STOP_EXACT ${session}`,
+    },
+    {
+      role: "user",
+      content: `PI_HERDSMAN_CRASH_RECOVERY_SETTLED_CONTINUE ${session}`,
+    },
+  ]);
+  assert.equal(firstToolCall(settled).name, "continue_agent");
+  assert.equal(firstToolCall(settled).arguments.session, session);
+  assert.equal(
+    settled.content.some(
+      (part) => part.type === "toolCall" && part.name === "stop_agent",
+    ),
+    false,
+  );
+  const stop = decide([
+    ...afterSteer,
+    {
+      role: "user",
+      content: `PI_HERDSMAN_CRASH_RECOVERY_STOP_EXACT ${session}`,
+    },
+  ]);
+  assert.equal(firstToolCall(stop).name, "stop_agent");
+  const closed = [
+    ...afterSteer,
+    {
+      role: "user",
+      content: `PI_HERDSMAN_CRASH_RECOVERY_STOP_EXACT ${session}`,
+    },
+    { role: "assistant", content: [firstToolCall(stop)] },
+    {
+      role: "toolResult",
+      toolName: "stop_agent",
+      toolCallId: firstToolCall(stop).id,
+      isError: false,
+      details: { closed_assignment: { session_path: session } },
+    },
+  ];
+  assert.equal(
+    firstTextContent(decide(closed)).text,
+    "PI_HERDSMAN_CRASH_RECOVERY_CLOSED",
+  );
+  const prompt = {
+    role: "user",
+    content: "PI_HERDSMAN_CRASH_RECOVERY_CONTINUE",
   };
-  const stopped = decideSmokeFaux("agent-crash-root", {
-    messages: [...messages, steer, steerResult],
-  });
-  assert.equal(firstToolCall(stopped).name, "stop_agent");
-});
-
-test("crash-recovery accepts only the resumed target's marked completion", () => {
-  const prefix = [
+  const resumed = decide([...closed, prompt]);
+  assert.equal(firstToolCall(resumed).name, "continue_agent");
+  assert.equal(firstToolCall(resumed).arguments.session, session);
+  const call = firstToolCall(resumed);
+  const continuationResult = {
+    role: "toolResult",
+    toolName: "continue_agent",
+    toolCallId: call.id,
+    isError: false,
+    details: { ok: true },
+  };
+  const pending = decide([
+    ...closed,
+    prompt,
+    { role: "assistant", content: [call] },
+    continuationResult,
+  ]);
+  assert.match(
+    firstTextContent(pending).text,
+    /Waiting for the continued exact session result/,
+  );
+  assert.equal(
+    pending.content.some(
+      (part) => part.type === "toolCall" && part.name === "continue_agent",
+    ),
+    false,
+  );
+  const done = decide([
+    ...closed,
+    prompt,
+    { role: "assistant", content: [call] },
+    continuationResult,
     {
       role: "user",
       content:
-        "PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART PI_HERDSMAN_CRASH_RECOVERY_CONTINUE",
+        "Agent result · agent=smoke-crash-target · definition=implementer · status=completed\n\nPI_HERDSMAN_CRASH_RECOVERY_CONTINUED",
     },
+  ]);
+  assert.equal(
+    firstTextContent(done).text,
+    "PI_HERDSMAN_CRASH_RECOVERY_CONTINUED",
+  );
+});
+
+test("crash-recovery uses the latest successful list_agents result after restart prompt", () => {
+  const staleHistory = [
+    { role: "user", content: "PI_HERDSMAN_CRASH_RECOVERY_INITIAL" },
     {
       role: "assistant",
-      content: [
-        { type: "toolCall", id: "list", name: "list_agents", arguments: {} },
-      ],
+      content: [{ type: "toolCall", id: "old-list", name: "list_agents" }],
     },
     {
       role: "toolResult",
       toolName: "list_agents",
-      toolCallId: "list",
+      toolCallId: "old-list",
       isError: false,
-      content: "",
+      details: {
+        agents: [
+          {
+            label: "smoke-crash-target",
+            available_tools: ["stop_agent"],
+            pi_session_path: "/saved/target.jsonl",
+          },
+        ],
+      },
     },
     {
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "close",
-          name: "stop_agent",
-          arguments: { agent: "smoke-crash-target" },
-        },
-      ],
-    },
-    {
-      role: "toolResult",
-      toolName: "stop_agent",
-      toolCallId: "close",
-      isError: false,
-      details: { closed_assignment: { session_path: "/saved/target.jsonl" } },
-      content: "closed",
-    },
-    {
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "continue",
-          name: "continue_agent",
-          arguments: { session: "/saved/target.jsonl" },
-        },
-      ],
-    },
-    {
-      role: "toolResult",
-      toolName: "continue_agent",
-      toolCallId: "continue",
-      isError: false,
-      content: "continued",
+      role: "user",
+      content: "PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART",
     },
   ];
-  const unrelated = decideSmokeFaux("agent-crash-root", {
-    messages: [
-      ...prefix,
-      {
-        role: "user",
-        content:
-          "Agent result · agent=unrelated-agent · definition=implementer · status=completed\n\nUnrelated work completed.",
-      },
-    ],
-  });
-  assert.match(
-    firstTextContent(unrelated).text,
-    /Waiting for the continued exact session result/,
-  );
-  const resumed = decideSmokeFaux("agent-crash-root", {
-    messages: [
-      ...prefix,
-      {
-        role: "user",
-        content:
-          "Agent result · agent=smoke-crash-target · definition=implementer · status=completed\n\nPI_HERDSMAN_CRASH_RECOVERY_CONTINUED",
-      },
-    ],
-  });
   assert.equal(
-    firstTextContent(resumed).text,
-    "PI_HERDSMAN_CRASH_RECOVERY_CONTINUED",
+    firstToolCall(
+      decideSmokeFaux("agent-crash-root", { messages: staleHistory }),
+    ).name,
+    "list_agents",
   );
+  const entries = staleHistory.map((entry) => ({
+    type: "message",
+    message: entry,
+  }));
+  assert.equal(latestPostRestartListAgentsResult(entries), undefined);
+  const current = {
+    type: "message",
+    message: {
+      role: "toolResult",
+      toolName: "list_agents",
+      isError: false,
+      details: { agents: [{ label: "smoke-crash-parent" }] },
+    },
+  };
+  const latest = latestPostRestartListAgentsResult([...entries, current]);
+  assert.equal(latest, current);
+  assert.equal(latest.message.details.agents[0].label, "smoke-crash-parent");
 });
 
 test("installed faux provider requeues decisions and emits its terminal failure through native error events", async () => {
@@ -6558,6 +6667,78 @@ test("candidate start treats only a structured missing-pane error as impossible"
       ),
     /candidate pane pane-1 disappeared/,
   );
+});
+
+test("old execution classifies exact session panes as quiescent, active, or unknown", async () => {
+  const target = {
+    paneId: "pane-1",
+    sessionId: "target-session",
+    sessionPath: resolve("/sessions/target.jsonl"),
+  };
+  const cases = [
+    [{ agents: [], panes: [] }, "quiescent", () => "clear", [target.paneId]],
+    [
+      {
+        agents: [
+          { pane_id: target.paneId },
+          {
+            pane_id: "pane-2",
+            agent_session: { kind: "path", value: target.sessionPath },
+          },
+        ],
+        panes: [],
+      },
+      "active",
+      (paneId) => (paneId === "pane-2" ? "active" : "clear"),
+      [target.paneId, "pane-2"],
+    ],
+    [
+      {
+        agents: [
+          { pane_id: target.paneId },
+          {
+            pane_id: "pane-2",
+            agent_session: { kind: "id", value: target.sessionId },
+          },
+        ],
+        panes: [],
+      },
+      "active",
+      (paneId) => (paneId === "pane-2" ? "active" : "clear"),
+      [target.paneId, "pane-2"],
+    ],
+    [
+      { agents: [] },
+      "unknown",
+      () => assert.fail("incomplete snapshot inspected"),
+      [],
+    ],
+    [
+      {
+        agents: [
+          { agent_session: { kind: "path", value: target.sessionPath } },
+        ],
+        panes: [],
+      },
+      "unknown",
+      () => assert.fail("missing pane identity inspected"),
+      [],
+    ],
+    [{ agents: [], panes: [] }, "unknown", () => "unknown", [target.paneId]],
+  ];
+  for (const [snapshot, expected, inspect, expectedPanes] of cases) {
+    const inspected = [];
+    const state = await classifyOldExecution(
+      snapshot,
+      target,
+      async (paneId) => {
+        inspected.push(paneId);
+        return inspect(paneId);
+      },
+    );
+    assert.equal(state, expected);
+    assert.deepEqual(inspected, expectedPanes);
+  }
 });
 
 test("smoke model override wins without reading Git config", async () => {
