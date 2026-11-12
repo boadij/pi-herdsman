@@ -146,3 +146,54 @@ test("post-checkout installs dependencies only in new linked worktrees", (t) => 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("setup:hooks enables hooks without replacing existing hooks", () => {
+  const root = mkdtempSync(join(tmpdir(), "herdsman-hooks-setup-"));
+  try {
+    const repo = join(root, "repo");
+    mkdirSync(repo);
+    const globalConfig = join(root, "gitconfig");
+    writeFileSync(globalConfig, "");
+    const env = {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: globalConfig,
+      GIT_CONFIG_NOSYSTEM: "1",
+    };
+    const git = (...args) =>
+      execFileSync("git", args, { cwd: repo, env, encoding: "utf8" }).trim();
+    git("init", "-b", "main");
+    mkdirSync(join(repo, ".githooks"));
+    writeFileSync(join(repo, ".githooks", "post-checkout"), "#!/bin/sh\n");
+    const setup = () =>
+      spawnSync(
+        process.execPath,
+        [join(repoRoot, "scripts/setup-hooks.mjs")],
+        { cwd: repo, env, encoding: "utf8" },
+      );
+
+    assert.equal(setup().status, 0);
+    assert.equal(
+      git("config", "--local", "--get", "core.hooksPath"),
+      join(realpathSync(repo), ".githooks"),
+    );
+    assert.equal(setup().status, 0);
+
+    git("config", "--local", "core.hooksPath", join(root, "other-hooks"));
+    const conflict = setup();
+    assert.notEqual(conflict.status, 0);
+    assert.match(conflict.stderr, /Refusing to replace existing core\\.hooksPath/);
+    assert.equal(git("config", "--get", "core.hooksPath"), join(root, "other-hooks"));
+
+    git("config", "--local", "--unset", "core.hooksPath");
+    if (process.platform !== "win32") {
+      const existingHook = join(repo, ".git", "hooks", "pre-commit");
+      writeFileSync(existingHook, "#!/bin/sh\n");
+      chmodSync(existingHook, 0o755);
+      const blocked = setup();
+      assert.notEqual(blocked.status, 0);
+      assert.match(blocked.stderr, /Refusing to replace executable hooks/);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
