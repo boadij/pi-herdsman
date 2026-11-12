@@ -18,13 +18,14 @@ interrupted_ssh="${name}-interrupted-ssh"
 tmp="$(mktemp -d)"
 interrupt_fixture="$tmp/interrupt-fixture"
 port=
+update_home="${name}-pi-update-home"
 
 cleanup() {
   docker rm -f "$name" >/dev/null 2>&1 || true
   docker image rm -f "$replacement_image" >/dev/null 2>&1 || true
   docker volume rm \
     "$home" "$ssh_state" "$offline_home" "$offline_ssh" \
-    "$migration_home" "$migration_ssh" "$damaged_home" "$damaged_ssh" \
+    "$migration_home" "$migration_ssh" "$damaged_home" "$damaged_ssh" "$update_home" \
     "$interrupted_home" "$interrupted_ssh" \
     >/dev/null 2>&1 || true
   if [ -n "${custom_volume:-}" ]; then
@@ -74,6 +75,151 @@ grep -q 'PUID must be a positive decimal integer' "$tmp/invalid-id.log"
 
 expected_pi="$(node -p 'require("./package.json").piHerdsman.runtime.pi')"
 expected_herdr="$(node -p 'require("./package.json").piHerdsman.runtime.herdr.version')"
+# Exercise the image-owned updater offline with a deterministic complete-format release fixture.
+update_fixture="$tmp/pi-update-fixture"
+update_home="${name}-pi-update-home"
+mkdir -p "$update_fixture/bin" "$update_fixture/pi/theme" "$update_fixture/pi/assets" \
+  "$update_fixture/pi/export-html" "$update_fixture/pi/docs" "$update_fixture/pi/examples" \
+  "$update_fixture/pi/native/linux-x64"
+printf '%s\n' '{"name":"pi-fixture","version":"9.8.7"}' > "$update_fixture/pi/package.json"
+printf '%s\n' '#!/bin/sh' 'test "${1:-}" != --version || { echo 9.8.7; exit; }' 'exit 0' > "$update_fixture/pi/pi"
+printf fixture-theme > "$update_fixture/pi/theme/default.md"
+printf fixture-asset > "$update_fixture/pi/assets/companion"
+printf x64 > "$update_fixture/pi/assets/architecture"
+printf wasm-fixture > "$update_fixture/pi/photon_rs_bg.wasm"
+chmod 0755 "$update_fixture/pi/pi"
+tar -czf "$update_fixture/pi-linux-x64.tar.gz" -C "$update_fixture" pi
+printf arm64 > "$update_fixture/pi/assets/architecture"
+tar -czf "$update_fixture/pi-linux-arm64.tar.gz" -C "$update_fixture" pi
+printf x64 > "$update_fixture/pi/assets/architecture"
+cp -R "$update_fixture/pi" "$update_fixture/wrong-pi"
+printf '%s\n' '#!/bin/sh' 'test "${1:-}" != --version || { echo 1.0.0; exit; }' 'exit 0' > "$update_fixture/wrong-pi/pi"
+chmod 0755 "$update_fixture/wrong-pi/pi"
+tar -czf "$update_fixture/pi-linux-x64-wrong.tar.gz" -C "$update_fixture" wrong-pi
+(cd "$update_fixture" && sha256sum pi-linux-x64.tar.gz pi-linux-arm64.tar.gz > SHA256SUMS)
+(cd "$update_fixture" && sha256sum pi-linux-x64-wrong.tar.gz | sed 's/  pi-linux-x64-wrong.tar.gz/  pi-linux-x64.tar.gz/') > "$update_fixture/WRONG-SHA256SUMS"
+printf '%064d  pi-linux-x64.tar.gz\n' 0 > "$update_fixture/BAD-SHA256SUMS"
+cat > "$update_fixture/bin/curl" <<'SH'
+#!/bin/sh
+output=
+url=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) output=$2; shift 2 ;;
+    *) url=$1; shift ;;
+  esac
+done
+[ "${FAIL_DOWNLOAD:-}" != 1 ] || exit 22
+case "$url" in
+  */pi-linux-x64.tar.gz)
+    case "$url" in
+      */v$PI_BUNDLED_VERSION/pi-linux-x64.tar.gz) cp /fixture/pi-official-linux-x64.tar.gz "$output" ;;
+      *) if [ "${WRONG_VERSION:-}" = 1 ]; then cp /fixture/pi-linux-x64-wrong.tar.gz "$output"; else cp /fixture/pi-linux-x64.tar.gz "$output"; fi ;;
+    esac ;;
+  */pi-linux-arm64.tar.gz) cp /fixture/pi-linux-arm64.tar.gz "$output" ;;
+  */SHA256SUMS)
+    case "$url" in
+      */v$PI_BUNDLED_VERSION/SHA256SUMS) cp /fixture/OFFICIAL-SHA256SUMS "$output" ;;
+      *) if [ "${BAD_CHECKSUM:-}" = 1 ]; then cp /fixture/BAD-SHA256SUMS "$output"
+      elif [ "${WRONG_VERSION:-}" = 1 ]; then cp /fixture/WRONG-SHA256SUMS "$output"
+      else cp /fixture/SHA256SUMS "$output"; fi ;;
+    esac ;;
+  *) exit 22 ;;
+esac
+SH
+chmod 0755 "$update_fixture/bin/curl"
+cat > "$update_fixture/bin/pi" <<'SH'
+#!/bin/sh
+if [ "${POST_VERIFY_FAIL:-}" = 1 ] && [ "${1:-}" = --version ]; then echo 0.0.0; exit 0; fi
+exec /usr/local/bin/pi "$@"
+SH
+cat > "$update_fixture/bin/uname" <<'SH'
+#!/bin/sh
+if [ "${TEST_ARM:-}" = 1 ]; then echo aarch64; else exec /usr/bin/uname "$@"; fi
+SH
+cat > "$update_fixture/bin/mv" <<'SH'
+#!/bin/sh
+if [ "${INTERRUPT_ACTIVATION:-}" = 1 ] && [ "$1" = -Tf ] && [ ! -e "$HOME/.update-interrupted" ]; then
+  : > "$HOME/.update-interrupted"
+  /usr/bin/mv "$@"
+  kill -TERM "$PPID"
+  exit 0
+fi
+exec /usr/bin/mv "$@"
+SH
+chmod 0755 "$update_fixture/bin/pi" "$update_fixture/bin/uname" "$update_fixture/bin/mv"
+docker run --rm --network none -v "$update_fixture:/fixture" --entrypoint /bin/sh "$image" \
+  -c 'tar -czf /fixture/pi-official-linux-x64.tar.gz -C /opt pi'
+(cd "$update_fixture" && sha256sum pi-official-linux-x64.tar.gz | sed 's/  pi-official-linux-x64.tar.gz/  pi-linux-x64.tar.gz/') > "$update_fixture/OFFICIAL-SHA256SUMS"
+docker volume create "$update_home" >/dev/null
+docker run --rm --network none --user herdsman -e HOME=/home/herdsman \
+  -e PATH=/fixture/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  -e PI_BUNDLED_VERSION="$expected_pi" \
+  -v "$update_home:/home/herdsman" -v "$update_fixture:/fixture:ro" \
+  --entrypoint /bin/sh "$image" -c '
+    pi-container-update 9.8.7
+    test "$(pi --version)" = 9.8.7
+    first=$(readlink -f "$HOME/.local/share/pi-herdsman/pi/current")
+    test -f "$first/assets/companion"
+    test "$(cat "$first/assets/architecture")" = x64
+    if BAD_CHECKSUM=1 pi-container-update 9.8.8; then exit 1; fi
+    if WRONG_VERSION=1 pi-container-update 9.8.8; then exit 1; fi
+    if FAIL_DOWNLOAD=1 pi-container-update 9.8.9; then exit 1; fi
+    test "$(pi --version)" = 9.8.7
+    current="$HOME/.local/share/pi-herdsman/pi/current"
+    if POST_VERIFY_FAIL=1 pi-container-update 9.8.7; then exit 1; fi
+    test "$(readlink -f "$current")" = "$first"
+    if INTERRUPT_ACTIVATION=1 pi-container-update 9.8.7; then exit 1; fi
+    rm -f "$HOME/.update-interrupted"
+    test "$(pi --version)" = 9.8.7
+    pi-container-update 9.8.7
+    second=$(readlink -f "$current")
+    test "$first" != "$second"
+    test -f "$second/assets/companion"
+    test "$(pi --version)" = 9.8.7
+  '
+# Test arm64 mapping independently with the fixture uname, and verify persistence on recreation.
+docker run --rm --network none --user herdsman -e HOME=/home/herdsman \
+  -e PATH=/fixture/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin -e TEST_ARM=1 \
+  -e PI_BUNDLED_VERSION="$expected_pi" \
+  -v "$update_home:/home/herdsman" -v "$update_fixture:/fixture:ro" \
+  --entrypoint /bin/sh "$image" -c 'pi-container-update 9.8.7; test -f "$HOME/.local/share/pi-herdsman/pi/current/assets/companion"; test "$(cat "$HOME/.local/share/pi-herdsman/pi/current/assets/architecture")" = arm64'
+docker run --rm --network none --user root -v "$update_home:/home/herdsman" \
+  --entrypoint /bin/sh "$image" -c 'test "$(/usr/local/bin/pi --version)" = "$1"; if /usr/local/bin/pi-container-update 9.8.7; then exit 1; fi' sh "$expected_pi"
+docker run --rm --network none --user herdsman -e HOME=/home/herdsman \
+  -v "$update_home:/home/herdsman" --entrypoint /bin/sh "$image" \
+  -c 'test "$(pi --version)" = 9.8.7; test -f "$(readlink -f "$HOME/.local/share/pi-herdsman/pi/current")/assets/companion"'
+# Malformed state fails explicitly; removing only the test symlink recovers bundled Pi.
+docker run --rm --network none --user herdsman -e HOME=/home/herdsman \
+  -v "$update_home:/home/herdsman" --entrypoint /bin/sh "$image" -c '
+    root="$HOME/.local/share/pi-herdsman/pi"
+    rm "$root/current"
+    ln -s /tmp/not-a-release "$root/current"
+    if pi --version 2>/tmp/pi-error; then exit 1; fi
+    grep -q "invalid persistent release selection\\|selected persistent release is unusable" /tmp/pi-error
+    rm "$root/current"
+    test "$(pi --version)" = "$1"
+  ' sh "$expected_pi"
+# Repackage the image's complete bundled Pi distribution, install it persistently, and run the real CLI through the launcher.
+docker run --rm --network none --user herdsman -e HOME=/home/herdsman \
+  -e PATH=/fixture/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  -e PI_BUNDLED_VERSION="$expected_pi" \
+  -v "$update_home:/home/herdsman" -v "$update_fixture:/fixture:ro" \
+  --entrypoint /bin/sh "$image" -c '
+    pi-container-update "$PI_BUNDLED_VERSION"
+    release=$(readlink -f "$HOME/.local/share/pi-herdsman/pi/current")
+    test "$release" != /opt/pi
+    test -f "$release/photon_rs_bg.wasm" && test -d "$release/export-html" && test -d "$release/native"
+    test "$(pi --version)" = "$PI_BUNDLED_VERSION"
+    pi --offline --help >/tmp/pi-persistent-help 2>&1
+    if grep -q "Failed to load extension" /tmp/pi-persistent-help; then exit 1; fi
+  '
+docker run --rm --network none --user herdsman -e HOME=/home/herdsman \
+  -v "$update_home:/home/herdsman" --entrypoint /bin/sh "$image" -c '
+    test "$(pi --version)" = "$1"
+    pi --offline --help >/tmp/pi-recreated-help 2>&1
+    test -f "$(readlink -f "$HOME/.local/share/pi-herdsman/pi/current")/photon_rs_bg.wasm"
+  ' sh "$expected_pi"
 
 start_offline() {
   volume="$1"
@@ -409,7 +555,8 @@ remote() {
 
 verify_runtime() {
   remote "set -e; echo 'stage: runtime Pi'; test \"\$(pi --version)\" = '$expected_pi'; \
-    test \"\$(readlink -f \"\$(command -v pi)\")\" = /opt/pi/pi; \
+    test \"\$(readlink -f \"\$(command -v pi)\")\" = /usr/local/bin/pi; \
+    test \"\$PI_SELF_UPDATE_COMMAND\" = \"/usr/local/bin/pi-container-update {version}\"; \
     npm_root=\"\$(npm root -g)\"; mkdir -p \"\$npm_root\"; \
     npm_global=\"\$(npm list -g --depth=0 2>/dev/null)\"; \
     if printf '%s\n' \"\$npm_global\" | grep -q '@earendil-works/pi-coding-agent'; then exit 1; fi; \
@@ -424,6 +571,7 @@ verify_runtime() {
     grep -q '^# Pi Herdsman container environment$' /AGENTS.md; \
     node -e 'const s=JSON.parse(require(\"fs\").readFileSync(process.env.HOME+\"/.pi/agent/settings.json\"));if(!s.packages.some(p=>p===\"npm:pi-herdsman\"||p?.source===\"npm:pi-herdsman\")||s.packages.some(p=>p===\"/opt/pi-herdsman\"||p?.source===\"/opt/pi-herdsman\"))process.exit(1)'; \
     test -f ~/.pi/agent/extensions/herdr-agent-state.ts; \
+    test -f /opt/pi/photon_rs_bg.wasm && test -d /opt/pi/export-html && test -d /opt/pi/native; \
     echo 'stage: runtime offline Pi'; pi --offline --help >/tmp/pi-help 2>&1; \
     echo 'stage: runtime extension load check'; \
     if grep -q 'Failed to load extension' /tmp/pi-help; then exit 1; fi"
@@ -513,6 +661,7 @@ docker rm -f "$name" >/dev/null
 
 start
 verify_runtime
+docker exec "$name" sh -c 'test "$PI_SELF_UPDATE_COMMAND" = "/usr/local/bin/pi-container-update {version}"'
 docker exec --user herdsman "$name" sh -c 'test "$(npm config get update-notifier)" = false'
 
 printf '%s\n' \

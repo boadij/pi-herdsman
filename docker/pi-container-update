@@ -1,0 +1,146 @@
+#!/bin/sh
+set -eu
+
+fail() {
+  echo "pi-container-update: $*" >&2
+  exit 1
+}
+
+[ "$#" -eq 1 ] || fail "expected exactly one release version"
+version=$1
+printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$' ||
+  fail "invalid release version"
+[ "$(id -un)" = herdsman ] || fail "must run as herdsman"
+
+case "$(uname -m)" in
+  x86_64) arch=x64 ;;
+  aarch64) arch=arm64 ;;
+  *) fail "unsupported architecture: $(uname -m)" ;;
+esac
+asset="pi-linux-$arch.tar.gz"
+base="https://github.com/earendil-works/pi/releases/download/v$version"
+root=/home/herdsman/.local/share/pi-herdsman/pi
+releases="$root/releases"
+mkdir -p "$releases"
+exec 9>"$root/.update.lock"
+flock -n 9 || fail "another update is running"
+
+work="$(mktemp -d "$root/.update.XXXXXX")"
+release_tmp=
+rollback_dir=
+rollback_link=
+new_target=
+activated=0
+committed=0
+rollback_selection() {
+  [ "$activated" -eq 1 ] && [ "$committed" -eq 0 ] || return 0
+  if [ ! -L "$root/current" ] || [ "$(readlink "$root/current")" != "$new_target" ]; then
+    if [ "$old_selection" = symlink ] && [ -L "$root/current" ] && [ "$(readlink "$root/current")" = "$old_target" ]; then
+      activated=0
+      return 0
+    fi
+    if [ "$old_selection" = absent ] && [ ! -e "$root/current" ] && [ ! -L "$root/current" ]; then
+      activated=0
+      return 0
+    fi
+    echo "pi-container-update: selection changed during verification; rollback link retained at $rollback_link" >&2
+    return 1
+  fi
+  if [ "$old_selection" = symlink ]; then
+    mv -Tf "$rollback_link" "$root/current" || {
+      echo "pi-container-update: could not restore previous selection; rollback link retained at $rollback_link" >&2
+      return 1
+    }
+    rmdir "$rollback_dir" || true
+  else
+    mv -T "$root/current" "$rollback_link" || {
+      echo "pi-container-update: could not restore the previously absent selection; new link retained at $root/current" >&2
+      return 1
+    }
+  fi
+  activated=0
+}
+cleanup() {
+  status=$?
+  rollback_selection || status=1
+  rm -rf "$work"
+  if [ -n "$release_tmp" ] && [ -d "$release_tmp" ]; then
+    rm -rf "$release_tmp"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+
+curl --proto '=https' --proto-redir '=https' -fLsS "$base/$asset" -o "$work/$asset" ||
+  fail "could not download release archive"
+curl --proto '=https' --proto-redir '=https' -fLsS "$base/SHA256SUMS" -o "$work/SHA256SUMS" ||
+  fail "could not download release checksums"
+
+checksum="$(awk -v name="$asset" '
+  $2 == name && length($1) == 64 && $1 !~ /[^0-9a-fA-F]/ {
+    print $1 "  " name
+    count++
+  }
+  END { if (count != 1) exit 1 }
+' "$work/SHA256SUMS")" || fail "missing or duplicate release checksum"
+(
+  cd "$work"
+  printf '%s\n' "$checksum" | sha256sum -c -
+) || fail "release archive checksum verification failed"
+
+mkdir "$work/distribution"
+tar -xzf "$work/$asset" -C "$work/distribution" --strip-components=1 --no-same-owner --no-same-permissions ||
+  fail "could not extract release distribution"
+[ -x "$work/distribution/pi" ] || fail "release executable is missing"
+[ -f "$work/distribution/package.json" ] || fail "release package metadata is missing"
+[ -d "$work/distribution/theme" ] || fail "release themes are missing"
+[ -d "$work/distribution/assets" ] || fail "release assets are missing"
+[ -f "$work/distribution/photon_rs_bg.wasm" ] || fail "release image resource is missing"
+[ -d "$work/distribution/export-html" ] || fail "release HTML resources are missing"
+[ -d "$work/distribution/docs" ] || fail "release documentation is missing"
+[ -d "$work/distribution/examples" ] || fail "release examples are missing"
+[ -d "$work/distribution/native" ] || fail "release native helpers are missing"
+staged_version="$(env -u PI_PACKAGE_DIR "$work/distribution/pi" --version)" ||
+  fail "staged Pi executable failed"
+[ "$staged_version" = "$version" ] || fail "staged release reports version $staged_version, expected $version"
+
+release_tmp="$(mktemp -d "$releases/.install.XXXXXX")"
+release_id="${version}-${release_tmp##*.}"
+release="$releases/$release_id"
+mv "$work/distribution" "$release_tmp/distribution"
+mv "$release_tmp/distribution" "$release"
+rmdir "$release_tmp"
+release_tmp=
+
+if [ -e "$root/current" ] && [ ! -L "$root/current" ]; then
+  fail "persistent selection is not a symlink"
+fi
+old_selection=absent
+if [ -L "$root/current" ]; then
+  old_selection=symlink
+  old_target="$(readlink "$root/current")"
+fi
+rollback_dir="$(mktemp -d "$root/.rollback.XXXXXX")"
+rollback_link="$rollback_dir/current"
+if [ "$old_selection" = symlink ]; then
+  ln -s "$old_target" "$rollback_link"
+fi
+new_target="releases/$release_id"
+link="$root/.current.$$"
+ln -s "$new_target" "$link"
+activated=1
+mv -Tf "$link" "$root/current"
+if selected_version="$(pi --version)" && [ "$selected_version" = "$version" ]; then
+  committed=1
+else
+  fail "activated release is not reachable through pi launcher (reported ${selected_version:-no version})"
+fi
+if [ "$old_selection" = symlink ]; then
+  rm -f "$rollback_link"
+  rmdir "$rollback_dir"
+else
+  rmdir "$rollback_dir"
+fi
+rollback_dir=
+rollback_link=

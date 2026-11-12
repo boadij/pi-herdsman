@@ -150,7 +150,40 @@ Tailscale provides networking only. SSH remains normal OpenSSH.
 
 ## Update
 
-To update Herdsman inside the container, finish active coordination first, then run:
+To update the Pi runtime inside the container, finish active coordination
+first, then run:
+
+```sh
+pi update
+```
+
+Pi downloads the complete official release into an immutable directory under
+`~/.local/share/pi-herdsman/pi/releases/` and atomically selects it. New Pi
+processes use that release; already-running processes continue using their
+original files. The selection survives container restart and recreation and
+takes precedence over the Pi bundled in a newer image. Pulling an image does
+not replace this persistent selection, so review it separately for Pi security
+updates. Forced reinstallations create additional retained release directories;
+the container does not prune them.
+
+Pi's `pi update --all` follows upstream behavior: installed packages are
+updated before the Pi runtime, so the operation is not transactional. For
+operationally significant updates, stop coordination and run the Pi update and
+package updates as separate operations.
+
+To recover to the image-bundled Pi after stopping work, remove only the
+selection symlink:
+
+```sh
+rm ~/.local/share/pi-herdsman/pi/current
+pi --version
+```
+
+Do not delete the release directories or the persistent home. The bundled
+runtime remains available at `/opt/pi`.
+
+To update Herdsman or other installed Pi packages, finish active coordination
+first, then run:
 
 ```sh
 pi update npm:pi-herdsman

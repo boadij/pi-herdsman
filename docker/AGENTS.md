@@ -55,3 +55,12 @@ the deployment explicitly provides additional capabilities.
 
 Pi Herdsman is already installed. Follow its runtime instructions for agent
 orchestration rather than creating an alternate orchestration mechanism.
+
+## Pi runtime updates
+
+`/usr/local/bin/pi` is the image-owned launcher. It runs `/opt/pi/pi` by
+default and selects a verified immutable release under the persistent
+`/home/herdsman` only for the `herdsman` user. `pi-container-update` installs
+complete official Pi distributions and atomically updates that selection.
+Keep Docker and SSH `PI_SELF_UPDATE_COMMAND` configuration aligned. Do not
+change the entrypoint's Herdsman npm seeding or Herdr lifecycle for Pi updates.
