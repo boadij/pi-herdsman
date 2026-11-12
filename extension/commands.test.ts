@@ -2237,6 +2237,387 @@ test("ordinary Leads deliver peer messages across non-Git sockets", async (t) =>
   }
 });
 
+test("Chief discovers and exchanges messages with a non-Git ordinary Lead", async (t) => {
+  setLeadEnvironment();
+  const runtime = peerRuntime();
+  const lead = {
+    sessionId: randomUUID(),
+    paneId: `ordinary-pane-${randomUUID()}`,
+    tabId: `ordinary-tab-${randomUUID()}`,
+    workspaceId: `ordinary-workspace-${randomUUID()}`,
+    socket: join(tmpdir(), `ordinary-${randomUUID()}.sock`),
+  };
+  const chief = {
+    sessionId: randomUUID(),
+    paneId: `chief-pane-${randomUUID()}`,
+    tabId: `chief-tab-${randomUUID()}`,
+    workspaceId: `chief-workspace-${randomUUID()}`,
+  };
+  const agents = [lead, chief].map((identity) => ({
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: identity.sessionId,
+    },
+    workspace_id: identity.workspaceId,
+    pane_id: identity.paneId,
+    tab_id: identity.tabId,
+    cwd: "/tmp",
+  }));
+  let topologyUnavailable = false;
+  const chiefExec = (_command: string, args: string[]) => {
+    if (isAgentList(args))
+      return {
+        stdout: JSON.stringify({ id: AGENT_ID, result: { agents } }),
+        stderr: "",
+        code: 0,
+      };
+    if (isApiSnapshot(args))
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: { snapshot: { agents, panes: [], workspaces: [] } },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    if (args[0] === "agent" && args[1] === "get")
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: { agent: agents.find((agent) => agent.pane_id === args[2]) },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    if (args[0] === "worktree" && args[1] === "list")
+      return topologyUnavailable
+        ? {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              error: { code: "workspace_not_found", message: "not found" },
+            }),
+            stderr: "",
+            code: 1,
+          }
+        : nonGitWorkspaceResponse();
+    if (args[0] === "workspace" && args[1] === "get")
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: { workspace: { workspace_id: args[2], worktree: null } },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    return { stdout: "{}", stderr: "", code: 0 };
+  };
+  const leadPi = fakeChiefPi({
+    activeTools: ["read", "bash"],
+    exec: chiefExec,
+  });
+  const leadCtx = fakeContext(leadPi.entries) as any;
+  leadCtx.sessionManager.getSessionId = () => lead.sessionId;
+  const setEnvironment = (identity: typeof lead) => {
+    process.env.HERDR_PANE_ID = identity.paneId;
+    process.env.HERDR_TAB_ID = identity.tabId;
+    process.env.HERDR_SOCKET_PATH = identity.socket;
+    process.env.HERDR_WORKSPACE_ID = identity.workspaceId;
+  };
+  let shutdownChief: (() => Promise<void>) | undefined;
+  try {
+    setEnvironment(lead);
+    registerExtension!(leadPi.pi as never);
+    await leadPi.events.get("session_start")![0](undefined, leadCtx);
+    await leadPi.commandOptions.get("lead").handler("orchestrate", leadCtx);
+    assert.equal(
+      readPeerLeadRecord(runtime, lead.sessionId)?.sessionKind,
+      "ordinary",
+    );
+    assert.equal(
+      globalProjectAssignmentSnapshot().get(lead.sessionId)?.length ?? 0,
+      0,
+    );
+
+    setEnvironment({ ...lead, socket: process.env.HERDR_SOCKET_PATH! });
+    const chiefPi = fakeChiefPi({ activeTools: ["read"], exec: chiefExec });
+    const chiefCtx = fakeContext(chiefPi.entries) as any;
+    chiefCtx.sessionManager.getSessionId = () => chief.sessionId;
+    setEnvironment({
+      ...lead,
+      paneId: chief.paneId,
+      tabId: chief.tabId,
+      workspaceId: chief.workspaceId,
+    });
+    shutdownChief = async () => {
+      setEnvironment({
+        ...lead,
+        paneId: chief.paneId,
+        tabId: chief.tabId,
+        workspaceId: chief.workspaceId,
+      });
+      await chiefPi.events.get("session_shutdown")?.[0]();
+    };
+    registerExtension!(chiefPi.pi as never);
+    await chiefPi.events.get("session_start")![0](undefined, chiefCtx);
+    await chiefPi.commandOptions.get("chief").handler("", chiefCtx);
+    const staff = chiefPi.tools.find((tool) => tool.name === "list_staff")!;
+    const listStaff = () =>
+      staff.execute("list", {}, undefined, undefined, chiefCtx);
+    const listed = await listStaff();
+    assert.ok(
+      listed.details.reports.some(
+        (report: any) =>
+          report.target === coordinatorTarget("lead", lead.sessionId),
+      ),
+      JSON.stringify(listed.details),
+    );
+    const target = coordinatorTarget("lead", lead.sessionId);
+    const sent = await chiefPi.tools
+      .find((tool) => tool.name === "message_staff")!
+      .execute(
+        "message",
+        { target, message: "Chief-to-Lead non-Git round trip" },
+        undefined,
+        undefined,
+        chiefCtx,
+      );
+    const chiefMessagePath = listCoordinationMessagePaths(
+      supervisionRuntime(),
+      lead.sessionId,
+    )[0];
+    assert.ok(chiefMessagePath, JSON.stringify(sent.details));
+    assert.equal(readChiefMessage(chiefMessagePath).kind, "chief_message");
+
+    setEnvironment(lead);
+    await invokeEventHandlers(leadPi, "turn_end")(
+      { outcome: "completed" },
+      leadCtx,
+    );
+    await t.waitFor(() =>
+      assert.ok(
+        leadPi.sentMessageCalls.some(
+          ({ message }: any) =>
+            message?.customType === "pi-herdsman-chief_message" &&
+            message?.details?.id === sent.details.id,
+        ),
+        JSON.stringify({
+          paths: listCoordinationMessagePaths(
+            supervisionRuntime(),
+            lead.sessionId,
+          ).map((path) => readChiefMessage(path)),
+          sent: leadPi.sentMessageCalls.map(({ message }: any) => message),
+        }),
+      ),
+    );
+    const reply = await leadPi.tools
+      .find((tool) => tool.name === "message_supervisor")!
+      .execute(
+        "message",
+        { message: "Lead-to-Chief non-Git reply" },
+        undefined,
+        undefined,
+        leadCtx,
+      );
+    assert.ok(
+      listCoordinationMessagePaths(supervisionRuntime(), chief.sessionId).some(
+        (path) => readChiefMessage(path).id === reply.details.id,
+      ),
+    );
+    setEnvironment({
+      ...lead,
+      paneId: chief.paneId,
+      tabId: chief.tabId,
+      workspaceId: chief.workspaceId,
+    });
+    await invokeEventHandlers(chiefPi, "turn_end")(
+      { outcome: "completed" },
+      chiefCtx,
+    );
+    await t.waitFor(() =>
+      assert.ok(
+        chiefPi.sentMessageCalls.some(
+          ({ message }: any) =>
+            message?.customType === "pi-herdsman-lead_message" &&
+            message?.details?.id === reply.details.id,
+        ),
+      ),
+    );
+
+    const sessionKindEntry = leadPi.entries.find(
+      (entry: any) =>
+        entry.customType === "pi-herdsman-session-kind" &&
+        entry.data?.sessionId === lead.sessionId,
+    ) as any;
+    assert.ok(sessionKindEntry);
+    const ordinaryIdentity = sessionKindEntry.data;
+    const managedIdentity = {
+      version: 1,
+      sessionId: lead.sessionId,
+      kind: "managed",
+      repoKey: "/tmp",
+      branch: "managed-fixture",
+    };
+    leadCtx.isIdle = () => false;
+    const managedRecipientMessage = await chiefPi.tools
+      .find((tool) => tool.name === "message_staff")!
+      .execute(
+        "message",
+        { target, message: "managed Lead must reject Chief message" },
+        undefined,
+        undefined,
+        chiefCtx,
+      );
+    assert.ok(
+      listCoordinationMessagePaths(supervisionRuntime(), lead.sessionId).some(
+        (path) =>
+          readChiefMessage(path).id === managedRecipientMessage.details.id,
+      ),
+      "Chief message is queued for the real recipient inbox before identity changes",
+    );
+    sessionKindEntry.data = managedIdentity;
+    assert.deepEqual(
+      readSessionKind(leadPi.entries, lead.sessionId),
+      managedIdentity,
+    );
+    setEnvironment(lead);
+    await invokeEventHandlers(leadPi, "turn_end")(
+      { outcome: "completed" },
+      leadCtx,
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(
+      leadPi.sentMessageCalls.some(
+        ({ message }: any) =>
+          message?.customType === "pi-herdsman-chief_message" &&
+          message?.details?.id === managedRecipientMessage.details.id,
+      ),
+      false,
+      "the production Chief-message inbox rejects a locally managed Lead",
+    );
+    sessionKindEntry.data = ordinaryIdentity;
+    leadCtx.isIdle = () => true;
+
+    const ordinaryPeer = readPeerLeadRecord(runtime, lead.sessionId)!;
+    writePeerLeadRecord(runtime, { ...ordinaryPeer, sessionKind: "managed" });
+    assert.equal(
+      (await listStaff()).details.reports.some(
+        (report: any) => report.target === target,
+      ),
+      false,
+      "managed peer identity is never an actionable Chief Lead",
+    );
+    writePeerLeadRecord(runtime, ordinaryPeer);
+
+    const assignmentRepo = "/tmp";
+    const assignmentBranch = `assigned-${randomUUID()}`;
+    writeProjectAssignment(supervisionRuntime(), {
+      version: 2,
+      id: lead.sessionId,
+      repoKey: assignmentRepo,
+      branch: assignmentBranch,
+      text: "current project assignment",
+    });
+    try {
+      assert.equal(
+        (await listStaff()).details.reports.some(
+          (report: any) => report.target === target,
+        ),
+        false,
+        "an ordinary identity with a current assignment is not a Chief report",
+      );
+    } finally {
+      removeProjectAssignment(
+        supervisionRuntime(),
+        assignmentRepo,
+        assignmentBranch,
+      );
+    }
+
+    for (const [field, value] of [
+      ["paneId", "mismatched-pane"],
+      ["tabId", "mismatched-tab"],
+      ["workspaceId", "mismatched-workspace"],
+      ["socket", "/mismatched-herdr.sock"],
+    ] as const) {
+      writePeerLeadRecord(runtime, { ...ordinaryPeer, [field]: value });
+      assert.equal(
+        (await listStaff()).details.reports.some(
+          (report: any) => report.target === target,
+        ),
+        false,
+        `peer ${field} mismatch fails closed`,
+      );
+    }
+    writePeerLeadRecord(runtime, ordinaryPeer);
+
+    topologyUnavailable = true;
+    assert.equal(
+      (await listStaff()).details.reports.some(
+        (report: any) => report.target === target,
+      ),
+      false,
+      "workspace_not_found is not treated as a non-Git fallback",
+    );
+    topologyUnavailable = false;
+
+    writeLeadCoordinationState(supervisionRuntime(), {
+      version: 1,
+      build: OTHER_HERDSMAN_BUILD,
+      role: "lead",
+      instanceId: randomUUID(),
+      piSessionId: lead.sessionId,
+      updatedAt: Date.now(),
+    });
+    const incompatible = await listStaff();
+    assert.ok(
+      incompatible.details.reports.some(
+        (report: any) => report.compatibility === "incompatible",
+      ),
+      "incompatible Leads remain observation-only",
+    );
+    assert.equal(
+      incompatible.details.reports.some(
+        (report: any) => report.target === target,
+      ),
+      false,
+    );
+    const beforeIncompatibleSend = listCoordinationMessagePaths(
+      supervisionRuntime(),
+      lead.sessionId,
+    );
+    await assert.rejects(
+      chiefPi.tools
+        .find((tool) => tool.name === "message_staff")!
+        .execute(
+          "message",
+          { target, message: "must not reach incompatible Lead" },
+          undefined,
+          undefined,
+          chiefCtx,
+        ),
+      /not found|eligible|incompatible|build mismatch/iu,
+    );
+    assert.deepEqual(
+      listCoordinationMessagePaths(supervisionRuntime(), lead.sessionId),
+      beforeIncompatibleSend,
+    );
+  } finally {
+    try {
+      await shutdownChief?.();
+    } finally {
+      setEnvironment(lead);
+      await leadPi.events.get("session_shutdown")?.[0]();
+      delete process.env.HERDR_SOCKET_PATH;
+      delete process.env.HERDR_PANE_ID;
+      delete process.env.HERDR_TAB_ID;
+      delete process.env.HERDR_WORKSPACE_ID;
+      setLeadEnvironment();
+    }
+  }
+});
+
 test("Manager peer messages deliver to a live Manager without changing its role", async (t) => {
   setLeadEnvironment();
   const runtime = peerRuntime();
@@ -17988,6 +18369,29 @@ async function openChiefOverview(
           : { stdout: "{}", stderr: "", code: 0 };
     },
   });
+  const overviewPeerRuntime = peerRuntime();
+  const overviewPeerLease =
+    populated && !options.incompatibleBuild
+      ? acquireProcessLock(
+          peerLeadLockPath(overviewPeerRuntime, PARENT_SESSION_ID),
+          { name: "Lead peer presence" },
+        )
+      : undefined;
+  if (overviewPeerLease)
+    writePeerLeadRecord(overviewPeerRuntime, {
+      version: 2,
+      build: HERDSMAN_BUILD,
+      sessionKind: "ordinary",
+      role: "lead",
+      piSessionId: PARENT_SESSION_ID,
+      paneId: "lead-pane",
+      tabId: "lead-tab",
+      workspaceId: WORKSPACE,
+      socket: process.env.HERDR_SOCKET_PATH!,
+      group: null,
+      claim: overviewPeerLease.claim,
+      updatedAt: Date.now(),
+    });
   const context = fakeContext([]) as any;
   context.hasUI = true;
   let component: any;
@@ -18069,6 +18473,10 @@ async function openChiefOverview(
     widgetRegistrations,
     async cleanup() {
       await pi.events.get("session_shutdown")?.[0]();
+      if (overviewPeerLease) {
+        removePeerLeadRecord(overviewPeerRuntime, PARENT_SESSION_ID);
+        overviewPeerLease.release();
+      }
       delete process.env.HERDR_SOCKET_PATH;
       delete process.env.HERDR_TAB_ID;
       setLeadEnvironment();

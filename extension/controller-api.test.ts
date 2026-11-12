@@ -2364,6 +2364,24 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
     piSessionId: senderId,
     updatedAt: Date.now(),
   });
+  const peers = peerRuntime();
+  const senderLease = acquireProcessLock(peerLeadLockPath(peers, senderId), {
+    name: "Lead peer presence",
+  });
+  writePeerLeadRecord(peers, {
+    version: 2,
+    build: HERDSMAN_BUILD,
+    role: "lead",
+    sessionKind: "ordinary",
+    piSessionId: senderId,
+    paneId: "sender-pane",
+    tabId: "sender-tab",
+    workspaceId: WORKSPACE,
+    socket,
+    group: null,
+    claim: senderLease.claim,
+    updatedAt: Date.now(),
+  });
   const exec = (_command: string, args: string[]) => {
     let result: unknown = {};
     if (isApiSnapshot(args))
@@ -2402,7 +2420,10 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
   ctx.isIdle = () => true;
   try {
     await pi.events.get("session_start")![0](undefined, ctx);
-    assert.equal(readPeerLeadRecord(peerRuntime(), senderId), undefined);
+    assert.equal(
+      readPeerLeadRecord(peerRuntime(), senderId)?.sessionKind,
+      "ordinary",
+    );
     await pi.commandOptions.get("chief").handler("", ctx);
     const chiefRoleRejected = await pi.tools
       .find((tool) => tool.name === "message_supervisor")!
@@ -2500,68 +2521,61 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
       { fromSessionId: senderId, toSessionId: sessionId, toRole: "chief" },
     );
 
-    const peers = peerRuntime();
-    const senderLease = acquireProcessLock(peerLeadLockPath(peers, senderId), {
-      name: "Lead peer presence",
+    writePeerLeadRecord(peers, {
+      version: 2,
+      build: HERDSMAN_BUILD,
+      role: "lead",
+      sessionKind: "ordinary",
+      piSessionId: senderId,
+      paneId: "sender-pane",
+      tabId: "sender-tab",
+      workspaceId: WORKSPACE,
+      socket: process.env.HERDR_SOCKET_PATH ?? "/test-socket",
+      group: null,
+      name: "feature-auth",
+      workspaceLabel: "pi-herdsman/feat-auth",
+      cwd: "/tmp/feat-auth",
+      claim: senderLease.claim,
+      updatedAt: Date.now(),
     });
-    try {
-      writePeerLeadRecord(peers, {
+    assert.equal(readPeerLeadRecord(peers, senderId)?.name, "feature-auth");
+    writeChiefMessage(
+      {
         version: 2,
-        build: HERDSMAN_BUILD,
-        role: "lead",
-        sessionKind: "ordinary",
-        piSessionId: senderId,
-        paneId: "sender-pane",
-        tabId: "sender-tab",
-        workspaceId: WORKSPACE,
-        socket: process.env.HERDR_SOCKET_PATH ?? "/test-socket",
-        group: null,
-        name: "feature-auth",
-        workspaceLabel: "pi-herdsman/feat-auth",
-        cwd: "/tmp/feat-auth",
-        claim: senderLease.claim,
-        updatedAt: Date.now(),
-      });
-      assert.equal(readPeerLeadRecord(peers, senderId)?.name, "feature-auth");
-      writeChiefMessage(
-        {
-          version: 2,
-          id: randomUUID(),
-          leaseId: descriptor.leaseId,
-          kind: "lead_message",
-          fromSessionId: senderId,
-          toSessionId: sessionId,
-          leadSessionId: senderId,
-          text: "semantic endpoint test",
-          createdAt: Date.now(),
-        },
-        supervisionRuntime(),
-      );
-      await pi.events.get("agent_start")![0](undefined, ctx);
-      await waitForStage(t, "subsequent Chief message delivery", () =>
-        assert.ok(
-          pi.sent.some((message: any) =>
-            String(message?.content ?? "").includes("semantic endpoint test"),
-          ),
+        id: randomUUID(),
+        leaseId: descriptor.leaseId,
+        kind: "lead_message",
+        fromSessionId: senderId,
+        toSessionId: sessionId,
+        leadSessionId: senderId,
+        text: "semantic endpoint test",
+        createdAt: Date.now(),
+      },
+      supervisionRuntime(),
+    );
+    await pi.events.get("agent_start")![0](undefined, ctx);
+    await waitForStage(t, "subsequent Chief message delivery", () =>
+      assert.ok(
+        pi.sent.some((message: any) =>
+          String(message?.content ?? "").includes("semantic endpoint test"),
         ),
-      );
-      const enriched = pi.sent.find(
-        (message: any) =>
-          message.customType === "pi-herdsman-lead_message" &&
-          String(message.content).includes("semantic endpoint test"),
-      ) as any;
-      assert.equal(enriched.details.fromDisplayName, "feature-auth");
-      assert.equal(enriched.details.toRole, "chief");
-    } finally {
-      removePeerLeadRecord(peers, senderId);
-      senderLease.release();
-    }
+      ),
+    );
+    const enriched = pi.sent.find(
+      (message: any) =>
+        message.customType === "pi-herdsman-lead_message" &&
+        String(message.content).includes("semantic endpoint test"),
+    ) as any;
+    assert.equal(enriched.details.fromDisplayName, "feature-auth");
+    assert.equal(enriched.details.toRole, "chief");
     assert.equal(
       listChiefMessagePaths(supervisionRuntime(), sessionId).length,
       0,
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
+    removePeerLeadRecord(peers, senderId);
+    senderLease.release();
     delete process.env.HERDR_SOCKET_PATH;
     setLeadEnvironment();
   }
