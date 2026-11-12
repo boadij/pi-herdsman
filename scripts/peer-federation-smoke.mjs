@@ -1483,6 +1483,53 @@ try {
     );
   resources.a.savedPeer = { id: addedMachineId, output: addedMachine };
   if (phase === "manager-core") {
+    const captureManagerPrompt = (side, prompt) => {
+      const output = herdr(side, [
+        "agent",
+        "prompt",
+        resources[side].paneId,
+        prompt,
+        "--wait",
+        "--timeout",
+        "60000",
+      ]);
+      const sessionPath = JSON.parse(output).result.agent.agent_session.value;
+      const sessionId =
+        typeof sessionPath === "string"
+          ? sessionPath.match(/_([0-9a-f-]{36})\.jsonl$/u)?.[1]
+          : undefined;
+      if (!sessionId)
+        throw new Error(
+          `${side}: Manager prompt omitted its exact Pi session file`,
+        );
+      return { output, sessionPath, sessionId };
+    };
+    const verifyCoreManagerSession = (side, captured) => {
+      exec(side, ["test", "-f", captured.sessionPath]);
+      const probe = JSON.parse(
+        exec(
+          side,
+          ["pi-herdsman-peer", "probe"],
+          ["--user", "herdsman", ...herdrEnv(side)],
+        ),
+      );
+      const status = managerAuthorityStatus(probe, {
+        dataRoot: `${resources[side].runtime.piAgentDir}/pi-herdsman`,
+        sessionId: captured.sessionId,
+        paneId: resources[side].paneId,
+        workspaceId: resources[side].workspaceId,
+      });
+      if (status !== "established")
+        throw new Error(
+          `${side}: captured session does not match the live Manager identity (${status})`,
+        );
+      resources[side].managerSessionFile = captured.sessionPath;
+      resources[side].managerSessionId = captured.sessionId;
+    };
+    verifyCoreManagerSession(
+      "b",
+      captureManagerPrompt("b", "PEER_E2E_B_CAPTURE_SESSION"),
+    );
     const readManagerEntries = (side) => {
       const session = exec(side, ["cat", resources[side].managerSessionFile]);
       const lines = session.split("\n");
@@ -1548,15 +1595,8 @@ try {
       }
       return undefined;
     };
-    herdr("a", [
-      "agent",
-      "prompt",
-      resources.a.paneId,
-      "PEER_E2E_A_SINGLE_SEND",
-      "--wait",
-      "--timeout",
-      "60000",
-    ]);
+    const aSend = captureManagerPrompt("a", "PEER_E2E_A_SINGLE_SEND");
+    verifyCoreManagerSession("a", aSend);
     const request = waitFor(
       () =>
         findSuccessfulSend(readManagerEntries("a"), "PEER_E2E_SINGLE_REQUEST"),
@@ -1630,8 +1670,8 @@ try {
         .find(
           (item) =>
             item?.value.acceptanceId === request.id &&
-            item.value.originSession === resources.b.managerSessionId &&
-            item.value.recipientSession === resources.a.managerSessionId &&
+            item.value.originSession === resources.a.managerSessionId &&
+            item.value.recipientSession === resources.b.managerSessionId &&
             item.value.role === "manager" &&
             item.value.replies?.some((reply) => reply.id === bReply.id),
         );
