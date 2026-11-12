@@ -1815,6 +1815,26 @@ function sessionEntries(contents) {
     });
 }
 
+export function latestPostRestartListAgentsResult(entries) {
+  const restartPromptIndex = entries.findLastIndex(
+    (entry) =>
+      entry.type === "message" &&
+      entry.message?.role === "user" &&
+      typeof entry.message.content === "string" &&
+      entry.message.content.includes(
+        "PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART",
+      ),
+  );
+  return entries.findLast(
+    (entry, index) =>
+      index > restartPromptIndex &&
+      entry.type === "message" &&
+      entry.message?.role === "toolResult" &&
+      entry.message.toolName === "list_agents" &&
+      !entry.message.isError,
+  );
+}
+
 export function isPackageReadPath(path, cwd) {
   return (
     typeof path === "string" &&
@@ -6767,25 +6787,13 @@ async function runAgentCrashRecoverySmoke(ctx) {
       const owner = await rootSessionSnapshot(ctx);
       const found =
         owner &&
-        sessionEntries(owner.contents).some(
-          (entry) =>
-            entry.type === "message" &&
-            entry.message?.role === "toolResult" &&
-            entry.message.toolName === "list_agents" &&
-            !entry.message.isError,
-        );
+        latestPostRestartListAgentsResult(sessionEntries(owner.contents));
       return { done: !!found, value: owner };
     },
     { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS, pollMs: 200 },
   );
   const ownerEntries = sessionEntries(reopenedOwner.contents);
-  const listResult = ownerEntries.find(
-    (entry) =>
-      entry.type === "message" &&
-      entry.message?.role === "toolResult" &&
-      entry.message.toolName === "list_agents" &&
-      !entry.message.isError,
-  );
+  const listResult = latestPostRestartListAgentsResult(ownerEntries);
   const controlledAgents = listResult?.message?.details?.agents;
   assert.ok(
     Array.isArray(controlledAgents),

@@ -708,7 +708,10 @@ function agentCrashRecoveryDecision(model, context) {
       );
     }
     if (postRestart) {
-      const list = correlatedCall(messages, "list_agents");
+      const list = correlatedCall(
+        messages.slice(messages.indexOf(postRestart)),
+        "list_agents",
+      );
       if (!list) return call("list_agents", {});
       const parent = list.result?.details?.agents?.find(
         (agent) =>
@@ -770,7 +773,7 @@ function agentCrashRecoveryDecision(model, context) {
           text(message) ===
             `PI_HERDSMAN_CRASH_RECOVERY_STOP_EXACT ${target?.pi_session_path}`,
       );
-      if (!closed && stopAuthorization) {
+      if (!closed && !settledPrompt && stopAuthorization) {
         if (!target?.available_tools?.includes("stop_agent"))
           throw new Error("Authorized crash-recovery target is not stoppable");
         return call("stop_agent", { agent: "smoke-crash-target" });

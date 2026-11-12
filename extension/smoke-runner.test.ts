@@ -98,6 +98,7 @@ import {
   managerBootstrapDelegationState,
   herdrErrorCode,
   classifyOldExecution,
+  latestPostRestartListAgentsResult,
   managerDiagnosticLines,
   captureManagerLeadDiagnostics,
   savedSessionHeaderEvidence,
@@ -5622,7 +5623,7 @@ test("crash-recovery accepts only the resumed target's marked completion", () =>
   );
 });
 
-test("crash-recovery continues a settled target without issuing stop", () => {
+test("crash-recovery settled authorization wins over a coexisting stop authorization", () => {
   const messages = [
     {
       role: "user",
@@ -5661,6 +5662,10 @@ test("crash-recovery continues a settled target without issuing stop", () => {
       ...messages,
       {
         role: "user",
+        content: "PI_HERDSMAN_CRASH_RECOVERY_STOP_EXACT /saved/target.jsonl",
+      },
+      {
+        role: "user",
         content:
           "PI_HERDSMAN_CRASH_RECOVERY_SETTLED_CONTINUE /saved/target.jsonl",
       },
@@ -5676,6 +5681,77 @@ test("crash-recovery continues a settled target without issuing stop", () => {
       (part) => part.type === "toolCall" && part.name === "stop_agent",
     ),
     false,
+  );
+});
+
+test("crash-recovery uses the latest successful list_agents result after restart prompt", () => {
+  const stale = {
+    type: "message",
+    message: {
+      role: "toolResult",
+      toolName: "list_agents",
+      isError: false,
+      details: {
+        agents: [
+          { label: "smoke-crash-target", available_tools: ["stop_agent"] },
+        ],
+      },
+    },
+  };
+  const current = {
+    type: "message",
+    message: {
+      role: "toolResult",
+      toolName: "list_agents",
+      isError: false,
+      details: { agents: [{ label: "smoke-crash-parent" }] },
+    },
+  };
+  const staleHistory = [
+    { role: "user", content: "PI_HERDSMAN_CRASH_RECOVERY_INITIAL" },
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "old-list", name: "list_agents" }],
+    },
+    {
+      role: "toolResult",
+      toolName: "list_agents",
+      toolCallId: "old-list",
+      isError: false,
+      details: {
+        agents: [
+          {
+            label: "smoke-crash-target",
+            available_tools: ["stop_agent"],
+            pi_session_path: "/saved/target.jsonl",
+          },
+        ],
+      },
+    },
+    {
+      role: "user",
+      content: "PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART",
+    },
+  ];
+  assert.equal(
+    firstToolCall(
+      decideSmokeFaux("agent-crash-root", { messages: staleHistory }),
+    ).name,
+    "list_agents",
+  );
+  assert.equal(
+    latestPostRestartListAgentsResult([
+      stale,
+      {
+        type: "message",
+        message: {
+          role: "user",
+          content: "PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART",
+        },
+      },
+      current,
+    ]),
+    current,
   );
 });
 
