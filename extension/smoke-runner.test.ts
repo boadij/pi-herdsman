@@ -9255,65 +9255,6 @@ test("collectDiagnostics reads the host pane through the parent Herdr environmen
   );
 });
 
-test("crash-recovery failure evidence projects only the continuation preflight allowlist", async () => {
-  const preflightLog = `[continuation-preflight-probe] {
-  matchingSavedStateCount: 1,
-  activeSavedStateCount: 0,
-  acceptedCompletedAck: true,
-  matchingLiveHerdrEntryCount: 1,
-  savedStateCoveredLiveEntryCount: 0,
-  completedSavedStatePresent: true,
-  closedReceiptMatchedLiveEntryCount: 1,
-  closedReceiptPaneNotFoundCount: 1,
-  finalRepresentationCount: 0
-}
-PRIVATE_SESSION_ID PRIVATE_SESSION_PATH`;
-  const originalError = console.error;
-  console.error = () => {};
-  let projection;
-  try {
-    projection = await collectDiagnostics(
-      {
-        scenario: "agent-crash-recovery",
-        paths: {},
-        sessionName: "isolated",
-        rootPaneId: "root-pane",
-      },
-      { hostPaneId: "host-pane" },
-      null,
-      {
-        execute: async (_file: string, args: string[]) => ({
-          stdout: args.includes("root-pane") ? preflightLog : "host output",
-        }),
-        observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
-        snapshot: async () => null,
-      },
-    );
-  } finally {
-    console.error = originalError;
-  }
-
-  const evidence = sanitizedFailureEvidence(
-    { scenario: "agent-crash-recovery" },
-    {},
-    "SCENARIO_FAIL",
-    "PASS",
-    projection,
-  );
-  assert.deepEqual(evidence.diagnostics?.continuationPreflight, {
-    matchingSavedStateCount: 1,
-    activeSavedStateCount: 0,
-    acceptedCompletedAck: true,
-    matchingLiveHerdrEntryCount: 1,
-    savedStateCoveredLiveEntryCount: 0,
-    completedSavedStatePresent: true,
-    closedReceiptMatchedLiveEntryCount: 1,
-    closedReceiptPaneNotFoundCount: 1,
-    finalRepresentationCount: 0,
-  });
-  assert.doesNotMatch(JSON.stringify(evidence), /PRIVATE_SESSION/u);
-});
-
 test("diagnostic collection failure preserves sanitized primary failure evidence", async () => {
   const secondaryException = "PRIVATE secondary diagnostic exception";
   const ctx: Record<string, unknown> & {

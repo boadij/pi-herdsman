@@ -12019,10 +12019,6 @@ export async function collectDiagnostics(
     hostPane.status === "fulfilled"
       ? hostPane.value.stdout.slice(-12_000)
       : { error: hostPane.reason?.message ?? null };
-  if (ctx.scenario === "agent-crash-recovery")
-    diagnostics.continuationPreflight = continuationPreflightFromTerminal(
-      diagnostics.root,
-    );
   const knownDescendants = [
     ...new Set(
       [
@@ -12072,9 +12068,6 @@ export async function collectDiagnostics(
         ? diagnostics.processes.filter((record) => record.processMatch).length
         : null,
       rootSessionObserved: !diagnostics.rootSession?.error,
-      ...(diagnostics.continuationPreflight
-        ? { continuationPreflight: diagnostics.continuationPreflight }
-        : {}),
       ...(diagnostics.coreDelegation
         ? {
             coreDelegation: sanitizedCoreDelegation(diagnostics.coreDelegation),
@@ -12096,9 +12089,6 @@ export async function collectDiagnostics(
     rootSessionObserved: Boolean(
       diagnostics.rootSession && !diagnostics.rootSession.error,
     ),
-    ...(diagnostics.continuationPreflight
-      ? { continuationPreflight: diagnostics.continuationPreflight }
-      : {}),
     ...(ctx.scenario === "continuation"
       ? {
           rootDelegation:
@@ -12732,55 +12722,12 @@ function sanitizedCoreHandoff(value) {
   };
 }
 
-function continuationPreflightFromTerminal(output) {
-  if (typeof output !== "string") return null;
-  const matches = output.matchAll(
-    /\[continuation-preflight-probe\]\s*\{([^{}]{1,2048})\}/gu,
-  );
-  let latest = null;
-  for (const match of matches) {
-    const fields = match[1];
-    const number = (name) => {
-      const found = fields.match(
-        new RegExp(`\\b${name}:\\s*(\\d+)\\b`, "u"),
-      );
-      return found ? Number(found[1]) : null;
-    };
-    const boolean = (name) => {
-      const found = fields.match(
-        new RegExp(`\\b${name}:\\s*(true|false)\\b`, "u"),
-      );
-      return found ? found[1] === "true" : null;
-    };
-    const value = {
-      matchingSavedStateCount: number("matchingSavedStateCount"),
-      activeSavedStateCount: number("activeSavedStateCount"),
-      acceptedCompletedAck: boolean("acceptedCompletedAck"),
-      matchingLiveHerdrEntryCount: number("matchingLiveHerdrEntryCount"),
-      savedStateCoveredLiveEntryCount: number(
-        "savedStateCoveredLiveEntryCount",
-      ),
-      completedSavedStatePresent: boolean("completedSavedStatePresent"),
-      closedReceiptMatchedLiveEntryCount: number(
-        "closedReceiptMatchedLiveEntryCount",
-      ),
-      closedReceiptPaneNotFoundCount: number(
-        "closedReceiptPaneNotFoundCount",
-      ),
-      finalRepresentationCount: number("finalRepresentationCount"),
-    };
-    if (Object.values(value).every((field) => field !== null)) latest = value;
-  }
-  return latest;
-}
-
 function sanitizedFailureDiagnostics(value) {
   if (!value || typeof value !== "object") return null;
   const count = (input) =>
     Number.isSafeInteger(input) && input >= 0 ? Math.min(input, 256) : null;
   const root = value.rootDelegation;
   const supervisor = value.supervisorAgent;
-  const continuationPreflight = value.continuationPreflight;
   return {
     ...(typeof value.stage === "string" &&
     /^[a-z0-9-]{1,80}$/u.test(value.stage)
@@ -12838,37 +12785,6 @@ function sanitizedFailureDiagnostics(value) {
                 ? supervisor.childSessionObserved
                 : false,
             matchingMailboxes: count(supervisor.matchingMailboxes),
-          },
-        }
-      : {}),
-    ...(continuationPreflight && typeof continuationPreflight === "object"
-      ? {
-          continuationPreflight: {
-            matchingSavedStateCount: count(
-              continuationPreflight.matchingSavedStateCount,
-            ),
-            activeSavedStateCount: count(
-              continuationPreflight.activeSavedStateCount,
-            ),
-            acceptedCompletedAck:
-              continuationPreflight.acceptedCompletedAck === true,
-            matchingLiveHerdrEntryCount: count(
-              continuationPreflight.matchingLiveHerdrEntryCount,
-            ),
-            savedStateCoveredLiveEntryCount: count(
-              continuationPreflight.savedStateCoveredLiveEntryCount,
-            ),
-            completedSavedStatePresent:
-              continuationPreflight.completedSavedStatePresent === true,
-            closedReceiptMatchedLiveEntryCount: count(
-              continuationPreflight.closedReceiptMatchedLiveEntryCount,
-            ),
-            closedReceiptPaneNotFoundCount: count(
-              continuationPreflight.closedReceiptPaneNotFoundCount,
-            ),
-            finalRepresentationCount: count(
-              continuationPreflight.finalRepresentationCount,
-            ),
           },
         }
       : {}),
