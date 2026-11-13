@@ -231,9 +231,10 @@ test("setup:hooks enables hooks without replacing existing hooks", () => {
     assert.equal(git("config", "--get", "core.hooksPath"), customHooks);
 
     git("config", "--local", "--unset", "core.hooksPath");
-    writeFileSync(
-      globalConfig,
-      `[core]\n\thooksPath = ${join(copied, ".githooks")}\n`,
+    execFileSync(
+      "git",
+      ["config", "--file", globalConfig, "core.hooksPath", join(copied, ".githooks")],
+      { env },
     );
     const global = setup();
     assert.notEqual(global.status, 0);
