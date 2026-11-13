@@ -1787,8 +1787,9 @@ test("completed and failed one-shot agents converge after durable delivery", asy
         ? { text: child.agentLabel }
         : {
             error: {
-              code: "empty_result" as const,
-              message: "agent returned no result",
+              code: "execution_error" as const,
+              message:
+                "Agent model execution failed (synthetic-provider/failed-model): 429 Too Many Requests",
             },
           }),
       completedAt: Date.now(),
@@ -1817,6 +1818,13 @@ test("completed and failed one-shot agents converge after durable delivery", asy
     for (let index = 0; index < 5; index++)
       await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(deliveries, 1);
+    const delivered = pi.sent.find(
+      (message: any) => message.customType === "pi-herdsman-agent-result",
+    );
+    const expectedFailure =
+      "Agent model execution failed (synthetic-provider/failed-model): 429 Too Many Requests";
+    assert.equal((delivered as any)?.details.error.message, expectedFailure);
+    assert.ok((delivered as any)?.content.includes(expectedFailure));
     assert.deepEqual(lifecycle.closeOrder, [children[0].agentLabel]);
     assert.ok(readResult(mailboxes[1], children[1].completedRequestId!));
 
