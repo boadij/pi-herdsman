@@ -16,6 +16,22 @@ coordinate parallel, branch-based project work across independent Leads.
 Pi runs the coding-agent conversations; herdr manages their terminal sessions
 and workspaces; Herdsman coordinates delegation, ownership, and supervision.
 
+## Emergent agentic workflows
+
+**Define the boundaries, not the workflow.**
+
+A fixed agent pipeline defines the handoff sequence in advance. Pi Herdsman
+instead lets coordinating models decide how to break down an objective, which
+eligible Agents or Leads to delegate to, and when to run independent work in
+parallel or adapt as results arrive. The execution path emerges at runtime
+rather than following a mandatory Agent A → Agent B → Agent C sequence.
+
+**Dynamic execution, explicit boundaries.** Herdsman still enforces
+delegation permissions, ownership, project assignments, and supervision.
+Bring your own workflow if you have one; a predefined sequence is not required.
+See [Coordination](docs/concepts/coordination.md#emergent-workflows-explicit-boundaries)
+for the model behind this approach.
+
 ## Demo
 
 _Advanced orchestration: a live Manager → Lead → Agent workflow._
