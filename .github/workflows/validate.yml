@@ -315,7 +315,7 @@ jobs:
             diagnostics: "1"
             summary: "1"
           - phase: Ordinary Lead
-            smoke_phase: delivery
+            smoke_phase: lead-core
             diagnostics: "1"
             summary: "0"
     steps:
