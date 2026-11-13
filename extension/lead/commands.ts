@@ -788,19 +788,28 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       return `${layer.scope} · ${basename(layer.path)}${changes.length ? ` ${changes.join("; ")}` : ""}`;
                     });
                     const fragments = inspection.bodyFragments;
-                    if (!fragments.length)
-                      add(title, undefined, undefined, "text", provenance);
+                    let provenanceAttached = false;
                     fragments.forEach((fragment, index) => {
-                      for (const part of expandedFragments[index] ?? [])
-                        if (part.text.length)
-                          add(
-                            title,
-                            part.text,
-                            part.filePath ?? fragment.path,
-                            "markdown",
-                            index === 0 ? provenance : undefined,
-                          );
+                      for (const part of expandedFragments[index] ?? []) {
+                        if (!part.text.length) continue;
+                        add(
+                          title,
+                          part.text,
+                          part.filePath ?? fragment.path,
+                          "markdown",
+                          provenanceAttached ? undefined : provenance,
+                        );
+                        provenanceAttached = true;
+                      }
                     });
+                    if (!provenanceAttached)
+                      add(
+                        title,
+                        undefined,
+                        undefined,
+                        "text",
+                        provenance.length ? provenance : undefined,
+                      );
                   };
                   const promptMode =
                     current.frontmatter.systemPromptMode ?? "append";

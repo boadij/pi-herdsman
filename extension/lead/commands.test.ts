@@ -567,9 +567,16 @@ test("ordinary Agent Details order native and appended context by launch mode", 
         "Herdsman shared guidance",
       ],
     },
+    {
+      name: "empty first source",
+      frontmatter: { inheritGlobalContext: true, inheritProjectContext: true },
+      expected: ["definition body"],
+      emptyFirstFragment: true,
+    },
   ]) {
     const choices = ["agents", "reviewer", "details", undefined, undefined];
     let displayed: string[] | undefined;
+    let inspectedSections: any[] | undefined;
     const notices: string[] = [];
     const definition = {
       name: "reviewer",
@@ -585,10 +592,39 @@ test("ordinary Agent Details order native and appended context by launch mode", 
       contextAgentDefinitions: async () => ({ definitions: [definition] }),
       inspectAgentDefinition: () => ({
         definition,
-        layers: [],
-        bodyFragments: [{ scope: "global", text: "definition body" }],
+        layers: scenario.emptyFirstFragment
+          ? [
+              {
+                scope: "global",
+                path: "/reviewer.md",
+                supplied: {},
+                after: {},
+                body: "",
+                bodyAction: "append",
+              },
+            ]
+          : [],
+        bodyFragments: scenario.emptyFirstFragment
+          ? [
+              { path: "/empty.md", scope: "global", body: "@empty.md" },
+              {
+                path: "/reviewer.md",
+                scope: "global",
+                body: "definition body",
+              },
+            ]
+          : [
+              {
+                path: "/reviewer.md",
+                scope: "global",
+                body: "definition body",
+              },
+            ],
       }),
-      expandDefinitionBodyFragments: () => ["definition body"],
+      expandDefinitionBodyFragments: () =>
+        scenario.emptyFirstFragment
+          ? ["", "definition body"]
+          : ["definition body"],
       selectedAgentContextFiles: () => [
         { path: "/workspace/AGENTS.md", content: "context sentinel" },
       ],
@@ -598,6 +634,7 @@ test("ordinary Agent Details order native and appended context by launch mode", 
       agentDefinitionMetadata: () => ({ name: "reviewer" }),
       formatAgentDefinitions: () => ["reviewer"],
       appendDefinitionsEntry: (data: any) => {
+        inspectedSections = data.inspector.sections;
         displayed = [
           ...data.inspector.summary,
           ...data.inspector.sections.flatMap((section: any) =>
@@ -629,6 +666,20 @@ test("ordinary Agent Details order native and appended context by launch mode", 
       [...positions].sort((a, b) => a - b),
       prompt,
     );
+    if (scenario.emptyFirstFragment) {
+      const firstVisible = inspectedSections!.find(
+        (section) => section.content === "definition body",
+      );
+      assert.ok(firstVisible, JSON.stringify(inspectedSections));
+      assert.ok(
+        firstVisible.changes?.length,
+        JSON.stringify(inspectedSections),
+      );
+      assert.equal(
+        inspectedSections!.some((section) => section.content === ""),
+        false,
+      );
+    }
   }
 });
 
