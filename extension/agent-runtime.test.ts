@@ -42,6 +42,7 @@ import support, {
   fakeContext,
   fakePi,
   fakeAgentContext,
+  invokeEventHandlers,
   managedState,
   agentControllerExecutor,
   assignmentLockPathForTest,
@@ -143,6 +144,63 @@ test("Pi 1.5.0 includes non-triggering startup messages in the first provider re
       /startup sibling/,
       JSON.stringify(request),
     );
+  } finally {
+    await session.dispose();
+  }
+});
+
+test("Pi dispatches all session_start handlers before resources_discover", async () => {
+  const faux = fauxProvider({
+    provider: "dispatcher-test",
+    models: [{ id: "test", contextWindow: 4096, maxTokens: 128 }],
+  });
+  const modelRuntime = await ModelRuntime.create({
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  modelRuntime.registerNativeProvider(faux.provider);
+  const settingsManager = SettingsManager.inMemory();
+  const order: string[] = [];
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    settingsManager,
+    noExtensions: true,
+    noContextFiles: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    extensionFactories: [
+      (api) =>
+        api.on("session_start", async () => {
+          order.push("other-start");
+        }),
+      (api) => {
+        api.on("session_start", async () => {
+          order.push("last-start");
+        });
+        api.on("resources_discover", async () => {
+          order.push("resources");
+        });
+      },
+    ],
+  });
+  await resourceLoader.reload();
+  const { session } = await createAgentSession({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    modelRuntime,
+    model: faux.getModel()!,
+    settingsManager,
+    resourceLoader,
+    sessionManager: SessionManager.inMemory(WORKSPACE),
+  });
+  try {
+    faux.setResponses([() => fauxAssistantMessage("done")]);
+    const runner = (session as any)._extensionRunner;
+    await runner.emit({ type: "session_start", reason: "startup" });
+    await runner.emitResourcesDiscover(WORKSPACE, "startup");
+    assert.deepEqual(order, ["other-start", "last-start", "resources"]);
   } finally {
     await session.dispose();
   }
@@ -7439,6 +7497,252 @@ test("agent persists one identity entry before mailbox initialization", async ()
   assert.ok(readAgentState(mailbox));
   assert.equal(readAgentStartupOutcome(mailbox)?.status, "ready");
   agent.events.get("session_shutdown")?.[0]();
+});
+
+test("participating fresh startup waits for resources_discover before readiness", async () => {
+  const mailbox = setAgentEnvironment();
+  const agent = fakePi({
+    entries: [
+      {
+        type: "message",
+        id: "setup001",
+        parentId: null,
+        timestamp: "2025-01-01T00:00:00.000Z",
+        message: {
+          role: "system",
+          content: "",
+          sections: { preamble: "Setup prompt" },
+          timestamp: 1735689600000,
+        },
+      },
+      {
+        type: "custom",
+        id: "setup002",
+        parentId: "setup001",
+        timestamp: "2025-01-01T00:00:01.000Z",
+        customType: "test/setup",
+        data: {},
+      },
+    ],
+  });
+  registerExtension!(agent.pi as never);
+  let initialized = false;
+  agent.pi.events.on("pi-herdsman:managed-agent-bootstrap", (value: any) => {
+    if (value.phase !== "initialize") return;
+    value.accept(async () => {
+      initialized = true;
+    });
+  });
+  const { writeAgentBootstrap } = await import("./mailbox.ts");
+  writeAgentBootstrap(mailbox, {
+    version: 5,
+    build: HERDSMAN_BUILD,
+    runId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    ownerSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    workspaceId: WORKSPACE,
+    agentLabel: "registered-agent",
+    childSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    participants: [{ id: "test/identity", payload: "opaque" }],
+  });
+  const context = fakeAgentContext(agent.entries);
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    assert.equal(initialized, false);
+    assert.equal(readAgentState(mailbox), undefined);
+    assert.equal(readAgentStartupOutcome(mailbox), undefined);
+    await agent.events.get("resources_discover")![0](undefined, context);
+    assert.equal(initialized, true);
+    assert.equal(
+      readAgentState(mailbox)?.piSessionId,
+      "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    );
+    assert.equal(readAgentStartupOutcome(mailbox)?.status, "ready");
+    assert.equal(agent.events.get("resources_discover")?.length, 1);
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("deferred bootstrap rechecks reserved-session freshness after later session_start handlers", async () => {
+  const mailbox = setAgentEnvironment("bootstrap-later-start");
+  const agent = fakePi();
+  registerExtension!(agent.pi as never);
+  let initialized = false;
+  agent.pi.events.on("pi-herdsman:managed-agent-bootstrap", (value: any) => {
+    if (value.phase !== "initialize") return;
+    value.accept(() => {
+      initialized = true;
+    });
+  });
+  agent.pi.on("session_start", async () => {
+    agent.entries.push({
+      type: "custom_message",
+      id: "later001",
+      parentId: null,
+      timestamp: "2025-01-01T00:00:01.000Z",
+      customType: "test/later-session-start",
+      content: "session activity appended after Herdsman preflight",
+    });
+  });
+  const { writeAgentBootstrap } = await import("./mailbox.ts");
+  writeAgentBootstrap(mailbox, {
+    version: 5,
+    build: HERDSMAN_BUILD,
+    runId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    ownerSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    workspaceId: WORKSPACE,
+    agentLabel: "bootstrap-later-start",
+    childSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    participants: [{ id: "test/identity", payload: "opaque" }],
+  });
+  const context = fakeAgentContext(agent.entries);
+  try {
+    await invokeEventHandlers(agent, "session_start")(undefined, context);
+    assert.ok(
+      agent.entries.some((entry: any) => entry.type === "custom_message"),
+    );
+    await invokeEventHandlers(agent, "resources_discover")(undefined, context);
+    assert.equal(initialized, false);
+    assert.equal(readAgentStartupOutcome(mailbox)?.status, "failed");
+    assert.equal(readAgentState(mailbox), undefined);
+    assert.deepEqual(agent.sentUsers, []);
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("reserved child session rejects prior conversational activity", async () => {
+  const mailbox = setAgentEnvironment("bootstrap-prior-conversation");
+  const agent = fakePi({
+    entries: [
+      {
+        type: "message",
+        id: "prior001",
+        parentId: null,
+        timestamp: "2025-01-01T00:00:00.000Z",
+        message: {
+          role: "user",
+          content: "Prior conversation",
+          timestamp: 1735689600000,
+        },
+      },
+    ],
+  });
+  registerExtension!(agent.pi as never);
+  const { writeAgentBootstrap } = await import("./mailbox.ts");
+  writeAgentBootstrap(mailbox, {
+    version: 5,
+    build: HERDSMAN_BUILD,
+    runId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    ownerSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    workspaceId: WORKSPACE,
+    agentLabel: "bootstrap-prior-conversation",
+    childSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    participants: [{ id: "test/identity", payload: "opaque" }],
+  });
+  const context = fakeAgentContext(agent.entries);
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    assert.equal(readAgentStartupOutcome(mailbox)?.status, "failed");
+    assert.equal(readAgentState(mailbox), undefined);
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("reserved child session rejects unknown session entry types", async () => {
+  const mailbox = setAgentEnvironment("bootstrap-unknown-entry");
+  const agent = fakePi({
+    entries: [
+      {
+        type: "future_context_entry",
+        id: "unknown001",
+        parentId: null,
+        timestamp: "2025-01-01T00:00:00.000Z",
+      },
+    ],
+  });
+  registerExtension!(agent.pi as never);
+  const { writeAgentBootstrap } = await import("./mailbox.ts");
+  writeAgentBootstrap(mailbox, {
+    version: 5,
+    build: HERDSMAN_BUILD,
+    runId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    ownerSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    workspaceId: WORKSPACE,
+    agentLabel: "bootstrap-unknown-entry",
+    childSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    participants: [{ id: "test/identity", payload: "opaque" }],
+  });
+  const context = fakeAgentContext(agent.entries);
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    assert.equal(readAgentStartupOutcome(mailbox)?.status, "failed");
+    assert.equal(readAgentState(mailbox), undefined);
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("deferred bootstrap failures publish failed outcomes and never become ready", async () => {
+  for (const scenario of [
+    "missing",
+    "duplicate",
+    "throwing",
+    "session-mismatch",
+  ] as const) {
+    const label = `bootstrap-${scenario}`;
+    const mailbox = setAgentEnvironment(label);
+    const agent = fakePi();
+    registerExtension!(agent.pi as never);
+    if (scenario !== "missing" && scenario !== "session-mismatch")
+      agent.pi.events.on(
+        "pi-herdsman:managed-agent-bootstrap",
+        (value: any) => {
+          if (value.phase !== "initialize") return;
+          if (scenario === "duplicate") {
+            value.accept(() => {});
+            value.accept(() => {});
+          } else
+            value.accept(() => {
+              throw new Error("initializer failed");
+            });
+        },
+      );
+    const { writeAgentBootstrap } = await import("./mailbox.ts");
+    writeAgentBootstrap(mailbox, {
+      version: 5,
+      build: HERDSMAN_BUILD,
+      runId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      ownerSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      workspaceId: WORKSPACE,
+      agentLabel: label,
+      childSessionId:
+        scenario === "session-mismatch"
+          ? "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+          : "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      participants: [{ id: "test/identity", payload: "opaque" }],
+    });
+    const context = fakeAgentContext(agent.entries);
+    try {
+      await agent.events.get("session_start")![0](undefined, context);
+      if (scenario !== "session-mismatch")
+        await agent.events.get("resources_discover")![0](undefined, context);
+      assert.equal(
+        readAgentStartupOutcome(mailbox)?.status,
+        "failed",
+        scenario,
+      );
+      assert.equal(readAgentState(mailbox), undefined, scenario);
+    } finally {
+      agent.events.get("session_shutdown")?.[0]();
+      resetAgentMailbox(mailbox);
+    }
+  }
 });
 
 test("agent reports failure after state publication and stops initialization", async () => {

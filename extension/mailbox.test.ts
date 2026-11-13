@@ -1541,7 +1541,8 @@ test("bootstrap sidecar round-trips atomically, rejects duplicates, and resets",
     ownerSessionId: state.ownerSessionId,
     workspaceId: state.workspaceId,
     agentLabel: state.agentLabel,
-    participants: [{ id: "pi-test/bridge", payload: "opaque" }],
+    childSessionId: "44444444-4444-4444-8444-444444444444",
+    participants: [{ id: "test/identity", payload: "opaque" }],
   };
   writeAgentBootstrap(path, bootstrap);
   assert.deepEqual(readAgentBootstrap(path), bootstrap);
@@ -1564,11 +1565,18 @@ test("bootstrap sidecar round-trips atomically, rejects duplicates, and resets",
   );
   assert.throws(
     () =>
+      writeAgentBootstrap(path, { ...bootstrap, childSessionId: "invalid" }),
+    /child session UUID/,
+  );
+  assert.throws(
+    () => writeAgentBootstrap(path, { ...bootstrap, extra: true } as any),
+    /Unknown mailbox field/,
+  );
+  assert.throws(
+    () =>
       writeAgentBootstrap(path, {
         ...bootstrap,
-        participants: [
-          { id: "pi-test/bridge", payload: "x".repeat(64 * 1024) },
-        ],
+        participants: [{ id: "test/identity", payload: "x".repeat(64 * 1024) }],
       }),
     /too large/,
   );

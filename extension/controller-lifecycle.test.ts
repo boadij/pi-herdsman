@@ -910,8 +910,11 @@ test("parent delegates two same-definition children with exact ownership", async
     realFs.writeFileSync(join(PI_AGENTS_DIR, name), content, "utf8");
   const lifecycle = delegatedLifecycleExecutor(parent);
   const starts: string[][] = [];
+  const reservations: string[] = [];
   const order: string[] = [];
   let duplicateRegistration = false;
+  let throwDuringPrepareDispatch = false;
+  let retainedPrepareEvent: any;
   let commitFails = false;
   let pi: ReturnType<typeof fakePi>;
   pi = fakePi({
@@ -925,17 +928,19 @@ test("parent delegates two same-definition children with exact ownership", async
         const mailbox = agentMailboxPath(WORKSPACE, label);
         const record = readAgentBootstrap(mailbox);
         if (record) {
-          order.push("child initialize");
-          pi.pi.events.emit(MANAGED_AGENT_BOOTSTRAP_EVENT, {
-            protocol: 1,
-            phase: "initialize",
-            context: fakeAgentContext([]),
-            agent: label,
-            participant: record.participants[0],
-            accept(initialize: () => void) {
-              initialize();
-            },
-          });
+          for (const participant of record.participants) {
+            order.push(`child initialize ${participant.id}`);
+            pi.pi.events.emit(MANAGED_AGENT_BOOTSTRAP_EVENT, {
+              protocol: 1,
+              phase: "initialize",
+              context: fakeAgentContext([]),
+              agent: label,
+              participant,
+              accept(initialize: () => void) {
+                initialize();
+              },
+            });
+          }
           removeAgentBootstrap(mailbox);
         }
       }
@@ -952,6 +957,13 @@ test("parent delegates two same-definition children with exact ownership", async
       }
       const result = lifecycle.exec(command, args);
       if (starting) {
+        const label = lifecycle.paneEnvironment.PI_HERDSMAN_LABEL;
+        const state = lifecycle.live.get(label);
+        const sessionArg = args.indexOf("--session-id");
+        if (sessionArg >= 0 && state) {
+          state.piSessionId = args[sessionArg + 1]!;
+          writeAgentState(agentMailboxPath(WORKSPACE, label), state);
+        }
         assert.equal(
           readAgentBootstrap(
             agentMailboxPath(
@@ -969,13 +981,26 @@ test("parent delegates two same-definition children with exact ownership", async
   pi.pi.events.on(MANAGED_AGENT_BOOTSTRAP_EVENT, (event: any) => {
     if (event.phase === "prepare") {
       order.push("prepare");
+      const firstReservation = event.reserveChildSessionId();
+      reservations.push(firstReservation);
       event.register("test/participant", async () => ({
         payload: "opaque",
         commit: () => {
           if (commitFails) throw new Error("parent commit failed");
-          order.push("parent commit");
+          order.push("parent commit test/participant");
         },
       }));
+      event.register("test/observer", async () => {
+        const secondReservation = event.reserveChildSessionId();
+        reservations.push(secondReservation);
+        return {
+          payload: "observed",
+          commit: () => {
+            if (commitFails) throw new Error("parent commit failed");
+            order.push("parent commit test/observer");
+          },
+        };
+      });
     } else if (event.phase === "initialize") {
       event.accept(() => {
         order.push("child initializer");
@@ -983,8 +1008,13 @@ test("parent delegates two same-definition children with exact ownership", async
     }
   });
   pi.pi.events.on(MANAGED_AGENT_BOOTSTRAP_EVENT, (event: any) => {
-    if (duplicateRegistration && event.phase === "prepare")
+    if (event.phase !== "prepare") return;
+    if (duplicateRegistration)
       event.register("test/participant", async () => undefined);
+    if (throwDuringPrepareDispatch) {
+      retainedPrepareEvent = event;
+      throw new Error("synchronous prepare listener failed");
+    }
   });
   registerExtension!(pi.pi as never);
   const context = fakeAgentContext([
@@ -1042,12 +1072,22 @@ test("parent delegates two same-definition children with exact ownership", async
       );
       if (task === "first child") {
         order.push("first task delivered");
+        assert.equal(reservations.length, 2);
+        assert.match(reservations[0]!, /^[0-9a-f-]{36}$/u);
+        assert.equal(reservations[1], reservations[0]);
+        assert.deepEqual(starts[0]!.slice(starts[0]!.indexOf("--session-id")), [
+          "--session-id",
+          reservations[0],
+        ]);
         assert.deepEqual(order, [
           "prepare",
-          "child initialize",
+          "child initialize test/participant",
+          "child initializer",
+          "child initialize test/observer",
           "child initializer",
           "child readiness",
-          "parent commit",
+          "parent commit test/participant",
+          "parent commit test/observer",
           "first task delivered",
         ]);
       }
@@ -1071,6 +1111,27 @@ test("parent delegates two same-definition children with exact ownership", async
     );
     assert.equal(starts.length, 2);
     duplicateRegistration = false;
+    throwDuringPrepareDispatch = true;
+    const dispatchFailure = await pi.tools
+      .find((tool) => tool.name === "delegate_agent")!
+      .execute(
+        "failed-prepare-dispatch",
+        { definition: "child", task: "must not launch" },
+        undefined,
+        undefined,
+        context,
+      );
+    assert.equal(dispatchFailure.details.ok, false);
+    assert.match(
+      JSON.stringify(dispatchFailure.details),
+      /synchronous prepare listener failed/u,
+    );
+    assert.throws(
+      () => retainedPrepareEvent.reserveChildSessionId(),
+      /Managed-Agent bootstrap preparation is closed/u,
+    );
+    assert.equal(starts.length, 2);
+    throwDuringPrepareDispatch = false;
     commitFails = true;
     const commitFailure = await pi.tools
       .find((tool) => tool.name === "delegate_agent")!
@@ -17167,6 +17228,8 @@ test("child bootstrap initializer is awaited before readiness and sidecar remova
   try {
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, fakeAgentContext([]));
+    for (const handler of pi.events.get("resources_discover") ?? [])
+      await handler(undefined, fakeAgentContext([]));
     assert.deepEqual(observed, ["initialized"]);
     assert.equal(readAgentBootstrap(mailbox), undefined);
     assert.ok(readAgentState(mailbox));
@@ -17250,6 +17313,8 @@ test("child bootstrap fails closed on identity, build, duplicate, and initialize
       registerExtension!(pi.pi as never);
       try {
         for (const handler of pi.events.get("session_start") ?? [])
+          await handler(undefined, fakeAgentContext([]));
+        for (const handler of pi.events.get("resources_discover") ?? [])
           await handler(undefined, fakeAgentContext([]));
         assert.equal(readAgentState(mailbox), undefined);
         assert.ok(readAgentBootstrap(mailbox));

@@ -8,9 +8,5 @@
     "allowImportingTsExtensions": true,
     "types": ["node"]
   },
-  "files": [
-    "extension/index.ts",
-    "extension/integrations/pi-codex-context-sharing.ts",
-    "bin/peer-bridge.ts"
-  ]
+  "files": ["extension/index.ts", "bin/peer-bridge.ts"]
 }

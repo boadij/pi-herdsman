@@ -2807,11 +2807,11 @@ export function startupExecutor(
 } {
   const mailbox = agentMailboxPath(WORKSPACE, label);
   let getCount = 0;
+  let startupSessionIdentity = sessionObservationId ?? DEFAULT_PI_SESSION_ID;
   const sessionObservation = () =>
     sessionObservationId ??
     (countStartup ? sessionForGet(getCount) : null) ??
-    DEFAULT_PI_SESSION_ID;
-  const startupSessionIdentity = sessionObservationId ?? DEFAULT_PI_SESSION_ID;
+    startupSessionIdentity;
   let runId = testRunId;
   let ownerSessionId = testRunId ? LEAD_SESSION_ID : "";
   let activePaneId = testPaneId;
@@ -3215,6 +3215,9 @@ export function startupExecutor(
       if (args[0] !== "agent" || args[1] !== "start")
         return { stdout: "{}", stderr: "", code: 0 };
       onStart?.(args);
+      const sessionIdIndex = args.indexOf("--session-id");
+      if (sessionIdIndex >= 0 && args[sessionIdIndex + 1])
+        startupSessionIdentity = args[sessionIdIndex + 1]!;
       const startedAgent = {
         name: args[2],
         pane_id: activePaneId,

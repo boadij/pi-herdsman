@@ -31,7 +31,6 @@ Run current tool versions on demand, not in CI. Record actual versions, commands
 {
   "entry": [
     "extension/index.ts!",
-    "extension/integrations/pi-codex-context-sharing.ts!",
     "scripts/{build,check,ci-scope,package-audit,smoke,test-env,tool-policy-diagnostic}.mjs!"
   ],
   "project": [

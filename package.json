@@ -81,14 +81,12 @@
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
-    "@howaboua/pi-codex-conversion": "^3.0.45 || ^4.0.0",
     "typebox": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "1.5.2",
     "@earendil-works/pi-coding-agent": "1.5.2",
     "@earendil-works/pi-tui": "1.5.2",
-    "@howaboua/pi-codex-conversion": "4.0.4",
     "@modelcontextprotocol/sdk": "1.32.0",
     "@types/node": "22.19.19",
     "@types/proper-lockfile": "4.1.4",
@@ -115,11 +113,6 @@
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
-  },
-  "peerDependenciesMeta": {
-    "@howaboua/pi-codex-conversion": {
-      "optional": true
-    }
   },
   "dependencies": {
     "proper-lockfile": "4.1.2"
