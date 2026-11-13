@@ -134,6 +134,32 @@ function managerAuthorityStatus(probe, expected) {
     : "manager-identity-mismatch";
 }
 
+function managerActivation(probe, expected, nativeSessionId) {
+  const matches = Array.isArray(probe?.peers)
+    ? probe.peers.filter(
+        (peer) =>
+          peer?.role === "manager" &&
+          peer.paneId === expected.paneId &&
+          peer.workspaceId === expected.workspaceId,
+      )
+    : [];
+  if (matches.length > 1) return { status: "ambiguous-manager-records" };
+  const sessionId = matches[0]?.piSessionId;
+  const status = managerAuthorityStatus(probe, {
+    ...expected,
+    sessionId: sessionId ?? nativeSessionId ?? "",
+  });
+  if (status !== "established") return { status };
+  if (
+    typeof sessionId !== "string" ||
+    !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(sessionId)
+  )
+    return { status: "invalid-session-id" };
+  if (nativeSessionId && nativeSessionId !== sessionId)
+    return { status: "native-session-mismatch" };
+  return { status, sessionId };
+}
+
 function singleReplyStatus(entries, replyId) {
   const matches = entries.flatMap((entry, index) =>
     entry.type === "custom_message" &&
@@ -256,19 +282,20 @@ assert.deepEqual(
   { replyCount: 0, assistantCompleted: false },
 );
 
+const managerSessionId = "12345678-1234-1234-1234-123456789abc";
 const expectedManager = {
   dataRoot: "/fixture",
-  sessionId: "session",
   paneId: "pane",
   workspaceId: "workspace",
 };
 const managerRecord = {
   role: "manager",
-  piSessionId: "session",
+  piSessionId: managerSessionId,
   paneId: "pane",
   workspaceId: "workspace",
   claim: { id: "claim" },
 };
+const managerProbe = { dataRoot: "/fixture", peers: [managerRecord] };
 for (const [probe, expectedStatus] of [
   [{ dataRoot: "/fixture", peers: [] }, "manager-record-absent"],
   [
@@ -276,7 +303,58 @@ for (const [probe, expectedStatus] of [
     "manager-identity-mismatch",
   ],
 ])
-  assert.equal(managerAuthorityStatus(probe, expectedManager), expectedStatus);
+  assert.equal(
+    managerAuthorityStatus(probe, {
+      ...expectedManager,
+      sessionId: managerSessionId,
+    }),
+    expectedStatus,
+  );
+assert.deepEqual(managerActivation(managerProbe, expectedManager), {
+  status: "established",
+  sessionId: managerSessionId,
+});
+assert.deepEqual(
+  managerActivation(managerProbe, expectedManager, managerSessionId),
+  { status: "established", sessionId: managerSessionId },
+);
+assert.deepEqual(
+  managerActivation(managerProbe, expectedManager, "different-session"),
+  { status: "native-session-mismatch" },
+);
+assert.deepEqual(
+  managerActivation({ dataRoot: "/fixture", peers: [] }, expectedManager),
+  { status: "manager-record-absent" },
+);
+assert.deepEqual(
+  managerActivation(
+    { dataRoot: "/fixture", peers: [managerRecord, managerRecord] },
+    expectedManager,
+  ),
+  { status: "ambiguous-manager-records" },
+);
+assert.deepEqual(
+  managerActivation(
+    { dataRoot: "/wrong", peers: [managerRecord] },
+    expectedManager,
+  ),
+  { status: "wrong-data-root" },
+);
+assert.deepEqual(
+  managerActivation(
+    { dataRoot: "/fixture", peers: [{ ...managerRecord, claim: undefined }] },
+    expectedManager,
+  ),
+  { status: "manager-identity-mismatch" },
+);
+assert.deepEqual(
+  managerActivation(
+    { dataRoot: "/fixture", peers: [{ ...managerRecord, paneId: "other" }] },
+    expectedManager,
+    managerSessionId,
+  ),
+  { status: "manager-identity-mismatch" },
+);
 assert.deepEqual(
   managerReplyCompletion(
     [
@@ -1254,20 +1332,20 @@ try {
     const submission = JSON.parse(
       herdr(side, ["agent", "prompt", pane, "/manager"], { timeout: 30_000 }),
     );
-    const sessionFile = submission.result?.agent?.agent_session?.value;
-    const sessionId =
-      typeof sessionFile === "string"
-        ? sessionFile.match(/_([0-9a-f-]{36})\.jsonl$/u)?.[1]
+    const nativeSessionFile = submission.result?.agent?.agent_session?.value;
+    const nativeSessionId =
+      typeof nativeSessionFile === "string"
+        ? nativeSessionFile.match(/_([0-9a-f-]{36})\.jsonl$/u)?.[1]
         : undefined;
-    if (!sessionId)
-      throw new Error(
-        `${side}: Manager activation omitted exact Pi session identity`,
-      );
-    resources[side].managerSessionFile = sessionFile;
-    const expectedRoot = `${resources[side].runtime.piAgentDir}/pi-herdsman`;
+    if (nativeSessionFile != null && !nativeSessionId)
+      throw new Error(`${side}: malformed native Pi session reference`);
+    const expected = {
+      dataRoot: `${resources[side].runtime.piAgentDir}/pi-herdsman`,
+      paneId: pane,
+      workspaceId: resources[side].workspaceId,
+    };
     const deadline = Date.now() + 45_000;
-    let authority = "absent";
-    let activated = false;
+    let activation = { status: "manager-record-absent" };
     while (Date.now() < deadline) {
       const probe = JSON.parse(
         exec(
@@ -1276,26 +1354,26 @@ try {
           ["--user", "herdsman", ...herdrEnv(side)],
         ),
       );
-      authority = managerAuthorityStatus(probe, {
-        dataRoot: expectedRoot,
-        sessionId,
-        paneId: pane,
-        workspaceId: resources[side].workspaceId,
-      });
-      if (authority === "invalid-probe-response")
-        throw new Error(`${side}: invalid Manager authority probe response`);
-      if (authority === "established") {
-        activated = true;
-        break;
-      }
+      activation = managerActivation(probe, expected, nativeSessionId);
+      if (activation.status === "established") break;
+      if (
+        !["manager-record-absent", "manager-identity-mismatch"].includes(
+          activation.status,
+        )
+      )
+        throw new Error(
+          `${side}: invalid Manager activation (${activation.status})`,
+        );
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
     }
-    if (!activated)
+    if (activation.status !== "established")
       throw new Error(
-        `${side}: exact Manager authority not established (${authority})`,
+        `${side}: Manager authority not established (${activation.status})`,
       );
-    resources[side].managerSessionId = sessionId;
+    resources[side].managerSessionId = activation.sessionId;
     resources[side].managerActivated = true;
+    if (nativeSessionFile != null)
+      resources[side].managerSessionFile = nativeSessionFile;
     save();
   }
 
