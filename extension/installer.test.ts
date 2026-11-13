@@ -672,14 +672,27 @@ test(
   },
 );
 
+const ptyTools = ["script", "python3"].map((tool) => {
+  const result = spawnSync("which", [tool], { encoding: "utf8" });
+  return { tool, path: result.status === 0 ? result.stdout.trim() : "" };
+});
+const missingPtyTools = ptyTools
+  .filter(({ path }) => path.length === 0)
+  .map(({ tool }) => tool);
+
 test(
   "native installer prompts through its controlling terminal and reprompts invalid input",
   {
     skip:
       process.platform === "win32" ||
-      spawnSync("sh", ["-c", "command -v script >/dev/null"]).status !== 0,
+      (process.platform !== "darwin" && missingPtyTools.length > 0),
   },
   () => {
+    assert.deepEqual(
+      missingPtyTools,
+      [],
+      `PTY regression requires script and python3 on macOS; missing: ${missingPtyTools.join(", ") || "none"}`,
+    );
     for (const [input, status] of [
       ["perhaps\nyes\n", "installed"],
       ["n\n", "skipped"],
@@ -694,11 +707,49 @@ test(
           process.platform === "darwin"
             ? ["-q", "/dev/null", "sh", installer]
             : ["-qec", command, "/dev/null"];
-        const result = spawnSync("script", args, {
-          env,
-          input,
-          encoding: "utf8",
-        });
+        // BSD script expects its own stdin to be a terminal. spawnSync(input)
+        // gives it a pipe/socket instead, which makes macOS script's terminal
+        // ioctl fail before it can create the child PTY. Fork it under a real
+        // controlling PTY, then type the answers through that PTY's master.
+        const ptyRunner = String.raw`import errno, os, pty, sys
+payload = sys.stdin.buffer.read()
+pid, master = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[1], [sys.argv[1]] + sys.argv[2:])
+if payload:
+    os.write(master, payload)
+while True:
+    try:
+        chunk = os.read(master, 4096)
+        if not chunk:
+            break
+        sys.stdout.buffer.write(chunk)
+        sys.stdout.buffer.flush()
+    except OSError as error:
+        if error.errno == errno.EIO:
+            break
+        raise
+_, status = os.waitpid(pid, 0)
+sys.exit(os.waitstatus_to_exitcode(status))`;
+        const result = spawnSync(
+          "python3",
+          ["-c", ptyRunner, "script", ...args],
+          {
+            env,
+            input,
+            encoding: "utf8",
+            timeout: 30_000,
+          },
+        );
+        const timedOut =
+          result.error !== undefined &&
+          "code" in result.error &&
+          result.error.code === "ETIMEDOUT";
+        assert.equal(
+          timedOut,
+          false,
+          "Python PTY runner timed out after 30 seconds",
+        );
         assert.equal(result.status, 0, result.stderr);
         assert.ok(result.stdout.includes("Install pi-web-access? [y/N]"));
         if (input.startsWith("perhaps"))
