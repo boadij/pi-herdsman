@@ -25,7 +25,10 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
 import type { LeadExecutionMode } from "./core.ts";
-import { matchesToolPattern } from "./agent-definitions.ts";
+import {
+  matchesToolPattern,
+  type DefinitionLayerTrace,
+} from "./agent-definitions.ts";
 import {
   projectMessageEnvelope,
   projectMessageLabel,
@@ -57,6 +60,202 @@ import { herdsmanTempRoot, resultPath, resultRef } from "./storage.ts";
 type CustomMessageInput = Parameters<
   Parameters<ExtensionAPI["registerMessageRenderer"]>[1]
 >[0];
+
+export function summarizeDefinitionLayerChanges(
+  layer: DefinitionLayerTrace,
+): string[] {
+  const fields = [
+    "enabled",
+    "description",
+    "model",
+    "thinking",
+    "systemPromptMode",
+    "bodyMode",
+    "noTools",
+    "noBuiltinTools",
+    "tools",
+    "excludeTools",
+    "noSkills",
+    "skills",
+    "noExtensions",
+    "extensions",
+    "agents",
+    "inheritGlobalContext",
+    "inheritProjectContext",
+    "inheritSkills",
+  ] as const;
+  const lines: string[] = [];
+  for (const field of fields) {
+    const before = layer.before?.[field];
+    const after = layer.after[field];
+    if (JSON.stringify(before) === JSON.stringify(after)) continue;
+    if (
+      field === "tools" ||
+      field === "skills" ||
+      field === "extensions" ||
+      field === "agents" ||
+      field === "excludeTools"
+    ) {
+      const supplied = layer.supplied[field];
+      if (
+        field === "tools" &&
+        Array.isArray(supplied) &&
+        supplied.length > 0 &&
+        supplied.every(
+          (entry) => typeof entry === "string" && /^[+-]/u.test(entry),
+        )
+      ) {
+        lines.push(`~ tools: relative ${supplied.join(" ")}`);
+        continue;
+      }
+      const beforeArray = Array.isArray(before) ? before : undefined;
+      const afterArray = Array.isArray(after) ? after : [];
+      if (beforeArray === undefined) {
+        if (afterArray.length)
+          lines.push(`~ ${field}: set to ${afterArray.join(", ")}`);
+        continue;
+      }
+      const removed = beforeArray.filter(
+        (entry) => !afterArray.includes(entry),
+      );
+      const added = afterArray.filter((entry) => !beforeArray.includes(entry));
+      if (removed.length) lines.push(`- ${field}: ${removed.join(", ")}`);
+      if (added.length) lines.push(`+ ${field}: ${added.join(", ")}`);
+      continue;
+    }
+    const next = after === undefined ? "unset" : String(after);
+    if (before === undefined) lines.push(`+ ${field}: ${next}`);
+    else {
+      const previous = String(before);
+      lines.push(`~ ${field}: ${previous} → ${next}`);
+    }
+  }
+  if (layer.bodyAction === "replace")
+    lines.push("~ body: replaced earlier body");
+  else if (layer.bodyAction === "append") lines.push("+ body: appended");
+  else if (layer.bodyAction === "base") lines.push("+ body: base");
+  return lines;
+}
+
+export function createInstructionInspectorView(
+  title: string,
+  lines: readonly string[],
+  theme: Pick<Theme, "fg" | "bold">,
+  isClose: (data: string) => boolean,
+  isToggle: (data: string) => boolean,
+  done: () => void,
+  requestRender: () => void,
+) {
+  const container = new Container();
+  const pageSize = 12;
+  let expanded = false;
+  let scrollOffset = 0;
+  let contentLineCount = 0;
+  const wrapLine = (line: string, width: number): string[] => {
+    if (visibleWidth(line) <= width) return [line];
+    const wrapped: string[] = [];
+    const leading = line.match(/^[ 	│├└─]*/u)?.[0] ?? "";
+    const continuation = " ".repeat(visibleWidth(leading));
+    let current = "";
+    let currentWidth = 0;
+    for (const character of line) {
+      const characterWidth = visibleWidth(character);
+      if (current && currentWidth + characterWidth > width) {
+        wrapped.push(current);
+        current = continuation;
+        currentWidth = visibleWidth(continuation);
+      }
+      current += character;
+      currentWidth += characterWidth;
+    }
+    if (current) wrapped.push(current);
+    return wrapped;
+  };
+  const build = (width: number): void => {
+    const body = new Container();
+    const wrappedLines = lines.flatMap((line) =>
+      wrapLine(line, Math.max(1, width - 4)),
+    );
+    contentLineCount = wrappedLines.length;
+    scrollOffset = Math.min(
+      scrollOffset,
+      Math.max(0, contentLineCount - pageSize),
+    );
+    const visible = expanded
+      ? wrappedLines.slice(scrollOffset, scrollOffset + pageSize)
+      : wrappedLines.slice(0, 8);
+    for (const line of visible)
+      body.addChild(new Text(theme.fg("text", line), 1, 0));
+    const frame = new Container();
+    const pageEnd = Math.min(scrollOffset + pageSize, wrappedLines.length);
+    populateMenuFrame(
+      frame,
+      theme,
+      title,
+      body,
+      expanded
+        ? `↑/↓ · PgUp/PgDn · Home/End · Ctrl+O Compact · Esc Close · ${scrollOffset + 1}–${pageEnd}/${wrappedLines.length}`
+        : "Ctrl+O Expand · Esc Close",
+    );
+    container.clear();
+    container.addChild(frame);
+  };
+  return {
+    render(width: number) {
+      build(width);
+      return container.render(width);
+    },
+    invalidate() {
+      container.invalidate();
+    },
+    handleInput(data: string) {
+      if (isClose(data)) done();
+      else if (isToggle(data)) {
+        expanded = !expanded;
+        scrollOffset = 0;
+      } else if (expanded) {
+        if (
+          data === "PageDown" ||
+          data === "pageDown" ||
+          PiTui.matchesKey(data, PiTui.Key.pageDown)
+        )
+          scrollOffset = Math.min(
+            Math.max(0, contentLineCount - pageSize),
+            scrollOffset + pageSize,
+          );
+        else if (
+          data === "PageUp" ||
+          data === "pageUp" ||
+          PiTui.matchesKey(data, PiTui.Key.pageUp)
+        )
+          scrollOffset = Math.max(0, scrollOffset - pageSize);
+        else if (data === "Home" || PiTui.matchesKey(data, PiTui.Key.home))
+          scrollOffset = 0;
+        else if (data === "End" || PiTui.matchesKey(data, PiTui.Key.end))
+          scrollOffset = Math.max(0, contentLineCount - pageSize);
+        else if (
+          data === "ArrowDown" ||
+          data === "Down" ||
+          PiTui.matchesKey(data, PiTui.Key.down)
+        )
+          scrollOffset = Math.min(
+            Math.max(0, contentLineCount - pageSize),
+            scrollOffset + 1,
+          );
+        else if (
+          data === "ArrowUp" ||
+          data === "Up" ||
+          PiTui.matchesKey(data, PiTui.Key.up)
+        )
+          scrollOffset = Math.max(0, scrollOffset - 1);
+      }
+      requestRender();
+    },
+    get expanded() {
+      return expanded;
+    },
+  };
+}
 
 export function populateMenuFrame(
   container: Container,

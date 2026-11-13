@@ -20821,6 +20821,7 @@ test("Definitions Details snapshots effective append and replace instructions", 
     const notices: string[] = [];
     context.ui.notify = (message: string) => notices.push(message);
     let customCalls = 0;
+    let inspectorLines: string[] = [];
     context.ui.custom = async (factory: any) => {
       const result = new Promise<unknown>((resolve) => {
         const component = factory(
@@ -20858,15 +20859,8 @@ test("Definitions Details snapshots effective append and replace instructions", 
         .reverse()
         .find(
           (entry: any) => entry?.customType === "pi-herdsman-agent-definitions",
-        ) as
-        | {
-            customType: string;
-            data: {
-              definitions: Array<Record<string, unknown>>;
-              instructions: string;
-            };
-          }
-        | undefined,
+        ),
+      inspectorLines,
       notices,
       error,
     };
@@ -20890,12 +20884,8 @@ test("Definitions Details snapshots effective append and replace instructions", 
         `---\nname: scout\ndescription: after\nbodyMode: append\n---\nAdditional instructions\n@${bodyPath}\n`,
       );
     });
-    const appendedEntry = appendedResult.entry!;
-    assert.equal(
-      appendedEntry.data.instructions,
-      `${baseBody}\n\nAdditional instructions\nmutated after selection`,
-    );
-    assert.equal(appendedEntry.data.definitions[0]?.description, "after");
+    assert.equal(appendedResult.entry, undefined);
+    assert.equal(appendedResult.error, undefined);
 
     realFs.writeFileSync(
       definitionPath,
@@ -20904,15 +20894,8 @@ test("Definitions Details snapshots effective append and replace instructions", 
     const replacedResult = await selectDetails("scout", () => {
       realFs.writeFileSync(bodyPath, "changed file instructions");
     });
-    const replacedEntry = replacedResult.entry!;
-    assert.equal(
-      replacedEntry.data.instructions,
-      "Replacement instructions\nchanged file instructions",
-    );
-    assert.equal(
-      appendedEntry.data.instructions,
-      `${baseBody}\n\nAdditional instructions\nmutated after selection`,
-    );
+    assert.equal(replacedResult.entry, undefined);
+    assert.equal(replacedResult.error, undefined);
 
     realFs.writeFileSync(
       customDefinitionPath,

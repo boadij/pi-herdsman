@@ -12,7 +12,11 @@ import {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { readFileSync, statSync, unlinkSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
+import { basename } from "node:path";
+import {
+  chiefGlobalInstructions as selectChiefGlobalInstructions,
+  chiefSystemPrompt as buildChiefSystemPrompt,
+} from "./chief-prompt.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import packageMetadata from "../package.json" with { type: "json" };
@@ -54,7 +58,12 @@ import {
   agentDefinitionMetadata,
   contextAgentDefinitions,
   discoverRoleDefinition,
+  inspectAgentDefinition,
+  inspectRoleDefinition,
   expandAgentBodyFiles,
+  expandDefinitionBodyFragments,
+  expandDefinitionBodyFragmentsWithSources,
+  selectedAgentContextFiles,
   updateAgentOverride,
   VALID_THINKING_LEVELS,
   type AgentDefinition,
@@ -192,6 +201,7 @@ import {
 import { readRootOwners } from "./lead/coordination.ts";
 
 import {
+  createInstructionInspectorView,
   populateMenuFrame,
   collapseDisplayText,
   formatAgentDefinitions,
@@ -1176,30 +1186,28 @@ function registerExtensionImpl(
     !!leadRuntime.chiefLease &&
     leadRuntime.chiefLease.descriptor.piSessionId ===
       ctx.sessionManager.getSessionId();
+  const chiefGlobalInstructions = (
+    options: BuildSystemPromptOptions | undefined,
+  ) => selectChiefGlobalInstructions(options, getAgentDir());
   const chiefSystemPrompt = (
     options: BuildSystemPromptOptions | undefined,
     body: string,
-  ): string => {
-    const agentDir = resolve(getAgentDir());
-    const globalInstructions = (options?.contextFiles ?? [])
-      .filter(
-        ({ path, content }) =>
-          typeof path === "string" &&
-          typeof content === "string" &&
-          resolve(dirname(path)) === agentDir &&
-          content.length > 0,
-      )
-      .map(({ content }) => content)
-      .join("\n\n");
-    return [
-      CHIEF_ROLE_CONTRACT,
-      body || undefined,
-      globalInstructions
-        ? `## global user instructions\n\n<global_instructions>\n${globalInstructions}\n</global_instructions>`
-        : undefined,
-    ]
-      .filter((section): section is string => section !== undefined)
-      .join("\n\n");
+  ): string =>
+    buildChiefSystemPrompt(options, body, CHIEF_ROLE_CONTRACT, getAgentDir());
+  const roleCharter = (ctx: ExtensionContext): string => {
+    const role = activeRole();
+    if (
+      leadRuntime.roleSuspended ||
+      (role === "chief" && !isCurrentChief(ctx)) ||
+      (role === "manager" && !leadRuntime.managerLease)
+    )
+      return `## Herdsman role\nNo active Herdsman role is verified for this Pi session.`;
+    if (role === "manager")
+      return `${MANAGER_ROLE_CONTRACT}\n\n${leadRuntimes.supervisoryProfileBody(ctx, "manager")}`;
+    const kind = leadRuntimes.sessionKindForPrompt(ctx);
+    if (kind === "ordinary") return ORDINARY_LEAD_CHARTER;
+    if (kind === "managed") return MANAGED_LEAD_CHARTER;
+    return `## Herdsman role\nNo active Herdsman role is verified for this Pi session.`;
   };
   const markLeadCoordinationUnhealthy = (ctx?: ExtensionContext): void =>
     leadRuntimes.coordinationRuntime!.markLeadCoordinationUnhealthy(ctx);
@@ -1414,21 +1422,7 @@ function registerExtensionImpl(
       sendMessage: (message: any) =>
         pi.sendMessage(message, { triggerTurn: false }),
       chiefSystemPrompt,
-      roleCharter: (ctx: ExtensionContext) => {
-        const role = activeRole();
-        if (
-          leadRuntime.roleSuspended ||
-          (role === "chief" && !isCurrentChief(ctx)) ||
-          (role === "manager" && !leadRuntime.managerLease)
-        )
-          return `## Herdsman role\nNo active Herdsman role is verified for this Pi session.`;
-        if (role === "manager")
-          return `${MANAGER_ROLE_CONTRACT}\n\n${leadRuntimes.supervisoryProfileBody(ctx, "manager")}`;
-        const kind = leadRuntimes.sessionKindForPrompt(ctx);
-        if (kind === "ordinary") return ORDINARY_LEAD_CHARTER;
-        if (kind === "managed") return MANAGED_LEAD_CHARTER;
-        return `## Herdsman role\nNo active Herdsman role is verified for this Pi session.`;
-      },
+      roleCharter,
       supervisoryProfileBody: (
         ctx: ExtensionContext,
         role: "manager" | "chief",
@@ -1653,6 +1647,24 @@ function registerExtensionImpl(
       updateProjectOverride,
       contextAgentDefinitions,
       discoverRoleDefinition,
+      getSystemPromptOptions: (ctx: ExtensionCommandContext) =>
+        ctx.getSystemPromptOptions(),
+      chiefSystemPrompt,
+      chiefGlobalInstructions,
+      roleCharter,
+      isCurrentChief,
+      supervisoryProfileBody: (
+        ctx: ExtensionContext,
+        role: "manager" | "chief",
+      ) => leadRuntimes.supervisoryProfileBody(ctx, role),
+      executionPrompt: () => leadRuntimes.executionPrompt(),
+      leadExecutionDefinition: () => leadRuntimes.leadExecutionDefinition(),
+      inspectAgentDefinition,
+      inspectRoleDefinition,
+      expandDefinitionBodyFragments,
+      expandDefinitionBodyFragmentsWithSources,
+      expandAgentBodyFiles,
+      selectedAgentContextFiles,
       setLeadExecutionMode: (
         ctx: ExtensionCommandContext,
         mode: LeadExecutionMode,
@@ -1660,9 +1672,36 @@ function registerExtensionImpl(
       leadExecutionPresentation: () => leadRuntimes.leadExecutionPresentation(),
       agentDefinitionEnabled,
       agentDefinitionMetadata,
-      expandAgentBodyFiles,
-      appendDefinitionsEntry: (data: any) =>
-        pi.appendEntry(AGENT_DEFINITIONS_ENTRY, data),
+      showDefinitionDetails: async (
+        ctx: ExtensionContext,
+        title: string,
+        lines: readonly string[],
+      ) => {
+        if (ctx.mode !== "tui") return;
+        await ctx.ui.custom(
+          (
+            tui: any,
+            theme: any,
+            _keybindings: any,
+            done: (value: unknown) => void,
+          ) =>
+            createInstructionInspectorView(
+              `${title} · Effective Instructions`,
+              lines,
+              theme,
+              (data) => matchesKey(data, Key.escape),
+              (data) => matchesKey(data, Key.ctrl("o")),
+              () => done(undefined),
+              () => tui.requestRender(),
+            ),
+          {
+            blocked: {
+              kind: "question",
+              message: `${title} · Effective Instructions`,
+            },
+          },
+        );
+      },
       formatAgentDefinitions,
       validThinkingLevels: VALID_THINKING_LEVELS,
       updateAgentOverride,
