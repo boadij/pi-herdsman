@@ -684,8 +684,8 @@ test(
   "native installer prompts through its controlling terminal and reprompts invalid input",
   {
     skip:
-      process.platform === "win32" ||
-      (process.platform !== "darwin" && missingPtyTools.length > 0),
+      (process.platform !== "linux" && process.platform !== "darwin") ||
+      (process.platform === "linux" && missingPtyTools.length > 0),
   },
   () => {
     assert.deepEqual(
@@ -711,25 +711,133 @@ test(
         // gives it a pipe/socket instead, which makes macOS script's terminal
         // ioctl fail before it can create the child PTY. Fork it under a real
         // controlling PTY, then type the answers through that PTY's master.
-        const ptyRunner = String.raw`import errno, os, pty, sys
-payload = sys.stdin.buffer.read()
-pid, master = pty.fork()
-if pid == 0:
-    os.execvp(sys.argv[1], [sys.argv[1]] + sys.argv[2:])
-if payload:
-    os.write(master, payload)
-while True:
+        const ptyRunner = String.raw`import errno, os, pty, select, signal, sys, time
+answers = sys.stdin.buffer.read().splitlines(keepends=True)
+stage = "starting PTY child"
+captured = bytearray()
+pid = master = None
+reaped = False
+status = 1
+deadline = time.monotonic() + 25
+
+def process_group_exists():
     try:
-        chunk = os.read(master, 4096)
-        if not chunk:
+        os.killpg(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+def reap_leader():
+    global reaped
+    try:
+        waited, _ = os.waitpid(pid, os.WNOHANG)
+        if waited == pid:
+            reaped = True
+    except ChildProcessError:
+        reaped = True
+    return reaped
+
+def clean_process_group():
+    if type(pid) is not int or pid <= 0:
+        return True, reaped
+    if process_group_exists():
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    end = time.monotonic() + 1
+    while time.monotonic() < end:
+        reap_leader()
+        if not process_group_exists():
             break
-        sys.stdout.buffer.write(chunk)
-        sys.stdout.buffer.flush()
-    except OSError as error:
-        if error.errno == errno.EIO:
+        time.sleep(0.02)
+    if process_group_exists():
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    end = time.monotonic() + 1
+    while time.monotonic() < end:
+        reap_leader()
+        if not process_group_exists() and reaped:
             break
-        raise
-_, status = os.waitpid(pid, 0)
+        time.sleep(0.02)
+    return not process_group_exists(), reaped
+
+try:
+    pid, master = pty.fork()
+    if pid == 0:
+        try:
+            os.execvp(sys.argv[1], [sys.argv[1]] + sys.argv[2:])
+        except BaseException:
+            try:
+                os.write(2, b"PTY child exec failed\\n")
+            except BaseException:
+                pass
+            os._exit(127)
+    stage = "waiting for installer prompt"
+    sent = 0
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select([master], [], [], 0.1)
+        if ready:
+            try:
+                chunk = os.read(master, 4096)
+            except OSError as error:
+                if error.errno == errno.EIO:
+                    stage = "PTY returned EIO; checking child status"
+                    break
+                raise
+            if not chunk:
+                stage = "PTY returned EOF; checking child status"
+                break
+            captured.extend(chunk)
+            sys.stdout.buffer.write(chunk)
+            sys.stdout.buffer.flush()
+            prompts = captured.count(b"Install pi-web-access? [y/N]")
+            while sent < prompts and sent < len(answers):
+                os.write(master, answers[sent])
+                sent += 1
+                stage = "waiting for next observed prompt or child exit"
+        waited, child_status = os.waitpid(pid, os.WNOHANG)
+        if waited:
+            status = child_status
+            reaped = True
+            stage = "installer child exited and was reaped"
+            break
+    else:
+        raise TimeoutError("PTY runner deadline expired")
+    if not reaped:
+        stage = "waiting for installer child exit and reap"
+        while time.monotonic() < deadline:
+            waited, status = os.waitpid(pid, os.WNOHANG)
+            if waited:
+                reaped = True
+                stage = "installer child reaped"
+                break
+            time.sleep(0.02)
+        if not reaped:
+            raise TimeoutError("timed out waiting to reap installer child")
+except BaseException as error:
+    sys.stderr.write("Python PTY runner failed at stage: " + stage + "\\n")
+    sys.stderr.write("Captured PTY output:\\n" + captured.decode(errors="replace") + "\\n")
+    sys.stderr.write(type(error).__name__ + ": " + str(error) + "\\n")
+    clean, leader_reaped = clean_process_group()
+    if not clean:
+        sys.stderr.write("Process group remained after bounded SIGTERM/SIGKILL cleanup.\\n")
+    if not leader_reaped:
+        sys.stderr.write("PTY child leader remained unreaped after bounded cleanup.\\n")
+    sys.exit(124)
+else:
+    clean, leader_reaped = clean_process_group()
+    if not clean or not leader_reaped:
+        if not clean:
+            sys.stderr.write("Process group remained after bounded SIGTERM/SIGKILL cleanup.\\n")
+        if not leader_reaped:
+            sys.stderr.write("PTY child leader remained unreaped after bounded cleanup.\\n")
+        sys.exit(125)
+finally:
+    if master is not None:
+        os.close(master)
 sys.exit(os.waitstatus_to_exitcode(status))`;
         const result = spawnSync(
           "python3",
@@ -748,7 +856,14 @@ sys.exit(os.waitstatus_to_exitcode(status))`;
         assert.equal(
           timedOut,
           false,
-          "Python PTY runner timed out after 30 seconds",
+          [
+            "Python PTY runner timed out after 30 seconds.",
+            "Captured PTY output:",
+            result.stdout,
+            "Runner diagnostics:",
+            result.stderr,
+            result.error?.message ?? "",
+          ].join("\\n"),
         );
         assert.equal(result.status, 0, result.stderr);
         assert.ok(result.stdout.includes("Install pi-web-access? [y/N]"));
