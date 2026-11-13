@@ -110,15 +110,16 @@ recovery, and integration.
 
 ## Project status & roadmap
 
-Pi Herdsman is evolving toward 1.0. Core capabilities are available today:
+Pi Herdsman is actively evolving. Core capabilities are available today:
 
 - **Lead & Agent orchestration - core complete.** Background and nested delegation, result handoffs, and local peer communication; reliability work continues.
 - **Manager orchestration - polishing.** Branch-based delegation, supervision, and integration work; recovery and usability are being refined.
 - **Chief coordination - in progress.** Supervision works; repository provisioning and Manager lifecycle orchestration are being developed.
 - **Federated peer communication - in progress.** Cross-machine Manager/ordinary Lead messaging and durable replies work; reverse initiation is planned.
 
-**Federation limitation:** New cross-machine initiation requires an SSH route
-from the initiating machine; replies work without reverse SSH. See
+**Federation limitation:** Independent cross-machine discovery and initiation
+require an SSH route from the initiating machine; replies work without reverse
+SSH. See
 [#790](https://github.com/boadij/pi-herdsman/issues/790) and
 [#688](https://github.com/boadij/pi-herdsman/issues/688).
 
