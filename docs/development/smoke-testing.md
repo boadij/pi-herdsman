@@ -231,6 +231,22 @@ Herdsman, copy normal Pi settings or extensions, or run as part of
 `npm run validate`. Run selected scenarios according to the change being
 verified; `npm run smoke` defaults to `core`.
 
+## Peer federation acceptance
+
+Required peer-federation CI runs two real containerized Manager instances for
+the focused `manager-core` phase. It verifies one successful request,
+the exact correlated reply persisted once, and A's assistant completion after
+that reply without another prompt. The ordinary-Lead delivery phase remains a
+separate acceptance check.
+
+Run the focused Manager phase with
+`PEER_SMOKE_PHASE=manager-core node scripts/peer-federation-smoke.mjs`.
+The comprehensive Manager recovery scenario remains the default and is
+manually runnable with
+`node scripts/peer-federation-smoke.mjs`. Run ordinary-Lead delivery with
+`PEER_SMOKE_PHASE=delivery node scripts/peer-federation-smoke.mjs`.
+A failed federation invocation is not retried automatically.
+
 ## Runtime preflight
 
 Before allocating the Herdr environment, the harness validates installed Node,

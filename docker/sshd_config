@@ -16,6 +16,6 @@ X11Forwarding no
 
 AcceptEnv LANG LC_*
 
-SetEnv PATH=/home/herdsman/.local/share/mise/shims:/home/herdsman/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin NPM_CONFIG_PREFIX=/home/herdsman/.local NPM_CONFIG_UPDATE_NOTIFIER=false
+SetEnv PATH=/home/herdsman/.local/share/mise/shims:/home/herdsman/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin NPM_CONFIG_PREFIX=/home/herdsman/.local NPM_CONFIG_UPDATE_NOTIFIER=false PI_SELF_UPDATE_COMMAND="/usr/local/bin/pi-container-update {version}"
 
 Subsystem sftp internal-sftp

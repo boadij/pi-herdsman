@@ -14,8 +14,9 @@ test("runtime verification fails when npm list fails", () => {
       `
     ${verify}
     expected_pi=expected
+    export PI_SELF_UPDATE_COMMAND='/usr/local/bin/pi-container-update {version}'
     remote() {
-      sh -c 'pi() { echo expected; }; readlink() { echo /opt/pi/pi; }; mkdir() { [ "$2" = /test/npm-root ]; }; npm() { if [ "$1" = root ]; then echo /test/npm-root; else return 42; fi; }; '"$1"
+      sh -c 'pi() { echo expected; }; readlink() { echo /usr/local/bin/pi; }; mkdir() { [ "$2" = /test/npm-root ]; }; npm() { if [ "$1" = root ]; then echo /test/npm-root; else return 42; fi; }; '"$1"
     }
     verify_runtime
   `,
