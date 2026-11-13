@@ -140,11 +140,10 @@ type LeadCommandHost = {
   };
   agentDefinitionEnabled(definition: AgentDefinition): boolean;
   agentDefinitionMetadata(definition: AgentDefinition): Record<string, unknown>;
-  showDefinitionDetails(
-    ctx: ExtensionContext,
-    title: string,
-    lines: readonly string[],
-  ): Promise<void>;
+  appendDefinitionsEntry(data: {
+    definitions: Record<string, unknown>[];
+    inspector: { summary: string[]; tree: string };
+  }): void;
   formatAgentDefinitions(
     definitions: readonly Record<string, unknown>[],
   ): string[];
@@ -769,9 +768,6 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                     : managedLeadProfile
                       ? "future Managed Lead launch"
                       : "prospective Coordinator profile";
-                  const title = roleProfile
-                    ? `${current.name} · ${rolePreview}`
-                    : current.name;
                   const tree: string[] = [];
                   const appendText = (prefix: string, content: string) => {
                     for (const line of content.split("\n"))
@@ -950,16 +946,18 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   if (roleProfile && !activeRole && current.name !== "chief")
                     tree.push(`Working directory · ${ctx.cwd}`);
                   tree.push("+ added · - removed · ~ changed");
-                  await host.showDefinitionDetails(ctx, title, [
-                    `Context: ${ctx.cwd}`,
-                    `Preview: ${roleProfile ? rolePreview : "Future Agent launch"}`,
-                    `Definition sources (${sources.length}): ${sources.join(", ") || "standalone"}`,
-                    `Pi context files: ${contextCount} · ${contextMode}`,
-                    "Known-input preview only; provider/runtime transformations may add inputs.",
-                    ...host.formatAgentDefinitions([metadata]),
-                    "",
-                    ...tree,
-                  ]);
+                  host.appendDefinitionsEntry({
+                    definitions: [metadata],
+                    inspector: {
+                      summary: [
+                        `${roleProfile ? rolePreview : "Future Agent launch"} · ${sources.length} source(s) · ${contextCount} Pi context files`,
+                        `Context: ${ctx.cwd} · ${contextMode}`,
+                        "Known-input preview only; provider/runtime transformations may add inputs.",
+                      ],
+                      tree: tree.join("\n"),
+                    },
+                  });
+                  return;
                 } catch (error) {
                   ctx.ui.notify(
                     `Could not inspect ${current.name}: ${String(error).replace(/^Error: /u, "")}`,

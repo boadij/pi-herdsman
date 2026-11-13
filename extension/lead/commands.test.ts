@@ -597,12 +597,11 @@ test("ordinary Agent Details order native and appended context by launch mode", 
       isCurrentChief: () => false,
       agentDefinitionMetadata: () => ({ name: "reviewer" }),
       formatAgentDefinitions: () => ["reviewer"],
-      showDefinitionDetails: async (
-        _ctx: unknown,
-        _title: string,
-        lines: string[],
-      ) => {
-        displayed = [...lines];
+      appendDefinitionsEntry: (data: any) => {
+        displayed = [
+          ...data.inspector.summary,
+          ...data.inspector.tree.split("\n"),
+        ];
       },
     } as any);
     await runtime.openDefinitionsMenu({
@@ -666,12 +665,11 @@ test("Coordinator Details show current prompt inputs in composition order", asyn
     selectedAgentContextFiles: () => [],
     agentDefinitionMetadata: () => ({ name: "manager" }),
     formatAgentDefinitions: () => ["Manager metadata"],
-    showDefinitionDetails: async (
-      _ctx: unknown,
-      _title: string,
-      lines: string[],
-    ) => {
-      displayed = [...lines];
+    appendDefinitionsEntry: (data: any) => {
+      displayed = [
+        ...data.inspector.summary,
+        ...data.inspector.tree.split("\n"),
+      ];
     },
   } as any);
   await runtime.openDefinitionsMenu({
@@ -696,7 +694,7 @@ test("Coordinator Details show current prompt inputs in composition order", asyn
   assert.ok(base >= 0 && base < context);
   assert.ok(cwd >= 0 && cwd < contract && contract < profile);
   assert.ok(profile < runtimeSection);
-  assert.match(lines, /Preview: active-session inputs/u);
+  assert.match(lines, /active-session inputs/u);
 });
 
 test("Chief Details use the forced prompt producer with global-only context", async () => {
@@ -759,12 +757,11 @@ test("Chief Details use the forced prompt producer with global-only context", as
     selectedAgentContextFiles: () => [],
     agentDefinitionMetadata: () => ({ name: "chief" }),
     formatAgentDefinitions: () => ["Chief metadata"],
-    showDefinitionDetails: async (
-      _ctx: unknown,
-      _title: string,
-      lines: string[],
-    ) => {
-      displayed = [...lines];
+    appendDefinitionsEntry: (data: any) => {
+      displayed = [
+        ...data.inspector.summary,
+        ...data.inspector.tree.split("\n"),
+      ];
     },
   } as any);
   await runtime.openDefinitionsMenu({
