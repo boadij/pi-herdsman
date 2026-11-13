@@ -2799,13 +2799,25 @@ function createWidthSafeBox(
   return box;
 }
 
+export type InstructionSection = {
+  title: string;
+  source?: string;
+  changes?: string[];
+  content?: string;
+  format?: "markdown" | "text";
+};
+
 export function renderAgentDefinitionsOverview(
   definitions: readonly Record<string, unknown>[],
   theme: ThemeLike,
   options: {
     expanded?: boolean;
     instructions?: string;
-    inspector?: { summary: string[]; tree: string };
+    inspector?: {
+      summary: string[];
+      tree?: string;
+      sections?: InstructionSection[];
+    };
   } = {},
 ): TuiBox {
   const lines: string[] =
@@ -2814,6 +2826,8 @@ export function renderAgentDefinitionsOverview(
           `${theme.bold(theme.fg("customMessageLabel", "Definitions"))}${theme.fg("muted", ` · ${definitions.length}`)}`,
         ]
       : [];
+  if (options.expanded === true && options.inspector?.sections)
+    lines.push(theme.fg("accent", theme.bold("METADATA")));
   definitions.forEach((definition) => {
     const name = value(definition.name ?? definition.agent);
     if (!name) return;
@@ -2880,7 +2894,7 @@ export function renderAgentDefinitionsOverview(
   });
   if (options.inspector) {
     lines.push(...options.inspector.summary);
-    lines.push("Ctrl+O to expand");
+    if (options.expanded !== true) lines.push("Ctrl+O to expand");
   } else if (
     typeof options.instructions === "string" &&
     options.expanded !== true
@@ -2894,7 +2908,53 @@ export function renderAgentDefinitionsOverview(
     theme.bg("customMessageBg", line),
   );
   box.addChild(new WidthSafeText(lines.join("\n"), 0, 0));
-  if (options.expanded === true && options.inspector) {
+  if (options.expanded === true && options.inspector?.sections) {
+    box.addChild(new Spacer(1));
+    box.addChild(new DynamicBorder((line) => theme.fg("border", line)));
+    box.addChild(
+      new Text(
+        theme.fg("accent", theme.bold("INSTRUCTIONS · Known-input order")),
+        0,
+        0,
+      ),
+    );
+    options.inspector.sections.forEach((section, index) => {
+      box.addChild(new Spacer(1));
+      if (index > 0)
+        box.addChild(new DynamicBorder((line) => theme.fg("border", line)));
+      box.addChild(
+        new Text(
+          theme.fg("accent", theme.bold(`${index + 1}. ${section.title}`)),
+          0,
+          0,
+        ),
+      );
+      if (section.source)
+        box.addChild(
+          new WidthSafeText(theme.fg("muted", section.source), 0, 0),
+        );
+      if (section.changes?.length)
+        box.addChild(
+          new WidthSafeText(
+            theme.fg("muted", section.changes.join("\n")),
+            0,
+            0,
+          ),
+        );
+      if (section.content) {
+        box.addChild(new DynamicBorder((line) => theme.fg("muted", line)));
+        box.addChild(new Spacer(1));
+        box.addChild(
+          section.format === "markdown"
+            ? new Markdown(section.content, 0, 0, getMarkdownTheme())
+            : new WidthSafeText(section.content, 0, 0),
+        );
+      }
+    });
+  } else if (
+    options.expanded === true &&
+    options.inspector?.tree !== undefined
+  ) {
     box.addChild(new Spacer(1));
     box.addChild(new WidthSafeText(options.inspector.tree, 0, 0));
   } else if (

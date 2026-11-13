@@ -6107,6 +6107,74 @@ Use **strict review** for \`controller.ts\`.
     assert.match(expandedTreeBox.render(120).join("\n"), /FINAL TREE MARKER/u);
     for (const line of expandedTreeBox.render(24))
       assert.ok(visibleWidth(line) <= 24);
+
+    const sections = [
+      {
+        title: "Definition",
+        source: "Bundled · managed-lead.md",
+        changes: ["+ tools: codemode", "+ inheritProjectContext: true"],
+        content: "## Responsibilities\n\n- Coordinate work",
+        format: "markdown" as const,
+      },
+      {
+        title: "Pi context",
+        source: "/AGENTS.md",
+        content: "Context instructions",
+        format: "markdown" as const,
+      },
+    ];
+    const compactSections = renderedText(
+      renderAgentDefinitionsOverview(definition, theme, {
+        expanded: false,
+        inspector: { summary: ["Future launch"], sections },
+      }),
+    );
+    assert.match(compactSections, /Ctrl\+O to expand/u);
+    assert.doesNotMatch(compactSections, /Responsibilities|METADATA/u);
+    const expandedSectionsBox = renderAgentDefinitionsOverview(
+      definition,
+      theme,
+      {
+        expanded: true,
+        inspector: { summary: ["Future launch"], sections },
+      },
+    );
+    const expandedSections = renderedText(expandedSectionsBox);
+    assert.match(expandedSections, /METADATA/u);
+    assert.match(expandedSections, /INSTRUCTIONS · Known-input order/u);
+    assert.match(
+      expandedSections,
+      /1\. Definition[\s\S]*Bundled · managed-lead\.md/u,
+    );
+    assert.match(
+      expandedSections,
+      /\+ tools: codemode\n\s+\+ inheritProjectContext: true/u,
+    );
+    assert.match(expandedSections, /Responsibilities[\s\S]*Coordinate work/u);
+    assert.doesNotMatch(expandedSections, /Ctrl\+O to expand/u);
+    const renderedSectionLines = expandedSectionsBox.render(80);
+    const definitionHeading = renderedSectionLines.findIndex((line) =>
+      line.includes("1. Definition"),
+    );
+    const firstSectionContent = renderedSectionLines.findIndex((line) =>
+      line.includes("Coordinate work"),
+    );
+    const contextHeading = renderedSectionLines.findIndex((line) =>
+      line.includes("2. Pi context"),
+    );
+    assert.ok(
+      definitionHeading >= 0 &&
+        firstSectionContent > definitionHeading &&
+        contextHeading > firstSectionContent,
+    );
+    assert.ok(
+      renderedSectionLines
+        .slice(firstSectionContent + 1, contextHeading)
+        .some((line) => /^─+$/u.test(line.trim())),
+      "expected a separator after the first section content and before the next source heading",
+    );
+    for (const line of expandedSectionsBox.render(24))
+      assert.ok(visibleWidth(line) <= 24);
   }
 });
 
