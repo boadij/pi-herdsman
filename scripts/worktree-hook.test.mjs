@@ -146,3 +146,73 @@ test("post-checkout installs dependencies only in new linked worktrees", (t) => 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("setup:hooks enables hooks without replacing existing hooks", () => {
+  const root = mkdtempSync(join(tmpdir(), "herdsman-hooks-setup-"));
+  try {
+    const repo = join(root, "repo");
+    mkdirSync(repo);
+    const globalConfig = join(root, "gitconfig");
+    writeFileSync(globalConfig, "");
+    const env = {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: globalConfig,
+      GIT_CONFIG_NOSYSTEM: "1",
+    };
+    const git = (...args) =>
+      execFileSync("git", args, { cwd: repo, env, encoding: "utf8" }).trim();
+    git("init", "-b", "main");
+    git("config", "user.name", "Test");
+    git("config", "user.email", "test@example.invalid");
+    git("commit", "--allow-empty", "-m", "initial");
+    mkdirSync(join(repo, ".githooks"));
+    writeFileSync(join(repo, ".githooks", "post-checkout"), "#!/bin/sh\n");
+    const setup = (cwd = repo) =>
+      spawnSync(process.execPath, [join(repoRoot, "scripts/setup-hooks.mjs")], {
+        cwd,
+        env,
+        encoding: "utf8",
+      });
+
+    const initial = setup();
+    assert.equal(initial.status, 0, initial.stderr);
+    assert.equal(
+      git("config", "--local", "--get", "core.hooksPath"),
+      join(realpathSync(repo), ".githooks"),
+    );
+    assert.equal(setup().status, 0);
+
+    const linked = join(root, "linked");
+    git("worktree", "add", "-b", "linked", linked);
+    const refused = setup(linked);
+    assert.notEqual(refused.status, 0);
+    assert.match(
+      refused.stderr,
+      /Run setup from the primary repository checkout/,
+    );
+
+    git("config", "--local", "core.hooksPath", join(root, "other-hooks"));
+    const conflict = setup();
+    assert.notEqual(conflict.status, 0);
+    assert.match(
+      conflict.stderr,
+      /Refusing to replace existing core\.hooksPath/,
+    );
+    assert.equal(
+      git("config", "--get", "core.hooksPath"),
+      join(root, "other-hooks"),
+    );
+
+    git("config", "--local", "--unset", "core.hooksPath");
+    if (process.platform !== "win32") {
+      const existingHook = join(repo, ".git", "hooks", "pre-commit");
+      writeFileSync(existingHook, "#!/bin/sh\n");
+      chmodSync(existingHook, 0o755);
+      const blocked = setup();
+      assert.notEqual(blocked.status, 0);
+      assert.match(blocked.stderr, /Refusing to replace executable hooks/);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
