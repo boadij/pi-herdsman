@@ -94,7 +94,10 @@ const { fileURLToPath } = require("node:url");
 const home = process.argv[2];
 const legacySource = "/opt/pi-herdsman";
 const npmSource = "npm:pi-herdsman";
+const webAccessSource = "npm:pi-web-access";
 const bundledPackage = "/opt/pi-herdsman";
+const webAccessPackage = "/opt/pi-herdsman-npm-seed/node_modules/pi-web-access";
+const webAccessVersion = JSON.parse(fs.readFileSync(path.join(webAccessPackage, "package.json"), "utf8")).version;
 const seedRoot = "/opt/pi-herdsman-npm-seed";
 const seedPackage = path.join(seedRoot, "node_modules", "pi-herdsman");
 const seedCache = "/opt/pi-herdsman-npm-cache";
@@ -283,6 +286,7 @@ function writeAtomically(filePath, contents, mode) {
 
 try {
   const agentDir = agentDirectory();
+  const seedWebAccess = !fs.existsSync(agentDir);
   const npmDirectory = path.join(agentDir, "npm");
   const packageDirectory = path.join(npmDirectory, "node_modules", "pi-herdsman");
   const settingsPath = path.join(agentDir, "settings.json");
@@ -345,18 +349,23 @@ try {
       fs.cpSync(npmDirectory, stagingDirectory, { recursive: true, verbatimSymlinks: true });
     }
     else fs.mkdirSync(stagingDirectory, { mode: 0o755 });
-    const seedBytes = fs.readFileSync("/opt/pi-herdsman-seed.tgz");
     const seedDirectory = path.join(agentDir, ".pi-herdsman-seeds");
     fs.mkdirSync(seedDirectory, { mode: 0o700, recursive: true });
     if (!fs.lstatSync(seedDirectory).isDirectory()) fail("retained seed directory must be a real directory");
-    const seedArtifact = path.join(seedDirectory, `${createHash("sha256").update(seedBytes).digest("hex")}.tgz`);
-    try {
-      fs.writeFileSync(seedArtifact, seedBytes, { flag: "wx", mode: 0o400 });
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      if (!fs.lstatSync(seedArtifact).isFile() || !fs.readFileSync(seedArtifact).equals(seedBytes))
-        fail("existing retained seed is invalid; refusing to overwrite it");
+    function retainSeed(source) {
+      const bytes = fs.readFileSync(source);
+      const artifact = path.join(seedDirectory, `${createHash("sha256").update(bytes).digest("hex")}.tgz`);
+      try {
+        fs.writeFileSync(artifact, bytes, { flag: "wx", mode: 0o400 });
+      } catch (error) {
+        if (error.code !== "EEXIST") throw error;
+        if (!fs.lstatSync(artifact).isFile() || !fs.readFileSync(artifact).equals(bytes))
+          fail("existing retained seed is invalid; refusing to overwrite it");
+      }
+      return artifact;
     }
+    const seedArtifacts = [retainSeed("/opt/pi-herdsman-seed.tgz")];
+    if (seedWebAccess) seedArtifacts.push(retainSeed("/opt/pi-web-access-seed.tgz"));
     const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-herdsman-npm-seed-"));
     const cacheDirectory = path.join(temporaryRoot, "cache");
     try {
@@ -365,12 +374,14 @@ try {
         "npm",
         ["install", "--prefix", stagingDirectory, "--cache", cacheDirectory,
           "--offline", "--legacy-peer-deps", "--ignore-scripts", "--no-audit", "--no-fund",
-          seedArtifact],
+          ...seedArtifacts],
         { env: { ...process.env, npm_config_cache: cacheDirectory, npm_config_offline: "true" }, stdio: "inherit" },
       );
       if (result.error) fail(`offline npm seed install failed: ${result.error.message}`);
       if (result.status !== 0) fail(`offline npm seed install failed with code ${result.status ?? "unknown"}`);
-      const manifestResult = spawnSync("npm", ["pkg", "set", "--prefix", stagingDirectory, "dependencies.pi-herdsman=*"], { stdio: "inherit" });
+      const npmSetArgs = ["pkg", "set", "--prefix", stagingDirectory, "dependencies.pi-herdsman=*"];
+      if (seedWebAccess) npmSetArgs.push("dependencies.pi-web-access=*");
+      const manifestResult = spawnSync("npm", npmSetArgs, { stdio: "inherit" });
       if (manifestResult.error || manifestResult.status !== 0)
         fail("cannot set unpinned npm seed dependency");
     } finally {
@@ -379,6 +390,24 @@ try {
     activeManifest = validateManagedPackage(path.join(stagingDirectory, "node_modules", "pi-herdsman"), stagingDirectory);
     if (activeManifest.version !== seedManifest.version)
       fail("offline npm seed installed a different Herdsman version");
+    if (seedWebAccess) {
+      const webDirectory = path.join(stagingDirectory, "node_modules", "pi-web-access");
+      const webManifest = readJson(path.join(webDirectory, "package.json"));
+      if (webManifest.name !== "pi-web-access" || webManifest.version !== webAccessVersion)
+        fail("offline npm seed installed an unexpected pi-web-access package");
+      if (!Array.isArray(webManifest.pi?.extensions) || !webManifest.pi.extensions.includes("./dist"))
+        fail("pi-web-access installation does not declare its ./dist extension entry");
+      try {
+        if (!fs.lstatSync(path.join(webDirectory, "dist", "index.js")).isFile()) throw new Error();
+      } catch {
+        fail("pi-web-access installation is missing dist/index.js");
+      }
+      const rootManifest = readJson(path.join(stagingDirectory, "package.json"));
+      const lock = readJson(path.join(stagingDirectory, "package-lock.json"));
+      const lockedVersion = lock.packages?.["node_modules/pi-web-access"]?.version ?? lock.dependencies?.["pi-web-access"]?.version;
+      if (rootManifest.dependencies?.["pi-web-access"] !== "*" || lockedVersion !== webManifest.version)
+        fail("pi-web-access npm metadata does not match the staged installation");
+    }
     if (fs.existsSync(npmDirectory)) {
       preserveManagedState(npmDirectory, stagingDirectory);
       fs.renameSync(npmDirectory, backupDirectory);
@@ -411,6 +440,8 @@ try {
       nextPackages = [...currentPackages, npmSource];
     }
   }
+  if (seedWebAccess && !nextPackages.some((entry) => packageSource(entry) === webAccessSource))
+    nextPackages = [...nextPackages, webAccessSource];
 
   if (JSON.stringify(nextPackages) !== JSON.stringify(currentPackages)) {
     const nextSettings = { ...settings, packages: nextPackages };

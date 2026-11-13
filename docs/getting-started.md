@@ -27,9 +27,19 @@ herdr integration install pi
 ```
 
 The native bootstraps install missing components and preserve compatible newer
-versions. If installation fails, follow the reported recovery instructions.
-For manual installation, see [Pi's Quickstart](https://pi.dev/docs/latest/quickstart)
-and [Herdr's installation guide](https://herdr.dev/docs/install/).
+versions. When `pi-web-access` is not already installed, they ask
+`Install pi-web-access? [y/N]`; pressing Enter skips it. Existing installations
+are preserved. For automation, set `PI_HERDSMAN_WEB_ACCESS=install` to install
+it without prompting or `PI_HERDSMAN_WEB_ACCESS=skip` to skip. Without an
+available interactive terminal, it is skipped. If installation fails, follow
+the reported recovery instructions.
+
+The Docker distribution includes web access in fresh Pi environments; existing
+Docker homes retain their current package state. See
+[Container deployment](guides/container-deployment.md#web-access) for package
+management and security details. For manual installation, see
+[Pi's Quickstart](https://pi.dev/docs/latest/quickstart) and
+[Herdr's installation guide](https://herdr.dev/docs/install/).
 
 ## Start Pi in Herdr
 

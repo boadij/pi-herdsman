@@ -91,6 +91,8 @@ jobs:
     if: ${{ needs.scope.outputs.bootstrap == 'true' }}
     runs-on: windows-latest
     timeout-minutes: 20
+    env:
+      PI_HERDSMAN_WEB_ACCESS: skip
     steps:
       - uses: actions/checkout@v7
         with:

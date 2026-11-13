@@ -193,22 +193,29 @@ Focused source-edit agent for an explicitly approved implementation.
 
 ### `researcher`
 
-Focused current/external research agent. Read-only local policy. It also
-allows the default web tool names exposed by `pi-web-access`:
-`web_search`, `fetch_content`, `get_search_content`, and `source_check`.
-Web access is optional. Install it with:
+Focused current/external research agent. Read-only local policy. Its tool
+allowlist includes `web_enable` and the default web tools exposed by
+`pi-web-access`: `web_search`, `fetch_content`, `get_search_content`, and
+`source_check`. The `web_enable` loader is necessary when the extension uses
+dynamic tool activation; Pi and the extension determine when the other tools
+become available.
 
-```text
+Web access is optional. The Docker distribution includes it for fresh Pi
+environments; native installation offers it as an explicit optional choice.
+You can also install it through Pi:
+
+```sh
 pi install npm:pi-web-access
 ```
 
-Pi Herdsman does not depend on or install `pi-web-access`. Without those tools,
-the researcher retains local inspection capabilities and reports unavailable
-external evidence. Normal Pi extension discovery is intentionally enabled for
-this role so an installed compatible extension can provide the tools. If
-`pi-web-access` is configured with different public tool names, replace the
-researcher's `tools` array through a matching project or global overlay.
-Extension code itself is not sandboxed by the callable-tool allowlist.
+Without the extension, the researcher retains local inspection capabilities
+and reports unavailable external evidence. Normal Pi extension discovery is
+intentionally enabled for this role so an installed compatible extension can
+provide the tools. If `pi-web-access` is configured with different public tool
+names, replace the researcher's `tools` array through a matching project or
+global overlay. Search providers may receive external requests, and extension
+code runs in the Pi process with that process's permissions; the callable-tool
+allowlist is not an operating-system sandbox.
 
 ### `reviewer`
 

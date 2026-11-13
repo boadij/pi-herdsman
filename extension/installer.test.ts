@@ -68,10 +68,23 @@ function runWindowsBootstrap({
   installed = "",
   fail = "",
   status = "pi: current (v9) (C:\\mock\\integration)",
+  webAccess = "skip",
+  answer = "",
+  inputFailure = false,
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-ps-test-"));
   const harness = join(root, "harness.ps1");
-  const values = { pi, herdr, node, installed, fail, status };
+  const values = {
+    pi,
+    herdr,
+    node,
+    installed,
+    fail,
+    status,
+    webAccess,
+    answer,
+    inputFailure,
+  };
   const escaped = JSON.stringify(values).replaceAll("'", "''");
   writeFileSync(
     harness,
@@ -80,6 +93,7 @@ $ErrorActionPreference = 'Stop'
 $script:case = ConvertFrom-Json '${escaped}'
 $script:log = [System.Collections.Generic.List[string]]::new()
 $script:LASTEXITCODE = 0
+if ($script:case.webAccess) { $env:PI_HERDSMAN_WEB_ACCESS = $script:case.webAccess } else { Remove-Item Env:PI_HERDSMAN_WEB_ACCESS -ErrorAction SilentlyContinue }
 . '${windowsInstaller.replaceAll("'", "''")}' -DefinitionsOnly
 function Invoke-RestMethod { [pscustomobject]@{ version='8.0.0'; engines=@{node='>=22.19.0'}; piHerdsman=@{runtime=@{pi='1.4.0';herdr=@{version='0.9.5'}}} } }
 function Resolve-Command([string]$Name) {
@@ -99,7 +113,8 @@ function Version([string]$Command) {
 function Invoke-WebRequest { param($Uri,$OutFile,[switch]$UseBasicParsing) Set-Content -Path $OutFile -Value 'mock installer' }
 function powershell.exe { $script:LASTEXITCODE=0; $env:Path += ';C:\\mock-installed' }
 function Invoke-UpstreamInstaller([string]$Url) { $script:log.Add("installer $Url") }
-function MockPi { param($Action,$Arg1,$Arg2,$Arg3) $script:LASTEXITCODE=0; if ($Action -eq 'list') { return $script:case.installed }; $script:log.Add("pi $Action $Arg1 $Arg2"); if ($script:case.fail -eq $Action) {$script:LASTEXITCODE=17} }
+function Read-Host { param($Prompt) $script:log.Add("prompt $Prompt"); if ($script:case.inputFailure) { throw 'No interactive host input' }; return $script:case.answer }
+function MockPi { param($Action,$Arg1,$Arg2,$Arg3) $script:LASTEXITCODE=0; if ($Action -eq 'list') { return $script:case.installed }; $script:log.Add("pi $Action $Arg1 $Arg2"); if ($script:case.fail -eq $Action -or ($Action -eq 'install' -and $Arg1 -eq 'npm:pi-web-access' -and $script:case.fail -eq 'web-install')) {$script:LASTEXITCODE=17} }
 function MockHerdr { param($Action,$Arg1,$Arg2) $script:LASTEXITCODE=0; if ($Action -eq 'integration' -and $Arg1 -eq 'status') { return $script:case.status }; $script:log.Add("herdr $Action $Arg1 $Arg2"); if ($script:case.fail -eq 'integration') {$script:LASTEXITCODE=19} }
 $failed = $false
 try { Invoke-Bootstrap } catch { $failed = $true; [Console]::Error.WriteLine($_.Exception.Message) }
@@ -133,6 +148,31 @@ test(
     assert.match(result.stdout, /pi install npm:pi-herdsman --no-approve/u);
     assert.match(result.stdout, /herdr integration install pi/u);
     assert.match(result.stdout, /Next steps:/u);
+  },
+);
+
+test(
+  "Windows bootstrap honors web-access overrides and skips unavailable host input",
+  { skip: process.platform !== "win32" },
+  () => {
+    const skipped = runWindowsBootstrap({ webAccess: "skip" });
+    assert.equal(skipped.status, 0, skipped.stderr);
+    assert.doesNotMatch(skipped.stdout, /prompt Install pi-web-access/u);
+    assert.doesNotMatch(skipped.stdout, /pi install npm:pi-web-access/u);
+    const installed = runWindowsBootstrap({ webAccess: "install" });
+    assert.equal(installed.status, 0, installed.stderr);
+    assert.match(
+      installed.stdout,
+      /pi install npm:pi-web-access --no-approve/u,
+    );
+    assert.doesNotMatch(installed.stdout, /prompt Install pi-web-access/u);
+    const unavailable = runWindowsBootstrap({
+      webAccess: "",
+      inputFailure: true,
+    });
+    assert.equal(unavailable.status, 0, unavailable.stderr);
+    assert.match(unavailable.stdout, /prompt Install pi-web-access/u);
+    assert.match(unavailable.stdout, /Optional pi-web-access: skipped/u);
   },
 );
 
@@ -392,6 +432,7 @@ function fixture({
   piListFails = false,
   piInstallFails = false,
   piUpdateFails = false,
+  piWebAccessInstallFails = false,
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-install-"));
   const bin = join(root, "bin");
@@ -470,7 +511,12 @@ case "\${1:-}" in
   install)
     printf 'pi %s\\n' "$*" >> "$FAKE_LOG"
     [ "$FAKE_PI_INSTALL_FAILS" != true ] || exit 1
-    printf '  %s\\n' "$2" > "$FAKE_PI_LIST"
+    if [ "$2" = npm:pi-web-access ]; then
+      [ "$FAKE_PI_WEB_ACCESS_INSTALL_FAILS" != true ] || exit 1
+      printf '  %s\\n' "$2" >> "$FAKE_PI_LIST"
+    else
+      printf '  %s\\n' "$2" > "$FAKE_PI_LIST"
+    fi
     ;;
   update)
     printf 'pi %s\\n' "$*" >> "$FAKE_LOG"
@@ -545,12 +591,224 @@ process.stdin.on("end", () => {
       FAKE_PI_LIST_FAILS: String(piListFails),
       FAKE_PI_INSTALL_FAILS: String(piInstallFails),
       FAKE_PI_UPDATE_FAILS: String(piUpdateFails),
+      FAKE_PI_WEB_ACCESS_INSTALL_FAILS: String(piWebAccessInstallFails),
       FAKE_HERDR_ASSET: herdrAsset,
       FAKE_PI_INSTALLER_TARGET: piInstallerVersion,
       FAKE_HERDR_TARGET: packageJson.piHerdsman.runtime.herdr.version,
     },
   };
 }
+
+test(
+  "native web-access selection is opt-in without a terminal and supports overrides",
+  { skip: process.platform === "win32" },
+  () => {
+    for (const [choice, expected] of [
+      ["skip", false],
+      ["install", true],
+    ] as const) {
+      const setup = fixture();
+      try {
+        const result = spawnSync("sh", [installer], {
+          env: { ...setup.env, PI_HERDSMAN_WEB_ACCESS: choice },
+          input: "y\\n",
+          encoding: "utf8",
+        });
+        assert.equal(result.status, 0, result.stderr);
+        assert.match(
+          result.stdout,
+          new RegExp(
+            `Optional pi-web-access: ${expected ? "installed" : "skipped"}\\.`,
+          ),
+        );
+        assert.equal(
+          (
+            readFileSync(setup.log, "utf8").match(
+              /^pi install npm:pi-web-access --no-approve$/gmu,
+            ) ?? []
+          ).length,
+          expected ? 1 : 0,
+        );
+      } finally {
+        rmSync(setup.root, { recursive: true, force: true });
+      }
+    }
+  },
+);
+
+test(
+  "native installer prompts through its controlling terminal and reprompts invalid input",
+  {
+    skip:
+      process.platform === "win32" ||
+      spawnSync("sh", ["-c", "command -v script >/dev/null"]).status !== 0,
+  },
+  () => {
+    for (const [input, status] of [
+      ["perhaps\nyes\n", "installed"],
+      ["n\n", "skipped"],
+      ["\n", "skipped"],
+    ]) {
+      const setup = fixture();
+      try {
+        const env: NodeJS.ProcessEnv = { ...setup.env };
+        delete env.PI_HERDSMAN_WEB_ACCESS;
+        const command = `sh '${installer.replaceAll("'", "'\\''")}'`;
+        const result = spawnSync("script", ["-qec", command, "/dev/null"], {
+          env,
+          input,
+          encoding: "utf8",
+        });
+        assert.equal(result.status, 0, result.stderr);
+        assert.ok(result.stdout.includes("Install pi-web-access? [y/N]"));
+        if (input.startsWith("perhaps"))
+          assert.ok(result.stdout.includes("Please enter y or n"));
+        assert.match(
+          result.stdout,
+          new RegExp(`Optional pi-web-access: ${status}\\.`),
+        );
+      } finally {
+        rmSync(setup.root, { recursive: true, force: true });
+      }
+    }
+  },
+);
+
+test(
+  "selected native web access is not reinstalled on a later installer run",
+  { skip: process.platform === "win32" },
+  () => {
+    const setup = fixture();
+    try {
+      const env = { ...setup.env, PI_HERDSMAN_WEB_ACCESS: "install" };
+      const first = spawnSync("sh", [installer], { env, encoding: "utf8" });
+      assert.equal(first.status, 0, first.stderr);
+      const second = spawnSync("sh", [installer], { env, encoding: "utf8" });
+      assert.equal(second.status, 0, second.stderr);
+      assert.match(second.stdout, /Optional pi-web-access: already installed/u);
+      assert.equal(
+        (
+          readFileSync(setup.log, "utf8").match(
+            /^pi install npm:pi-web-access --no-approve$/gmu,
+          ) ?? []
+        ).length,
+        1,
+      );
+    } finally {
+      rmSync(setup.root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "native installer rejects invalid web-access overrides before modifying runtimes",
+  { skip: process.platform === "win32" },
+  () => {
+    const setup = fixture();
+    try {
+      const result = spawnSync("sh", [installer], {
+        env: { ...setup.env, PI_HERDSMAN_WEB_ACCESS: "yes" },
+        encoding: "utf8",
+      });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /PI_HERDSMAN_WEB_ACCESS must be/u);
+      assert.doesNotMatch(
+        readFileSync(setup.log, "utf8"),
+        /^(?:curl |herdr |pi )/mu,
+      );
+    } finally {
+      rmSync(setup.root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "native installer preserves exact existing web-access declarations and reports optional failure",
+  { skip: process.platform === "win32" },
+  () => {
+    for (const declaration of [
+      "npm:pi-web-access",
+      "npm:pi-web-access@0.47.0",
+      "npm:pi-web-access@^0.47.0 (filtered)",
+    ]) {
+      const setup = fixture({
+        initialPiList: `npm:pi-herdsman\n  ${declaration}\n`,
+      });
+      try {
+        const result = spawnSync("sh", [installer], {
+          env: { ...setup.env, PI_HERDSMAN_WEB_ACCESS: "install" },
+          encoding: "utf8",
+        });
+        assert.equal(result.status, 0, result.stderr);
+        assert.match(
+          result.stdout,
+          /Optional pi-web-access: already installed/u,
+        );
+        assert.doesNotMatch(
+          readFileSync(setup.log, "utf8"),
+          /^pi install npm:pi-web-access/mu,
+        );
+      } finally {
+        rmSync(setup.root, { recursive: true, force: true });
+      }
+    }
+    const similar = fixture({
+      initialPiList: "npm:pi-herdsman\nnpm:other-pi-web-access\n",
+    });
+    const failed = fixture({ piWebAccessInstallFails: true });
+    try {
+      const similarResult = spawnSync("sh", [installer], {
+        env: { ...similar.env, PI_HERDSMAN_WEB_ACCESS: "install" },
+        encoding: "utf8",
+      });
+      assert.equal(similarResult.status, 0, similarResult.stderr);
+      assert.match(
+        readFileSync(similar.log, "utf8"),
+        /^pi install npm:pi-web-access --no-approve$/mu,
+      );
+      const failureResult = spawnSync("sh", [installer], {
+        env: { ...failed.env, PI_HERDSMAN_WEB_ACCESS: "install" },
+        encoding: "utf8",
+      });
+      assert.notEqual(failureResult.status, 0);
+      assert.match(
+        failureResult.stderr,
+        /Pi Herdsman and Herdr installed successfully/u,
+      );
+      assert.match(
+        failureResult.stderr,
+        /Optional pi-web-access installation failed/u,
+      );
+      assert.match(failureResult.stderr, /pi install npm:pi-web-access/u);
+    } finally {
+      rmSync(similar.root, { recursive: true, force: true });
+      rmSync(failed.root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "piped native installer does not consume pipeline input as a web-access answer",
+  { skip: process.platform === "win32" },
+  () => {
+    const setup = fixture();
+    try {
+      const result = spawnSync("sh", [installer], {
+        env: setup.env,
+        input: "y\\n",
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /Optional pi-web-access: skipped/u);
+      assert.doesNotMatch(
+        readFileSync(setup.log, "utf8"),
+        /^pi install npm:pi-web-access/mu,
+      );
+    } finally {
+      rmSync(setup.root, { recursive: true, force: true });
+    }
+  },
+);
 
 test(
   "installer rejects a Node version below the published package requirement",

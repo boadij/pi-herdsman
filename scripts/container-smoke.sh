@@ -9,6 +9,8 @@ ssh_state="${name}-ssh"
 custom_volume="${name}-identity-home"
 offline_home="${name}-offline-home"
 offline_ssh="${name}-offline-ssh"
+web_home="${name}-web-home"
+web_ssh="${name}-web-ssh"
 migration_home="${name}-migration-home"
 migration_ssh="${name}-migration-ssh"
 damaged_home="${name}-damaged-home"
@@ -24,7 +26,7 @@ cleanup() {
   docker rm -f "$name" >/dev/null 2>&1 || true
   docker image rm -f "$replacement_image" >/dev/null 2>&1 || true
   docker volume rm \
-    "$home" "$ssh_state" "$offline_home" "$offline_ssh" \
+    "$home" "$ssh_state" "$offline_home" "$offline_ssh" "$web_home" "$web_ssh" \
     "$migration_home" "$migration_ssh" "$damaged_home" "$damaged_ssh" "$update_home" \
     "$interrupted_home" "$interrupted_ssh" \
     >/dev/null 2>&1 || true
@@ -251,6 +253,31 @@ start_offline() {
   return 1
 }
 
+verify_web_access() {
+  docker exec --user herdsman -e HOME=/home/herdsman "$name" node -e '
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const crypto = require("node:crypto");
+    const agent = path.join(process.env.HOME, ".pi", "agent");
+    const settings = JSON.parse(fs.readFileSync(path.join(agent, "settings.json"), "utf8"));
+    const sources = settings.packages.map((entry) => typeof entry === "string" ? entry : entry?.source);
+    if (sources.filter((source) => source === "npm:pi-web-access").length !== 1) throw new Error("pi-web-access must be declared exactly once");
+    const npm = path.join(agent, "npm");
+    const manifest = JSON.parse(fs.readFileSync(path.join(npm, "package.json"), "utf8"));
+    const lock = JSON.parse(fs.readFileSync(path.join(npm, "package-lock.json"), "utf8"));
+    const installed = JSON.parse(fs.readFileSync(path.join(npm, "node_modules/pi-web-access/package.json"), "utf8"));
+    const entry = lock.packages?.["node_modules/pi-web-access"];
+    if (manifest.dependencies["pi-web-access"] !== "*" || entry?.version !== installed.version || !entry.resolved.startsWith("file:")) throw new Error("pi-web-access npm metadata does not match the installed package");
+    if (!Array.isArray(installed.pi?.extensions) || !installed.pi.extensions.includes("./dist") || !fs.statSync(path.join(npm, "node_modules/pi-web-access/dist/index.js")).isFile()) throw new Error("pi-web-access extension entry is missing");
+    const tarball = path.resolve(npm, entry.resolved.slice(5));
+    const integrity = `sha512-${crypto.createHash("sha512").update(fs.readFileSync(tarball)).digest("base64")}`;
+    const sha256 = crypto.createHash("sha256").update(fs.readFileSync(tarball)).digest("hex");
+    if (path.dirname(tarball) !== path.join(agent, ".pi-herdsman-seeds") || path.basename(tarball) !== `${sha256}.tgz` || integrity !== entry.integrity) throw new Error("pi-web-access retained tarball resolution or integrity is invalid");
+    if (!fs.readFileSync(path.join(npm, "node_modules/pi-web-access/dist/index.js")).equals(fs.readFileSync("/opt/pi-herdsman-npm-seed/node_modules/pi-web-access/dist/index.js"))) throw new Error("installed pi-web-access differs from the image seed");
+    console.log(`npm:pi-web-access@${installed.version}`);
+  '
+}
+
 verify_seeded_package() {
   docker exec --user herdsman -e HOME=/home/herdsman "$name" node -e '
     const fs = require("node:fs");
@@ -282,7 +309,9 @@ seed_state() {
     /home/herdsman/.pi/agent/npm/package.json \
     /home/herdsman/.pi/agent/npm/package-lock.json \
     /home/herdsman/.pi/agent/npm/node_modules/pi-herdsman/package.json \
-    /home/herdsman/.pi/agent/npm/node_modules/pi-herdsman/dist/index.js
+    /home/herdsman/.pi/agent/npm/node_modules/pi-herdsman/dist/index.js \
+    /home/herdsman/.pi/agent/npm/node_modules/pi-web-access/package.json \
+    /home/herdsman/.pi/agent/npm/node_modules/pi-web-access/dist/index.js
 }
 
 wait_after_restart() {
@@ -307,15 +336,22 @@ wait_after_restart() {
 echo 'stage: offline seed, restart, and recreation'
 start_offline "$offline_home" "$offline_ssh"
 verify_seeded_package
+verify_web_access
 initial_seed_state="$(seed_state)"
 test "$(docker exec "$name" stat -c %u /home/herdsman/.pi/agent/settings.json)" = "$(docker exec "$name" id -u herdsman)"
 test "$(docker exec "$name" stat -c %u /home/herdsman/.pi/agent/npm/package-lock.json)" = "$(docker exec "$name" id -u herdsman)"
-docker exec --user herdsman -e HOME=/home/herdsman "$name" pi --offline --help >/dev/null
+docker exec --user herdsman -e HOME=/home/herdsman "$name" pi --offline --help >"$tmp/fresh-pi-help" 2>&1
+if grep -q 'Failed to load extension' "$tmp/fresh-pi-help"; then
+  cat "$tmp/fresh-pi-help" >&2
+  echo "offline pi-web-access extension loading failed" >&2
+  exit 1
+fi
 docker exec --user herdsman "$name" sh -c \
   'printf persistent-copy > /home/herdsman/.pi/agent/npm/node_modules/pi-herdsman/.smoke-preserve'
 docker restart "$name" >/dev/null
 wait_after_restart
 verify_seeded_package
+verify_web_access
 test "$(seed_state)" = "$initial_seed_state"
 docker exec --user herdsman "$name" sh -c \
   'test "$(cat /home/herdsman/.pi/agent/npm/node_modules/pi-herdsman/.smoke-preserve)" = persistent-copy'
@@ -323,6 +359,7 @@ before_recreation="$(seed_state)"
 docker rm -f "$name" >/dev/null
 start_offline "$offline_home" "$offline_ssh"
 verify_seeded_package
+verify_web_access
 test "$(seed_state)" = "$before_recreation"
 docker exec --user herdsman "$name" sh -c \
   'test "$(cat /home/herdsman/.pi/agent/npm/node_modules/pi-herdsman/.smoke-preserve)" = persistent-copy'
@@ -337,18 +374,30 @@ docker exec --user herdsman "$name" sh -c \
   'test "$(cat /opt/pi-herdsman-npm-seed/node_modules/pi-herdsman/README.md)" = replacement-image-seed && test "$(cat /home/herdsman/.pi/agent/npm/node_modules/pi-herdsman/.smoke-preserve)" = persistent-copy && ! grep -q replacement-image-seed /home/herdsman/.pi/agent/npm/node_modules/pi-herdsman/README.md'
 docker rm -f "$name" >/dev/null
 
+# Explicit removal is persistent across restarts.
+start_offline "$offline_home" "$offline_ssh"
+docker exec --user herdsman "$name" sh -c 'pi remove npm:pi-web-access --no-approve'
+docker restart "$name" >/dev/null
+wait_after_restart
+docker exec --user herdsman -e HOME=/home/herdsman "$name" node -e '
+  const fs=require("node:fs"); const p=process.env.HOME+"/.pi/agent"; const s=JSON.parse(fs.readFileSync(p+"/settings.json","utf8"));
+  if(s.packages.some((entry)=> (typeof entry==="string"?entry:entry?.source)==="npm:pi-web-access")) throw Error("removed pi-web-access was restored on restart");'
+docker rm -f "$name" >/dev/null
+
 # Startup honors the configured Pi agent directory, including on restart.
 echo 'stage: custom agent directory'
 docker volume rm "$damaged_home" "$damaged_ssh" >/dev/null 2>&1 || true
 start_offline "$damaged_home" "$damaged_ssh" "$image" /home/herdsman/custom-agent
 docker exec --user herdsman "$name" sh -c '
   test -f /home/herdsman/custom-agent/npm/node_modules/pi-herdsman/dist/index.js
+  test -f /home/herdsman/custom-agent/npm/node_modules/pi-web-access/dist/index.js
   grep -q npm:pi-herdsman /home/herdsman/custom-agent/settings.json
+  grep -q npm:pi-web-access /home/herdsman/custom-agent/settings.json
   test ! -e /home/herdsman/.pi/agent/npm/node_modules/pi-herdsman
 '
 docker restart "$name" >/dev/null
 wait_after_restart
-docker exec --user herdsman "$name" sh -c 'test -f /home/herdsman/custom-agent/npm/node_modules/pi-herdsman/dist/index.js && grep -q npm:pi-herdsman /home/herdsman/custom-agent/settings.json'
+docker exec --user herdsman "$name" sh -c 'test -f /home/herdsman/custom-agent/npm/node_modules/pi-herdsman/dist/index.js && test -f /home/herdsman/custom-agent/npm/node_modules/pi-web-access/dist/index.js && grep -q npm:pi-herdsman /home/herdsman/custom-agent/settings.json && grep -q npm:pi-web-access /home/herdsman/custom-agent/settings.json'
 docker rm -f "$name" >/dev/null
 docker volume rm "$damaged_home" "$damaged_ssh" >/dev/null
 
@@ -396,6 +445,21 @@ for mode in failure interrupt; do
   '
 done
 
+# An established home that already selected web access retains its declaration and package copy.
+echo 'stage: existing web-access selection preservation'
+docker run --rm --network none --user herdsman -e HOME=/home/herdsman --entrypoint /bin/sh \
+  -v "$web_home:/home/herdsman" "$image" -c '
+    mkdir -p ~/.pi/agent
+    cp -R /opt/pi-herdsman-npm-seed/. ~/.pi/agent/npm/
+    printf "%s\n" "{\"packages\":[{\"source\":\"npm:pi-herdsman\"},{\"source\":\"npm:pi-web-access\",\"extensions\":[\"./dist\"],\"skills\":[]}],\"marker\":\"preserve-web-selection\"}" > ~/.pi/agent/settings.json
+  '
+start_offline "$web_home" "$web_ssh"
+docker exec --user herdsman -e HOME=/home/herdsman "$name" node -e '
+  const fs=require("node:fs"); const p=process.env.HOME+"/.pi/agent"; const s=JSON.parse(fs.readFileSync(p+"/settings.json","utf8")); const pkg=JSON.parse(fs.readFileSync(p+"/npm/node_modules/pi-web-access/package.json","utf8"));
+  const selected=s.packages.find((entry)=>entry?.source==="npm:pi-web-access");
+  if(!selected || JSON.stringify(selected.extensions)!==JSON.stringify(["./dist"]) || s.marker!=="preserve-web-selection" || pkg.version!==require("/opt/pi-herdsman-npm-seed/node_modules/pi-web-access/package.json").version) throw Error("existing pi-web-access state was modified");'
+docker rm -f "$name" >/dev/null
+
 # Migrate an object-form legacy declaration while preserving settings and another npm version.
 echo 'stage: migration'
 docker run --rm --network none \
@@ -413,6 +477,9 @@ docker run --rm --network none \
   '
 start_offline "$migration_home" "$migration_ssh"
 verify_seeded_package
+docker exec --user herdsman -e HOME=/home/herdsman "$name" node -e '
+  const fs=require("node:fs"); const path=process.env.HOME+"/.pi/agent"; const settings=JSON.parse(fs.readFileSync(path+"/settings.json","utf8")); const sources=settings.packages.map((entry)=>typeof entry==="string"?entry:entry?.source);
+  if(sources.includes("npm:pi-web-access") || fs.existsSync(path+"/npm/node_modules/pi-web-access")) throw Error("established home was automatically given pi-web-access");'
 docker exec --user herdsman -e HOME=/home/herdsman "$name" node -e '
   const fs=require("node:fs"); const path=require("node:path"); const home=process.env.HOME; const settings=JSON.parse(fs.readFileSync(path.join(home,".pi/agent/settings.json"),"utf8")); const packages=settings.packages;
   if(settings.marker!=="keep-this-setting" || JSON.stringify(settings.extensions)!==JSON.stringify(["./extensions/user.ts"])) throw Error("unrelated settings were not preserved");
