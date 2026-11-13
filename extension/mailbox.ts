@@ -178,6 +178,7 @@ export interface ManagedAgentBootstrapRecord {
   ownerSessionId: string;
   workspaceId: string;
   agentLabel: string;
+  childSessionId?: string;
   participants: Array<{ id: string; payload: string }>;
 }
 export const MANAGED_AGENT_BOOTSTRAP_LIMIT_BYTES = 64 * 1024;
@@ -495,6 +496,7 @@ function validate(
       "ownerSessionId",
       "workspaceId",
       "agentLabel",
+      "childSessionId",
       "participants",
     ];
     if (Object.keys(v).some((key) => !allowed.includes(key)))
@@ -510,6 +512,8 @@ function validate(
       if (typeof v[field] !== "string" || !(v[field] as string).trim())
         throw new Error(`Invalid mailbox field: ${field}`);
     if (!UUID.test(v.runId as string)) throw new Error("Invalid mailbox UUID");
+    if (v.childSessionId !== undefined && !UUID.test(v.childSessionId))
+      throw new Error("Invalid bootstrap child session UUID");
     if (!Array.isArray(v.participants) || !v.participants.length)
       throw new Error("Invalid bootstrap participants");
     const ids = new Set<string>();

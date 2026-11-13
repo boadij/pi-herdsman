@@ -230,7 +230,7 @@ skills:
   ]
 extensions:
   [
-    "~/.pi/agent/npm/node_modules/@howaboua/pi-codex-conversion/dist/index.js",
+    "~/.pi/agent/extensions/example-session-aware.ts",
     "~/.pi/agent/extensions/agents-md-imports.ts",
   ]
 tools: ["read", "grep"]
@@ -242,7 +242,7 @@ Prompt`).find(({ name }) => name === "custom")!;
     "~/Coding/AI/agent-skills/skills/gh-github/SKILL.md",
   ]);
   assert.deepEqual(definition.frontmatter.extensions, [
-    "~/.pi/agent/npm/node_modules/@howaboua/pi-codex-conversion/dist/index.js",
+    "~/.pi/agent/extensions/example-session-aware.ts",
     "~/.pi/agent/extensions/agents-md-imports.ts",
   ]);
   assert.deepEqual(definition.frontmatter.tools, ["read", "grep"]);

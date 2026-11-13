@@ -12,8 +12,6 @@ await build({
   absWorkingDir: root,
   entryPoints: {
     index: "extension/index.ts",
-    "integrations/pi-codex-context-sharing":
-      "extension/integrations/pi-codex-context-sharing.ts",
     "peer-bridge": "bin/peer-bridge.ts",
   },
   outdir: "dist",
@@ -26,7 +24,6 @@ await build({
     "@earendil-works/pi-ai",
     "@earendil-works/pi-coding-agent",
     "@earendil-works/pi-tui",
-    "@howaboua/pi-codex-conversion/context-sharing",
     "typebox",
   ],
 });

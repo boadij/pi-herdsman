@@ -154,7 +154,6 @@ Group routine tests by area rather than enumerating every test file.
 - `extension/presentation.ts`: Model, TUI, and status presentation.
 - `extension/config.ts`: Flat Pi Herdsman configuration.
 - `extension/supervision.ts`: Chief, Manager, and Lead authority, leases, supervision state, and staff tool contracts.
-- `extension/integrations/pi-codex-context-sharing.ts`: Pi Codex Conversion context-sharing integration.
 - `extension/support.ts`: Shared extension integration-test mocks and fixtures.
 - `extension/*.test.ts`, `extension/lead/*.test.ts`, `extension/integrations/*.test.ts`: Extension runtime, command, and integration tests.
 - `bin/*.test.ts`, `scripts/*.test.mjs`: Peer bridge and development tooling tests.

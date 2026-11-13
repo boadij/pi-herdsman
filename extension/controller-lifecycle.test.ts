@@ -912,6 +912,8 @@ test("parent delegates two same-definition children with exact ownership", async
   const starts: string[][] = [];
   const order: string[] = [];
   let duplicateRegistration = false;
+  let throwDuringPrepareDispatch = false;
+  let retainedPrepareEvent: any;
   let commitFails = false;
   let pi: ReturnType<typeof fakePi>;
   pi = fakePi({
@@ -983,8 +985,13 @@ test("parent delegates two same-definition children with exact ownership", async
     }
   });
   pi.pi.events.on(MANAGED_AGENT_BOOTSTRAP_EVENT, (event: any) => {
-    if (duplicateRegistration && event.phase === "prepare")
+    if (event.phase !== "prepare") return;
+    if (duplicateRegistration)
       event.register("test/participant", async () => undefined);
+    if (throwDuringPrepareDispatch) {
+      retainedPrepareEvent = event;
+      throw new Error("synchronous prepare listener failed");
+    }
   });
   registerExtension!(pi.pi as never);
   const context = fakeAgentContext([
@@ -1071,6 +1078,27 @@ test("parent delegates two same-definition children with exact ownership", async
     );
     assert.equal(starts.length, 2);
     duplicateRegistration = false;
+    throwDuringPrepareDispatch = true;
+    const dispatchFailure = await pi.tools
+      .find((tool) => tool.name === "delegate_agent")!
+      .execute(
+        "failed-prepare-dispatch",
+        { definition: "child", task: "must not launch" },
+        undefined,
+        undefined,
+        context,
+      );
+    assert.equal(dispatchFailure.details.ok, false);
+    assert.match(
+      JSON.stringify(dispatchFailure.details),
+      /synchronous prepare listener failed/u,
+    );
+    assert.throws(
+      () => retainedPrepareEvent.reserveChildSessionId(),
+      /Managed-Agent bootstrap preparation is closed/u,
+    );
+    assert.equal(starts.length, 2);
+    throwDuringPrepareDispatch = false;
     commitFails = true;
     const commitFailure = await pi.tools
       .find((tool) => tool.name === "delegate_agent")!
@@ -17167,6 +17195,8 @@ test("child bootstrap initializer is awaited before readiness and sidecar remova
   try {
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, fakeAgentContext([]));
+    for (const handler of pi.events.get("resources_discover") ?? [])
+      await handler(undefined, fakeAgentContext([]));
     assert.deepEqual(observed, ["initialized"]);
     assert.equal(readAgentBootstrap(mailbox), undefined);
     assert.ok(readAgentState(mailbox));
@@ -17250,6 +17280,8 @@ test("child bootstrap fails closed on identity, build, duplicate, and initialize
       registerExtension!(pi.pi as never);
       try {
         for (const handler of pi.events.get("session_start") ?? [])
+          await handler(undefined, fakeAgentContext([]));
+        for (const handler of pi.events.get("resources_discover") ?? [])
           await handler(undefined, fakeAgentContext([]));
         assert.equal(readAgentState(mailbox), undefined);
         assert.ok(readAgentBootstrap(mailbox));

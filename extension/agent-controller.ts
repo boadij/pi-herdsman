@@ -9104,65 +9104,79 @@ export function createAgentController(
           }
           if (!ownerDisplay)
             throw new Error("Verified direct owner role is unavailable");
+          let reservedChildSessionId: string | undefined;
           if (p.action === "delegate") {
             const registrations = new Map<
               string,
               ManagedAgentBootstrapPrepare
             >();
             let open = true;
+            let preparing = true;
             let registrationError: Error | undefined;
-            pi.events.emit(MANAGED_AGENT_BOOTSTRAP_EVENT, {
-              protocol: 1,
-              phase: "prepare",
-              context: ctx,
-              agent: label,
-              register(id: string, prepare: ManagedAgentBootstrapPrepare) {
-                if (!open)
-                  throw new Error(
-                    "Managed-agent bootstrap registration is closed",
-                  );
-                if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(id)) {
-                  registrationError ??= new Error(
-                    "Invalid managed-agent bootstrap participant ID",
-                  );
-                  return;
-                }
-                if (registrations.has(id)) {
-                  registrationError ??= new Error(
-                    `Duplicate managed-agent bootstrap participant ID: ${id}`,
-                  );
-                  return;
-                }
-                if (typeof prepare !== "function") {
-                  registrationError ??= new Error(
-                    "Invalid managed-agent bootstrap prepare callback",
-                  );
-                  return;
-                }
-                registrations.set(id, prepare);
-              },
-            });
-            open = false;
-            if (registrationError) throw registrationError;
             const participants: Array<{ id: string; payload: string }> = [];
-            for (const [id, prepare] of registrations) {
-              const result = await prepare();
-              if (result !== undefined) {
-                if (
-                  !result ||
-                  typeof result.payload !== "string" ||
-                  (result.commit !== undefined &&
-                    typeof result.commit !== "function")
-                )
-                  throw new Error(
-                    `Invalid preparation from managed-agent bootstrap participant "${id}"`,
-                  );
-                participants.push({ id, payload: result.payload });
-                preparedBootstrap.push({
-                  id,
-                  ...(result.commit ? { commit: result.commit } : {}),
-                });
+            try {
+              pi.events.emit(MANAGED_AGENT_BOOTSTRAP_EVENT, {
+                protocol: 1,
+                phase: "prepare",
+                context: ctx,
+                agent: label,
+                reserveChildSessionId() {
+                  if (!preparing)
+                    throw new Error(
+                      "Managed-Agent bootstrap preparation is closed",
+                    );
+                  return (reservedChildSessionId ??= randomUUID());
+                },
+                register(id: string, prepare: ManagedAgentBootstrapPrepare) {
+                  if (!open)
+                    throw new Error(
+                      "Managed-agent bootstrap registration is closed",
+                    );
+                  if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(id)) {
+                    registrationError ??= new Error(
+                      "Invalid managed-agent bootstrap participant ID",
+                    );
+                    return;
+                  }
+                  if (registrations.has(id)) {
+                    registrationError ??= new Error(
+                      `Duplicate managed-agent bootstrap participant ID: ${id}`,
+                    );
+                    return;
+                  }
+                  if (typeof prepare !== "function") {
+                    registrationError ??= new Error(
+                      "Invalid managed-agent bootstrap prepare callback",
+                    );
+                    return;
+                  }
+                  registrations.set(id, prepare);
+                },
+              });
+              open = false;
+              if (registrationError) throw registrationError;
+              for (const [id, prepare] of registrations) {
+                const result = await prepare();
+                if (result !== undefined) {
+                  if (
+                    !result ||
+                    typeof result.payload !== "string" ||
+                    (result.commit !== undefined &&
+                      typeof result.commit !== "function")
+                  )
+                    throw new Error(
+                      `Invalid preparation from managed-agent bootstrap participant "${id}"`,
+                    );
+                  participants.push({ id, payload: result.payload });
+                  preparedBootstrap.push({
+                    id,
+                    ...(result.commit ? { commit: result.commit } : {}),
+                  });
+                }
               }
+            } finally {
+              open = false;
+              preparing = false;
             }
             if (participants.length)
               writeAgentBootstrap(mailbox, {
@@ -9172,6 +9186,9 @@ export function createAgentController(
                 ownerSessionId: owner,
                 workspaceId,
                 agentLabel: label,
+                ...(reservedChildSessionId
+                  ? { childSessionId: reservedChildSessionId }
+                  : {}),
                 participants,
               });
           }
@@ -9250,7 +9267,13 @@ export function createAgentController(
             extensionPath: options.extensionPath,
             placement,
             ...(placementRevalidator ? { placementRevalidator } : {}),
-            agentArgs: [...launchArgs, ...sessionArgs],
+            agentArgs: [
+              ...launchArgs,
+              ...(reservedChildSessionId && preparedBootstrap.length
+                ? ["--session-id", reservedChildSessionId]
+                : []),
+              ...sessionArgs,
+            ],
             env,
             signal,
           });
@@ -9377,6 +9400,15 @@ export function createAgentController(
             fail(
               "target_not_found",
               "Managed Agent state identity did not match startup",
+              p.action,
+            );
+          if (
+            reservedChildSessionId &&
+            state.piSessionId !== reservedChildSessionId
+          )
+            fail(
+              "target_not_found",
+              "Managed Agent started with an unexpected Pi session ID",
               p.action,
             );
           requireCompatibleBuild(

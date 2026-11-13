@@ -59,8 +59,6 @@ const expectedDist = new Set([
   "dist/index.js.map",
   "dist/peer-bridge.js",
   "dist/peer-bridge.js.map",
-  "dist/integrations/pi-codex-context-sharing.js",
-  "dist/integrations/pi-codex-context-sharing.js.map",
   ...expectedDefinitions,
 ]);
 for (const path of expectedRoot)

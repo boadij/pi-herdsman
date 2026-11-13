@@ -4019,6 +4019,7 @@ export function registerManagedAgentSessionStartHandler(
     appendError(ctx: ExtensionContext, error: unknown): void;
   },
 ): void {
+  let pendingStartup: (() => Promise<void>) | undefined;
   pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
     let verified: ManagedAgentState | undefined;
     let startupStage: ManagedAgentStartupStage = "definition";
@@ -4128,11 +4129,12 @@ export function registerManagedAgentSessionStartHandler(
           }
         }
       }
+      let bootstrap = undefined as ReturnType<typeof readAgentBootstrap>;
       if (!existing) {
         startupStage = "definition";
         validateManagedAgentDefinition(await options.getAgentDefinitions(ctx));
         startupStage = "bootstrap";
-        const bootstrap = readAgentBootstrap(mailbox);
+        bootstrap = readAgentBootstrap(mailbox);
         if (bootstrap) {
           if (
             bootstrap.runId !== candidate.runId ||
@@ -4143,146 +4145,249 @@ export function registerManagedAgentSessionStartHandler(
             throw new Error("Managed-agent bootstrap identity mismatch");
           if (!sameRuntimeBuild(options.build, bootstrap.build))
             throw new Error("Managed-agent bootstrap Herdsman build mismatch");
-          for (const participant of bootstrap.participants) {
-            let initializer: (() => void | Promise<void>) | undefined;
-            let acceptCount = 0;
-            let invalidInitializer = false;
-            pi.events.emit(MANAGED_AGENT_BOOTSTRAP_EVENT, {
-              protocol: 1,
-              phase: "initialize",
-              context: ctx,
-              agent: candidate.agentLabel,
-              participant: { id: participant.id, payload: participant.payload },
-              accept(callback: () => void | Promise<void>) {
-                acceptCount++;
-                if (typeof callback !== "function") {
-                  invalidInitializer = true;
-                  return;
+          if (bootstrap.childSessionId) {
+            const nativeSessionId = ctx.sessionManager.getSessionId();
+            if (
+              nativeSessionId !== bootstrap.childSessionId ||
+              candidate.piSessionId !== bootstrap.childSessionId
+            )
+              throw new Error(
+                "Managed-agent bootstrap child session identity mismatch",
+              );
+            if (
+              ctx.sessionManager.getEntries().some((entry) => {
+                switch (entry.type) {
+                  case "message":
+                    // Pi persists its prompt/tool setup as system messages.
+                    // Other message roles represent conversational activity;
+                    // unknown roles fail closed as well.
+                    return entry.message.role !== "system";
+                  case "custom_message":
+                  case "compaction":
+                  case "branch_summary":
+                  case "context_edit":
+                    return true;
+                  case "thinking_level_change":
+                  case "model_change":
+                  case "usage":
+                  case "custom":
+                  case "label":
+                  case "session_info":
+                    // These pinned Pi session-entry types record setup,
+                    // extension state, or metadata rather than conversation.
+                    return false;
+                  default:
+                    // Unknown entry types may carry context; fail closed.
+                    return true;
                 }
-                if (acceptCount === 1) initializer = callback;
-              },
-            });
-            if (acceptCount === 0 || invalidInitializer)
+              })
+            )
               throw new Error(
-                `Managed-agent bootstrap participant "${participant.id}" is unavailable or invalid`,
+                "Managed-agent bootstrap child session is not fresh",
               );
-            if (acceptCount > 1)
-              throw new Error(
-                `Managed-agent bootstrap participant "${participant.id}" has multiple initializers`,
-              );
-            try {
-              await initializer!();
-            } catch (error) {
-              throw new Error(
-                `Managed-agent bootstrap participant "${participant.id}" failed: ${String(error)}`,
-                { cause: error },
-              );
-            }
           }
-          removeAgentBootstrap(mailbox);
         }
       }
-      startupStage = "mailbox_state";
-      const release = options.claimAssignmentLock(mailbox, "session_start", {
-        label: execution.assignment.agentLabel,
-        paneId: execution.assignment.paneId,
-      });
-      try {
-        const current = readAgentState(mailbox);
-        if (current && !options.sameIdentity(current, execution.assignment))
-          throw new Error("agent session identity changed while state existed");
-        if (existing !== undefined && current === undefined)
-          throw new Error("agent mailbox disappeared while state existed");
-        if (
-          existing !== undefined &&
-          current !== undefined &&
-          !options.sameDurableState(current, existing)
-        )
-          throw new Error(
-            "agent mailbox changed while session start was preparing",
-          );
-        if (existing === undefined && current !== undefined)
-          execution.assignment = {
-            ...candidate,
-            ...current,
-            build: options.build,
-            updatedAt: Date.now(),
-          };
-        writeAgentState(mailbox, execution.assignment);
-      } finally {
-        release();
-      }
-      if (options.delegationEnabled) {
-        startupStage = "controller_recovery";
-        managedAgentControllerIdentity(ctx);
-        await options.recoverControllerRuntimes(ctx, metadataSignal);
-        options.setControllerReady(true);
-      }
-      if (execution.assignment.activeRequestId)
-        options.touchActivity(Date.now(), forceActivityTouch);
-      if (options.delegationEnabled)
-        options.startControllerHealthScanner(ctx, metadataSignal);
-      execution.initialized = true;
-      const definition = process.env.PI_HERDSMAN_AGENT_DEFINITION!;
-      const label = execution.assignment.agentLabel;
-      nameSessionIfUnset(
-        pi,
-        ctx,
-        definition === label ? label : `${definition} · ${label}`,
-      );
-      startupStage = "request_observer";
-      execution.stopRequestObserver = observeMailbox(
-        mailbox,
-        (name) => /^request-.*\.json$/.test(name),
-        () => options.pumpRequest(ctx),
-        (error) => options.appendError(ctx, error),
-      );
-      options.pumpRequest(ctx);
-      if (!options.delegationEnabled && ctx.mode === "tui" && ctx.hasUI)
-        options.startLeafStatus(ctx);
-      startupStage = "metadata";
-      const model = ctx.model
-        ? `${ctx.model.provider}/${ctx.model.id}`
-        : undefined;
-      const thinking = ctx.thinkingLevel;
-      options.reportMetadata(
-        execution.assignment,
-        ctx,
-        {
-          activity: null,
-          context: null,
-          model: model || null,
-          thinking: thinking || null,
-        },
-        true,
-      );
-      const releaseStartup = options.claimAssignmentLock(
-        mailbox,
-        "session_start",
-        {
-          label: candidate.agentLabel,
-          paneId: candidate.paneId,
-        },
-      );
-      try {
-        const current = readAgentState(mailbox);
-        if (!current || !options.sameIdentity(current, candidate))
-          throw new Error(
-            "agent session identity changed before startup outcome",
-          );
-        writeAgentStartupOutcome(mailbox, {
-          version: 5,
-          build: options.build,
-          runId: candidate.runId,
-          ownerSessionId: candidate.ownerSessionId,
-          workspaceId: candidate.workspaceId,
-          agentLabel: candidate.agentLabel,
-          paneId: candidate.paneId,
-          status: "ready",
+      const finishStartup = async () => {
+        if (!execution.assignment)
+          throw new Error("Managed Agent startup state is unavailable");
+        startupStage = "mailbox_state";
+        const release = options.claimAssignmentLock(mailbox, "session_start", {
+          label: execution.assignment.agentLabel,
+          paneId: execution.assignment.paneId,
         });
-      } finally {
-        releaseStartup();
+        try {
+          const current = readAgentState(mailbox);
+          if (current && !options.sameIdentity(current, execution.assignment))
+            throw new Error(
+              "agent session identity changed while state existed",
+            );
+          if (existing !== undefined && current === undefined)
+            throw new Error("agent mailbox disappeared while state existed");
+          if (
+            existing !== undefined &&
+            current !== undefined &&
+            !options.sameDurableState(current, existing)
+          )
+            throw new Error(
+              "agent mailbox changed while session start was preparing",
+            );
+          if (existing === undefined && current !== undefined)
+            execution.assignment = {
+              ...candidate,
+              ...current,
+              build: options.build,
+              updatedAt: Date.now(),
+            };
+          writeAgentState(mailbox, execution.assignment);
+        } finally {
+          release();
+        }
+        if (options.delegationEnabled) {
+          startupStage = "controller_recovery";
+          managedAgentControllerIdentity(ctx);
+          await options.recoverControllerRuntimes(ctx, metadataSignal);
+          options.setControllerReady(true);
+        }
+        if (execution.assignment.activeRequestId)
+          options.touchActivity(Date.now(), forceActivityTouch);
+        if (options.delegationEnabled)
+          options.startControllerHealthScanner(ctx, metadataSignal);
+        execution.initialized = true;
+        const definition = process.env.PI_HERDSMAN_AGENT_DEFINITION!;
+        const label = execution.assignment.agentLabel;
+        nameSessionIfUnset(
+          pi,
+          ctx,
+          definition === label ? label : `${definition} · ${label}`,
+        );
+        startupStage = "request_observer";
+        execution.stopRequestObserver = observeMailbox(
+          mailbox,
+          (name) => /^request-.*\.json$/.test(name),
+          () => options.pumpRequest(ctx),
+          (error) => options.appendError(ctx, error),
+        );
+        options.pumpRequest(ctx);
+        if (!options.delegationEnabled && ctx.mode === "tui" && ctx.hasUI)
+          options.startLeafStatus(ctx);
+        startupStage = "metadata";
+        const model = ctx.model
+          ? `${ctx.model.provider}/${ctx.model.id}`
+          : undefined;
+        const thinking = ctx.thinkingLevel;
+        options.reportMetadata(
+          execution.assignment,
+          ctx,
+          {
+            activity: null,
+            context: null,
+            model: model || null,
+            thinking: thinking || null,
+          },
+          true,
+        );
+        const releaseStartup = options.claimAssignmentLock(
+          mailbox,
+          "session_start",
+          {
+            label: candidate.agentLabel,
+            paneId: candidate.paneId,
+          },
+        );
+        try {
+          const current = readAgentState(mailbox);
+          if (!current || !options.sameIdentity(current, candidate))
+            throw new Error(
+              "agent session identity changed before startup outcome",
+            );
+          writeAgentStartupOutcome(mailbox, {
+            version: 5,
+            build: options.build,
+            runId: candidate.runId,
+            ownerSessionId: candidate.ownerSessionId,
+            workspaceId: candidate.workspaceId,
+            agentLabel: candidate.agentLabel,
+            paneId: candidate.paneId,
+            status: "ready",
+          });
+        } finally {
+          releaseStartup();
+        }
+      };
+      const initializeBootstrap = async (
+        value: NonNullable<typeof bootstrap>,
+      ) => {
+        for (const participant of value.participants) {
+          let initializer: (() => void | Promise<void>) | undefined;
+          let acceptCount = 0;
+          let invalidInitializer = false;
+          pi.events.emit(MANAGED_AGENT_BOOTSTRAP_EVENT, {
+            protocol: 1,
+            phase: "initialize",
+            context: ctx,
+            agent: candidate.agentLabel,
+            participant: { id: participant.id, payload: participant.payload },
+            accept(callback: () => void | Promise<void>) {
+              acceptCount++;
+              if (typeof callback !== "function") invalidInitializer = true;
+              else if (acceptCount === 1) initializer = callback;
+            },
+          });
+          if (acceptCount === 0 || invalidInitializer)
+            throw new Error(
+              `Managed-agent bootstrap participant "${participant.id}" is unavailable or invalid`,
+            );
+          if (acceptCount > 1)
+            throw new Error(
+              `Managed-agent bootstrap participant "${participant.id}" has multiple initializers`,
+            );
+          try {
+            await initializer!();
+          } catch (error) {
+            throw new Error(
+              `Managed-agent bootstrap participant "${participant.id}" failed: ${String(error)}`,
+              { cause: error },
+            );
+          }
+        }
+        removeAgentBootstrap(mailbox);
+      };
+      if (bootstrap?.participants.length) {
+        pendingStartup = async () => {
+          try {
+            if (
+              bootstrap!.childSessionId &&
+              ctx.sessionManager.getSessionId() !== bootstrap!.childSessionId
+            )
+              throw new Error(
+                "Managed-agent bootstrap child session identity changed",
+              );
+            await initializeBootstrap(bootstrap!);
+            await finishStartup();
+          } catch (error) {
+            execution.initialized = false;
+            execution.stopRequestObserver?.();
+            execution.stopRequestObserver = undefined;
+            options.resetRequestPump();
+            options.statusRuntime.clear();
+            options.setControllerReady(false);
+            execution.assignment = undefined;
+            if (options.delegationEnabled) options.clearControllerRuntimes();
+            options.appendError(ctx, error);
+            ctx.ui.notify(`pi_herdsman_state_error: ${String(error)}`, "error");
+            try {
+              const release = options.claimAssignmentLock(
+                mailbox,
+                "session_start",
+                { label: candidate.agentLabel, paneId: candidate.paneId },
+              );
+              try {
+                const current = readAgentState(mailbox);
+                if (!current || options.sameIdentity(current, candidate))
+                  writeAgentStartupOutcome(mailbox, {
+                    version: 5,
+                    build: options.build,
+                    runId: candidate.runId,
+                    ownerSessionId: candidate.ownerSessionId,
+                    workspaceId: candidate.workspaceId,
+                    agentLabel: candidate.agentLabel,
+                    paneId: candidate.paneId,
+                    status: "failed",
+                    error: "Managed Agent initialization failed",
+                    stage: startupStage,
+                  });
+              } finally {
+                release();
+              }
+            } catch (publicationError) {
+              options.appendError(ctx, publicationError);
+            }
+          }
+        };
+        return;
       }
+      await finishStartup();
     } catch (error) {
       if (verified) {
         try {
@@ -4332,5 +4437,10 @@ export function registerManagedAgentSessionStartHandler(
       options.appendError(ctx, error);
       ctx.ui.notify(`pi_herdsman_state_error: ${String(error)}`, "error");
     }
+  });
+  pi.on("resources_discover", async () => {
+    const pending = pendingStartup;
+    pendingStartup = undefined;
+    if (pending) await pending();
   });
 }
