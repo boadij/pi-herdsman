@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -182,6 +183,24 @@ test("setup:hooks enables hooks without replacing existing hooks", () => {
     );
     assert.equal(setup().status, 0);
 
+    // A directory copy carries the original repository's absolute hooks path.
+    const copied = join(root, "copied");
+    cpSync(repo, copied, { recursive: true });
+    const repaired = setup(copied);
+    assert.equal(repaired.status, 0, repaired.stderr);
+    assert.equal(
+      execFileSync("git", ["config", "--local", "--get", "core.hooksPath"], {
+        cwd: copied,
+        env,
+        encoding: "utf8",
+      }).trim(),
+      join(realpathSync(copied), ".githooks"),
+    );
+    assert.equal(
+      git("config", "--local", "--get", "core.hooksPath"),
+      join(realpathSync(repo), ".githooks"),
+    );
+
     const linked = join(root, "linked");
     git("worktree", "add", "-b", "linked", linked);
     const refused = setup(linked);
@@ -203,7 +222,33 @@ test("setup:hooks enables hooks without replacing existing hooks", () => {
       join(root, "other-hooks"),
     );
 
+    const customHooks = join(root, "custom", ".githooks");
+    mkdirSync(customHooks, { recursive: true });
+    writeFileSync(join(customHooks, "post-checkout"), "#!/bin/sh\nexit 1\n");
+    git("config", "--local", "core.hooksPath", customHooks);
+    const custom = setup();
+    assert.notEqual(custom.status, 0);
+    assert.equal(git("config", "--get", "core.hooksPath"), customHooks);
+
     git("config", "--local", "--unset", "core.hooksPath");
+    execFileSync(
+      "git",
+      [
+        "config",
+        "--file",
+        globalConfig,
+        "core.hooksPath",
+        join(copied, ".githooks"),
+      ],
+      { env },
+    );
+    const global = setup();
+    assert.notEqual(global.status, 0);
+    assert.equal(
+      git("config", "--get", "core.hooksPath"),
+      join(copied, ".githooks"),
+    );
+    writeFileSync(globalConfig, "");
     if (process.platform !== "win32") {
       const existingHook = join(repo, ".git", "hooks", "pre-commit");
       writeFileSync(existingHook, "#!/bin/sh\n");

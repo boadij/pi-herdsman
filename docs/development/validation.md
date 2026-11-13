@@ -150,10 +150,12 @@ npm run setup
 ```
 
 This configures the hook and installs dependencies. If dependencies are already
-installed, `npm run setup:hooks` enables only the hook. Setup is idempotent and
-refuses to override an existing `core.hooksPath` pointing elsewhere or active
-executable hooks in Git's default hooks directory. Inspect the current hook
-configuration and its origin with:
+installed, `npm run setup:hooks` enables only the hook. Setup is idempotent.
+When a repository folder is copied with its `.git` directory, setup repairs a
+repository-local `core.hooksPath` pointing to an old `.githooks` directory
+if that directory is missing or its hook files match the current checkout.
+Unrelated hook managers, global settings, and executable default hooks are
+not overridden. Inspect the current hook configuration and its origin with:
 
 ```sh
 git config --show-origin --get core.hooksPath
