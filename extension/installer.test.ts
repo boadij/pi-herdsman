@@ -690,7 +690,11 @@ test(
         const env: NodeJS.ProcessEnv = { ...setup.env };
         delete env.PI_HERDSMAN_WEB_ACCESS;
         const command = `sh '${installer.replaceAll("'", "'\\''")}'`;
-        const result = spawnSync("script", ["-qec", command, "/dev/null"], {
+        const args =
+          process.platform === "darwin"
+            ? ["-q", "/dev/null", "sh", installer]
+            : ["-qec", command, "/dev/null"];
+        const result = spawnSync("script", args, {
           env,
           input,
           encoding: "utf8",
