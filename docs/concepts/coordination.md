@@ -5,6 +5,26 @@
 Pi Herdsman separates supervision, execution ownership, and physical placement.
 Those relationships intentionally do not collapse into one global Agent tree.
 
+## Emergent workflows, explicit boundaries
+
+Pi Herdsman provides coordination tools, not a prescribed execution graph.
+A Lead decides how to decompose its objective into bounded tasks and which
+permitted Agents to delegate them to. A delegation-enabled Agent can repeat
+that process within its own allowlist and the configured depth limit. At
+project scale, a Manager decides which independent, branch-scoped objectives
+to assign to managed Leads; each Lead directs its own Agent tree. The models
+may choose parallel execution for independent work or sequence dependent work,
+reassessing after handoffs instead of following a fixed pipeline.
+
+The execution strategy is adaptive; authority is not. Exact-session Agent
+ownership, delegation permissions, current project assignments, verified
+worktree scope, and supervision boundaries remain enforced by Herdsman.
+Agents cannot grant themselves broader authority by choosing a different
+handoff. Users can still specify a workflow or customize Agent definitions,
+but no predetermined handoff order is required. See [Delegation](delegation.md)
+and [Project orchestration](../guides/project-orchestration.md) for the
+respective execution contracts.
+
 ## Roles
 
 ```mermaid
