@@ -4129,6 +4129,33 @@ export function registerManagedAgentSessionStartHandler(
           }
         }
       }
+      const reservedSessionIsFresh = () =>
+        !ctx.sessionManager.getEntries().some((entry) => {
+          switch (entry.type) {
+            case "message":
+              // Pi persists its prompt/tool setup as system messages.
+              // Other message roles represent conversational activity;
+              // unknown roles fail closed as well.
+              return entry.message.role !== "system";
+            case "custom_message":
+            case "compaction":
+            case "branch_summary":
+            case "context_edit":
+              return true;
+            case "thinking_level_change":
+            case "model_change":
+            case "usage":
+            case "custom":
+            case "label":
+            case "session_info":
+              // These pinned Pi session-entry types record setup,
+              // extension state, or metadata rather than conversation.
+              return false;
+            default:
+              // Unknown entry types may carry context; fail closed.
+              return true;
+          }
+        });
       let bootstrap = undefined as ReturnType<typeof readAgentBootstrap>;
       if (!existing) {
         startupStage = "definition";
@@ -4154,34 +4181,7 @@ export function registerManagedAgentSessionStartHandler(
               throw new Error(
                 "Managed-agent bootstrap child session identity mismatch",
               );
-            if (
-              ctx.sessionManager.getEntries().some((entry) => {
-                switch (entry.type) {
-                  case "message":
-                    // Pi persists its prompt/tool setup as system messages.
-                    // Other message roles represent conversational activity;
-                    // unknown roles fail closed as well.
-                    return entry.message.role !== "system";
-                  case "custom_message":
-                  case "compaction":
-                  case "branch_summary":
-                  case "context_edit":
-                    return true;
-                  case "thinking_level_change":
-                  case "model_change":
-                  case "usage":
-                  case "custom":
-                  case "label":
-                  case "session_info":
-                    // These pinned Pi session-entry types record setup,
-                    // extension state, or metadata rather than conversation.
-                    return false;
-                  default:
-                    // Unknown entry types may carry context; fail closed.
-                    return true;
-                }
-              })
-            )
+            if (!reservedSessionIsFresh())
               throw new Error(
                 "Managed-agent bootstrap child session is not fresh",
               );
@@ -4342,6 +4342,10 @@ export function registerManagedAgentSessionStartHandler(
             )
               throw new Error(
                 "Managed-agent bootstrap child session identity changed",
+              );
+            if (bootstrap!.childSessionId && !reservedSessionIsFresh())
+              throw new Error(
+                "Managed-agent bootstrap child session is not fresh",
               );
             await initializeBootstrap(bootstrap!);
             await finishStartup();

@@ -42,6 +42,7 @@ import support, {
   fakeContext,
   fakePi,
   fakeAgentContext,
+  invokeEventHandlers,
   managedState,
   agentControllerExecutor,
   assignmentLockPathForTest,
@@ -7557,6 +7558,55 @@ test("participating fresh startup waits for resources_discover before readiness"
     );
     assert.equal(readAgentStartupOutcome(mailbox)?.status, "ready");
     assert.equal(agent.events.get("resources_discover")?.length, 1);
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("deferred bootstrap rechecks reserved-session freshness after later session_start handlers", async () => {
+  const mailbox = setAgentEnvironment("bootstrap-later-start");
+  const agent = fakePi();
+  registerExtension!(agent.pi as never);
+  let initialized = false;
+  agent.pi.events.on("pi-herdsman:managed-agent-bootstrap", (value: any) => {
+    if (value.phase !== "initialize") return;
+    value.accept(() => {
+      initialized = true;
+    });
+  });
+  agent.pi.on("session_start", async () => {
+    agent.entries.push({
+      type: "custom_message",
+      id: "later001",
+      parentId: null,
+      timestamp: "2025-01-01T00:00:01.000Z",
+      customType: "test/later-session-start",
+      content: "session activity appended after Herdsman preflight",
+    });
+  });
+  const { writeAgentBootstrap } = await import("./mailbox.ts");
+  writeAgentBootstrap(mailbox, {
+    version: 5,
+    build: HERDSMAN_BUILD,
+    runId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    ownerSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    workspaceId: WORKSPACE,
+    agentLabel: "bootstrap-later-start",
+    childSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    participants: [{ id: "test/identity", payload: "opaque" }],
+  });
+  const context = fakeAgentContext(agent.entries);
+  try {
+    await invokeEventHandlers(agent, "session_start")(undefined, context);
+    assert.ok(
+      agent.entries.some((entry: any) => entry.type === "custom_message"),
+    );
+    await invokeEventHandlers(agent, "resources_discover")(undefined, context);
+    assert.equal(initialized, false);
+    assert.equal(readAgentStartupOutcome(mailbox)?.status, "failed");
+    assert.equal(readAgentState(mailbox), undefined);
+    assert.deepEqual(agent.sentUsers, []);
   } finally {
     agent.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
