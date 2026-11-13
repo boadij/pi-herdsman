@@ -162,11 +162,14 @@ test("setup:hooks enables hooks without replacing existing hooks", () => {
     const git = (...args) =>
       execFileSync("git", args, { cwd: repo, env, encoding: "utf8" }).trim();
     git("init", "-b", "main");
+    git("config", "user.name", "Test");
+    git("config", "user.email", "test@example.invalid");
+    git("commit", "--allow-empty", "-m", "initial");
     mkdirSync(join(repo, ".githooks"));
     writeFileSync(join(repo, ".githooks", "post-checkout"), "#!/bin/sh\n");
-    const setup = () =>
+    const setup = (cwd = repo) =>
       spawnSync(process.execPath, [join(repoRoot, "scripts/setup-hooks.mjs")], {
-        cwd: repo,
+        cwd,
         env,
         encoding: "utf8",
       });
@@ -178,6 +181,12 @@ test("setup:hooks enables hooks without replacing existing hooks", () => {
       join(realpathSync(repo), ".githooks"),
     );
     assert.equal(setup().status, 0);
+
+    const linked = join(root, "linked");
+    git("worktree", "add", "-b", "linked", linked);
+    const refused = setup(linked);
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /Run setup from the primary repository checkout/);
 
     git("config", "--local", "core.hooksPath", join(root, "other-hooks"));
     const conflict = setup();
