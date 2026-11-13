@@ -1038,14 +1038,25 @@ export function decide(model, context) {
       const listed = correlatedCall(messages, "list_peers");
       if (!listed) return call("list_peers", {});
       const peers = JSON.parse(text(listed.result));
-      const peer = peers.peers?.find((candidate) => candidate.machine);
+      const expectedRole =
+        prompt.match(/\brole=(lead|manager)\b/u)?.[1] ?? "manager";
+      const expectedTarget = prompt.match(
+        /\bexpectedTarget=((?:lead|manager):[0-9a-hjkmnp-tv-z]{10})\b/u,
+      )?.[1];
+      const peer = peers.peers?.find(
+        (candidate) =>
+          candidate.machine &&
+          candidate.target?.startsWith(`${expectedRole}:`) &&
+          (!expectedTarget || candidate.target === expectedTarget),
+      );
       if (!peer)
-        throw new Error("single-message fixture found no remote Manager");
+        throw new Error(
+          `single-message fixture found no remote ${expectedRole}`,
+        );
       if (successfulCallCount(messages, "message_peer") === 0)
         return call("message_peer", {
           target: peer.target,
-          message:
-            "PEER_E2E_SINGLE_REQUEST: verify receiving Manager delivery.",
+          message: "PEER_E2E_SINGLE_REQUEST: verify peer delivery.",
         });
       return fauxAssistantMessage("PEER_E2E_A_SINGLE_SENT");
     }
@@ -1288,16 +1299,16 @@ export function decide(model, context) {
     );
     if (singleRequest) {
       const origin = text(singleRequest).match(
-        /Peer message from (manager:[0-9a-hjkmnp-tv-z]{10}):/u,
+        /Peer message from ((?:manager|lead):[0-9a-hjkmnp-tv-z]{10}):/u,
       )?.[1];
-      if (!origin) throw new Error("Missing origin Manager");
+      if (!origin) throw new Error("Missing origin peer");
       const reply = correlatedCall(currentTurn(messages), "message_peer");
       if (!reply)
         return call("message_peer", {
           target: origin,
           message: "PEER_E2E_SINGLE_REPLY",
         });
-      if (reply.result.isError) throw new Error("Manager reply failed");
+      if (reply.result.isError) throw new Error("Peer reply failed");
       return fauxAssistantMessage("PEER_E2E_B_SINGLE_REPLIED");
     }
     const inbounds = messages.filter(

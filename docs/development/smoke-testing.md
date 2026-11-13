@@ -233,17 +233,21 @@ verified; `npm run smoke` defaults to `core`.
 
 ## Peer federation acceptance
 
-Required peer-federation CI runs two real containerized Manager instances for
-the focused `manager-core` phase. It verifies one successful request,
-the exact correlated reply persisted once, and A's assistant completion after
-that reply without another prompt. The ordinary-Lead delivery phase remains a
-separate acceptance check.
+Required peer-federation CI runs the shared core acceptance independently for
+real containerized Managers (`manager-core`) and ordinary Leads (`lead-core`).
+Each verifies one successful request, the exact correlated reply persisted
+once, and A's assistant completion after that reply without another prompt.
+The comprehensive ordinary-Lead acceptance remains manually available as the
+`delivery` phase; it covers managed-Lead exclusion and delivery/recovery checks
+not included in the focused CI gate.
 
-Run the focused Manager phase with
-`PEER_SMOKE_PHASE=manager-core node scripts/peer-federation-smoke.mjs`.
+Run the focused phases with
+`PEER_SMOKE_PHASE=manager-core node scripts/peer-federation-smoke.mjs` and
+`PEER_SMOKE_PHASE=lead-core node scripts/peer-federation-smoke.mjs`.
 The comprehensive Manager recovery scenario remains the default and is
 manually runnable with
-`node scripts/peer-federation-smoke.mjs`. Run ordinary-Lead delivery with
+`node scripts/peer-federation-smoke.mjs`. Run comprehensive ordinary-Lead
+delivery with
 `PEER_SMOKE_PHASE=delivery node scripts/peer-federation-smoke.mjs`.
 A failed federation invocation is not retried automatically.
 

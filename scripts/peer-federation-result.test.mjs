@@ -93,6 +93,45 @@ test("federated Manager A recognizes provider-context peer replies and completes
   );
 });
 
+test("federated Manager B replies to a Lead-origin provider-context request", () => {
+  const inbound = {
+    role: "user",
+    content: [
+      {
+        type: "text",
+        text: "Peer message from lead:abcdefghjk: PEER_E2E_SINGLE_REQUEST",
+      },
+    ],
+  };
+  const initial = decide("federated-peer-b", { messages: [inbound] });
+  const replyCall = initial.content?.find((part) => part.type === "toolCall");
+  assert.equal(replyCall?.name, "message_peer");
+  assert.deepEqual(replyCall?.arguments, {
+    target: "lead:abcdefghjk",
+    message: "PEER_E2E_SINGLE_REPLY",
+  });
+  const completed = decide("federated-peer-b", {
+    messages: [
+      inbound,
+      { role: "assistant", content: [replyCall] },
+      {
+        role: "toolResult",
+        toolName: "message_peer",
+        toolCallId: replyCall.id,
+        content: "queued",
+        isError: false,
+      },
+    ],
+  });
+  assert.ok(
+    completed.content?.some(
+      (part) =>
+        part.type === "text" &&
+        part.text?.includes("PEER_E2E_B_SINGLE_REPLIED"),
+    ),
+  );
+});
+
 test("ordinary Lead send acceptance requires one fresh discovery, one send, and its exact receipt", () => {
   const diagnostics = {
     freshListPeersCalls: 1,
