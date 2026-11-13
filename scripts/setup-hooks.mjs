@@ -6,8 +6,8 @@ const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
 const root = realpathSync(process.cwd());
 if (
   root !== realpathSync(git("rev-parse", "--show-toplevel")) ||
-  git("rev-parse", "--path-format=absolute", "--git-dir") !==
-    git("rev-parse", "--path-format=absolute", "--git-common-dir")
+  realpathSync(git("rev-parse", "--git-dir")) !==
+    realpathSync(git("rev-parse", "--git-common-dir"))
 ) {
   throw new Error("Run setup from the primary repository checkout.");
 }
