@@ -43,7 +43,7 @@ test("post-checkout installs dependencies only in new linked worktrees", (t) => 
     const fakeNpm = join(bin, "npm");
     writeFileSync(
       fakeNpm,
-      '#!/bin/sh\nprintf "%s\\t%s\\n" "$PWD" "$*" >> "$HOOK_LOG"\n[ "${FAIL_NPM:-0}" != 1 ]\n',
+      '#!/bin/sh\nprintf "%s\\t%s\n" "$PWD" "$*" >> "$HOOK_LOG"\n[ "${FAIL_NPM:-0}" != 1 ]\n',
     );
     chmodSync(fakeNpm, 0o755);
 
@@ -224,7 +224,7 @@ test("setup:hooks enables hooks without replacing existing hooks", () => {
 
     const customHooks = join(root, "custom", ".githooks");
     mkdirSync(customHooks, { recursive: true });
-    writeFileSync(join(customHooks, "post-checkout"), "#!/bin/sh\\nexit 1\\n");
+    writeFileSync(join(customHooks, "post-checkout"), "#!/bin/sh\nexit 1\n");
     git("config", "--local", "core.hooksPath", customHooks);
     const custom = setup();
     assert.notEqual(custom.status, 0);
@@ -233,11 +233,14 @@ test("setup:hooks enables hooks without replacing existing hooks", () => {
     git("config", "--local", "--unset", "core.hooksPath");
     writeFileSync(
       globalConfig,
-      `[core]\\n\thooksPath = ${join(copied, ".githooks")}\\n`,
+      `[core]\n\thooksPath = ${join(copied, ".githooks")}\n`,
     );
     const global = setup();
     assert.notEqual(global.status, 0);
-    assert.equal(git("config", "--get", "core.hooksPath"), join(copied, ".githooks"));
+    assert.equal(
+      git("config", "--get", "core.hooksPath"),
+      join(copied, ".githooks"),
+    );
     writeFileSync(globalConfig, "");
     if (process.platform !== "win32") {
       const existingHook = join(repo, ".git", "hooks", "pre-commit");
