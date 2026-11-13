@@ -233,7 +233,13 @@ test("setup:hooks enables hooks without replacing existing hooks", () => {
     git("config", "--local", "--unset", "core.hooksPath");
     execFileSync(
       "git",
-      ["config", "--file", globalConfig, "core.hooksPath", join(copied, ".githooks")],
+      [
+        "config",
+        "--file",
+        globalConfig,
+        "core.hooksPath",
+        join(copied, ".githooks"),
+      ],
       { env },
     );
     const global = setup();
