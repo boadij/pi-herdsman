@@ -201,7 +201,6 @@ import {
 import { readRootOwners } from "./lead/coordination.ts";
 
 import {
-  createInstructionInspectorView,
   populateMenuFrame,
   collapseDisplayText,
   formatAgentDefinitions,
@@ -670,11 +669,30 @@ function registerExtensionImpl(
       typeof data.instructions === "string"
         ? data.instructions
         : undefined;
+    const storedInspector =
+      data && typeof data === "object" && "inspector" in data
+        ? data.inspector
+        : undefined;
+    const inspector =
+      storedInspector &&
+      typeof storedInspector === "object" &&
+      !Array.isArray(storedInspector) &&
+      "summary" in storedInspector &&
+      Array.isArray(storedInspector.summary) &&
+      storedInspector.summary.every((line) => typeof line === "string") &&
+      "tree" in storedInspector &&
+      typeof storedInspector.tree === "string"
+        ? {
+            summary: storedInspector.summary,
+            tree: storedInspector.tree,
+          }
+        : undefined;
     return expandablePresentation(options.expanded, (expanded) =>
       renderAgentDefinitionsOverview(definitions, theme, {
         ...options,
         expanded,
         instructions,
+        inspector,
       }),
     );
   });
@@ -1672,36 +1690,10 @@ function registerExtensionImpl(
       leadExecutionPresentation: () => leadRuntimes.leadExecutionPresentation(),
       agentDefinitionEnabled,
       agentDefinitionMetadata,
-      showDefinitionDetails: async (
-        ctx: ExtensionContext,
-        title: string,
-        lines: readonly string[],
-      ) => {
-        if (ctx.mode !== "tui") return;
-        await ctx.ui.custom(
-          (
-            tui: any,
-            theme: any,
-            _keybindings: any,
-            done: (value: unknown) => void,
-          ) =>
-            createInstructionInspectorView(
-              `${title} · Effective Instructions`,
-              lines,
-              theme,
-              (data) => matchesKey(data, Key.escape),
-              (data) => matchesKey(data, Key.ctrl("o")),
-              () => done(undefined),
-              () => tui.requestRender(),
-            ),
-          {
-            blocked: {
-              kind: "question",
-              message: `${title} · Effective Instructions`,
-            },
-          },
-        );
-      },
+      appendDefinitionsEntry: (data: {
+        definitions: Record<string, unknown>[];
+        inspector: { summary: string[]; tree: string };
+      }) => pi.appendEntry(AGENT_DEFINITIONS_ENTRY, data),
       formatAgentDefinitions,
       validThinkingLevels: VALID_THINKING_LEVELS,
       updateAgentOverride,

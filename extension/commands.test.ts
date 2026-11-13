@@ -20821,7 +20821,6 @@ test("Definitions Details snapshots effective append and replace instructions", 
     const notices: string[] = [];
     context.ui.notify = (message: string) => notices.push(message);
     let customCalls = 0;
-    let inspectorLines: string[] = [];
     context.ui.custom = async (factory: any) => {
       const result = new Promise<unknown>((resolve) => {
         const component = factory(
@@ -20860,7 +20859,10 @@ test("Definitions Details snapshots effective append and replace instructions", 
         .find(
           (entry: any) => entry?.customType === "pi-herdsman-agent-definitions",
         ),
-      inspectorLines,
+      customCalls,
+      renderer: pi.entryRenderers.find(
+        ({ customType }: any) => customType === "pi-herdsman-agent-definitions",
+      )!.renderer,
       notices,
       error,
     };
@@ -20884,8 +20886,42 @@ test("Definitions Details snapshots effective append and replace instructions", 
         `---\nname: scout\ndescription: after\nbodyMode: append\n---\nAdditional instructions\n@${bodyPath}\n`,
       );
     });
-    assert.equal(appendedResult.entry, undefined);
     assert.equal(appendedResult.error, undefined);
+    assert.ok(appendedResult.entry);
+    assert.equal(appendedResult.customCalls, 3);
+    assert.equal(appendedResult.entry.data.definitions[0].name, "scout");
+    assert.match(
+      appendedResult.entry.data.inspector.tree,
+      /mutated after selection/u,
+    );
+    assert.match(
+      appendedResult.entry.data.inspector.tree,
+      /Additional instructions/u,
+    );
+    const savedTree = appendedResult.entry.data.inspector.tree;
+    realFs.writeFileSync(bodyPath, "changed after transcript snapshot");
+    assert.equal(appendedResult.entry.data.inspector.tree, savedTree);
+    const renderer = appendedResult.renderer as any;
+    const theme = {
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    };
+    const compact = renderer(appendedResult.entry, { expanded: false }, theme)
+      .render(120)
+      .join("\n");
+    assert.match(compact, /Ctrl\+O to expand/u);
+    assert.doesNotMatch(compact, /mutated after selection/u);
+    const expandedComponent = renderer(
+      appendedResult.entry,
+      { expanded: true },
+      theme,
+    );
+    const expanded = expandedComponent.render(120).join("\n");
+    assert.match(expanded, /mutated after selection/u);
+    assert.doesNotMatch(expanded, /1–12\//u);
+    for (const line of expandedComponent.render(24))
+      assert.ok(visibleWidth(line) <= 24);
 
     realFs.writeFileSync(
       definitionPath,
@@ -20894,8 +20930,16 @@ test("Definitions Details snapshots effective append and replace instructions", 
     const replacedResult = await selectDetails("scout", () => {
       realFs.writeFileSync(bodyPath, "changed file instructions");
     });
-    assert.equal(replacedResult.entry, undefined);
     assert.equal(replacedResult.error, undefined);
+    assert.ok(replacedResult.entry);
+    assert.match(
+      replacedResult.entry.data.inspector.tree,
+      /Replacement instructions/u,
+    );
+    assert.match(
+      replacedResult.entry.data.inspector.tree,
+      /changed file instructions/u,
+    );
 
     realFs.writeFileSync(
       customDefinitionPath,
@@ -20921,6 +20965,7 @@ test("Definitions Details snapshots effective append and replace instructions", 
         `---\nname: details-scout\nunknownField: true\n---\nInvalid\n`,
       );
     });
+    assert.equal(invalidResult.entry, undefined);
     assert.ok(
       invalidResult.notices.some((notice) =>
         /unknownField|Malformed|invalid/i.test(notice),
@@ -20987,6 +21032,7 @@ test("Agent Definition details toggle independently on click", () => {
         },
       ],
       instructions: "AGENT_DEFINITION_INSTRUCTIONS_SENTINEL",
+      inspector: { summary: ["malformed inspector"], tree: null },
     },
   };
   const theme = {
@@ -21011,6 +21057,7 @@ test("Agent Definition details toggle independently on click", () => {
   const second = renderer(entry, { expanded: false }, theme);
   const rendered = (component: any) => component.render(120).join("\n");
 
+  assert.doesNotMatch(rendered(first), /malformed inspector/u);
   assert.doesNotMatch(
     rendered(first),
     /AGENT_DEFINITION_INSTRUCTIONS_SENTINEL/u,
@@ -21036,6 +21083,7 @@ test("Agent Definition details toggle independently on click", () => {
     rendered(globallyExpanded),
     /AGENT_DEFINITION_INSTRUCTIONS_SENTINEL/u,
   );
+  assert.doesNotMatch(rendered(globallyExpanded), /malformed inspector/u);
 });
 
 test("Definitions cancellation navigates one menu level at a time", async () => {

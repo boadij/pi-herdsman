@@ -132,11 +132,13 @@ action. Use `/manager refresh` or `/chief refresh` to validate and apply the
 active role's definition. Definition files are not watched while a profile is
 active.
 
-The `Details…` action opens a transient, read-only inspector. It starts in a
-compact view; press `Ctrl+O` to expand the known definition details and
-instructions. Expanded content is shown in bounded pages; use the arrow keys,
-`PageUp`/`PageDown`, or `Home`/`End` to inspect it, and `Esc` to return to the action menu. The expanded content is
-not appended to the Pi session history. The compact view reports the effective
+The `Details…` action appends a read-only inspection entry to the normal Pi chat
+transcript and closes the Definitions menu. The compact entry reports the
+inspection context and preview; use Pi's native `Ctrl+O` expansion to reveal
+the complete known-input instruction tree. Expanded content occupies its
+natural transcript height and uses ordinary terminal scrolling. The inspection
+snapshot, including applicable context text, is saved with the Pi session but
+is excluded from model context. The compact view reports the effective
 configuration, definition source count, selected context-file count, execution
 context, and preview limitation. The expanded tree follows known prompt-input
 ordering; source layers and surviving body text are nested within the Herdsman

@@ -137,126 +137,6 @@ export function summarizeDefinitionLayerChanges(
   return lines;
 }
 
-export function createInstructionInspectorView(
-  title: string,
-  lines: readonly string[],
-  theme: Pick<Theme, "fg" | "bold">,
-  isClose: (data: string) => boolean,
-  isToggle: (data: string) => boolean,
-  done: () => void,
-  requestRender: () => void,
-) {
-  const container = new Container();
-  const pageSize = 12;
-  let expanded = false;
-  let scrollOffset = 0;
-  let contentLineCount = 0;
-  const wrapLine = (line: string, width: number): string[] => {
-    if (visibleWidth(line) <= width) return [line];
-    const wrapped: string[] = [];
-    const leading = line.match(/^[ 	│├└─]*/u)?.[0] ?? "";
-    const continuation = " ".repeat(visibleWidth(leading));
-    let current = "";
-    let currentWidth = 0;
-    for (const character of line) {
-      const characterWidth = visibleWidth(character);
-      if (current && currentWidth + characterWidth > width) {
-        wrapped.push(current);
-        current = continuation;
-        currentWidth = visibleWidth(continuation);
-      }
-      current += character;
-      currentWidth += characterWidth;
-    }
-    if (current) wrapped.push(current);
-    return wrapped;
-  };
-  const build = (width: number): void => {
-    const body = new Container();
-    const wrappedLines = lines.flatMap((line) =>
-      wrapLine(line, Math.max(1, width - 4)),
-    );
-    contentLineCount = wrappedLines.length;
-    scrollOffset = Math.min(
-      scrollOffset,
-      Math.max(0, contentLineCount - pageSize),
-    );
-    const visible = expanded
-      ? wrappedLines.slice(scrollOffset, scrollOffset + pageSize)
-      : wrappedLines.slice(0, 8);
-    for (const line of visible)
-      body.addChild(new Text(theme.fg("text", line), 1, 0));
-    const frame = new Container();
-    const pageEnd = Math.min(scrollOffset + pageSize, wrappedLines.length);
-    populateMenuFrame(
-      frame,
-      theme,
-      title,
-      body,
-      expanded
-        ? `↑/↓ · PgUp/PgDn · Home/End · Ctrl+O Compact · Esc Close · ${scrollOffset + 1}–${pageEnd}/${wrappedLines.length}`
-        : "Ctrl+O Expand · Esc Close",
-    );
-    container.clear();
-    container.addChild(frame);
-  };
-  return {
-    render(width: number) {
-      build(width);
-      return container.render(width);
-    },
-    invalidate() {
-      container.invalidate();
-    },
-    handleInput(data: string) {
-      if (isClose(data)) done();
-      else if (isToggle(data)) {
-        expanded = !expanded;
-        scrollOffset = 0;
-      } else if (expanded) {
-        if (
-          data === "PageDown" ||
-          data === "pageDown" ||
-          PiTui.matchesKey(data, PiTui.Key.pageDown)
-        )
-          scrollOffset = Math.min(
-            Math.max(0, contentLineCount - pageSize),
-            scrollOffset + pageSize,
-          );
-        else if (
-          data === "PageUp" ||
-          data === "pageUp" ||
-          PiTui.matchesKey(data, PiTui.Key.pageUp)
-        )
-          scrollOffset = Math.max(0, scrollOffset - pageSize);
-        else if (data === "Home" || PiTui.matchesKey(data, PiTui.Key.home))
-          scrollOffset = 0;
-        else if (data === "End" || PiTui.matchesKey(data, PiTui.Key.end))
-          scrollOffset = Math.max(0, contentLineCount - pageSize);
-        else if (
-          data === "ArrowDown" ||
-          data === "Down" ||
-          PiTui.matchesKey(data, PiTui.Key.down)
-        )
-          scrollOffset = Math.min(
-            Math.max(0, contentLineCount - pageSize),
-            scrollOffset + 1,
-          );
-        else if (
-          data === "ArrowUp" ||
-          data === "Up" ||
-          PiTui.matchesKey(data, PiTui.Key.up)
-        )
-          scrollOffset = Math.max(0, scrollOffset - 1);
-      }
-      requestRender();
-    },
-    get expanded() {
-      return expanded;
-    },
-  };
-}
-
 export function populateMenuFrame(
   container: Container,
   theme: Pick<Theme, "fg" | "bold">,
@@ -2922,7 +2802,11 @@ function createWidthSafeBox(
 export function renderAgentDefinitionsOverview(
   definitions: readonly Record<string, unknown>[],
   theme: ThemeLike,
-  options: { expanded?: boolean; instructions?: string } = {},
+  options: {
+    expanded?: boolean;
+    instructions?: string;
+    inspector?: { summary: string[]; tree: string };
+  } = {},
 ): TuiBox {
   const lines: string[] =
     definitions.length > 1
@@ -2994,7 +2878,13 @@ export function renderAgentDefinitionsOverview(
         ),
       );
   });
-  if (typeof options.instructions === "string" && options.expanded !== true) {
+  if (options.inspector) {
+    lines.push(...options.inspector.summary);
+    lines.push("Ctrl+O to expand");
+  } else if (
+    typeof options.instructions === "string" &&
+    options.expanded !== true
+  ) {
     const characters = Array.from(options.instructions).length;
     lines.push(
       humanRow(theme, "instructions", `${characters} chars · Ctrl+O to expand`),
@@ -3004,7 +2894,13 @@ export function renderAgentDefinitionsOverview(
     theme.bg("customMessageBg", line),
   );
   box.addChild(new WidthSafeText(lines.join("\n"), 0, 0));
-  if (typeof options.instructions === "string" && options.expanded === true) {
+  if (options.expanded === true && options.inspector) {
+    box.addChild(new Spacer(1));
+    box.addChild(new WidthSafeText(options.inspector.tree, 0, 0));
+  } else if (
+    typeof options.instructions === "string" &&
+    options.expanded === true
+  ) {
     box.addChild(new Spacer(1));
     box.addChild(
       new Text(

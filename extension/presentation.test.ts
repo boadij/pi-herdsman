@@ -17,7 +17,6 @@ import { Box, Container } from "@earendil-works/pi-tui";
 import { prepareMessageInput } from "./core.ts";
 import type { DefinitionLayerTrace, Frontmatter } from "./agent-definitions.ts";
 import {
-  createInstructionInspectorView,
   populateMenuFrame,
   summarizeDefinitionLayerChanges,
   collapseDisplayText,
@@ -113,106 +112,6 @@ test("definition layer summaries show only safe, authoritative field changes", (
       bodyAction: "inherit",
     }),
     ["~ tools: relative +codemode -bash"],
-  );
-});
-
-test("instruction inspector toggles compact trees, closes, wraps, and stays transient", () => {
-  const theme = {
-    fg: (_color: string, text: string) => text,
-    bold: (text: string) => text,
-  };
-  const events: string[] = [];
-  const view = createInstructionInspectorView(
-    "reviewer · Effective Instructions",
-    [
-      "Context /workspace/subdirectory",
-      "Preview Future Agent launch",
-      "Definition sources 3",
-      "Pi context files 2",
-      "Preview limitation",
-      "Effective configuration",
-      "tools: read",
-      "├─ Appended prompt",
-      "│  ├─ Private · reviewer.md",
-      "│  │  └─ surviving source text that wraps at a narrow width",
-      "└─ Runtime contributions",
-    ],
-    theme,
-    (data) => data === "Escape",
-    (data) => data === "Ctrl+O",
-    () => events.push("close"),
-    () => events.push("render"),
-  );
-  const compact = view.render(24);
-  assert.equal(view.expanded, false);
-  assert.ok(compact.every((line) => visibleWidth(line) <= 24));
-  assert.ok(!compact.join("\n").includes("surviving source text"));
-
-  view.handleInput("Ctrl+O");
-  assert.equal(view.expanded, true);
-  const expanded = view.render(24);
-  assert.ok(expanded.every((line) => visibleWidth(line) <= 24));
-  assert.doesNotMatch(
-    stripVTControlCharacters(expanded.join("\n")),
-    /surviving source text/u,
-  );
-  view.handleInput("End");
-  const finalPage = stripVTControlCharacters(view.render(24).join("\n"));
-  assert.match(finalPage, /surviving s/u);
-  assert.match(finalPage, /text/u);
-  assert.match(stripVTControlCharacters(expanded.join("\n")), /│  ├─ Private/u);
-  assert.ok(expanded.length > compact.length);
-  assert.ok(events.includes("render"));
-
-  view.handleInput("Ctrl+O");
-  assert.equal(view.expanded, false);
-  view.handleInput("Escape");
-  assert.deepEqual(
-    events.filter((event) => event === "close"),
-    ["close"],
-  );
-});
-
-test("expanded instruction inspector pages through bounded long content", () => {
-  const theme = {
-    fg: (_color: string, text: string) => text,
-    bold: (text: string) => text,
-  };
-  const lines = Array.from(
-    { length: 40 },
-    (_, index) => `instruction line ${index + 1}`,
-  );
-  const view = createInstructionInspectorView(
-    "Long instructions",
-    lines,
-    theme,
-    (data) => data === "Escape",
-    (data) => data === "Ctrl+O",
-    () => {},
-    () => {},
-  );
-
-  view.render(80);
-  view.handleInput("Ctrl+O");
-  const firstPage = stripVTControlCharacters(view.render(80).join("\n"));
-  assert.match(firstPage, /instruction line 1/u);
-  assert.doesNotMatch(firstPage, /instruction line 13/u);
-  assert.match(firstPage, /1–12\/40/u);
-
-  view.handleInput("PageDown");
-  const secondPage = stripVTControlCharacters(view.render(80).join("\n"));
-  assert.match(secondPage, /instruction line 13/u);
-  assert.match(secondPage, /instruction line 24/u);
-  assert.doesNotMatch(secondPage, /instruction line 1(?:\D|$)/u);
-
-  view.handleInput("End");
-  const lastPage = stripVTControlCharacters(view.render(80).join("\n"));
-  assert.match(lastPage, /instruction line 40/u);
-  assert.match(lastPage, /29–40\/40/u);
-  view.handleInput("Home");
-  assert.match(
-    stripVTControlCharacters(view.render(80).join("\n")),
-    /instruction line 1/u,
   );
 });
 
@@ -6182,6 +6081,32 @@ Use **strict review** for \`controller.ts\`.
     );
     assert.equal((multiDefinition.match(/Instructions/g) ?? []).length, 1);
     assert.equal((multiDefinition.match(/strict review/g) ?? []).length, 1);
+
+    const tree = Array.from(
+      { length: 40 },
+      (_, index) => `├─ source ${index + 1} · known instruction text`,
+    ).join("\n");
+    const inspector = {
+      summary: ["Active session · 1 source · 2 Pi context files"],
+      tree: `${tree}\nFINAL TREE MARKER`,
+    };
+    const compactTree = renderAgentDefinitionsOverview(definition, theme, {
+      expanded: false,
+      inspector,
+    })
+      .render(120)
+      .join("\n");
+    assert.match(compactTree, /Active session · 1 source/u);
+    assert.match(compactTree, /Ctrl\+O to expand/u);
+    assert.doesNotMatch(compactTree, /FINAL TREE MARKER/u);
+
+    const expandedTreeBox = renderAgentDefinitionsOverview(definition, theme, {
+      expanded: true,
+      inspector,
+    });
+    assert.match(expandedTreeBox.render(120).join("\n"), /FINAL TREE MARKER/u);
+    for (const line of expandedTreeBox.render(24))
+      assert.ok(visibleWidth(line) <= 24);
   }
 });
 
