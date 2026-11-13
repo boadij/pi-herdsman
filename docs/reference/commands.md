@@ -132,6 +132,29 @@ action. Use `/manager refresh` or `/chief refresh` to validate and apply the
 active role's definition. Definition files are not watched while a profile is
 active.
 
+The `Details…` action opens a transient, read-only inspector. It starts in a
+compact view; press `Ctrl+O` to expand the known definition details and
+instructions. Expanded content is shown in bounded pages; use the arrow keys,
+`PageUp`/`PageDown`, or `Home`/`End` to inspect it, and `Esc` to return to the action menu. The expanded content is
+not appended to the Pi session history. The compact view reports the effective
+configuration, definition source count, selected context-file count, execution
+context, and preview limitation. The expanded tree follows known prompt-input
+ordering; source layers and surviving body text are nested within the Herdsman
+definition section. `+` and `-` identify added and removed explicit values;
+`~` identifies changed values or body operations. Context files follow Pi's
+loader order and the Agent's global/project inheritance settings. Configured
+skills and extensions are selections, not proof that those resources loaded.
+For an active Lead or Manager, the expanded tree uses the verified role-contract
+producer and current Pi system-prompt options for known context inputs; ordinary
+Lead execution profile text is shown separately. Chief uses its forced-prompt
+producer, which includes applicable global user instructions and excludes
+ordinary project context. Inactive Coordinator profiles are shown prospectively;
+current active contracts are not substituted for them. Managed Lead previews place its append-only definition body and shared guidance
+before inherited context, followed by the verified runtime role section when
+active. Other session-dependent sections are identified as such. The preview
+is not an exact provider prompt: role/session runtime inputs and provider-side
+transformations may add content.
+
 The details view shows applicable effective metadata:
 
 - name and description;

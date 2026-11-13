@@ -2,6 +2,7 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { basename } from "node:path";
 import {
   getSupportedThinkingLevels,
   type Api,
@@ -18,6 +19,12 @@ import {
   discoverGlobalAgentDefinition,
   notifyDefinitionWarning,
   discoverRoleDefinitions,
+  expandDefinitionBodyFragments,
+  expandDefinitionBodyFragmentsWithSources,
+  type ExpandedDefinitionBodyPart,
+  selectedAgentContextFiles,
+  contextInheritance,
+  type DefinitionInspection,
   definitionEditTargets,
   readDefinitionEditSnapshot,
   isReservedRoleDefinition,
@@ -31,6 +38,7 @@ import { isLeadExecutionMode, type LeadExecutionMode } from "../core.ts";
 import {
   compactModelToken,
   managedExecutionLabel,
+  summarizeDefinitionLayerChanges,
   type StatusSnapshot,
   type buildStatusRows,
   type renderRunningOptions,
@@ -80,6 +88,28 @@ type LeadCommandHost = {
     roleDefinitions: AgentDefinition[];
     projectTrusted: boolean;
   }>;
+  getSystemPromptOptions(
+    ctx: ExtensionCommandContext,
+  ): import("@earendil-works/pi-coding-agent").BuildSystemPromptOptions;
+  chiefSystemPrompt(
+    options:
+      | import("@earendil-works/pi-coding-agent").BuildSystemPromptOptions
+      | undefined,
+    body: string,
+  ): string;
+  chiefGlobalInstructions(
+    options:
+      | import("@earendil-works/pi-coding-agent").BuildSystemPromptOptions
+      | undefined,
+  ): Array<{ path: string; content: string }>;
+  roleCharter(ctx: ExtensionContext): string;
+  isCurrentChief(ctx: ExtensionContext): boolean;
+  supervisoryProfileBody(
+    ctx: ExtensionContext,
+    role: "manager" | "chief",
+  ): string;
+  executionPrompt(): string | undefined;
+  leadExecutionDefinition(): AgentDefinition | undefined;
   discoverRoleDefinition(
     name: RoleDefinitionName,
     options?: {
@@ -87,6 +117,18 @@ type LeadCommandHost = {
       onWarning?: (message: string) => void;
     },
   ): AgentDefinition;
+  inspectAgentDefinition(
+    name: string,
+    options?: { projectRoot?: string; onWarning?: (message: string) => void },
+  ): DefinitionInspection;
+  inspectRoleDefinition(
+    name: RoleDefinitionName,
+    options?: { projectRoot?: string; onWarning?: (message: string) => void },
+  ): DefinitionInspection;
+  expandDefinitionBodyFragments: typeof expandDefinitionBodyFragments;
+  expandDefinitionBodyFragmentsWithSources?: typeof expandDefinitionBodyFragmentsWithSources;
+  expandAgentBodyFiles: typeof import("../agent-definitions.ts").expandAgentBodyFiles;
+  selectedAgentContextFiles: typeof selectedAgentContextFiles;
   setLeadExecutionMode(
     ctx: ExtensionCommandContext,
     mode: LeadExecutionMode,
@@ -98,12 +140,11 @@ type LeadCommandHost = {
   };
   agentDefinitionEnabled(definition: AgentDefinition): boolean;
   agentDefinitionMetadata(definition: AgentDefinition): Record<string, unknown>;
-  expandAgentBodyFiles(
-    body: string,
-    files: readonly string[],
-    operation: string,
-  ): string;
-  appendDefinitionsEntry(data: unknown): void;
+  showDefinitionDetails(
+    ctx: ExtensionContext,
+    title: string,
+    lines: readonly string[],
+  ): Promise<void>;
   formatAgentDefinitions(
     definitions: readonly Record<string, unknown>[],
   ): string[];
@@ -603,15 +644,328 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               definition = current;
               const metadata = host.agentDefinitionMetadata(current);
               if (ctx.mode === "tui") {
-                const instructions = host.expandAgentBodyFiles(
-                  current.body,
-                  [],
-                  "definition details",
-                );
-                host.appendDefinitionsEntry({
-                  definitions: [metadata],
-                  instructions,
-                });
+                try {
+                  const promptOptions = isReservedRoleDefinition(current.name)
+                    ? host.getSystemPromptOptions(ctx)
+                    : undefined;
+                  const inspection = isReservedRoleDefinition(current.name)
+                    ? host.inspectRoleDefinition(
+                        current.name as RoleDefinitionName,
+                        ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
+                      )
+                    : host.inspectAgentDefinition(
+                        current.name,
+                        ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
+                      );
+                  const expandedFragments: ExpandedDefinitionBodyPart[][] =
+                    host.expandDefinitionBodyFragmentsWithSources?.(
+                      inspection.bodyFragments,
+                      [],
+                      "definition details",
+                    ) ??
+                    host
+                      .expandDefinitionBodyFragments(
+                        inspection.bodyFragments,
+                        [],
+                        "definition details",
+                      )
+                      .map((text) => [{ text }]);
+                  const fragments = expandedFragments.map((parts) =>
+                    parts.map(({ text }) => text).join(""),
+                  );
+                  const sources = inspection.layers.map(({ scope }) => scope);
+                  const roleProfile = isReservedRoleDefinition(current.name);
+                  const execution = host.leadExecutionPresentation();
+                  const managedLeadProfile = current.name === "managed-lead";
+                  let activeRole =
+                    (current.name === "manager" &&
+                      host.roleActive("manager")) ||
+                    (current.name === "chief" && host.isCurrentChief(ctx)) ||
+                    (managedLeadProfile && execution.managed) ||
+                    (current.name === "flexible-lead" &&
+                      !execution.managed &&
+                      execution.mode === "flexible" &&
+                      !host.roleActive("manager") &&
+                      !host.roleActive("chief")) ||
+                    (current.name === "orchestrator-lead" &&
+                      !execution.managed &&
+                      execution.mode === "orchestrate" &&
+                      !host.roleActive("manager") &&
+                      !host.roleActive("chief"));
+                  const activeChief = current.name === "chief" && activeRole;
+                  const currentRoleCharter =
+                    activeRole && current.name !== "chief"
+                      ? host.roleCharter(ctx)
+                      : undefined;
+                  if (
+                    currentRoleCharter?.includes(
+                      "No active Herdsman role is verified for this Pi session.",
+                    )
+                  )
+                    activeRole = false;
+                  const activeExecutionDefinition = activeRole
+                    ? host.leadExecutionDefinition()
+                    : undefined;
+                  const inheritance =
+                    !roleProfile || managedLeadProfile
+                      ? contextInheritance(current)
+                      : undefined;
+                  const roleContextFiles =
+                    activeRole && current.name !== "chief"
+                      ? (promptOptions?.contextFiles ?? []).map((file) => ({
+                          path: file.path,
+                          text: file.content,
+                        }))
+                      : [];
+                  const chiefContextFiles =
+                    current.name === "chief"
+                      ? host
+                          .chiefGlobalInstructions(promptOptions)
+                          .map((file) => ({
+                            path: file.path,
+                            text: file.content,
+                          }))
+                      : [];
+                  const futureContextFiles =
+                    inheritance && (!roleProfile || !activeRole)
+                      ? host
+                          .selectedAgentContextFiles(current, ctx.cwd)
+                          .map((file) => ({
+                            path: file.path,
+                            text: file.content,
+                          }))
+                      : [];
+                  const contextFiles =
+                    current.name === "chief"
+                      ? chiefContextFiles
+                      : roleProfile
+                        ? activeRole
+                          ? roleContextFiles
+                          : futureContextFiles
+                        : futureContextFiles;
+                  const contextCount = inheritance
+                    ? String(contextFiles.length)
+                    : current.name === "chief"
+                      ? String(chiefContextFiles.length)
+                      : activeRole
+                        ? String(roleContextFiles.length)
+                        : "session-dependent";
+                  const contextMode =
+                    current.name === "chief"
+                      ? "Chief forced prompt includes only global user instructions; project context excluded"
+                      : inheritance
+                        ? inheritance.global && inheritance.project
+                          ? "Pi context inherited globally and from the project"
+                          : inheritance.global
+                            ? "Selected global Pi context"
+                            : inheritance.project
+                              ? "Selected project Pi context"
+                              : "Pi context files disabled"
+                        : activeRole
+                          ? "Current Pi context from getSystemPromptOptions()"
+                          : "Coordinator profile context depends on its future session";
+                  const rolePreview = activeRole
+                    ? "active-session inputs"
+                    : managedLeadProfile
+                      ? "future Managed Lead launch"
+                      : "prospective Coordinator profile";
+                  const title = roleProfile
+                    ? `${current.name} · ${rolePreview}`
+                    : current.name;
+                  const tree: string[] = [];
+                  const appendText = (prefix: string, content: string) => {
+                    for (const line of content.split("\n"))
+                      tree.push(`${prefix}${line}`);
+                  };
+                  const appendContexts = (label: string) => {
+                    if (!contextFiles.length) {
+                      tree.push(`├─ ${label} · none`);
+                      return;
+                    }
+                    tree.push(`├─ ${label}`);
+                    contextFiles.forEach((file, index) => {
+                      tree.push(
+                        `│  ${index === contextFiles.length - 1 ? "└─" : "├─"} ${file.path}`,
+                      );
+                      appendText("│  │  ", file.text);
+                    });
+                  };
+                  const appendDefinition = (label: string) => {
+                    tree.push(`├─ ${label}`);
+                    inspection.layers.forEach((layer, index) => {
+                      const lastLayer = index === inspection.layers.length - 1;
+                      tree.push(
+                        `│  ${lastLayer ? "└─" : "├─"} ${layer.scope} · ${basename(layer.path)}`,
+                      );
+                      for (const change of summarizeDefinitionLayerChanges(
+                        layer,
+                      ))
+                        tree.push(`│  │  ${change}`);
+                    });
+                    for (
+                      let index = 0;
+                      index < inspection.bodyFragments.length;
+                      index++
+                    ) {
+                      const fragment = inspection.bodyFragments[index]!;
+                      tree.push(
+                        `│  └─ ${fragment.scope} · surviving body text`,
+                      );
+                      for (const part of expandedFragments[index] ?? []) {
+                        if (part.filePath) {
+                          tree.push(`│     └─ ${part.filePath}`);
+                          appendText("│        ", part.text);
+                        } else appendText("│     ", part.text);
+                      }
+                    }
+                  };
+                  const promptMode =
+                    current.frontmatter.systemPromptMode ?? "append";
+                  const chiefBody = activeChief
+                    ? host.supervisoryProfileBody(ctx, "chief")
+                    : fragments.join("\n\n");
+                  const chiefPrompt =
+                    current.name === "chief"
+                      ? host.chiefSystemPrompt(promptOptions, chiefBody)
+                      : undefined;
+                  if (!roleProfile) {
+                    tree.push(
+                      promptMode === "replace"
+                        ? "├─ Replacement prompt · Pi base prefix replaced"
+                        : "├─ Pi base instructions · native Pi defaults/tool guidance",
+                    );
+                    appendDefinition(
+                      promptMode === "replace"
+                        ? "├─ Replacement body · Herdsman definition"
+                        : "├─ Appended prompt · Herdsman definition",
+                    );
+                    if (inheritance?.global && inheritance.project) {
+                      tree.push(
+                        "├─ Herdsman shared guidance · managed launch input",
+                      );
+                      appendContexts(`Pi context · ${contextMode}`);
+                    } else {
+                      appendContexts(`Pi context · ${contextMode}`);
+                      tree.push(
+                        "├─ Herdsman shared guidance · managed launch input",
+                      );
+                    }
+                    tree.push(
+                      "├─ Pi skills/extensions · configured selections; load status unknown",
+                    );
+                    tree.push("├─ Working directory");
+                    tree.push(`│  ${ctx.cwd}`);
+                    tree.push("└─ Runtime contributions · session-dependent");
+                  } else if (current.name === "chief") {
+                    tree.push(
+                      activeChief
+                        ? "├─ Active Chief forced prompt"
+                        : "├─ Prospective Chief forced prompt",
+                    );
+                    appendText("│  ", chiefPrompt ?? "");
+                    appendDefinition(
+                      "├─ Effective Chief profile on disk · may differ from active snapshot",
+                    );
+                    tree.push(
+                      `└─ Global user instruction files included: ${chiefContextFiles.length}; project context excluded`,
+                    );
+                  } else if (managedLeadProfile) {
+                    if (activeRole) {
+                      tree.push(
+                        "├─ Managed Lead body · active runtime definition",
+                      );
+                      if (activeExecutionDefinition?.name === "managed-lead")
+                        appendText(
+                          "│  ",
+                          host.expandAgentBodyFiles(
+                            activeExecutionDefinition.body,
+                            [],
+                            "definition details",
+                          ),
+                        );
+                      tree.push(
+                        "├─ Herdsman shared guidance · managed launch input",
+                      );
+                      appendContexts(`Pi context · ${contextMode}`);
+                      tree.push(
+                        "├─ Runtime role contract · verified active producer",
+                      );
+                      appendText("│  ", currentRoleCharter ?? "");
+                    } else {
+                      appendDefinition(
+                        "├─ Managed Lead definition · future launch",
+                      );
+                      tree.push(
+                        "├─ Herdsman shared guidance · managed Lead launch input",
+                      );
+                      appendContexts(`Pi context · ${contextMode}`);
+                    }
+                    tree.push("├─ Working directory");
+                    tree.push(`│  ${ctx.cwd}`);
+                    tree.push(
+                      "└─ Runtime contributions · managed session-dependent",
+                    );
+                  } else if (activeRole) {
+                    tree.push(
+                      "├─ Pi base prompt · native and not reconstructed",
+                    );
+                    appendContexts(`Pi context · ${contextMode}`);
+                    tree.push("├─ Working directory");
+                    tree.push(`│  ${ctx.cwd}`);
+                    tree.push(
+                      "├─ Herdsman role contract/profile · current verified producer",
+                    );
+                    appendText("│  ", currentRoleCharter ?? "");
+                    if (
+                      current.name === "flexible-lead" ||
+                      current.name === "orchestrator-lead"
+                    ) {
+                      const activeBody = host.executionPrompt();
+                      if (activeBody) {
+                        tree.push(
+                          "├─ Lead execution profile · active runtime producer",
+                        );
+                        appendText("│  ", activeBody);
+                      }
+                      appendDefinition(
+                        "├─ Effective Lead profile on disk · active prompt is a session snapshot",
+                      );
+                    } else if (current.name === "manager") {
+                      appendDefinition(
+                        "├─ Effective Manager profile on disk · active prompt is a session snapshot",
+                      );
+                    }
+                    tree.push("└─ Runtime contributions · session-dependent");
+                  } else {
+                    appendDefinition(
+                      "├─ Prospective Coordinator profile contribution",
+                    );
+                    tree.push(
+                      "├─ Runtime sections · depend on active role/session",
+                    );
+                    tree.push(
+                      "└─ Exact future prompt unavailable until launch",
+                    );
+                  }
+                  if (roleProfile && !activeRole && current.name !== "chief")
+                    tree.push(`Working directory · ${ctx.cwd}`);
+                  tree.push("+ added · - removed · ~ changed");
+                  await host.showDefinitionDetails(ctx, title, [
+                    `Context: ${ctx.cwd}`,
+                    `Preview: ${roleProfile ? rolePreview : "Future Agent launch"}`,
+                    `Definition sources (${sources.length}): ${sources.join(", ") || "standalone"}`,
+                    `Pi context files: ${contextCount} · ${contextMode}`,
+                    "Known-input preview only; provider/runtime transformations may add inputs.",
+                    ...host.formatAgentDefinitions([metadata]),
+                    "",
+                    ...tree,
+                  ]);
+                } catch (error) {
+                  ctx.ui.notify(
+                    `Could not inspect ${current.name}: ${String(error).replace(/^Error: /u, "")}`,
+                    "error",
+                  );
+                }
               } else {
                 ctx.ui.notify(
                   host.formatAgentDefinitions([metadata]).join("\n"),

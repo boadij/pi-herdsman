@@ -33,6 +33,13 @@ import {
   ordinaryLeadDeliveryReady,
 } from "./peer-federation-result.mjs";
 
+const phase = process.env.PEER_SMOKE_PHASE ?? "";
+if (
+  process.argv[2] !== "--cleanup" &&
+  !["", "delivery", "manager-core"].includes(phase)
+)
+  throw new Error(`Unknown peer smoke phase: ${phase}`);
+
 let runId = `peer474-${randomUUID()}`;
 let root = join(tmpdir(), runId);
 let manifestPath = join(root, "resources.json");
@@ -127,6 +134,35 @@ function managerAuthorityStatus(probe, expected) {
     : "manager-identity-mismatch";
 }
 
+function singleReplyStatus(entries, replyId) {
+  const matches = entries.flatMap((entry, index) =>
+    entry.type === "custom_message" &&
+    entry.customType === "pi-herdsman-peer_message" &&
+    entry.details?.id === replyId &&
+    entry.content.includes("PEER_E2E_SINGLE_REPLY")
+      ? [index]
+      : [],
+  );
+  const replyIndex = matches[0] ?? -1;
+  return {
+    replyCount: matches.length,
+    assistantCompleted:
+      matches.length === 1 &&
+      entries
+        .slice(replyIndex + 1)
+        .some(
+          (entry) =>
+            entry.type === "message" &&
+            entry.message?.role === "assistant" &&
+            entry.message.content?.some(
+              (part) =>
+                part.type === "text" &&
+                part.text?.includes("PEER_E2E_A_SINGLE_REPLIED"),
+            ),
+        ),
+  };
+}
+
 function managerReplyCompletion(entries, progressId, finalId) {
   const progressIndex = entries.findIndex(
     (entry) =>
@@ -162,6 +198,63 @@ function managerReplyCompletion(entries, progressId, finalId) {
         ),
   };
 }
+
+const singleReplyEntry = (id) => ({
+  type: "custom_message",
+  customType: "pi-herdsman-peer_message",
+  details: { id },
+  content: "PEER_E2E_SINGLE_REPLY",
+});
+const assistantMarker = {
+  type: "message",
+  message: {
+    role: "assistant",
+    content: [{ type: "text", text: "PEER_E2E_A_SINGLE_REPLIED" }],
+  },
+};
+assert.deepEqual(singleReplyStatus([], "reply-id"), {
+  replyCount: 0,
+  assistantCompleted: false,
+});
+assert.deepEqual(
+  singleReplyStatus([singleReplyEntry("reply-id")], "reply-id"),
+  {
+    replyCount: 1,
+    assistantCompleted: false,
+  },
+);
+assert.deepEqual(
+  singleReplyStatus(
+    [assistantMarker, singleReplyEntry("reply-id")],
+    "reply-id",
+  ),
+  { replyCount: 1, assistantCompleted: false },
+);
+assert.deepEqual(
+  singleReplyStatus(
+    [assistantMarker, singleReplyEntry("reply-id"), assistantMarker],
+    "reply-id",
+  ),
+  { replyCount: 1, assistantCompleted: true },
+);
+assert.deepEqual(
+  singleReplyStatus(
+    [
+      singleReplyEntry("reply-id"),
+      singleReplyEntry("reply-id"),
+      assistantMarker,
+    ],
+    "reply-id",
+  ),
+  { replyCount: 2, assistantCompleted: false },
+);
+assert.deepEqual(
+  singleReplyStatus(
+    [singleReplyEntry("wrong-id"), assistantMarker],
+    "reply-id",
+  ),
+  { replyCount: 0, assistantCompleted: false },
+);
 
 const expectedManager = {
   dataRoot: "/fixture",
@@ -976,6 +1069,9 @@ try {
       ...(side === "b" && resources.diagnosticsEnabled
         ? ["-e", "PEER_FEDERATION_DECISION_DIAGNOSTICS=1"]
         : []),
+      ...(phase === "manager-core" && resources.diagnosticsEnabled
+        ? ["-e", "PEER_FEDERATION_CORE_DIAGNOSTICS=1"]
+        : []),
       resources[side].container,
       "herdr",
       "--session",
@@ -1257,7 +1353,7 @@ try {
     resources[side].ordinaryLead = { pane, sessionPath, sessionId };
     save();
   };
-  startOrdinaryLead("b");
+  if (phase !== "manager-core") startOrdinaryLead("b");
 
   // Create test-owned ordinary files. Result references are created below by
   // each live Manager's actual local project-delegation/result-import path.
@@ -1386,6 +1482,260 @@ try {
       `Herdr did not report the created isolated machine ID: ${addedMachine}`,
     );
   resources.a.savedPeer = { id: addedMachineId, output: addedMachine };
+  if (phase === "manager-core") {
+    const captureManagerPrompt = (side, prompt) => {
+      const output = herdr(side, [
+        "agent",
+        "prompt",
+        resources[side].paneId,
+        prompt,
+        "--wait",
+        "--timeout",
+        "60000",
+      ]);
+      const sessionPath = JSON.parse(output).result.agent.agent_session.value;
+      const sessionId =
+        typeof sessionPath === "string"
+          ? sessionPath.match(/_([0-9a-f-]{36})\.jsonl$/u)?.[1]
+          : undefined;
+      if (!sessionId)
+        throw new Error(
+          `${side}: Manager prompt omitted its exact Pi session file`,
+        );
+      return { output, sessionPath, sessionId };
+    };
+    const verifyCoreManagerSession = (side, captured) => {
+      exec(side, ["test", "-f", captured.sessionPath]);
+      const probe = JSON.parse(
+        exec(
+          side,
+          ["pi-herdsman-peer", "probe"],
+          ["--user", "herdsman", ...herdrEnv(side)],
+        ),
+      );
+      const status = managerAuthorityStatus(probe, {
+        dataRoot: `${resources[side].runtime.piAgentDir}/pi-herdsman`,
+        sessionId: captured.sessionId,
+        paneId: resources[side].paneId,
+        workspaceId: resources[side].workspaceId,
+      });
+      if (status !== "established")
+        throw new Error(
+          `${side}: captured session does not match the live Manager identity (${status})`,
+        );
+      resources[side].managerSessionFile = captured.sessionPath;
+      resources[side].managerSessionId = captured.sessionId;
+    };
+    verifyCoreManagerSession(
+      "b",
+      captureManagerPrompt("b", "PEER_E2E_B_CAPTURE_SESSION"),
+    );
+    const readManagerEntries = (side) => {
+      const session = exec(side, ["cat", resources[side].managerSessionFile]);
+      const lines = session.split("\n");
+      if (session.endsWith("\n")) lines.pop();
+      return lines.flatMap((line, index) => {
+        if (!line) return [];
+        try {
+          return [JSON.parse(line)];
+        } catch {
+          if (index === lines.length - 1 && !session.endsWith("\n")) return [];
+          throw new Error(
+            `Malformed complete entry in ${side} Manager session`,
+          );
+        }
+      });
+    };
+    const coreLifecycleDiagnostics = () => ({
+      a: readContainerJsonLines(
+        "a",
+        `${resources.a.runtime.piAgentDir}/pi-herdsman/runtime/peer-core-lifecycle.jsonl`,
+      ).slice(-16),
+      b: readContainerJsonLines(
+        "b",
+        `${resources.b.runtime.piAgentDir}/pi-herdsman/runtime/peer-core-lifecycle.jsonl`,
+      ).slice(-16),
+    });
+    const waitFor = (predicate, timeoutMs, intervalMs = 500) => {
+      const deadline = Date.now() + timeoutMs;
+      let value;
+      while (Date.now() < deadline) {
+        value = predicate();
+        if (value) return value;
+        Atomics.wait(
+          new Int32Array(new SharedArrayBuffer(4)),
+          0,
+          0,
+          intervalMs,
+        );
+      }
+      return value;
+    };
+    const findSuccessfulSend = (entries, marker) => {
+      const calls = new Map();
+      for (const entry of entries) {
+        if (entry.message?.role === "assistant")
+          for (const part of entry.message.content ?? [])
+            if (
+              part.type === "toolCall" &&
+              part.name === "message_peer" &&
+              JSON.stringify(part.arguments).includes(marker)
+            )
+              calls.set(part.id, part);
+        if (
+          entry.message?.role === "toolResult" &&
+          entry.message.toolName === "message_peer" &&
+          calls.has(entry.message.toolCallId) &&
+          !entry.message.isError
+        ) {
+          const details = entry.message.details ?? entry.details;
+          if (details?.queued === true && typeof details.id === "string")
+            return { id: details.id, resultIndex: entries.indexOf(entry) };
+        }
+      }
+      return undefined;
+    };
+    const aSend = captureManagerPrompt("a", "PEER_E2E_A_SINGLE_SEND");
+    verifyCoreManagerSession("a", aSend);
+    const request = waitFor(
+      () =>
+        findSuccessfulSend(readManagerEntries("a"), "PEER_E2E_SINGLE_REQUEST"),
+      60_000,
+    );
+    if (!request)
+      throw new Error(
+        `A request queued: false; B request persisted: false; B reply queued: false; A reply persisted: false; A assistant completed: false; lifecycle=${JSON.stringify(resources.diagnosticsEnabled ? coreLifecycleDiagnostics() : [])}`,
+      );
+    resources.acceptanceMessageId = request.id;
+    stage("manager-core-request-queued", { id: request.id });
+    const bRequest = waitFor(() => {
+      const entries = readManagerEntries("b");
+      const matches = entries.filter(
+        (entry) =>
+          entry.type === "custom_message" &&
+          entry.customType === "pi-herdsman-peer_message" &&
+          entry.details?.id === request.id &&
+          entry.content.includes("PEER_E2E_SINGLE_REQUEST"),
+      );
+      return matches.length === 1 ? entries : undefined;
+    }, 60_000);
+    if (!bRequest)
+      throw new Error(
+        `A request queued: true; B request persisted: false; B reply queued: false; A reply persisted: false; A assistant completed: false; request=${request.id}; lifecycle=${JSON.stringify(resources.diagnosticsEnabled ? coreLifecycleDiagnostics() : [])}`,
+      );
+    const bReply = waitFor(() => {
+      const entries = readManagerEntries("b");
+      const receipt = findSuccessfulSend(entries, "PEER_E2E_SINGLE_REPLY");
+      if (!receipt) return undefined;
+      const completed = entries
+        .slice(receipt.resultIndex + 1)
+        .some(
+          (entry) =>
+            entry.type === "message" &&
+            entry.message?.role === "assistant" &&
+            entry.message.content?.some(
+              (part) =>
+                part.type === "text" &&
+                part.text?.includes("PEER_E2E_B_SINGLE_REPLIED"),
+            ),
+        );
+      return completed ? receipt : undefined;
+    }, 60_000);
+    if (!bReply)
+      throw new Error(
+        `A request queued: true; B request persisted: true; B reply queued: false; A reply persisted: false; A assistant completed: false; request=${request.id}; lifecycle=${JSON.stringify(resources.diagnosticsEnabled ? coreLifecycleDiagnostics() : [])}`,
+      );
+    resources.replyId = bReply.id;
+    stage("manager-core-reply-queued", {
+      requestId: request.id,
+      replyId: bReply.id,
+    });
+    const correspondenceDirectory = `${resources.b.runtime.piAgentDir}/pi-herdsman/runtime/peer-correspondences`;
+    const findCorrespondence = () => {
+      const files = exec("b", [
+        "sh",
+        "-c",
+        `find ${correspondenceDirectory} -maxdepth 1 -type f -name '*.json' -print 2>/dev/null || true`,
+      ])
+        .split("\n")
+        .filter(Boolean);
+      return files
+        .map((file) => {
+          try {
+            return { file, value: JSON.parse(exec("b", ["cat", file])) };
+          } catch {
+            return undefined;
+          }
+        })
+        .find(
+          (item) =>
+            item?.value.acceptanceId === request.id &&
+            item.value.originSession === resources.a.managerSessionId &&
+            item.value.recipientSession === resources.b.managerSessionId &&
+            item.value.role === "manager" &&
+            item.value.replies?.some((reply) => reply.id === bReply.id),
+        );
+    };
+    const correspondence = waitFor(findCorrespondence, 30_000);
+    if (!correspondence || correspondence.value.replies.length !== 1)
+      throw new Error(
+        `B reply correspondence missing, duplicated, or uncorrelated: ${bReply.id}`,
+      );
+    const replyReceived = waitFor(() => {
+      const entries = readManagerEntries("a");
+      const status = singleReplyStatus(entries, bReply.id);
+      return status.replyCount === 1 ? { entries, status } : undefined;
+    }, 120_000);
+    if (!replyReceived) {
+      const entries = readManagerEntries("a");
+      const status = singleReplyStatus(entries, bReply.id);
+      throw new Error(
+        `A request queued: true; B request persisted: true; B reply queued: true; A reply persisted: ${status.replyCount === 1}; A assistant completed: false; lifecycle=${JSON.stringify(resources.diagnosticsEnabled ? coreLifecycleDiagnostics() : [])}`,
+      );
+    }
+    const completed = waitFor(() => {
+      const status = singleReplyStatus(readManagerEntries("a"), bReply.id);
+      return status.assistantCompleted ? status : undefined;
+    }, 120_000);
+    if (!completed)
+      throw new Error(
+        `A request queued: true; B request persisted: true; B reply queued: true; A reply persisted: true; A assistant completed: false; lifecycle=${JSON.stringify(resources.diagnosticsEnabled ? coreLifecycleDiagnostics() : [])}`,
+      );
+    const acknowledged = waitFor(() => {
+      try {
+        const current = JSON.parse(exec("b", ["cat", correspondence.file]));
+        return current.replies?.find((reply) => reply.id === bReply.id)
+          ?.acknowledged === true
+          ? current
+          : undefined;
+      } catch {
+        return undefined;
+      }
+    }, 30_000);
+    if (!acknowledged)
+      throw new Error(`B reply acknowledgement missing for ${bReply.id}`);
+    stage("manager-core-accepted", {
+      requestId: request.id,
+      replyId: bReply.id,
+      assistantAfterReply: true,
+      acknowledged: true,
+    });
+    console.log(
+      `[peer-smoke-summary] ${JSON.stringify({
+        phase: "manager-core",
+        managers: {
+          a: resources.a.managerSessionId,
+          b: resources.b.managerSessionId,
+        },
+        requestId: request.id,
+        replyId: bReply.id,
+        assistantAfterReply: true,
+        acknowledged: true,
+      })}`,
+    );
+    if (process.env.PEER_SMOKE_KEEP !== "1") cleanup();
+    process.exit(0);
+  }
   startOrdinaryLead("a");
   const managedAssignmentOutput = herdr("b", [
     "agent",
