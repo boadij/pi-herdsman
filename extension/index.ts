@@ -673,19 +673,51 @@ function registerExtensionImpl(
       data && typeof data === "object" && "inspector" in data
         ? data.inspector
         : undefined;
+    const validSections = (
+      sections: unknown,
+    ): sections is import("./presentation.ts").InstructionSection[] =>
+      Array.isArray(sections) &&
+      sections.every(
+        (section) =>
+          section !== null &&
+          typeof section === "object" &&
+          !Array.isArray(section) &&
+          "title" in section &&
+          typeof section.title === "string" &&
+          (!("source" in section) ||
+            section.source === undefined ||
+            typeof section.source === "string") &&
+          (!("content" in section) ||
+            section.content === undefined ||
+            typeof section.content === "string") &&
+          (!("format" in section) ||
+            section.format === undefined ||
+            section.format === "markdown" ||
+            section.format === "text") &&
+          (!("changes" in section) ||
+            section.changes === undefined ||
+            (Array.isArray(section.changes) &&
+              section.changes.every(
+                (change: unknown) => typeof change === "string",
+              ))),
+      );
     const inspector =
       storedInspector &&
       typeof storedInspector === "object" &&
       !Array.isArray(storedInspector) &&
       "summary" in storedInspector &&
       Array.isArray(storedInspector.summary) &&
-      storedInspector.summary.every((line) => typeof line === "string") &&
-      "tree" in storedInspector &&
-      typeof storedInspector.tree === "string"
-        ? {
-            summary: storedInspector.summary,
-            tree: storedInspector.tree,
-          }
+      storedInspector.summary.every((line) => typeof line === "string")
+        ? "sections" in storedInspector &&
+          validSections(storedInspector.sections)
+          ? {
+              summary: storedInspector.summary,
+              sections: storedInspector.sections,
+            }
+          : "tree" in storedInspector &&
+              typeof storedInspector.tree === "string"
+            ? { summary: storedInspector.summary, tree: storedInspector.tree }
+            : undefined
         : undefined;
     return expandablePresentation(options.expanded, (expanded) =>
       renderAgentDefinitionsOverview(definitions, theme, {
@@ -1692,7 +1724,10 @@ function registerExtensionImpl(
       agentDefinitionMetadata,
       appendDefinitionsEntry: (data: {
         definitions: Record<string, unknown>[];
-        inspector: { summary: string[]; tree: string };
+        inspector: {
+          summary: string[];
+          sections: import("./presentation.ts").InstructionSection[];
+        };
       }) => pi.appendEntry(AGENT_DEFINITIONS_ENTRY, data),
       formatAgentDefinitions,
       validThinkingLevels: VALID_THINKING_LEVELS,

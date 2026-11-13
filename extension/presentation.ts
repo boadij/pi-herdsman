@@ -2799,13 +2799,25 @@ function createWidthSafeBox(
   return box;
 }
 
+export type InstructionSection = {
+  title: string;
+  source?: string;
+  changes?: string[];
+  content?: string;
+  format?: "markdown" | "text";
+};
+
 export function renderAgentDefinitionsOverview(
   definitions: readonly Record<string, unknown>[],
   theme: ThemeLike,
   options: {
     expanded?: boolean;
     instructions?: string;
-    inspector?: { summary: string[]; tree: string };
+    inspector?: {
+      summary: string[];
+      tree?: string;
+      sections?: InstructionSection[];
+    };
   } = {},
 ): TuiBox {
   const lines: string[] =
@@ -2894,7 +2906,31 @@ export function renderAgentDefinitionsOverview(
     theme.bg("customMessageBg", line),
   );
   box.addChild(new WidthSafeText(lines.join("\n"), 0, 0));
-  if (options.expanded === true && options.inspector) {
+  if (options.expanded === true && options.inspector?.sections) {
+    for (const section of options.inspector.sections) {
+      const content = new Container();
+      content.addChild(new Text(theme.bold(section.title), 0, 0));
+      if (section.source)
+        content.addChild(
+          new WidthSafeText(theme.fg("muted", section.source), 0, 0),
+        );
+      if (section.changes?.length)
+        content.addChild(new WidthSafeText(section.changes.join("\n"), 0, 0));
+      if (section.content) {
+        content.addChild(new Spacer(1));
+        content.addChild(
+          section.format === "markdown"
+            ? new Markdown(section.content, 0, 0, getMarkdownTheme())
+            : new WidthSafeText(section.content, 0, 0),
+        );
+      }
+      box.addChild(new Spacer(1));
+      box.addChild(content);
+    }
+  } else if (
+    options.expanded === true &&
+    options.inspector?.tree !== undefined
+  ) {
     box.addChild(new Spacer(1));
     box.addChild(new WidthSafeText(options.inspector.tree, 0, 0));
   } else if (

@@ -43,6 +43,7 @@ import {
   type buildStatusRows,
   type renderRunningOptions,
   type formatStatusCounts,
+  type InstructionSection,
 } from "../presentation.ts";
 
 type LeadCommandHost = {
@@ -142,7 +143,7 @@ type LeadCommandHost = {
   agentDefinitionMetadata(definition: AgentDefinition): Record<string, unknown>;
   appendDefinitionsEntry(data: {
     definitions: Record<string, unknown>[];
-    inspector: { summary: string[]; tree: string };
+    inspector: { summary: string[]; sections: InstructionSection[] };
   }): void;
   formatAgentDefinitions(
     definitions: readonly Record<string, unknown>[],
@@ -768,52 +769,38 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                     : managedLeadProfile
                       ? "future Managed Lead launch"
                       : "prospective Coordinator profile";
-                  const tree: string[] = [];
-                  const appendText = (prefix: string, content: string) => {
-                    for (const line of content.split("\n"))
-                      tree.push(`${prefix}${line}`);
+                  const sections: InstructionSection[] = [];
+                  const add = (
+                    title: string,
+                    content?: string,
+                    source?: string,
+                    format: "markdown" | "text" = "text",
+                    changes?: string[],
+                  ) =>
+                    sections.push({ title, content, source, format, changes });
+                  const addContexts = () => {
+                    for (const file of contextFiles)
+                      add("Pi context", file.text, file.path, "markdown");
                   };
-                  const appendContexts = (label: string) => {
-                    if (!contextFiles.length) {
-                      tree.push(`├─ ${label} · none`);
-                      return;
-                    }
-                    tree.push(`├─ ${label}`);
-                    contextFiles.forEach((file, index) => {
-                      tree.push(
-                        `│  ${index === contextFiles.length - 1 ? "└─" : "├─"} ${file.path}`,
-                      );
-                      appendText("│  │  ", file.text);
+                  const appendDefinition = (title: string) => {
+                    const provenance = inspection.layers.map((layer) => {
+                      const changes = summarizeDefinitionLayerChanges(layer);
+                      return `${layer.scope} · ${basename(layer.path)}${changes.length ? ` ${changes.join("; ")}` : ""}`;
                     });
-                  };
-                  const appendDefinition = (label: string) => {
-                    tree.push(`├─ ${label}`);
-                    inspection.layers.forEach((layer, index) => {
-                      const lastLayer = index === inspection.layers.length - 1;
-                      tree.push(
-                        `│  ${lastLayer ? "└─" : "├─"} ${layer.scope} · ${basename(layer.path)}`,
-                      );
-                      for (const change of summarizeDefinitionLayerChanges(
-                        layer,
-                      ))
-                        tree.push(`│  │  ${change}`);
+                    const fragments = inspection.bodyFragments;
+                    if (!fragments.length)
+                      add(title, undefined, undefined, "text", provenance);
+                    fragments.forEach((fragment, index) => {
+                      for (const part of expandedFragments[index] ?? [])
+                        if (part.text.length)
+                          add(
+                            title,
+                            part.text,
+                            part.filePath ?? fragment.path,
+                            "markdown",
+                            index === 0 ? provenance : undefined,
+                          );
                     });
-                    for (
-                      let index = 0;
-                      index < inspection.bodyFragments.length;
-                      index++
-                    ) {
-                      const fragment = inspection.bodyFragments[index]!;
-                      tree.push(
-                        `│  └─ ${fragment.scope} · surviving body text`,
-                      );
-                      for (const part of expandedFragments[index] ?? []) {
-                        if (part.filePath) {
-                          tree.push(`│     └─ ${part.filePath}`);
-                          appendText("│        ", part.text);
-                        } else appendText("│     ", part.text);
-                      }
-                    }
                   };
                   const promptMode =
                     current.frontmatter.systemPromptMode ?? "append";
@@ -825,127 +812,126 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       ? host.chiefSystemPrompt(promptOptions, chiefBody)
                       : undefined;
                   if (!roleProfile) {
-                    tree.push(
+                    add(
                       promptMode === "replace"
-                        ? "├─ Replacement prompt · Pi base prefix replaced"
-                        : "├─ Pi base instructions · native Pi defaults/tool guidance",
+                        ? "Replacement prompt"
+                        : "Pi base instructions",
+                      promptMode === "replace"
+                        ? "Pi base prefix replaced."
+                        : "Native Pi defaults and tool guidance are not reconstructed.",
                     );
                     appendDefinition(
                       promptMode === "replace"
-                        ? "├─ Replacement body · Herdsman definition"
-                        : "├─ Appended prompt · Herdsman definition",
+                        ? "Replacement body · Herdsman definition"
+                        : "Herdsman definition",
                     );
+                    const addGuidance = () =>
+                      add("Herdsman shared guidance", "Managed launch input.");
                     if (inheritance?.global && inheritance.project) {
-                      tree.push(
-                        "├─ Herdsman shared guidance · managed launch input",
-                      );
-                      appendContexts(`Pi context · ${contextMode}`);
+                      addGuidance();
+                      addContexts();
                     } else {
-                      appendContexts(`Pi context · ${contextMode}`);
-                      tree.push(
-                        "├─ Herdsman shared guidance · managed launch input",
-                      );
+                      addContexts();
+                      addGuidance();
                     }
-                    tree.push(
-                      "├─ Pi skills/extensions · configured selections; load status unknown",
+                    add(
+                      "Pi skills/extensions",
+                      "Configured selections; load status unknown.",
                     );
-                    tree.push("├─ Working directory");
-                    tree.push(`│  ${ctx.cwd}`);
-                    tree.push("└─ Runtime contributions · session-dependent");
+                    add("Working directory", ctx.cwd);
+                    add("Runtime contributions", "Session-dependent.");
                   } else if (current.name === "chief") {
-                    tree.push(
+                    add(
                       activeChief
-                        ? "├─ Active Chief forced prompt"
-                        : "├─ Prospective Chief forced prompt",
+                        ? "Active Chief forced prompt"
+                        : "Prospective Chief forced prompt",
+                      chiefPrompt ?? "",
+                      undefined,
+                      "text",
                     );
-                    appendText("│  ", chiefPrompt ?? "");
                     appendDefinition(
-                      "├─ Effective Chief profile on disk · may differ from active snapshot",
+                      "Effective Chief profile on disk · may differ from active snapshot",
                     );
-                    tree.push(
-                      `└─ Global user instruction files included: ${chiefContextFiles.length}; project context excluded`,
+                    add(
+                      "Chief context",
+                      `Global user instruction files included: ${chiefContextFiles.length}; project context excluded.`,
                     );
                   } else if (managedLeadProfile) {
                     if (activeRole) {
-                      tree.push(
-                        "├─ Managed Lead body · active runtime definition",
-                      );
                       if (activeExecutionDefinition?.name === "managed-lead")
-                        appendText(
-                          "│  ",
+                        add(
+                          "Managed Lead body",
                           host.expandAgentBodyFiles(
                             activeExecutionDefinition.body,
                             [],
                             "definition details",
                           ),
+                          undefined,
+                          "text",
                         );
-                      tree.push(
-                        "├─ Herdsman shared guidance · managed launch input",
+                      add("Herdsman shared guidance", "Managed launch input.");
+                      addContexts();
+                      add(
+                        "Runtime role contract",
+                        currentRoleCharter ?? "",
+                        undefined,
+                        "text",
                       );
-                      appendContexts(`Pi context · ${contextMode}`);
-                      tree.push(
-                        "├─ Runtime role contract · verified active producer",
-                      );
-                      appendText("│  ", currentRoleCharter ?? "");
                     } else {
                       appendDefinition(
-                        "├─ Managed Lead definition · future launch",
+                        "Managed Lead definition · future launch",
                       );
-                      tree.push(
-                        "├─ Herdsman shared guidance · managed Lead launch input",
+                      add(
+                        "Herdsman shared guidance",
+                        "Managed Lead launch input.",
                       );
-                      appendContexts(`Pi context · ${contextMode}`);
+                      addContexts();
                     }
-                    tree.push("├─ Working directory");
-                    tree.push(`│  ${ctx.cwd}`);
-                    tree.push(
-                      "└─ Runtime contributions · managed session-dependent",
-                    );
+                    add("Working directory", ctx.cwd);
+                    add("Runtime contributions", "Managed session-dependent.");
                   } else if (activeRole) {
-                    tree.push(
-                      "├─ Pi base prompt · native and not reconstructed",
+                    add("Pi base prompt", "Native and not reconstructed.");
+                    addContexts();
+                    add("Working directory", ctx.cwd);
+                    add(
+                      "Herdsman role contract/profile",
+                      currentRoleCharter ?? "",
+                      undefined,
+                      "text",
                     );
-                    appendContexts(`Pi context · ${contextMode}`);
-                    tree.push("├─ Working directory");
-                    tree.push(`│  ${ctx.cwd}`);
-                    tree.push(
-                      "├─ Herdsman role contract/profile · current verified producer",
-                    );
-                    appendText("│  ", currentRoleCharter ?? "");
                     if (
                       current.name === "flexible-lead" ||
                       current.name === "orchestrator-lead"
                     ) {
                       const activeBody = host.executionPrompt();
-                      if (activeBody) {
-                        tree.push(
-                          "├─ Lead execution profile · active runtime producer",
+                      if (activeBody)
+                        add(
+                          "Lead execution profile",
+                          activeBody,
+                          undefined,
+                          "text",
                         );
-                        appendText("│  ", activeBody);
-                      }
                       appendDefinition(
-                        "├─ Effective Lead profile on disk · active prompt is a session snapshot",
+                        "Effective Lead profile on disk · active prompt is a session snapshot",
                       );
-                    } else if (current.name === "manager") {
+                    } else if (current.name === "manager")
                       appendDefinition(
-                        "├─ Effective Manager profile on disk · active prompt is a session snapshot",
+                        "Effective Manager profile on disk · active prompt is a session snapshot",
                       );
-                    }
-                    tree.push("└─ Runtime contributions · session-dependent");
+                    add("Runtime contributions", "Session-dependent.");
                   } else {
                     appendDefinition(
-                      "├─ Prospective Coordinator profile contribution",
+                      "Prospective Coordinator profile contribution",
                     );
-                    tree.push(
-                      "├─ Runtime sections · depend on active role/session",
-                    );
-                    tree.push(
-                      "└─ Exact future prompt unavailable until launch",
-                    );
+                    add("Runtime sections", "Depend on active role/session.");
+                    add("Exact future prompt", "Unavailable until launch.");
                   }
                   if (roleProfile && !activeRole && current.name !== "chief")
-                    tree.push(`Working directory · ${ctx.cwd}`);
-                  tree.push("+ added · - removed · ~ changed");
+                    add("Working directory", ctx.cwd);
+                  add(
+                    "Preview limitation",
+                    "Known-input preview only; provider/runtime transformations may add inputs.",
+                  );
                   host.appendDefinitionsEntry({
                     definitions: [metadata],
                     inspector: {
@@ -954,7 +940,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                         `Context: ${ctx.cwd} · ${contextMode}`,
                         "Known-input preview only; provider/runtime transformations may add inputs.",
                       ],
-                      tree: tree.join("\n"),
+                      sections,
                     },
                   });
                   return;

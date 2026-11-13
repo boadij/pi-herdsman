@@ -600,7 +600,14 @@ test("ordinary Agent Details order native and appended context by launch mode", 
       appendDefinitionsEntry: (data: any) => {
         displayed = [
           ...data.inspector.summary,
-          ...data.inspector.tree.split("\n"),
+          ...data.inspector.sections.flatMap((section: any) =>
+            [
+              section.title,
+              section.source,
+              ...(section.changes ?? []),
+              section.content,
+            ].filter(Boolean),
+          ),
         ];
       },
     } as any);
@@ -668,7 +675,14 @@ test("Coordinator Details show current prompt inputs in composition order", asyn
     appendDefinitionsEntry: (data: any) => {
       displayed = [
         ...data.inspector.summary,
-        ...data.inspector.tree.split("\n"),
+        ...data.inspector.sections.flatMap((section: any) =>
+          [
+            section.title,
+            section.source,
+            ...(section.changes ?? []),
+            section.content,
+          ].filter(Boolean),
+        ),
       ];
     },
   } as any);
@@ -683,14 +697,12 @@ test("Coordinator Details show current prompt inputs in composition order", asyn
     ["roles", "manager", "details"],
   );
   const lines = displayed!.join("\n");
-  const base = lines.indexOf("Pi base prompt · native and not reconstructed");
+  const base = lines.indexOf("Pi base prompt");
   const context = lines.indexOf("Current project context");
   const contract = lines.indexOf("Verified manager contract");
   const profile = lines.indexOf("Effective Manager profile on disk");
   const cwd = lines.indexOf("Working directory");
-  const runtimeSection = lines.indexOf(
-    "Runtime contributions · session-dependent",
-  );
+  const runtimeSection = lines.indexOf("Runtime contributions");
   assert.ok(base >= 0 && base < context);
   assert.ok(cwd >= 0 && cwd < contract && contract < profile);
   assert.ok(profile < runtimeSection);
@@ -760,7 +772,14 @@ test("Chief Details use the forced prompt producer with global-only context", as
     appendDefinitionsEntry: (data: any) => {
       displayed = [
         ...data.inspector.summary,
-        ...data.inspector.tree.split("\n"),
+        ...data.inspector.sections.flatMap((section: any) =>
+          [
+            section.title,
+            section.source,
+            ...(section.changes ?? []),
+            section.content,
+          ].filter(Boolean),
+        ),
       ];
     },
   } as any);
