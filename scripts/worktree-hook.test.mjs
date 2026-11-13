@@ -43,7 +43,7 @@ test("post-checkout installs dependencies only in new linked worktrees", (t) => 
     const fakeNpm = join(bin, "npm");
     writeFileSync(
       fakeNpm,
-      '#!/bin/sh\nprintf "%s\\t%s\n" "$PWD" "$*" >> "$HOOK_LOG"\n[ "${FAIL_NPM:-0}" != 1 ]\n',
+      '#!/bin/sh\nprintf "%s\\t%s\\n" "$PWD" "$*" >> "$HOOK_LOG"\n[ "${FAIL_NPM:-0}" != 1 ]\n',
     );
     chmodSync(fakeNpm, 0o755);
 
