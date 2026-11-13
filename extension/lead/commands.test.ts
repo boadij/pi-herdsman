@@ -702,6 +702,68 @@ test("ordinary Agent Details order native and appended context by launch mode", 
   }
 });
 
+test("inactive Managed Lead Details include Working directory exactly once", async () => {
+  const choices = ["roles", "managed-lead", "details", undefined, undefined];
+  let details: any;
+  const definition = {
+    name: "managed-lead",
+    path: "/managed-lead.md",
+    frontmatter: { name: "managed-lead" },
+    body: "Managed Lead instructions",
+  };
+  const runtime = createLeadCommandRuntime({
+    selectMenu: async () => choices.shift(),
+    getThinkingLevel: () => "high",
+    agentDefinitionEnabled: () => true,
+    getSystemPromptOptions: () => ({ contextFiles: [] }),
+    inspectRoleDefinition: () => ({
+      definition,
+      layers: [],
+      bodyFragments: [
+        { path: definition.path, scope: "bundled", body: definition.body },
+      ],
+    }),
+    expandDefinitionBodyFragments: (fragments: Array<{ body: string }>) =>
+      fragments.map(({ body }) => body),
+    roleActive: () => false,
+    isCurrentChief: () => false,
+    leadExecutionPresentation: () => ({ managed: false, mode: "flexible" }),
+    selectedAgentContextFiles: () => [],
+    agentDefinitionMetadata: () => ({ name: "managed-lead" }),
+    formatAgentDefinitions: () => ["Managed Lead metadata"],
+    appendDefinitionsEntry: (data: any) => {
+      details = data;
+    },
+  } as any);
+  await runtime.openDefinitionsMenu({
+    mode: "tui",
+    cwd: "/workspace",
+    isProjectTrusted: () => true,
+    ui: { notify: () => undefined },
+  } as any);
+
+  assert.ok(
+    details,
+    "Details should be appended for the prospective Managed Lead",
+  );
+  assert.equal(
+    details.inspector.sections.filter(
+      (section: any) => section.title === "Working directory",
+    ).length,
+    1,
+  );
+  assert.equal(
+    details.inspector.sections.some(
+      (section: any) => section.title === "Preview limitation",
+    ),
+    false,
+  );
+  assert.match(
+    details.inspector.summary.join("\n"),
+    /Known-input preview only/u,
+  );
+});
+
 test("Coordinator Details show current prompt inputs in composition order", async () => {
   const choices = ["roles", "manager", "details", undefined, undefined];
   const menus: { title: string; value?: string }[] = [];
