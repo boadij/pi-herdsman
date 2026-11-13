@@ -910,6 +910,7 @@ test("parent delegates two same-definition children with exact ownership", async
     realFs.writeFileSync(join(PI_AGENTS_DIR, name), content, "utf8");
   const lifecycle = delegatedLifecycleExecutor(parent);
   const starts: string[][] = [];
+  const reservations: string[] = [];
   const order: string[] = [];
   let duplicateRegistration = false;
   let throwDuringPrepareDispatch = false;
@@ -927,17 +928,19 @@ test("parent delegates two same-definition children with exact ownership", async
         const mailbox = agentMailboxPath(WORKSPACE, label);
         const record = readAgentBootstrap(mailbox);
         if (record) {
-          order.push("child initialize");
-          pi.pi.events.emit(MANAGED_AGENT_BOOTSTRAP_EVENT, {
-            protocol: 1,
-            phase: "initialize",
-            context: fakeAgentContext([]),
-            agent: label,
-            participant: record.participants[0],
-            accept(initialize: () => void) {
-              initialize();
-            },
-          });
+          for (const participant of record.participants) {
+            order.push(`child initialize ${participant.id}`);
+            pi.pi.events.emit(MANAGED_AGENT_BOOTSTRAP_EVENT, {
+              protocol: 1,
+              phase: "initialize",
+              context: fakeAgentContext([]),
+              agent: label,
+              participant,
+              accept(initialize: () => void) {
+                initialize();
+              },
+            });
+          }
           removeAgentBootstrap(mailbox);
         }
       }
@@ -954,6 +957,13 @@ test("parent delegates two same-definition children with exact ownership", async
       }
       const result = lifecycle.exec(command, args);
       if (starting) {
+        const label = lifecycle.paneEnvironment.PI_HERDSMAN_LABEL;
+        const state = lifecycle.live.get(label);
+        const sessionArg = args.indexOf("--session-id");
+        if (sessionArg >= 0 && state) {
+          state.piSessionId = args[sessionArg + 1]!;
+          writeAgentState(agentMailboxPath(WORKSPACE, label), state);
+        }
         assert.equal(
           readAgentBootstrap(
             agentMailboxPath(
@@ -971,13 +981,26 @@ test("parent delegates two same-definition children with exact ownership", async
   pi.pi.events.on(MANAGED_AGENT_BOOTSTRAP_EVENT, (event: any) => {
     if (event.phase === "prepare") {
       order.push("prepare");
+      const firstReservation = event.reserveChildSessionId();
+      reservations.push(firstReservation);
       event.register("test/participant", async () => ({
         payload: "opaque",
         commit: () => {
           if (commitFails) throw new Error("parent commit failed");
-          order.push("parent commit");
+          order.push("parent commit test/participant");
         },
       }));
+      event.register("test/observer", async () => {
+        const secondReservation = event.reserveChildSessionId();
+        reservations.push(secondReservation);
+        return {
+          payload: "observed",
+          commit: () => {
+            if (commitFails) throw new Error("parent commit failed");
+            order.push("parent commit test/observer");
+          },
+        };
+      });
     } else if (event.phase === "initialize") {
       event.accept(() => {
         order.push("child initializer");
@@ -1049,12 +1072,22 @@ test("parent delegates two same-definition children with exact ownership", async
       );
       if (task === "first child") {
         order.push("first task delivered");
+        assert.equal(reservations.length, 2);
+        assert.match(reservations[0]!, /^[0-9a-f-]{36}$/u);
+        assert.equal(reservations[1], reservations[0]);
+        assert.deepEqual(starts[0]!.slice(starts[0]!.indexOf("--session-id")), [
+          "--session-id",
+          reservations[0],
+        ]);
         assert.deepEqual(order, [
           "prepare",
-          "child initialize",
+          "child initialize test/participant",
+          "child initializer",
+          "child initialize test/observer",
           "child initializer",
           "child readiness",
-          "parent commit",
+          "parent commit test/participant",
+          "parent commit test/observer",
           "first task delivered",
         ]);
       }
