@@ -3822,9 +3822,20 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       const requiredEvidence = [projectBrief, ...attachedEvidence];
       const prepared = prepareMessageInput(
         operation.task,
-        attachedEvidence.flatMap<MessageFileInput>((evidence) =>
-          "path" in evidence ? [evidence.path] : [evidence.result],
-        ),
+        attachedEvidence.map<MessageFileInput>((evidence) => {
+          if ("result" in evidence) return evidence.result;
+
+          if (!evidence.ref)
+            throw new Error("Required evidence has no semantic reference");
+
+          return {
+            kind: "retainedEvidence",
+            ref: evidence.ref,
+            name: evidence.name,
+            path: evidence.path,
+            sha256: evidence.sha256,
+          };
+        }),
         ctx.cwd,
         "delegate_work",
         "Task",

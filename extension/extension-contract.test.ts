@@ -5885,10 +5885,13 @@ test("delegating agents receive only their allowed definition roster", async () 
   for (const file of ["AGENTS\\.md", "CLAUDE\\.md", "GEMINI\\.md"])
     assert.match(sharedGuidance, new RegExp(file));
   assert.match(sharedGuidance, /do not attach or mention/i);
-  assert.match(sharedGuidance, /Complete strict UTF-8 text may be embedded/);
   assert.match(
     sharedGuidance,
-    /canonical local references and are not copied or snapshotted/,
+    /Explicit Agent attachments must contain complete supported UTF-8 text within configured limits, or the handoff is rejected/,
+  );
+  assert.match(
+    sharedGuidance,
+    /Retained assignment evidence can instead be presented by an authorized semantic reference and retrieved with read_evidence/,
   );
   assert.doesNotMatch(description, /sole executor/);
   assert.doesNotMatch(

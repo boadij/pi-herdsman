@@ -148,12 +148,14 @@ Pi Herdsman has two text-file mechanisms with different purposes:
 - whole-line body `@file` references put definition-owned text into the agent
   system prompt when a new agent generation is built.
 
-For coordination operations that allow reference fallback, strict UTF-8 text is
-embedded when it fits; ordinary non-text and non-fitting files are canonical
-local references and are not copied or snapshotted. `await_owner` is stricter:
-its explicit files must be embedded supported UTF-8 text, or the request is
-rejected. The required-assignment exception preserves supported text snapshots
-and can reference those snapshots when they do not fit inline; see
+Explicit Agent attachments are delivered completely within their configured
+limits or rejected; they are not converted to local-path references.
+`await_owner` likewise requires complete supported UTF-8 text. Initial project
+assignments retain supported text snapshots and can present non-inline content
+by its semantic evidence reference. Previously accepted required evidence uses
+scoped semantic references, and completed results keep their existing
+`result:` references. Managed-Agent mailbox preparation retains its own
+operation-specific behavior. See
 [Required assignment evidence](#required-assignment-evidence).
 
 ## Coordination `files`
@@ -266,14 +268,12 @@ For other operations that accept `files`, file preparation retains its
 operation-specific behavior. In particular, managed-Agent mailbox and initial
 project-assignment paths continue to use their existing reference behavior.
 
-For those existing preparation paths, each regular file:
-
-- complete strict UTF-8 text without NUL bytes is embedded when the complete
-  message fits the effective configured `mailboxPayloadLimitBytes` boundary;
-- invalid UTF-8, NUL-containing, binary, and non-fitting ordinary files are
-  represented only by their canonical local path and observed byte size;
-  result references retain their logical name and carry the physical path and
-  observed byte size.
+For those existing preparation paths, complete strict UTF-8 text without NUL
+bytes is embedded when it fits. Initial project-assignment text retained as
+required evidence can instead be presented using its semantic reference when
+it does not fit inline. Explicit Agent attachments that cannot be delivered
+completely are rejected; they do not fall back to local paths. Result
+references retain their logical name and existing binding behavior.
 
 The fixed 1 MiB mailbox protocol safety ceiling is a separate read limit for
 mailbox records; it does not replace the configured admission limit for new
