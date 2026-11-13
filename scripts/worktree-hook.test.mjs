@@ -171,7 +171,8 @@ test("setup:hooks enables hooks without replacing existing hooks", () => {
         encoding: "utf8",
       });
 
-    assert.equal(setup().status, 0);
+    const initial = setup();
+    assert.equal(initial.status, 0, initial.stderr);
     assert.equal(
       git("config", "--local", "--get", "core.hooksPath"),
       join(realpathSync(repo), ".githooks"),
