@@ -51,7 +51,7 @@ Pi to use the bundled `scout` Agent for a read-only reconnaissance task:
 
 ```text
 Use scout to identify this repository's main entry points.
-Explain how the application starts. Don't change any files.
+Explain how the application starts.
 ```
 
 Delegation starts after Herdsman accepts the task. The Agent works
