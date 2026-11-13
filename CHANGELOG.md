@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.46.0](https://github.com/boadij/pi-herdsman/compare/v0.45.0...v0.46.0) (2026-11-13)
+
+
+### Features
+
+* **agents:** extend generic bootstrap and remove PCC integration ([#951](https://github.com/boadij/pi-herdsman/issues/951)) ([da8ade3](https://github.com/boadij/pi-herdsman/commit/da8ade376656599e7186cb38b8a6ab2db0855364)), closes [#637](https://github.com/boadij/pi-herdsman/issues/637)
+* **config:** support array modifiers in definition overlays ([#941](https://github.com/boadij/pi-herdsman/issues/941)) ([53b5df9](https://github.com/boadij/pi-herdsman/commit/53b5df946216c5c2d793cd03c399d3758dcf648e))
+* **container:** support persistent native Pi self-updates ([#945](https://github.com/boadij/pi-herdsman/issues/945)) ([c95877a](https://github.com/boadij/pi-herdsman/commit/c95877a5a02cb81d7820c502bdd6188409bb37de))
+* **dev:** add one-command setup for worktree hooks ([#947](https://github.com/boadij/pi-herdsman/issues/947)) ([6af00b4](https://github.com/boadij/pi-herdsman/commit/6af00b4b7ecd20a0f1d157768d34b6c9e8ffdd51))
+* **ui:** inspect effective instruction composition in Details ([#946](https://github.com/boadij/pi-herdsman/issues/946)) ([ec84045](https://github.com/boadij/pi-herdsman/commit/ec840458c57c09b4469f54f4f1cf89ef8636ad73)), closes [#942](https://github.com/boadij/pi-herdsman/issues/942)
+
+
+### Fixes
+
+* **dev:** repair hook setup in copied repositories ([#957](https://github.com/boadij/pi-herdsman/issues/957)) ([9bf4466](https://github.com/boadij/pi-herdsman/commit/9bf4466d8782dcc819f4973e462f6d74ced0f60b))
+* **ui:** present effective instructions as sequential Markdown sections ([#956](https://github.com/boadij/pi-herdsman/issues/956)) ([0519349](https://github.com/boadij/pi-herdsman/commit/0519349e4998bed90cfc2e6435f22c16bf26a82a))
+* **ui:** restore chat scrolling for effective instruction details ([#953](https://github.com/boadij/pi-herdsman/issues/953)) ([556e9c2](https://github.com/boadij/pi-herdsman/commit/556e9c2df47f82963d56f10315e16c790ad7e961))
+
+
+### Documentation
+
+* introduce emergent agentic workflows ([#959](https://github.com/boadij/pi-herdsman/issues/959)) ([9d1b078](https://github.com/boadij/pi-herdsman/commit/9d1b078a29604ac04f59d28214865a914d97b701))
+* refresh community contributor acknowledgments ([#964](https://github.com/boadij/pi-herdsman/issues/964)) ([8e9f371](https://github.com/boadij/pi-herdsman/commit/8e9f3713543452399924b1125c6462b1a4a86927))
+* streamline README onboarding and mobile layout ([#960](https://github.com/boadij/pi-herdsman/issues/960)) ([278d5d2](https://github.com/boadij/pi-herdsman/commit/278d5d2ba6fe82b0e156952a4fd4c6f382168d80))
+
+
+### Tests
+
+* **ci:** require minimal ordinary Lead federation acceptance ([#954](https://github.com/boadij/pi-herdsman/issues/954)) ([35418b4](https://github.com/boadij/pi-herdsman/commit/35418b452731f8433bb4dbc92a5ad2e618ce4d06))
+* **ci:** use minimal Manager federation acceptance ([#948](https://github.com/boadij/pi-herdsman/issues/948)) ([57c5a4f](https://github.com/boadij/pi-herdsman/commit/57c5a4f6f304df2aec791c144f8a1dae7b190774)), closes [#588](https://github.com/boadij/pi-herdsman/issues/588)
+* **ci:** verify Manager activation through live authority ([#962](https://github.com/boadij/pi-herdsman/issues/962)) ([534aea1](https://github.com/boadij/pi-herdsman/commit/534aea13bde5d27c2241da91d3baa4682ec031e0)), closes [#934](https://github.com/boadij/pi-herdsman/issues/934)
+
+
+### Other Changes
+
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.11.8 ([#958](https://github.com/boadij/pi-herdsman/issues/958)) ([17e680b](https://github.com/boadij/pi-herdsman/commit/17e680b175a6449d8b1d8a3976279a370b0b33dc))
+* **deps:** update npm non-major updates ([#935](https://github.com/boadij/pi-herdsman/issues/935)) ([6193198](https://github.com/boadij/pi-herdsman/commit/6193198849f37049e9038dc6bbe159ef10ed5aed))
+* **deps:** update tailscale/tailscale docker tag to v1.104.7 ([#949](https://github.com/boadij/pi-herdsman/issues/949)) ([f6e8ff9](https://github.com/boadij/pi-herdsman/commit/f6e8ff953acc993dde4945fb08d3e5042868068b))
+* **types:** enforce strict checking across all TypeScript sources ([#961](https://github.com/boadij/pi-herdsman/issues/961)) ([1955406](https://github.com/boadij/pi-herdsman/commit/1955406254edc2f0b8b6158fb75c2afd3c1e22ee))
+
 ## [0.45.0](https://github.com/boadij/pi-herdsman/compare/v0.44.0...v0.45.0) (2026-11-12)
 
 
