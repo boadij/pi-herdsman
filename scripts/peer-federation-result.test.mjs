@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
+import { decide } from "./smoke-faux.mjs";
 import {
   assertOrdinaryLeadSendAcceptance,
   assertPeerInListPeersResult,
@@ -25,6 +26,72 @@ import {
   parseDelegateResult,
   ordinaryLeadDeliveryReady,
 } from "./peer-federation-result.mjs";
+
+test("federated Manager A recognizes provider-context peer replies and completes", () => {
+  const answer = decide("federated-peer-a", {
+    messages: [
+      { role: "user", content: "PEER_E2E_A_SINGLE_SEND" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "list-peers",
+            name: "list_peers",
+            arguments: {},
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "list_peers",
+        toolCallId: "list-peers",
+        content: JSON.stringify({
+          peers: [{ machine: "peer", target: "manager:abcdefghjk" }],
+        }),
+        isError: false,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "send-request",
+            name: "message_peer",
+            arguments: {
+              target: "manager:abcdefghjk",
+              message: "PEER_E2E_SINGLE_REQUEST",
+            },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "message_peer",
+        toolCallId: "send-request",
+        content: "queued",
+        isError: false,
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Peer message from manager:abcdefghjk: PEER_E2E_SINGLE_REPLY",
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.ok(
+    answer.content?.some(
+      (part) =>
+        part.type === "text" &&
+        part.text?.includes("PEER_E2E_A_SINGLE_REPLIED"),
+    ),
+  );
+});
 
 test("ordinary Lead send acceptance requires one fresh discovery, one send, and its exact receipt", () => {
   const diagnostics = {
