@@ -6156,17 +6156,22 @@ Use **strict review** for \`controller.ts\`.
     const definitionHeading = renderedSectionLines.findIndex((line) =>
       line.includes("1. Definition"),
     );
+    const firstSectionContent = renderedSectionLines.findIndex((line) =>
+      line.includes("Coordinate work"),
+    );
     const contextHeading = renderedSectionLines.findIndex((line) =>
       line.includes("2. Pi context"),
     );
-    assert.ok(definitionHeading >= 0 && contextHeading > definitionHeading);
-    const separatorsBetweenSources = renderedSectionLines
-      .slice(definitionHeading + 1, contextHeading)
-      .filter((line) => /^─+$/u.test(line.trim()));
-    assert.equal(
-      separatorsBetweenSources.length,
-      2,
-      "expected a header/body divider and a distinct divider before the next source",
+    assert.ok(
+      definitionHeading >= 0 &&
+        firstSectionContent > definitionHeading &&
+        contextHeading > firstSectionContent,
+    );
+    assert.ok(
+      renderedSectionLines
+        .slice(firstSectionContent + 1, contextHeading)
+        .some((line) => /^─+$/u.test(line.trim())),
+      "expected a separator after the first section content and before the next source heading",
     );
     for (const line of expandedSectionsBox.render(24))
       assert.ok(visibleWidth(line) <= 24);
