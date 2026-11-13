@@ -70,6 +70,7 @@ function runWindowsBootstrap({
   status = "pi: current (v9) (C:\\mock\\integration)",
   webAccess = "skip",
   answer = "",
+  answers = [""],
   inputFailure = false,
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-ps-test-"));
@@ -83,6 +84,7 @@ function runWindowsBootstrap({
     status,
     webAccess,
     answer,
+    answers: answers[0] ? answers : answer ? [answer] : [],
     inputFailure,
   };
   const escaped = JSON.stringify(values).replaceAll("'", "''");
@@ -92,6 +94,7 @@ function runWindowsBootstrap({
 $ErrorActionPreference = 'Stop'
 $script:case = ConvertFrom-Json '${escaped}'
 $script:log = [System.Collections.Generic.List[string]]::new()
+$script:answerIndex = 0
 $script:LASTEXITCODE = 0
 if ($script:case.webAccess) { $env:PI_HERDSMAN_WEB_ACCESS = $script:case.webAccess } else { Remove-Item Env:PI_HERDSMAN_WEB_ACCESS -ErrorAction SilentlyContinue }
 . '${windowsInstaller.replaceAll("'", "''")}' -DefinitionsOnly
@@ -113,7 +116,7 @@ function Version([string]$Command) {
 function Invoke-WebRequest { param($Uri,$OutFile,[switch]$UseBasicParsing) Set-Content -Path $OutFile -Value 'mock installer' }
 function powershell.exe { $script:LASTEXITCODE=0; $env:Path += ';C:\\mock-installed' }
 function Invoke-UpstreamInstaller([string]$Url) { $script:log.Add("installer $Url") }
-function Read-Host { param($Prompt) $script:log.Add("prompt $Prompt"); if ($script:case.inputFailure) { throw 'No interactive host input' }; return $script:case.answer }
+function Read-Host { param($Prompt) $script:log.Add("prompt $Prompt"); if ($script:case.inputFailure) { throw 'No interactive host input' }; $answer = $script:case.answers[$script:answerIndex]; $script:answerIndex++; return $answer }
 function MockPi { param($Action,$Arg1,$Arg2,$Arg3) $script:LASTEXITCODE=0; if ($Action -eq 'list') { return $script:case.installed }; $script:log.Add("pi $Action $Arg1 $Arg2"); if ($script:case.fail -eq $Action -or ($Action -eq 'install' -and $Arg1 -eq 'npm:pi-web-access' -and $script:case.fail -eq 'web-install')) {$script:LASTEXITCODE=17} }
 function MockHerdr { param($Action,$Arg1,$Arg2) $script:LASTEXITCODE=0; if ($Action -eq 'integration' -and $Arg1 -eq 'status') { return $script:case.status }; $script:log.Add("herdr $Action $Arg1 $Arg2"); if ($script:case.fail -eq 'integration') {$script:LASTEXITCODE=19} }
 $failed = $false
@@ -173,6 +176,39 @@ test(
     assert.equal(unavailable.status, 0, unavailable.stderr);
     assert.match(unavailable.stdout, /prompt Install pi-web-access/u);
     assert.match(unavailable.stdout, /Optional pi-web-access: skipped/u);
+  },
+);
+
+test(
+  "Windows bootstrap reprompts after invalid input before accepting y or n",
+  { skip: process.platform !== "win32" },
+  () => {
+    for (const [answer, expectedStatus, expectedInstall] of [
+      ["y", "installed", true],
+      ["n", "skipped", false],
+    ] as const) {
+      const result = runWindowsBootstrap({
+        webAccess: "",
+        answers: ["perhaps", answer],
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /Please enter y or n\./u);
+      assert.equal(
+        (result.stdout.match(/prompt Install pi-web-access\? \[y\/N\]/gu) ?? [])
+          .length,
+        2,
+        result.stdout,
+      );
+      assert.match(
+        result.stdout,
+        new RegExp(`Optional pi-web-access: ${expectedStatus}\\.`),
+      );
+      assert.equal(
+        result.stdout.includes("pi install npm:pi-web-access --no-approve"),
+        expectedInstall,
+        result.stdout,
+      );
+    }
   },
 );
 

@@ -94,14 +94,13 @@ try {
                 try { $answer = Read-Host 'Install pi-web-access? [y/N]' }
                 catch { break }
                 if ($null -eq $answer -or $answer.Trim() -eq '') { break }
-                switch ($answer.Trim().ToLowerInvariant()) {
-                    'y' { $installWeb = $true; break }
-                    'yes' { $installWeb = $true; break }
-                    'n' { break }
-                    'no' { break }
-                    default { Write-Host 'Please enter y or n.'; continue }
+                $normalizedAnswer = $answer.Trim().ToLowerInvariant()
+                if ($normalizedAnswer -in @('y', 'yes')) {
+                    $installWeb = $true
+                    break
                 }
-                break
+                if ($normalizedAnswer -in @('n', 'no')) { break }
+                Write-Host 'Please enter y or n.'
             }
         }
         if ($installWeb) {
