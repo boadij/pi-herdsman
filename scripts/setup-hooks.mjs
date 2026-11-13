@@ -1,5 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
 
 const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
@@ -34,7 +40,9 @@ const sameHooks = (other) => {
         name === newFiles[i] &&
         statSync(join(other, name)).isFile() &&
         statSync(join(hooksPath, name)).isFile() &&
-        readFileSync(join(other, name)).equals(readFileSync(join(hooksPath, name))),
+        readFileSync(join(other, name)).equals(
+          readFileSync(join(hooksPath, name)),
+        ),
     )
   );
 };
