@@ -279,11 +279,17 @@ The fixed 1 MiB mailbox protocol safety ceiling is a separate read limit for
 mailbox records; it does not replace the configured admission limit for new
 messages.
 
-No file is partially embedded. Embedded text is a submission-time snapshot.
-Where an operation permits reference-only files, they are not copied or
-snapshotted; their contents may change or disappear after submission, and the
-recipient must already have local filesystem/tool access to inspect them.
-`files` supplies evidence and does not grant runtime capabilities.
+No file is partially embedded. Explicit Agent and ordinary coordination
+attachments deliver only complete supported strict UTF-8 text within the
+applicable per-file and complete-message limits; unsupported or non-fitting
+content rejects the operation instead of falling back to a local path. Initial
+`delegate_work` text attachments are retained as snapshots, and a snapshot that
+does not fit inline is presented by its semantic `evidence:` reference.
+Previously accepted required evidence can be forwarded by its authorized
+semantic reference; the reference alone does not grant access. An authorized
+recipient retrieves bounded content with `read_evidence`. Embedded content is a
+submission-time snapshot. `files` supplies content or evidence references, not
+tools or runtime capabilities.
 
 Files are read through their canonical `realpath` target. Ordinary file inputs
 are rendered with that canonical path; result references retain the exact
