@@ -672,26 +672,21 @@ test(
   },
 );
 
-const ptyTools = ["script", "python3"].map((tool) => {
-  const result = spawnSync("which", [tool], { encoding: "utf8" });
-  return { tool, path: result.status === 0 ? result.stdout.trim() : "" };
-});
-const missingPtyTools = ptyTools
-  .filter(({ path }) => path.length === 0)
-  .map(({ tool }) => tool);
+const python3 = spawnSync("which", ["python3"], { encoding: "utf8" });
+const hasPython3 = python3.status === 0 && python3.stdout.trim().length > 0;
 
 test(
   "native installer prompts through its controlling terminal and reprompts invalid input",
   {
     skip:
       (process.platform !== "linux" && process.platform !== "darwin") ||
-      (process.platform === "linux" && missingPtyTools.length > 0),
+      (process.platform === "linux" && !hasPython3),
   },
   () => {
     assert.deepEqual(
-      missingPtyTools,
-      [],
-      `PTY regression requires script and python3 on macOS; missing: ${missingPtyTools.join(", ") || "none"}`,
+      hasPython3,
+      true,
+      "PTY regression requires python3 on macOS; python3 must be installed and available on PATH",
     );
     for (const [input, status] of [
       ["perhaps\nyes\n", "installed"],
@@ -702,15 +697,8 @@ test(
       try {
         const env: NodeJS.ProcessEnv = { ...setup.env };
         delete env.PI_HERDSMAN_WEB_ACCESS;
-        const command = `sh '${installer.replaceAll("'", "'\\''")}'`;
-        const args =
-          process.platform === "darwin"
-            ? ["-q", "/dev/null", "sh", installer]
-            : ["-qec", command, "/dev/null"];
-        // BSD script expects its own stdin to be a terminal. spawnSync(input)
-        // gives it a pipe/socket instead, which makes macOS script's terminal
-        // ioctl fail before it can create the child PTY. Fork it under a real
-        // controlling PTY, then type the answers through that PTY's master.
+        // Fork the installer under a real controlling PTY, then type answers
+        // through the PTY master only after each prompt is observed.
         const ptyRunner = String.raw`import errno, os, pty, select, signal, sys, time
 answers = sys.stdin.buffer.read().splitlines(keepends=True)
 stage = "starting PTY child"
@@ -768,7 +756,7 @@ try:
     pid, master = pty.fork()
     if pid == 0:
         try:
-            os.execvp(sys.argv[1], [sys.argv[1]] + sys.argv[2:])
+            os.execvp("sh", ["sh", sys.argv[1]])
         except BaseException:
             try:
                 os.write(2, b"PTY child exec failed\\n")
@@ -839,16 +827,12 @@ finally:
     if master is not None:
         os.close(master)
 sys.exit(os.waitstatus_to_exitcode(status))`;
-        const result = spawnSync(
-          "python3",
-          ["-c", ptyRunner, "script", ...args],
-          {
-            env,
-            input,
-            encoding: "utf8",
-            timeout: 30_000,
-          },
-        );
+        const result = spawnSync("python3", ["-c", ptyRunner, installer], {
+          env,
+          input,
+          encoding: "utf8",
+          timeout: 30_000,
+        });
         const timedOut =
           result.error !== undefined &&
           "code" in result.error &&
