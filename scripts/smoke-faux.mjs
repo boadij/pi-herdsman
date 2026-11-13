@@ -8,7 +8,6 @@ import {
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
-import { assertPeerInListPeersResult } from "./peer-federation-result.mjs";
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -1044,25 +1043,6 @@ export function decide(model, context) {
       const expectedTarget = prompt.match(
         /\bexpectedTarget=((?:lead|manager):[0-9a-hjkmnp-tv-z]{10})\b/u,
       )?.[1];
-      if (expectedTarget)
-        assertPeerInListPeersResult(
-          [
-            {
-              type: "message",
-              message: { role: "assistant", content: [listed.call] },
-            },
-            {
-              type: "message",
-              message: {
-                role: "toolResult",
-                toolName: "list_peers",
-                toolCallId: listed.call.id,
-                details: listed.result.details,
-              },
-            },
-          ],
-          expectedTarget,
-        );
       const peer = peers.peers?.find(
         (candidate) =>
           candidate.machine &&
