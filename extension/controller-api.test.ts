@@ -7824,6 +7824,7 @@ test("empty stop inventory reports a valid Agent discovered in final verificatio
     workspaceId: () => WORKSPACE,
     sendResultMessage: () => undefined,
     sendAskMessage: () => undefined,
+    sendOwnerMessage: () => undefined,
     sessionRetired: () => false,
     appendError: () => undefined,
     onChanged: () => {
@@ -7874,6 +7875,7 @@ test("quiesced Agent tree waits for the root delegation lock and retains it in c
     workspaceId: () => WORKSPACE,
     sendResultMessage: () => undefined,
     sendAskMessage: () => undefined,
+    sendOwnerMessage: () => undefined,
     sessionRetired: () => false,
     appendError: () => undefined,
     onChanged: () => undefined,
@@ -14508,6 +14510,7 @@ test("listing and transcript action retain distinct transcript-readiness callbac
     workspaceId: () => WORKSPACE,
     sendResultMessage: () => undefined,
     sendAskMessage: () => undefined,
+    sendOwnerMessage: () => undefined,
     sessionRetired: () => false,
     appendError: () => undefined,
     onChanged: () => undefined,

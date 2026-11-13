@@ -10,7 +10,7 @@ export function managerHandoffSupervisorToolAvailable(
 
 export function decide(
   model: string,
-  context: { messages: TranscriptMessages },
+  context: { messages: readonly unknown[] },
 ): AssistantMessage;
 
 export function waitForSmokeObservation(

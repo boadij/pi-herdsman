@@ -10,6 +10,7 @@ import type {
   Provider,
   TextContent,
   ToolCall,
+  TranscriptMessages,
 } from "@earendil-works/pi-ai";
 import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 import {
@@ -5524,8 +5525,10 @@ test("crash recovery faux performs only authorized stop or settled continuation"
       },
     },
   ];
-  const decide = (messages: any[]) =>
-    decideSmokeFaux("agent-crash-root", { messages });
+  const decide = (messages: unknown[]) =>
+    decideSmokeFaux("agent-crash-root", {
+      messages: messages as TranscriptMessages,
+    });
   const steer = firstToolCall(decide(messages));
   assert.equal(steer.name, "steer_agent");
   const pendingSteer = decide([
@@ -6675,7 +6678,12 @@ test("old execution classifies exact session panes as quiescent, active, or unkn
     sessionId: "target-session",
     sessionPath: resolve("/sessions/target.jsonl"),
   };
-  const cases = [
+  const cases: [
+    Record<string, unknown>,
+    "quiescent" | "active" | "unknown",
+    (paneId: string) => string,
+    string[],
+  ][] = [
     [{ agents: [], panes: [] }, "quiescent", () => "clear", [target.paneId]],
     [
       {
@@ -6727,7 +6735,7 @@ test("old execution classifies exact session panes as quiescent, active, or unkn
     [{ agents: [], panes: [] }, "unknown", () => "unknown", [target.paneId]],
   ];
   for (const [snapshot, expected, inspect, expectedPanes] of cases) {
-    const inspected = [];
+    const inspected: string[] = [];
     const state = await classifyOldExecution(
       snapshot,
       target,

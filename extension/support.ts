@@ -10,6 +10,7 @@ import type { Component, TUI } from "@earendil-works/pi-tui";
 import {
   Theme as PiTheme,
   type ExtensionContext,
+  type SessionEntry,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import packageMetadata from "../package.json" with { type: "json" };
@@ -872,17 +873,17 @@ export function fakeContext(
     isIdle: () => true,
     hasPendingMessages: () => false,
     shutdown: () => undefined,
+    waitForIdle: async () => undefined,
     compact: () => undefined,
     getSystemPrompt: () => "",
-    waitForIdle: async () => undefined,
     getContextUsage: () => ({ tokens: 2, contextWindow: 10, percent: null }),
     sessionManager: {
       getSessionId: () => LEAD_SESSION_ID,
       getSessionFile: () => "/tmp/root.jsonl",
       getSessionName: () => undefined,
-      getEntries: () => entries,
-      getBranch: () => branch,
-    },
+      getEntries: () => entries as SessionEntry[],
+      getBranch: () => branch as SessionEntry[],
+    } as unknown as ExtensionContext["sessionManager"],
     ui: {
       notify: () => undefined,
       select: async () => "tab",
@@ -971,7 +972,7 @@ export function fakeContext(
         );
       },
     },
-  };
+  } as ExtensionContext;
 }
 export function seedLeadRole(
   context: ReturnType<typeof fakeContext>,

@@ -107,17 +107,18 @@ test("Pi 1.5.0 includes non-triggering startup messages in the first provider re
     noPromptTemplates: true,
     noThemes: true,
     extensionFactories: [
-      (api) =>
+      (api) => {
         api.on("before_agent_start", async () => {
           await api.sendMessage(
             {
               customType: "fan-in-test",
               content: "startup sibling",
-              display: "none",
+              display: false,
             },
             { triggerTurn: false },
           );
-        }),
+        });
+      },
     ],
   });
   await resourceLoader.reload();
@@ -236,7 +237,7 @@ test("batched health attention reaches one faux-provider request with startup fa
   const parent = managedState("provider-health-owner");
   parent.ownerSessionId = LEAD_SESSION_ID;
   let health: ReturnType<typeof fakePi> | undefined;
-  const deliveries: Promise<void>[] = [];
+
   const requests: any[][] = [];
   const faux = fauxProvider({
     provider: "herdsman-health-fan-in-test",
@@ -249,6 +250,7 @@ test("batched health attention reaches one faux-provider request with startup fa
   modelRuntime.registerNativeProvider(faux.provider);
   const settingsManager = SettingsManager.inMemory();
   let healthScanStarted = false;
+  let deliveries = 0;
   const resourceLoader = new DefaultResourceLoader({
     cwd: WORKSPACE,
     agentDir: testTmpRoot,
@@ -263,9 +265,11 @@ test("batched health attention reaches one faux-provider request with startup fa
         const sendToFakePi = health.pi.sendMessage.bind(health.pi);
         health.pi.sendMessage = (message, options) => {
           sendToFakePi(message, options);
-          const delivery = api.sendMessage(message, options);
-          deliveries.push(delivery);
-          return delivery;
+          api.sendMessage(
+            message as Parameters<typeof api.sendMessage>[0],
+            options as Parameters<typeof api.sendMessage>[1],
+          );
+          deliveries++;
         };
         registerExtension!(health.pi as never);
         api.on("before_agent_start", async () => {
@@ -279,24 +283,21 @@ test("batched health attention reaches one faux-provider request with startup fa
             attempt++
           )
             await new Promise((resolve) => setImmediate(resolve));
-          await Promise.all(deliveries);
         });
-        api.on("session_shutdown", () =>
-          health!.events.get("session_shutdown")?.[0](),
-        );
       },
-      (api) =>
+      (api) => {
         registerRecipientFanIn(api, async (_ctx, phase, budget) => {
           if (phase !== "startup") return 0;
           const message = {
             customType: "startup-sibling",
             content: "independent startup fan-in sibling",
-            display: "none" as const,
+            display: false,
           };
           if (!includeFanInMessage(budget, message.content)) return 0;
           await api.sendMessage(message, { triggerTurn: false });
           return 1;
-        }),
+        });
+      },
     ],
   });
   await resourceLoader.reload();
@@ -318,7 +319,7 @@ test("batched health attention reaches one faux-provider request with startup fa
   try {
     await session.prompt("start");
     assert.equal(health?.sentMessageCalls.length, 2);
-    assert.equal(deliveries.length, 2);
+    assert.equal(deliveries, 2);
     assert.deepEqual(
       health?.sentMessageCalls
         .filter(
@@ -339,6 +340,7 @@ test("batched health attention reaches one faux-provider request with startup fa
     assert.match(providerInput, /independent startup fan-in sibling/);
   } finally {
     await session.dispose();
+    health?.events.get("session_shutdown")?.[0]?.();
     for (const state of states)
       resetAgentMailbox(agentMailboxPath(WORKSPACE, state.agentLabel));
     resetAgentMailbox(agentMailboxPath(WORKSPACE, parent.agentLabel));
@@ -394,7 +396,7 @@ test("two Chief inbox records reach one continued provider request from a turn-b
     noPromptTemplates: true,
     noThemes: true,
     extensionFactories: [
-      (api) =>
+      (api) => {
         api.on("turn_end", async (event) => {
           if (event.outcome !== "completed") return;
           const count = await drainCoordinationInbox({
@@ -415,7 +417,8 @@ test("two Chief inbox records reach one continued provider request from a turn-b
             },
           });
           return count ? { continue: true } : undefined;
-        }),
+        });
+      },
     ],
   });
   await resourceLoader.reload();
@@ -9348,7 +9351,10 @@ test("root role tool_call guard denies unauthorized native nested dispatch befor
             parameters: Type.Object({}),
             execute: async () => {
               forbiddenExecutions++;
-              return { content: [{ type: "text", text: "forbidden" }] };
+              return {
+                content: [{ type: "text", text: "forbidden" }],
+                details: undefined,
+              };
             },
           });
           api.registerTool({
@@ -9359,7 +9365,10 @@ test("root role tool_call guard denies unauthorized native nested dispatch befor
             parameters: Type.Object({}),
             execute: async () => {
               allowedExecutions++;
-              return { content: [{ type: "text", text: "allowed" }] };
+              return {
+                content: [{ type: "text", text: "allowed" }],
+                details: undefined,
+              };
             },
           });
           const events = createLeadAgentEventRuntime({
@@ -9399,12 +9408,12 @@ test("root role tool_call guard denies unauthorized native nested dispatch befor
       assert.ok(session.getCallableToolNames().includes("forbidden_probe"));
       await session.prompt("Invoke the nested parent tool.");
       assert.deepEqual(nestedResults, {
-        denied: !scenario.allowed.includes("forbidden_probe"),
+        denied: !scenario.allowed.some((tool) => tool === "forbidden_probe"),
         allowed: false,
       });
       assert.equal(
         forbiddenExecutions,
-        Number(scenario.allowed.includes("forbidden_probe")),
+        Number(scenario.allowed.some((tool) => tool === "forbidden_probe")),
       );
       assert.equal(allowedExecutions, 1);
     } finally {
