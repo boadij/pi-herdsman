@@ -186,7 +186,10 @@ test("setup:hooks enables hooks without replacing existing hooks", () => {
     git("worktree", "add", "-b", "linked", linked);
     const refused = setup(linked);
     assert.notEqual(refused.status, 0);
-    assert.match(refused.stderr, /Run setup from the primary repository checkout/);
+    assert.match(
+      refused.stderr,
+      /Run setup from the primary repository checkout/,
+    );
 
     git("config", "--local", "core.hooksPath", join(root, "other-hooks"));
     const conflict = setup();
