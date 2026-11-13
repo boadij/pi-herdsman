@@ -66,6 +66,7 @@ import {
 } from "./agent-definitions.ts";
 import { herdsmanTempRoot, readRequiredEvidenceSnapshot } from "./storage.ts";
 import { createLeadProjectRuntime } from "./lead/project.ts";
+import type { InstructionSection } from "./presentation.ts";
 
 initTheme("dark");
 
@@ -20868,7 +20869,7 @@ test("Definitions Details snapshots effective append and replace instructions", 
         | {
             data: {
               definitions: { name: string }[];
-              inspector: { tree: string };
+              inspector: { sections: InstructionSection[] };
             };
           }
         | undefined,
