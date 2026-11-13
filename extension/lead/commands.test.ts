@@ -573,6 +573,13 @@ test("ordinary Agent Details order native and appended context by launch mode", 
       expected: ["definition body"],
       emptyFirstFragment: true,
     },
+    {
+      name: "all fragments empty",
+      frontmatter: { inheritGlobalContext: true, inheritProjectContext: true },
+      expected: [],
+      emptyFirstFragment: true,
+      allFragmentsEmpty: true,
+    },
   ]) {
     const choices = ["agents", "reviewer", "details", undefined, undefined];
     let displayed: string[] | undefined;
@@ -622,9 +629,11 @@ test("ordinary Agent Details order native and appended context by launch mode", 
             ],
       }),
       expandDefinitionBodyFragments: () =>
-        scenario.emptyFirstFragment
-          ? ["", "definition body"]
-          : ["definition body"],
+        scenario.allFragmentsEmpty
+          ? ["", ""]
+          : scenario.emptyFirstFragment
+            ? ["", "definition body"]
+            : ["definition body"],
       selectedAgentContextFiles: () => [
         { path: "/workspace/AGENTS.md", content: "context sentinel" },
       ],
@@ -666,7 +675,17 @@ test("ordinary Agent Details order native and appended context by launch mode", 
       [...positions].sort((a, b) => a - b),
       prompt,
     );
-    if (scenario.emptyFirstFragment) {
+    if (scenario.allFragmentsEmpty) {
+      const fallback = inspectedSections!.find(
+        (section) => section.changes?.length,
+      );
+      assert.ok(fallback, JSON.stringify(inspectedSections));
+      assert.equal(fallback.content, undefined);
+      assert.equal(
+        inspectedSections!.some((section) => section.content === ""),
+        false,
+      );
+    } else if (scenario.emptyFirstFragment) {
       const firstVisible = inspectedSections!.find(
         (section) => section.content === "definition body",
       );
