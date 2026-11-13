@@ -2826,6 +2826,8 @@ export function renderAgentDefinitionsOverview(
           `${theme.bold(theme.fg("customMessageLabel", "Definitions"))}${theme.fg("muted", ` · ${definitions.length}`)}`,
         ]
       : [];
+  if (options.expanded === true && options.inspector?.sections)
+    lines.push(theme.fg("accent", theme.bold("METADATA")));
   definitions.forEach((definition) => {
     const name = value(definition.name ?? definition.agent);
     if (!name) return;
@@ -2892,7 +2894,7 @@ export function renderAgentDefinitionsOverview(
   });
   if (options.inspector) {
     lines.push(...options.inspector.summary);
-    lines.push("Ctrl+O to expand");
+    if (options.expanded !== true) lines.push("Ctrl+O to expand");
   } else if (
     typeof options.instructions === "string" &&
     options.expanded !== true
@@ -2907,26 +2909,48 @@ export function renderAgentDefinitionsOverview(
   );
   box.addChild(new WidthSafeText(lines.join("\n"), 0, 0));
   if (options.expanded === true && options.inspector?.sections) {
-    for (const section of options.inspector.sections) {
-      const content = new Container();
-      content.addChild(new Text(theme.bold(section.title), 0, 0));
+    box.addChild(new Spacer(1));
+    box.addChild(new DynamicBorder((line) => theme.fg("border", line)));
+    box.addChild(
+      new Text(
+        theme.fg("accent", theme.bold("INSTRUCTIONS · Known-input order")),
+        0,
+        0,
+      ),
+    );
+    options.inspector.sections.forEach((section, index) => {
+      box.addChild(new Spacer(1));
+      if (index > 0)
+        box.addChild(new DynamicBorder((line) => theme.fg("border", line)));
+      box.addChild(
+        new Text(
+          theme.fg("accent", theme.bold(`${index + 1}. ${section.title}`)),
+          0,
+          0,
+        ),
+      );
       if (section.source)
-        content.addChild(
+        box.addChild(
           new WidthSafeText(theme.fg("muted", section.source), 0, 0),
         );
       if (section.changes?.length)
-        content.addChild(new WidthSafeText(section.changes.join("\n"), 0, 0));
+        box.addChild(
+          new WidthSafeText(
+            theme.fg("muted", section.changes.join("\n")),
+            0,
+            0,
+          ),
+        );
       if (section.content) {
-        content.addChild(new Spacer(1));
-        content.addChild(
+        box.addChild(new DynamicBorder((line) => theme.fg("muted", line)));
+        box.addChild(new Spacer(1));
+        box.addChild(
           section.format === "markdown"
             ? new Markdown(section.content, 0, 0, getMarkdownTheme())
             : new WidthSafeText(section.content, 0, 0),
         );
       }
-      box.addChild(new Spacer(1));
-      box.addChild(content);
-    }
+    });
   } else if (
     options.expanded === true &&
     options.inspector?.tree !== undefined

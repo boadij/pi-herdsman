@@ -783,10 +783,12 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       add("Pi context", file.text, file.path, "markdown");
                   };
                   const appendDefinition = (title: string) => {
-                    const provenance = inspection.layers.map((layer) => {
-                      const changes = summarizeDefinitionLayerChanges(layer);
-                      return `${layer.scope} · ${basename(layer.path)}${changes.length ? ` ${changes.join("; ")}` : ""}`;
-                    });
+                    const provenance = inspection.layers.flatMap((layer) => [
+                      `${layer.scope} · ${basename(layer.path)}`,
+                      ...summarizeDefinitionLayerChanges(layer).map(
+                        (change) => `  ${change}`,
+                      ),
+                    ]);
                     const fragments = inspection.bodyFragments;
                     let provenanceAttached = false;
                     fragments.forEach((fragment, index) => {
@@ -935,12 +937,13 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                     add("Runtime sections", "Depend on active role/session.");
                     add("Exact future prompt", "Unavailable until launch.");
                   }
-                  if (roleProfile && !activeRole && current.name !== "chief")
+                  if (
+                    roleProfile &&
+                    !activeRole &&
+                    !managedLeadProfile &&
+                    current.name !== "chief"
+                  )
                     add("Working directory", ctx.cwd);
-                  add(
-                    "Preview limitation",
-                    "Known-input preview only; provider/runtime transformations may add inputs.",
-                  );
                   host.appendDefinitionsEntry({
                     definitions: [metadata],
                     inspector: {
