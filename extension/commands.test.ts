@@ -14,8 +14,9 @@ import { createServer } from "node:net";
 import { basename, dirname, join, resolve, toNamespacedPath } from "node:path";
 import { tmpdir } from "node:os";
 import { test, type TestContext } from "node:test";
-import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
+import { initTheme, ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import packageMetadata from "../package.json" with { type: "json" };
+
 import { Value } from "typebox/value";
 import type { ManagedAgentState } from "./mailbox.ts";
 import {
@@ -65,6 +66,8 @@ import {
 } from "./agent-definitions.ts";
 import { herdsmanTempRoot, readRequiredEvidenceSnapshot } from "./storage.ts";
 import { createLeadProjectRuntime } from "./lead/project.ts";
+
+initTheme("dark");
 
 const tuiMenuKeybindings = {
   matches: (data: string, key: string) =>
@@ -20891,16 +20894,21 @@ test("Definitions Details snapshots effective append and replace instructions", 
     assert.equal(appendedResult.customCalls, 3);
     assert.equal(appendedResult.entry.data.definitions[0].name, "scout");
     assert.match(
-      appendedResult.entry.data.inspector.tree,
+      JSON.stringify(appendedResult.entry.data.inspector.sections),
       /mutated after selection/u,
     );
     assert.match(
-      appendedResult.entry.data.inspector.tree,
+      JSON.stringify(appendedResult.entry.data.inspector.sections),
       /Additional instructions/u,
     );
-    const savedTree = appendedResult.entry.data.inspector.tree;
+    const savedTree = JSON.stringify(
+      appendedResult.entry.data.inspector.sections,
+    );
     realFs.writeFileSync(bodyPath, "changed after transcript snapshot");
-    assert.equal(appendedResult.entry.data.inspector.tree, savedTree);
+    assert.equal(
+      JSON.stringify(appendedResult.entry.data.inspector.sections),
+      savedTree,
+    );
     const renderer = appendedResult.renderer as any;
     const theme = {
       fg: (_color: string, text: string) => text,
@@ -20933,11 +20941,11 @@ test("Definitions Details snapshots effective append and replace instructions", 
     assert.equal(replacedResult.error, undefined);
     assert.ok(replacedResult.entry);
     assert.match(
-      replacedResult.entry.data.inspector.tree,
+      JSON.stringify(replacedResult.entry.data.inspector.sections),
       /Replacement instructions/u,
     );
     assert.match(
-      replacedResult.entry.data.inspector.tree,
+      JSON.stringify(replacedResult.entry.data.inspector.sections),
       /changed file instructions/u,
     );
 

@@ -567,9 +567,39 @@ test("ordinary Agent Details order native and appended context by launch mode", 
         "Herdsman shared guidance",
       ],
     },
+    {
+      name: "empty first source",
+      frontmatter: { inheritGlobalContext: true, inheritProjectContext: true },
+      expected: ["definition body"],
+      emptyFirstFragment: true,
+    },
+    {
+      name: "all fragments empty",
+      frontmatter: { inheritGlobalContext: true, inheritProjectContext: true },
+      expected: [],
+      emptyFirstFragment: true,
+      allFragmentsEmpty: true,
+    },
+    {
+      name: "multiple definition layer changes",
+      frontmatter: { inheritGlobalContext: true, inheritProjectContext: true },
+      expected: ["definition body"],
+      layers: [
+        {
+          scope: "global",
+          path: "/reviewer.md",
+          supplied: { description: "Updated", model: "new-model" },
+          before: { description: "Original", model: "old-model" },
+          after: { description: "Updated", model: "new-model" },
+          body: "definition body",
+          bodyAction: "inherit",
+        },
+      ],
+    },
   ]) {
     const choices = ["agents", "reviewer", "details", undefined, undefined];
     let displayed: string[] | undefined;
+    let inspectedSections: any[] | undefined;
     const notices: string[] = [];
     const definition = {
       name: "reviewer",
@@ -585,10 +615,43 @@ test("ordinary Agent Details order native and appended context by launch mode", 
       contextAgentDefinitions: async () => ({ definitions: [definition] }),
       inspectAgentDefinition: () => ({
         definition,
-        layers: [],
-        bodyFragments: [{ scope: "global", text: "definition body" }],
+        layers:
+          scenario.layers ??
+          (scenario.emptyFirstFragment
+            ? [
+                {
+                  scope: "global",
+                  path: "/reviewer.md",
+                  supplied: {},
+                  after: {},
+                  body: "",
+                  bodyAction: "append",
+                },
+              ]
+            : []),
+        bodyFragments: scenario.emptyFirstFragment
+          ? [
+              { path: "/empty.md", scope: "global", body: "@empty.md" },
+              {
+                path: "/reviewer.md",
+                scope: "global",
+                body: "definition body",
+              },
+            ]
+          : [
+              {
+                path: "/reviewer.md",
+                scope: "global",
+                body: "definition body",
+              },
+            ],
       }),
-      expandDefinitionBodyFragments: () => ["definition body"],
+      expandDefinitionBodyFragments: () =>
+        scenario.allFragmentsEmpty
+          ? ["", ""]
+          : scenario.emptyFirstFragment
+            ? ["", "definition body"]
+            : ["definition body"],
       selectedAgentContextFiles: () => [
         { path: "/workspace/AGENTS.md", content: "context sentinel" },
       ],
@@ -598,9 +661,17 @@ test("ordinary Agent Details order native and appended context by launch mode", 
       agentDefinitionMetadata: () => ({ name: "reviewer" }),
       formatAgentDefinitions: () => ["reviewer"],
       appendDefinitionsEntry: (data: any) => {
+        inspectedSections = data.inspector.sections;
         displayed = [
           ...data.inspector.summary,
-          ...data.inspector.tree.split("\n"),
+          ...data.inspector.sections.flatMap((section: any) =>
+            [
+              section.title,
+              section.source,
+              ...(section.changes ?? []),
+              section.content,
+            ].filter(Boolean),
+          ),
         ];
       },
     } as any);
@@ -622,7 +693,102 @@ test("ordinary Agent Details order native and appended context by launch mode", 
       [...positions].sort((a, b) => a - b),
       prompt,
     );
+    if (scenario.allFragmentsEmpty) {
+      const fallback = inspectedSections!.find(
+        (section) => section.changes?.length,
+      );
+      assert.ok(fallback, JSON.stringify(inspectedSections));
+      assert.equal(fallback.content, undefined);
+      assert.equal(
+        inspectedSections!.some((section) => section.content === ""),
+        false,
+      );
+    } else if (scenario.layers) {
+      const definitionSection = inspectedSections!.find(
+        (section) => section.title === "Herdsman definition",
+      );
+      assert.deepEqual(definitionSection?.changes, [
+        "global · reviewer.md",
+        "  ~ description: Original → Updated",
+        "  ~ model: old-model → new-model",
+      ]);
+    } else if (scenario.emptyFirstFragment) {
+      const firstVisible = inspectedSections!.find(
+        (section) => section.content === "definition body",
+      );
+      assert.ok(firstVisible, JSON.stringify(inspectedSections));
+      assert.ok(
+        firstVisible.changes?.length,
+        JSON.stringify(inspectedSections),
+      );
+      assert.equal(
+        inspectedSections!.some((section) => section.content === ""),
+        false,
+      );
+    }
   }
+});
+
+test("inactive Managed Lead Details include Working directory exactly once", async () => {
+  const choices = ["roles", "managed-lead", "details", undefined, undefined];
+  let details: any;
+  const definition = {
+    name: "managed-lead",
+    path: "/managed-lead.md",
+    frontmatter: { name: "managed-lead" },
+    body: "Managed Lead instructions",
+  };
+  const runtime = createLeadCommandRuntime({
+    selectMenu: async () => choices.shift(),
+    getThinkingLevel: () => "high",
+    agentDefinitionEnabled: () => true,
+    getSystemPromptOptions: () => ({ contextFiles: [] }),
+    inspectRoleDefinition: () => ({
+      definition,
+      layers: [],
+      bodyFragments: [
+        { path: definition.path, scope: "bundled", body: definition.body },
+      ],
+    }),
+    expandDefinitionBodyFragments: (fragments: Array<{ body: string }>) =>
+      fragments.map(({ body }) => body),
+    roleActive: () => false,
+    isCurrentChief: () => false,
+    leadExecutionPresentation: () => ({ managed: false, mode: "flexible" }),
+    selectedAgentContextFiles: () => [],
+    agentDefinitionMetadata: () => ({ name: "managed-lead" }),
+    formatAgentDefinitions: () => ["Managed Lead metadata"],
+    appendDefinitionsEntry: (data: any) => {
+      details = data;
+    },
+  } as any);
+  await runtime.openDefinitionsMenu({
+    mode: "tui",
+    cwd: "/workspace",
+    isProjectTrusted: () => true,
+    ui: { notify: () => undefined },
+  } as any);
+
+  assert.ok(
+    details,
+    "Details should be appended for the prospective Managed Lead",
+  );
+  assert.equal(
+    details.inspector.sections.filter(
+      (section: any) => section.title === "Working directory",
+    ).length,
+    1,
+  );
+  assert.equal(
+    details.inspector.sections.some(
+      (section: any) => section.title === "Preview limitation",
+    ),
+    false,
+  );
+  assert.match(
+    details.inspector.summary.join("\n"),
+    /Known-input preview only/u,
+  );
 });
 
 test("Coordinator Details show current prompt inputs in composition order", async () => {
@@ -668,7 +834,14 @@ test("Coordinator Details show current prompt inputs in composition order", asyn
     appendDefinitionsEntry: (data: any) => {
       displayed = [
         ...data.inspector.summary,
-        ...data.inspector.tree.split("\n"),
+        ...data.inspector.sections.flatMap((section: any) =>
+          [
+            section.title,
+            section.source,
+            ...(section.changes ?? []),
+            section.content,
+          ].filter(Boolean),
+        ),
       ];
     },
   } as any);
@@ -683,14 +856,12 @@ test("Coordinator Details show current prompt inputs in composition order", asyn
     ["roles", "manager", "details"],
   );
   const lines = displayed!.join("\n");
-  const base = lines.indexOf("Pi base prompt · native and not reconstructed");
+  const base = lines.indexOf("Pi base prompt");
   const context = lines.indexOf("Current project context");
   const contract = lines.indexOf("Verified manager contract");
   const profile = lines.indexOf("Effective Manager profile on disk");
   const cwd = lines.indexOf("Working directory");
-  const runtimeSection = lines.indexOf(
-    "Runtime contributions · session-dependent",
-  );
+  const runtimeSection = lines.indexOf("Runtime contributions");
   assert.ok(base >= 0 && base < context);
   assert.ok(cwd >= 0 && cwd < contract && contract < profile);
   assert.ok(profile < runtimeSection);
@@ -760,7 +931,14 @@ test("Chief Details use the forced prompt producer with global-only context", as
     appendDefinitionsEntry: (data: any) => {
       displayed = [
         ...data.inspector.summary,
-        ...data.inspector.tree.split("\n"),
+        ...data.inspector.sections.flatMap((section: any) =>
+          [
+            section.title,
+            section.source,
+            ...(section.changes ?? []),
+            section.content,
+          ].filter(Boolean),
+        ),
       ];
     },
   } as any);

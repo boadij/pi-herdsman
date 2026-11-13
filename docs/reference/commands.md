@@ -135,18 +135,19 @@ active.
 The `Details…` action appends a read-only inspection entry to the normal Pi chat
 transcript and closes the Definitions menu. The compact entry reports the
 inspection context and preview; use Pi's native `Ctrl+O` expansion to reveal
-the complete known-input instruction tree. Expanded content occupies its
-natural transcript height and uses ordinary terminal scrolling. The inspection
-snapshot, including applicable context text, is saved with the Pi session but
-is excluded from model context. The compact view reports the effective
-configuration, definition source count, selected context-file count, execution
-context, and preview limitation. The expanded tree follows known prompt-input
-ordering; source layers and surviving body text are nested within the Herdsman
-definition section. `+` and `-` identify added and removed explicit values;
+sequential instruction sections rendered with Pi's Markdown component.
+Expanded content occupies its natural transcript height and uses ordinary
+terminal scrolling. The inspection snapshot, including applicable context
+text, is saved with the Pi session but is excluded from model context. The
+compact view reports the effective configuration, definition source count,
+selected context-file count, execution context, and preview limitation. The
+expanded sections follow known prompt-input ordering; source headers identify
+instruction files and known runtime contributions. Definition overlays appear
+as concise configuration provenance separate from surviving instruction text. `+` and `-` identify added and removed explicit values;
 `~` identifies changed values or body operations. Context files follow Pi's
 loader order and the Agent's global/project inheritance settings. Configured
 skills and extensions are selections, not proof that those resources loaded.
-For an active Lead or Manager, the expanded tree uses the verified role-contract
+For an active Lead or Manager, the expanded view uses the verified role-contract
 producer and current Pi system-prompt options for known context inputs; ordinary
 Lead execution profile text is shown separately. Chief uses its forced-prompt
 producer, which includes applicable global user instructions and excludes
