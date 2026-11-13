@@ -5013,6 +5013,15 @@ async function runAgentTerminalFailureSmoke(ctx) {
           done: false,
           progress: { failedHandoff: true, childError: errors.length },
         };
+      const failedAssistant = errors.at(-1).message;
+      const expectedFailure = `Agent model execution failed (${failedAssistant.provider}/${failedAssistant.model}): ${failedAssistant.errorMessage}`;
+      if (
+        handoff.details.error.message !== expectedFailure ||
+        !messageText(handoff.content).includes(expectedFailure)
+      )
+        throw new Error(
+          "Agent failure handoff lost the terminal assistant cause or model",
+        );
       const attempts = (
         await readFile(
           join(evidenceDir, "smoke-faux-attempts.jsonl"),

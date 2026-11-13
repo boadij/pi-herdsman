@@ -100,7 +100,9 @@ direct-owner `result_error` attention; use its stored recovery details and
 
 A terminal model execution failure is not a completed assignment. Managed Agents
 report a failed result (`execution_error`) to their exact direct owner; partial
-assistant text is not a successful result. A completed execution with no result
+assistant text is not a successful result. When supplied by the failed assistant,
+its cause and provider/model identity are included in a bounded, best-effort-redacted
+message; redaction is not a confidentiality guarantee. A completed execution with no result
 text is reported separately as `empty_result`. Cancellation remains distinct
 from execution failure. These results do not by themselves close the assignment
 or release its ownership; inspect the exact assignment, child work, and durable

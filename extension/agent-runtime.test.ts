@@ -500,7 +500,14 @@ test("root status breadcrumb uses only the supplied verified role", () => {
 function emitAgentTurn(
   agent: ReturnType<typeof fakePi>,
   context: ReturnType<typeof fakeContext>,
-  message: { role: string; content: unknown },
+  message: {
+    role: string;
+    content: unknown;
+    stopReason?: string;
+    errorMessage?: unknown;
+    provider?: string;
+    model?: string;
+  },
   outcome: "completed" | "aborted" | "error" = "completed",
 ) {
   agent.events.get("turn_end")![0](
@@ -1759,6 +1766,214 @@ test("terminal Pi execution error discards partial text as an execution failure"
   resetAgentMailbox(mailbox);
 });
 
+test("terminal Pi execution error preserves a text-free 429 cause and actual model", async () => {
+  const mailbox = setAgentEnvironment("provider-error-agent");
+  const agent = fakePi();
+  const context = fakeContext();
+  registerExtension!(agent.pi as never);
+  agent.events.get("session_start")![0](undefined, context);
+  await new Promise((resolve) => setImmediate(resolve));
+  const request = writeMetadataTask(
+    mailbox,
+    "do the work",
+    "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+  );
+  agent.events.get("input")![0](
+    { text: controlMarker(request.requestId) },
+    context,
+  );
+  emitAgentTurn(
+    agent,
+    context,
+    {
+      role: "assistant",
+      content: [],
+      stopReason: "error",
+      provider: "synthetic-provider",
+      model: "failed-model",
+      errorMessage: "429 Too Many Requests: rate limit exceeded",
+    },
+    "error",
+  );
+  agent.events.get("agent_before_settle")![0]({ outcome: "error" }, context);
+  await agent.events.get("agent_settled")![0]({ aborted: false }, context);
+  const result = readResult(mailbox, request.requestId);
+  assert.equal(result?.status, "failed");
+  assert.deepEqual(result?.error, {
+    code: "execution_error",
+    message:
+      "Agent model execution failed (synthetic-provider/failed-model): 429 Too Many Requests: rate limit exceeded",
+  });
+  assert.equal(result?.text, undefined);
+  agent.events.get("session_shutdown")?.[0]();
+  resetAgentMailbox(mailbox);
+});
+
+test("terminal Pi execution causes are bounded, redacted, and replaced per turn", async (t) => {
+  const sensitive = [
+    "Bearer synthetic-bearer",
+    "Basic c3ludGhldGljOnBhc3M=",
+    '"api_key":"synthetic-key"',
+    "token=synthetic-token",
+    "secret='synthetic secret'",
+    "authorization=synthetic-auth",
+    "password=synthetic-password",
+    "cookie=synthetic-cookie",
+    "sk-syntheticprefix123456789",
+    "ghp_synthetictoken123456789",
+    "https://synthetic-user:synthetic-pass@example.invalid/?access_token=synthetic-query&ok=yes",
+  ].join("; ");
+  for (const variant of [
+    { name: "missing", cause: undefined },
+    { name: "blank", cause: " \n\t " },
+    { name: "malformed", cause: { message: "not a string" } },
+    { name: "long Unicode", cause: "限😀".repeat(2000), truncated: true },
+    {
+      name: "credentials and controls",
+      cause: `\u001b[31m429\u001b[0m\u0007\n${sensitive}`,
+      redacted: true,
+    },
+    {
+      name: "credential crosses cutoff",
+      cause: "x".repeat(900) + " token=" + "s".repeat(2000),
+      redacted: true,
+    },
+    {
+      name: "sensitive identity",
+      cause: "429",
+      provider: "Bearer synthetic-bearer",
+      model: "password=synthetic-password",
+      redacted: true,
+    },
+    {
+      name: "long Unicode identity",
+      cause: "限😀".repeat(2000),
+      provider: "模".repeat(2000),
+      model: "😀".repeat(2000),
+      truncated: true,
+    },
+    {
+      name: "later failed turn without cause",
+      cause: "obsolete 429 cause",
+      replace: true,
+    },
+  ]) {
+    await t.test(variant.name, async () => {
+      const mailbox = setAgentEnvironment("cause-variants-agent");
+      const agent = fakePi();
+      const context = fakeContext();
+      registerExtension!(agent.pi as never);
+      agent.events.get("session_start")![0](undefined, context);
+      await new Promise((resolve) => setImmediate(resolve));
+      const request = writeMetadataTask(
+        mailbox,
+        "do the work",
+        "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      );
+      agent.events.get("input")![0](
+        { text: controlMarker(request.requestId) },
+        context,
+      );
+      emitAgentTurn(
+        agent,
+        context,
+        {
+          role: "assistant",
+          content: [],
+          errorMessage: variant.cause,
+          provider: variant.provider ?? "synthetic-provider",
+          model: variant.model ?? "failed-model",
+        },
+        "error",
+      );
+      if (variant.replace)
+        emitAgentTurn(
+          agent,
+          context,
+          { role: "assistant", content: [] },
+          "error",
+        );
+      agent.events.get("agent_before_settle")![0](
+        { outcome: "error" },
+        context,
+      );
+      await agent.events.get("agent_settled")![0]({ aborted: false }, context);
+      const result = readResult(mailbox, request.requestId)!;
+      assert.equal(result.error?.code, "execution_error");
+      const message = result.error!.message;
+      assert.ok(Buffer.byteLength(message, "utf8") <= 1024);
+      assert.doesNotMatch(message, /\p{Cc}/u);
+      if (variant.truncated) assert.match(message, /… \[truncated\]$/);
+      else if (variant.redacted) {
+        assert.match(message, /\[REDACTED\]/);
+        assert.doesNotMatch(
+          message,
+          /synthetic-(?:bearer|key|token|auth|password|cookie|user|pass|query)|synthetic secret|c3ludGhldGlj|sk-synthetic|ghp_synthetic|s{20}/,
+        );
+      } else assert.equal(message, "Agent model execution failed");
+      assert.equal(result.text, undefined);
+      agent.events.get("session_shutdown")?.[0]();
+      resetAgentMailbox(mailbox);
+    });
+  }
+});
+
+test("a subsequent Pi run does not leak an earlier failed run cause", async (t) => {
+  for (const outcome of ["completed", "aborted", "error"] as const) {
+    await t.test(outcome, async () => {
+      const mailbox = setAgentEnvironment("subsequent-run-agent");
+      const agent = fakePi();
+      const context = fakeContext();
+      registerExtension!(agent.pi as never);
+      agent.events.get("session_start")![0](undefined, context);
+      await new Promise((resolve) => setImmediate(resolve));
+      const request = writeMetadataTask(mailbox, "do the work");
+      agent.events.get("input")![0](
+        { text: controlMarker(request.requestId) },
+        context,
+      );
+      emitAgentTurn(
+        agent,
+        context,
+        { role: "assistant", content: [], errorMessage: "obsolete cause" },
+        "error",
+      );
+      agent.events.get("agent_start")![0](undefined, context);
+      if (outcome !== "aborted")
+        emitAgentTurn(
+          agent,
+          context,
+          {
+            role: "assistant",
+            content: outcome === "completed" ? "successful result" : [],
+          },
+          outcome,
+        );
+      agent.events.get("agent_before_settle")![0]({ outcome }, context);
+      await agent.events.get("agent_settled")![0](
+        { aborted: outcome === "aborted" },
+        context,
+      );
+      const result = readResult(mailbox, request.requestId)!;
+      if (outcome === "completed") {
+        assert.equal(result.text, "successful result");
+        assert.equal(result.error, undefined);
+      } else
+        assert.deepEqual(
+          result.error,
+          outcome === "aborted"
+            ? { code: "aborted", message: "Agent execution was cancelled" }
+            : {
+                code: "execution_error",
+                message: "Agent model execution failed",
+              },
+        );
+      agent.events.get("session_shutdown")?.[0]();
+      resetAgentMailbox(mailbox);
+    });
+  }
+});
+
 test("a completed retry supersedes an earlier Pi error candidate", async () => {
   const mailbox = setAgentEnvironment("retry-outcome-agent");
   const agent = fakePi();
@@ -1781,6 +1996,7 @@ test("a completed retry supersedes an earlier Pi error candidate", async () => {
     {
       role: "assistant",
       content: "partial failed attempt",
+      errorMessage: "obsolete provider cause",
     },
     "error",
   );
@@ -1817,6 +2033,16 @@ test("aborted settlement fails an assignment despite meaningful assistant text",
   agent.events.get("input")![0](
     { text: controlMarker(request.requestId) },
     context,
+  );
+  emitAgentTurn(
+    agent,
+    context,
+    {
+      role: "assistant",
+      content: [],
+      errorMessage: "cancelled provider cause",
+    },
+    "error",
   );
   agent.events.get("message_end")![0](
     { message: { role: "assistant", content: "apparently successful answer" } },

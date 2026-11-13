@@ -107,7 +107,7 @@ import {
   readConfig,
   readEffectiveConfig,
 } from "./config.ts";
-import { isDeepStrictEqual } from "node:util";
+import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { readFileSync } from "node:fs";
 import { TextDecoder } from "node:util";
 import {
@@ -849,6 +849,58 @@ export type ManagedAgentMetadataPatch = {
   thinking?: string | null;
 };
 
+// Best-effort diagnostic redaction, not a confidentiality guarantee. Sanitize
+// before bounding so a credential crossing the cutoff cannot expose a prefix.
+function executionFailureMessage(message: {
+  errorMessage?: unknown;
+  provider?: unknown;
+  model?: unknown;
+}): string | undefined {
+  const sanitize = (value: unknown): string =>
+    typeof value !== "string"
+      ? ""
+      : stripVTControlCharacters(value)
+          .replace(/\p{Cc}/gu, " ")
+          .replace(/\b(Bearer|Basic)\s+[^\s,"';}]+/gi, "$1 [REDACTED]")
+          .replace(/((?:https?:\/\/))[^\s/@]+@/gi, "$1[REDACTED]@")
+          .replace(
+            /([?&](?:api[_-]?key|(?:access[_-]?|refresh[_-]?)?token|secret|authorization|password|cookie)=)[^&#\s]*/gi,
+            "$1[REDACTED]",
+          )
+          .replace(
+            /(["']?\b(?:api[_-]?key|(?:access[_-]?|refresh[_-]?)?token|secret|authorization|password|cookie)["']?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}]+)/gi,
+            "$1[REDACTED]",
+          )
+          .replace(
+            /\b(?:sk-|pk-|ghp_|github_pat_|xox[baprs]-)[A-Za-z0-9_-]+/g,
+            "[REDACTED]",
+          )
+          .replace(/\s+/g, " ")
+          .trim();
+  const bound = (text: string, bytes: number): string => {
+    if (Buffer.byteLength(text, "utf8") <= bytes) return text;
+    const marker = "… [truncated]";
+    let prefix = "";
+    let used = Buffer.byteLength(marker, "utf8");
+    for (const character of text) {
+      used += Buffer.byteLength(character, "utf8");
+      if (used > bytes) break;
+      prefix += character;
+    }
+    return prefix + marker;
+  };
+  const cause = sanitize(message.errorMessage);
+  if (!cause) return undefined;
+  const identity = [message.provider, message.model]
+    .map((value) => bound(sanitize(value), 128))
+    .filter(Boolean)
+    .join("/");
+  return bound(
+    `Agent model execution failed${identity ? ` (${identity})` : ""}: ${cause}`,
+    1024,
+  );
+}
+
 export function createManagedAgentExecutionState() {
   return {
     assignment: undefined as ManagedAgentState | undefined,
@@ -860,6 +912,7 @@ export function createManagedAgentExecutionState() {
           outcome?: "completed" | "aborted" | "error";
           responseEntryId?: string;
           responseText?: string;
+          executionErrorMessage?: string;
           askOwnerCapacityError?: string;
         }
       | undefined,
@@ -2386,6 +2439,10 @@ export function registerManagedAgentActivityHandlers(
         (execution.observation = { requestId: state.activeRequestId });
       if (observation.requestId === state.activeRequestId) {
         observation.outcome = event.outcome;
+        observation.executionErrorMessage =
+          event.outcome === "error"
+            ? executionFailureMessage(event.message)
+            : undefined;
         observation.responseEntryId = event.messageEntryId;
         observation.responseText = contentText(
           event.message.content,
@@ -2604,7 +2661,8 @@ export function registerManagedAgentSettlementHandlers(
                 : handoffSelectionError
                   ? "Selected handoff evidence could not be verified"
                   : outcome === "error"
-                    ? "Agent model execution failed"
+                    ? (observation?.executionErrorMessage ??
+                      "Agent model execution failed")
                     : observation?.requestId === state.activeRequestId &&
                         observation.askOwnerCapacityError
                       ? `Agent produced no assistant text. Earlier in this execution, await_owner rejected its attachments: ${observation.askOwnerCapacityError}. The question was not sent.`
