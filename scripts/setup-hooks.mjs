@@ -5,9 +5,8 @@ import { isAbsolute, join, resolve } from "node:path";
 const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
 const root = realpathSync(process.cwd());
 if (
-  root !== realpathSync(git("rev-parse", "--show-toplevel")) ||
-  realpathSync(git("rev-parse", "--git-dir")) !==
-    realpathSync(git("rev-parse", "--git-common-dir"))
+  git("rev-parse", "--show-prefix") ||
+  existsSync(join(git("rev-parse", "--git-dir"), "commondir"))
 ) {
   throw new Error("Run setup from the primary repository checkout.");
 }
