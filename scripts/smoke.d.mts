@@ -196,6 +196,18 @@ export function captureManagerLeadDiagnostics(
   ) => Promise<unknown>,
 ): Promise<void>;
 export function formatSmokeFailure(error: unknown, stage?: string): string;
+export function classifyOldExecution(
+  snapshot: unknown,
+  target: { paneId: string; sessionId: string; sessionPath: string },
+  inspect: (paneId: string) => string | Promise<string>,
+): Promise<"quiescent" | "active" | "unknown">;
+export function latestPostRestartListAgentsResult(
+  entries: OpenRecord[],
+): OpenRecord | undefined;
+export function matchesProjectMessageContent(
+  actual: unknown,
+  expected: string,
+): boolean;
 export function managerBootstrapDelegationProjection(progress?: OpenRecord): {
   delegateCalls: number;
   expectedBranchDelegateCalls: number;
@@ -952,6 +964,10 @@ export function sanitizedFailureEvidence(
   diagnostics?: OpenRecord;
   managerBootstrapFailureDiagnostics?: OpenRecord | null;
   coreDelegation?: OpenRecord | null;
+  crashRecovery?: {
+    recoveryPath: string;
+    continueAgentRejectionCategory: string;
+  };
   rootProvenance?: OpenRecord | null;
 };
 export function preserveFailureEvidence(

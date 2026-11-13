@@ -22,6 +22,7 @@ import type {
   NormalizedBuildSystemPromptOptions,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
+import type { JsonValue } from "@earendil-works/pi-ai";
 import type { RequestRecord, ManagedAgentState } from "./mailbox.ts";
 
 import { claimProcessLock } from "./lock.ts";
@@ -14152,14 +14153,17 @@ async function exerciseManagedParentResume(depth: number) {
     ) =>
       parentContext.sessionManager.getEntries().push({
         type: "message",
+        id: randomUUID(),
+        parentId: null,
+        timestamp: new Date().toISOString(),
         message: {
           role: "toolResult",
           toolCallId: `${toolName}-call`,
           toolName,
           content: [{ type: "text", text: JSON.stringify(result.details) }],
-          details: result.details,
+          details: result.details as JsonValue,
           timestamp: Date.now(),
-          ...(result.isError ? { isError: true } : {}),
+          isError: result.isError ?? false,
         },
       });
     assert.ok(delegate);
@@ -15322,8 +15326,7 @@ async function continueAfterTerminalResult(
     );
     assert.equal(
       result.details.ok,
-      (physical === "pane_not_found" || physical === "settled_shell") &&
-        physical !== "active_saved",
+      physical === "pane_not_found" || physical === "settled_shell",
       JSON.stringify(result.details),
     );
     if (physical === "pane_not_found" || physical === "settled_shell")
@@ -15333,8 +15336,7 @@ async function continueAfterTerminalResult(
     else assert.equal(result.details.ok, false);
     assert.equal(
       pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
-      (physical === "pane_not_found" || physical === "settled_shell") &&
-        physical !== "active_saved",
+      physical === "pane_not_found" || physical === "settled_shell",
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();

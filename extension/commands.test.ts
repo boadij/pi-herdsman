@@ -8124,8 +8124,8 @@ test("Manager merge requires a matching completed handoff before stopping or mut
     { unresolvedOwnedAgent: true },
     { pendingOwnedResult: true },
     { newerLeadExecution: true },
-    { newerOutcome: "execution_failure" },
-    { newerOutcome: "execution_cancelled" },
+    { newerOutcome: "execution_failure" as const },
+    { newerOutcome: "execution_cancelled" as const },
     { transitionLeadToWorking: true },
     {
       transitionLeadBeforeStop: true,
@@ -18080,11 +18080,14 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   await t.test(
     "Manager timeout teardown clears periodic intervals",
     async (timeoutTest) => {
-      globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
+      globalThis.setInterval = ((
+        callback: (...args: never[]) => void,
+        delay?: number,
+      ) => {
         const interval = originalSetInterval(callback, delay);
         activeIntervals.add(interval);
         return interval;
-      }) as typeof setInterval;
+      }) as unknown as typeof setInterval;
       globalThis.clearInterval = ((interval: NodeJS.Timeout | undefined) => {
         if (interval) activeIntervals.delete(interval);
         originalClearInterval(interval);
@@ -20858,7 +20861,14 @@ test("Definitions Details snapshots effective append and replace instructions", 
         .reverse()
         .find(
           (entry: any) => entry?.customType === "pi-herdsman-agent-definitions",
-        ),
+        ) as
+        | {
+            data: {
+              definitions: { name: string }[];
+              inspector: { tree: string };
+            };
+          }
+        | undefined,
       customCalls,
       renderer: pi.entryRenderers.find(
         ({ customType }: any) => customType === "pi-herdsman-agent-definitions",
@@ -23444,7 +23454,7 @@ test("managed Lead sampler requires a verified assignment, caches its sample, an
   globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
     if (delay === 10_000) statusTicks.push(callback);
     return originalSetInterval(() => undefined, 60_000);
-  }) as typeof setInterval;
+  }) as unknown as typeof setInterval;
   t.after(() => {
     globalThis.setInterval = originalSetInterval;
   });

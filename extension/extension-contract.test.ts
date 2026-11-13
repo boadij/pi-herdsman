@@ -13,6 +13,7 @@ import {
   type BeforeAgentStartEventResult,
   type BeforeAgentStartEvent,
   type ExtensionContext,
+  type ToolCallEventResult,
   type NormalizedBuildSystemPromptOptions,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
@@ -5146,7 +5147,10 @@ test("managed Lead prompt keeps the managed charter with an assigned session", a
     await pi.events.get("session_start")![0](undefined, context);
     assert.ok(pi.pi.getActiveTools().includes("codemode"));
     assert.ok(!pi.pi.getActiveTools().includes("bash"));
-    const toolCall = pi.events.get("tool_call")![0];
+    const toolCall = pi.events.get("tool_call")![0] as (
+      event: { toolName: string; parentToolCallId?: string },
+      context: ExtensionContext,
+    ) => ToolCallEventResult | undefined;
     assert.equal(toolCall({ toolName: "codemode" }, context), undefined);
     assert.ok(toolCall({ toolName: "bash" }, context)?.block);
     assert.ok(

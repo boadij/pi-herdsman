@@ -5662,8 +5662,9 @@ test("health attention defers candidates beyond the recipient fan-in cap", async
         nextAction: "Inspect the stored result error before recovery.",
       },
     };
-    state.runId = randomUUID();
-    state.resultError.runId = state.runId;
+    const runId = randomUUID();
+    state.runId = runId;
+    state.resultError.runId = runId;
     writeAgentState(agentMailboxPath(WORKSPACE, label), state);
     return state;
   });
