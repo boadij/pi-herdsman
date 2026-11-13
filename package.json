@@ -62,6 +62,8 @@
     }
   },
   "scripts": {
+    "setup": "npm run setup:hooks && npm ci",
+    "setup:hooks": "node scripts/setup-hooks.mjs",
     "test": "node --experimental-test-module-mocks --import=./scripts/test-env.mjs --test --test-timeout=10000",
     "smoke": "node scripts/smoke.mjs",
     "format": "prettier . --write",

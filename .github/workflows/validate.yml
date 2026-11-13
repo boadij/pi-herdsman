@@ -311,8 +311,8 @@ jobs:
       matrix:
         include:
           - phase: Manager
-            smoke_phase: ""
-            diagnostics: "0"
+            smoke_phase: manager-core
+            diagnostics: "1"
             summary: "1"
           - phase: Ordinary Lead
             smoke_phase: delivery

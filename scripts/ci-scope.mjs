@@ -132,6 +132,7 @@ function classify(paths) {
     if (path === "scripts/smoke.mjs" || path === "scripts/smoke-faux.mjs") {
       tests = true;
       runtimeSmoke = true;
+      if (path === "scripts/smoke-faux.mjs") peer = true;
       continue;
     }
 
@@ -406,6 +407,7 @@ if (process.argv[2] === "--self-test") {
     format: true,
     tests: true,
     smoke: true,
+    peer: true,
   });
 
   process.exit(0);

@@ -4699,6 +4699,12 @@ export function registerLeadRuntime(
       sessionKind?.sessionId === ctx.sessionManager.getSessionId()
         ? sessionKind.kind
         : undefined,
+    executionPrompt: () =>
+      leadExecution && !leadExecution.managed && leadExecution.valid
+        ? leadExecution.definition.body
+        : undefined,
+    leadExecutionDefinition: () =>
+      leadExecution?.valid ? leadExecution.definition : undefined,
     leadExecutionPresentation: () =>
       sessionKind?.kind === "managed"
         ? {
