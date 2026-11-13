@@ -60,7 +60,7 @@ Start `herdr` in your project directory, then run `pi` in its pane. Try:
 
 ```text
 Use scout to identify this repository's main entry points.
-Explain how the application starts. Don't change any files.
+Explain how the application starts.
 ```
 
 The Agent works asynchronously and returns its result to your Pi conversation.
@@ -76,7 +76,7 @@ for prerequisites, model login, and troubleshooting, or
 - **Explicit authority.** Chief, Manager, Lead, and Agent responsibilities have distinct supervision and ownership boundaries.
 - **Peer communication.** Eligible sessions can exchange messages locally and, where supported, across connected machines.
 - **Usage visibility.** Inspect Pi-native token and cost records for owned Agents and, for an active Manager, assigned Leads.
-- **Your tools, your workflow.** Bring your own Agent definitions, models, tools, skills, extensions, and development process.
+- **Your tools, your workflow.** Bring your own Agent definitions, Coordinator profiles, models, tools, skills, extensions, and development process.
 
 ## From one Agent to a project
 
@@ -110,22 +110,21 @@ recovery, and integration.
 
 ## Project status & roadmap
 
-Pi Herdsman is actively evolving. Core capabilities are available today:
+Pi Herdsman is pre-1.0. These capabilities are available today:
 
-- **Lead & Agent orchestration - core complete.** Background and nested delegation, result handoffs, and local peer communication; reliability work continues.
-- **Manager orchestration - polishing.** Branch-based delegation, supervision, and integration work; recovery and usability are being refined.
-- **Chief coordination - in progress.** Supervision works; repository provisioning and Manager lifecycle orchestration are being developed.
-- **Federated peer communication - in progress.** Cross-machine Manager/ordinary Lead messaging and durable replies work; reverse initiation is planned.
+- **Lead & Agent orchestration.** Background and nested delegation, result handoffs, and local peer communication.
+- **Manager orchestration.** Branch-based work assignments, supervision, pause/resume, and authorized local integration.
+- **Chief supervision.** Supervises current Managers and eligible ordinary Leads within one herdr runtime.
+- **Federated peer messaging.** Eligible Managers and ordinary Leads can communicate across connected machines, with durable replies.
 
-**Federation limitation:** Independent cross-machine discovery and initiation
-require an SSH route from the initiating machine; replies work without reverse
-SSH. See
-[#790](https://github.com/boadij/pi-herdsman/issues/790) and
-[#688](https://github.com/boadij/pi-herdsman/issues/688).
+**Current federation limitations:** Independent discovery and initiation require
+an SSH route from the initiating machine; an existing correspondence allows
+replies without reverse SSH. Different Herdsman builds cannot yet exchange
+ordinary messages. See [Peer communication](docs/reference/peer.md).
 
-**On the roadmap:** [Coordination profiles](https://github.com/boadij/pi-herdsman/issues/734),
-[cross-build messaging](https://github.com/boadij/pi-herdsman/issues/688), and
-[portable project state](https://github.com/boadij/pi-herdsman/issues/755).
+**Open proposals:** [bidirectional initiation over one-way connections (#790)](https://github.com/boadij/pi-herdsman/issues/790),
+[cross-build messaging (#688)](https://github.com/boadij/pi-herdsman/issues/688),
+and [portable repository runtime (#755)](https://github.com/boadij/pi-herdsman/issues/755).
 
 **Early-stage project:** Pre-1.0 releases may introduce breaking changes.
 See the [changelog](CHANGELOG.md) for release and migration guidance.
