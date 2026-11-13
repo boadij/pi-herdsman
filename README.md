@@ -9,44 +9,31 @@
 
 **The orchestration layer between [Pi](https://github.com/earendil-works/pi) and [herdr](https://github.com/herdrdev/herdr).**
 
-Pi Herdsman lets your AI coding assistant delegate tasks to background Agents
-while your main conversation stays interactive. Start with one Agent, or
-coordinate parallel, branch-based project work across independent Leads.
-
-Pi runs the coding-agent conversations; herdr manages their terminal sessions
-and workspaces; Herdsman coordinates delegation, ownership, and supervision.
+Pi Herdsman lets your AI coding assistant delegate work to background Agents
+while your conversation stays interactive, or coordinate larger projects across
+independent, branch-based Leads. Pi handles model conversations, herdr manages
+terminal sessions and workspaces, and Herdsman coordinates delegation,
+ownership, and supervision.
 
 ## Emergent agentic workflows
 
 **Define the boundaries, not the workflow.**
 
-A fixed agent pipeline defines the handoff sequence in advance. Pi Herdsman
-instead lets coordinating models decide how to break down an objective, which
-eligible Agents or Leads to delegate to, and when to run independent work in
-parallel or adapt as results arrive. The execution path emerges at runtime
-rather than following a mandatory Agent A → Agent B → Agent C sequence.
+Fixed agent pipelines prescribe the next handoff. Pi Herdsman instead lets models
+decide how to split work, delegate to permitted Agents or Leads, and sequence or
+parallelize tasks as results arrive. The execution path emerges at runtime,
+while Herdsman enforces delegation permissions, ownership, project assignments,
+and supervision.
 
-**Dynamic execution, explicit boundaries.** Herdsman still enforces
-delegation permissions, ownership, project assignments, and supervision.
-Bring your own workflow if you have one; a predefined sequence is not required.
-See [Coordination](docs/concepts/coordination.md#emergent-workflows-explicit-boundaries)
-for the model behind this approach.
+You can still bring your own workflow and Agent definitions. See
+[Coordination](docs/concepts/coordination.md#emergent-workflows-explicit-boundaries)
+for the underlying model.
 
 ## Demo
 
 _Advanced orchestration: a live Manager → Lead → Agent workflow._
 
 [![Live demo](https://github.com/user-attachments/assets/e1355ace-aaba-418e-a1d0-1246f1840fc6)](https://github.com/user-attachments/assets/d6ee6687-a96d-493e-ae75-429f586be393)
-
-## What Pi Herdsman gives you
-
-- **Background Agents.** Delegate bounded work without blocking the Lead conversation.
-- **Parallel and nested delegation.** Run independent work concurrently and let explicitly enabled Agents delegate their own bounded subtasks.
-- **Project orchestration.** A Manager coordinates durable branch-based work across independent Leads and their Agent trees.
-- **Direct supervision.** Chief, Manager, Lead, and Agent responsibilities stay explicit instead of collapsing into one global controller.
-- **Peer communication.** Leads can message eligible peers locally; unassigned ordinary Leads and Managers can also collaborate across connected machines.
-- **Owned usage visibility.** Inspect Pi-native token usage and cost for the current session and its transitively owned managed Agents. An active Manager also sees the Leads in its current durable project assignments and their owned Agent trees.
-- **Your workflow stays yours.** Bring your own Agent definitions, models, tools, skills, extensions, and development process.
 
 ## Quick start
 
@@ -62,57 +49,39 @@ curl -fsSL https://raw.githubusercontent.com/boadij/pi-herdsman/main/install.sh 
 irm https://raw.githubusercontent.com/boadij/pi-herdsman/main/install.ps1 | iex
 ```
 
-**Already using Pi and Herdr?**
+**Already using Pi and herdr?**
 
 ```sh
 pi install npm:pi-herdsman
 herdr integration install pi
 ```
 
-**Docker Compose (prebuilt SSH environment):** Requires Docker Compose and an
-SSH public key.
-
-```sh
-mkdir -p pi-herdsman && cd pi-herdsman
-curl -fsSLO https://raw.githubusercontent.com/boadij/pi-herdsman/main/compose.yaml
-SSH_AUTHORIZED_KEYS="$(cat ~/.ssh/id_ed25519.pub)" docker compose up -d
-ssh -p 2222 herdsman@localhost
-```
-
-The included [Compose file](compose.yaml) uses a prebuilt image and persistent
-Docker volumes. Herdr opens on SSH login; select a workspace and run `pi`.
-Replace `localhost` with the Docker host address for remote access. SSH port
-2222 is published on host interfaces by default; see
-[Container deployment](docs/guides/container-deployment.md) for networking,
-storage, and update options.
-
-For a native installation, start herdr in your project directory, then Pi in its pane:
-
-```sh
-herdr
-pi
-```
-
-If Pi needs model authentication, use `/login`. Then try a read-only first task:
+Start `herdr` in your project directory, then run `pi` in its pane. Try:
 
 ```text
 Use scout to identify this repository's main entry points.
-Explain how the application starts. Don't change any files.
+Explain how the application starts.
 ```
 
-The Agent works independently and sends its result back to the conversation
-that delegated the task. Discover Agent management and other capabilities with:
+The Agent works asynchronously and returns its result to your Pi conversation.
+Use `/herdsman` to discover controls. See [Getting started](docs/getting-started.md)
+for prerequisites, model login, and troubleshooting, or
+[Container deployment](docs/guides/container-deployment.md) for Docker Compose.
 
-```text
-/herdsman
-```
+## What Pi Herdsman gives you
 
-See [Getting started](docs/getting-started.md) for prerequisites and
-troubleshooting.
+- **Background Agents.** Delegate bounded work without blocking your conversation.
+- **Parallel and nested delegation.** Run independent work concurrently; permitted Agents can delegate their own subtasks.
+- **Project orchestration.** A Manager coordinates durable, branch-based work across independent Leads.
+- **Explicit authority.** Chief, Manager, Lead, and Agent responsibilities have distinct supervision and ownership boundaries.
+- **Peer communication.** Eligible sessions can exchange messages locally and, where supported, across connected machines.
+- **Usage visibility.** Inspect Pi-native token and cost records for owned Agents and, for an active Manager, assigned Leads.
+- **Your tools, your workflow.** Bring your own Agent definitions, Coordinator profiles, models, tools, skills, extensions, and development process.
 
 ## From one Agent to a project
 
-A normal Pi session is a **Lead**. It owns the Agents it delegates:
+A normal Pi session is a **Lead**. It can own Agents, including permitted
+nested Agents:
 
 ```text
 You ↔ Lead
@@ -122,7 +91,8 @@ You ↔ Lead
 ```
 
 For independent project work, an eligible Lead can enter **Manager** mode.
-Managers coordinate Leads instead of implementing through Agents themselves:
+The Manager assigns branch-based objectives to Leads, which direct their own
+Agent trees:
 
 ```text
 You ↔ Manager
@@ -130,70 +100,44 @@ You ↔ Manager
       └─ Lead → Agents
 ```
 
-A **Chief** is an optional runtime-wide supervisor above Managers. Without an
-active Manager for a project, Chief can directly supervise its ordinary Leads.
+An optional **Chief** supervises Managers and eligible ordinary Leads without
+an active project Manager. These roles define authority, not a mandatory task
+sequence. Project assignments remain durable across Manager turnover.
 
-The important boundaries are:
-
-```text
-supervision: Chief → Manager → Lead
-ownership: Lead → Agent → Agent
-```
-
-Project work is durable by Git branch. It does not belong to the Manager session
-that happened to start it, so assignments can be paused, resumed, or retired
-across Manager turnover.
-
-Manager-created project Leads are dedicated Managed Lead sessions: identity stays
-with the exact Pi session, while only a current project assignment authorizes
-execution. Unavailable or retired assignments never enable ordinary Lead tools.
-Use native Pi `/fork` or `/clone` for independent ordinary continuation with copied
-history, not a separate checkout or fresh process configuration. See
-[Project orchestration](docs/guides/project-orchestration.md#dedicated-sessions-and-independent-continuation).
-
-See [Coordination](docs/concepts/coordination.md) for the mental model and
-[Project orchestration](docs/guides/project-orchestration.md) for the Manager
-workflow.
+See [Coordination](docs/concepts/coordination.md) for role boundaries and
+[Project orchestration](docs/guides/project-orchestration.md) for assignments,
+recovery, and integration.
 
 ## Project status & roadmap
 
-Pi Herdsman is actively evolving. Core orchestration workflows are available today,
-while other areas are being refined or expanded.
+Pi Herdsman is pre-1.0. These capabilities are available today:
 
-| Area                             | Status               | What to expect                                                                                              |
-| -------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------- |
-| **Lead & Agent orchestration**   | ✅ **Core complete** | Background and nested delegation, result handoffs, and local peer communication. Ongoing reliability fixes. |
-| **Manager orchestration**        | ✨ **Polishing**     | Branch-based delegation, supervision, and integration are implemented. Refining recovery and usability.     |
-| **Chief coordination**           | 🚧 **In progress**   | Supervision is available. Repository provisioning and Manager lifecycle orchestration are being developed.  |
-| **Federated peer communication** | 🚧 **In progress**   | Cross-machine Manager/ordinary Lead messaging and durable replies work. Reverse initiation is planned.      |
+- **Lead & Agent orchestration.** Background and nested delegation, result handoffs, and local peer communication.
+- **Manager orchestration.** Branch-based work assignments, supervision, pause/resume, and authorized local integration.
+- **Chief supervision.** Supervises current Managers and eligible ordinary Leads within one herdr runtime.
+- **Federated peer messaging.** Eligible Managers and ordinary Leads can communicate across connected machines, with durable replies.
 
-**Federation limitations:** Independent discovery and initiation currently require
-an SSH route from the initiating machine. Replies work over an existing
-correspondence without reverse SSH. See [#790](https://github.com/boadij/pi-herdsman/issues/790)
-for bidirectional initiation and [#688](https://github.com/boadij/pi-herdsman/issues/688)
-for cross-build messaging interoperability.
+**Current federation limitations:** Independent discovery and initiation require
+an SSH route from the initiating machine; an existing correspondence allows
+replies without reverse SSH. Different Herdsman builds cannot yet exchange
+ordinary messages. See [Peer communication](docs/reference/peer.md).
 
-**On the roadmap:** [Coordination profiles](https://github.com/boadij/pi-herdsman/issues/734)
-(replacing the current role-definition terminology),
-[cross-build messaging](https://github.com/boadij/pi-herdsman/issues/688), and
-[portable project state](https://github.com/boadij/pi-herdsman/issues/755).
+**Open proposals:** [bidirectional initiation over one-way connections (#790)](https://github.com/boadij/pi-herdsman/issues/790),
+[cross-build messaging (#688)](https://github.com/boadij/pi-herdsman/issues/688),
+and [portable repository runtime (#755)](https://github.com/boadij/pi-herdsman/issues/755).
 
-**Early-stage project:** Core features are usable today, but pre-1.0 releases may
-introduce breaking changes as configuration and runtime conventions evolve.
-See the [changelog](CHANGELOG.md) for release changes and migration guidance.
+**Early-stage project:** Pre-1.0 releases may introduce breaking changes.
+See the [changelog](CHANGELOG.md) for release and migration guidance.
 
 ## Choose your next step
 
-| Goal                                       | Start here                                                    |
-| ------------------------------------------ | ------------------------------------------------------------- |
-| Install and delegate your first task       | [Getting started](docs/getting-started.md)                    |
-| Run independent branch-based project work  | [Project orchestration](docs/guides/project-orchestration.md) |
-| Communicate with other Pi sessions         | [Peer communication](docs/reference/peer.md)                  |
-| Understand roles, ownership, and authority | [Coordination](docs/concepts/coordination.md)                 |
-| Customize Agents                           | [Agent definitions](docs/guides/agent-definitions.md)         |
-| Build against the model-facing tools       | [Coordination API](docs/coordination-api.md)                  |
-| Deploy an SSH-ready environment            | [Container deployment](docs/guides/container-deployment.md)   |
-| Contribute to Pi Herdsman                  | [Contributing](CONTRIBUTING.md)                               |
+Browse the [documentation index](docs/README.md), or jump to:
+
+- **Start:** [Getting started](docs/getting-started.md)
+- **Orchestrate:** [Project orchestration](docs/guides/project-orchestration.md) and [Coordination](docs/concepts/coordination.md)
+- **Customize:** [Agent definitions](docs/guides/agent-definitions.md)
+- **Integrate:** [Coordination API](docs/coordination-api.md) and [Peer communication](docs/reference/peer.md)
+- **Contribute:** [Contributing](CONTRIBUTING.md)
 
 ## Community
 
