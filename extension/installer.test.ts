@@ -469,6 +469,7 @@ function fixture({
   piInstallFails = false,
   piUpdateFails = false,
   piWebAccessInstallFails = false,
+  piWebAccessHangs = false,
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-install-"));
   const bin = join(root, "bin");
@@ -549,6 +550,7 @@ case "\${1:-}" in
     [ "$FAKE_PI_INSTALL_FAILS" != true ] || exit 1
     if [ "$2" = npm:pi-web-access ]; then
       [ "$FAKE_PI_WEB_ACCESS_INSTALL_FAILS" != true ] || exit 1
+      [ "$FAKE_PI_WEB_ACCESS_HANGS" != true ] || exec sleep 30
       printf '  %s\\n' "$2" >> "$FAKE_PI_LIST"
     else
       printf '  %s\\n' "$2" > "$FAKE_PI_LIST"
@@ -628,6 +630,7 @@ process.stdin.on("end", () => {
       FAKE_PI_INSTALL_FAILS: String(piInstallFails),
       FAKE_PI_UPDATE_FAILS: String(piUpdateFails),
       FAKE_PI_WEB_ACCESS_INSTALL_FAILS: String(piWebAccessInstallFails),
+      FAKE_PI_WEB_ACCESS_HANGS: String(piWebAccessHangs),
       FAKE_HERDR_ASSET: herdrAsset,
       FAKE_PI_INSTALLER_TARGET: piInstallerVersion,
       FAKE_HERDR_TARGET: packageJson.piHerdsman.runtime.herdr.version,
@@ -676,7 +679,7 @@ const python3 = spawnSync("which", ["python3"], { encoding: "utf8" });
 const hasPython3 = python3.status === 0 && python3.stdout.trim().length > 0;
 
 test(
-  "native installer prompts through its controlling terminal and reprompts invalid input",
+  "native installer PTY prompts, reprompts invalid input, and cleans up timed-out children",
   {
     skip:
       (process.platform !== "linux" && process.platform !== "darwin") ||
@@ -706,7 +709,7 @@ captured = bytearray()
 pid = master = None
 reaped = False
 status = 1
-deadline = time.monotonic() + 25
+deadline = time.monotonic() + float(os.environ.get("PTY_RUNNER_DEADLINE_SECONDS", "25"))
 
 def process_group_exists():
     try:
@@ -814,6 +817,8 @@ except BaseException as error:
         sys.stderr.write("Process group remained after bounded SIGTERM/SIGKILL cleanup.\\n")
     if not leader_reaped:
         sys.stderr.write("PTY child leader remained unreaped after bounded cleanup.\\n")
+    if clean and leader_reaped:
+        sys.stderr.write("PTY_CLEANUP group_gone=true leader_reaped=true\\n")
     sys.exit(124)
 else:
     clean, leader_reaped = clean_process_group()
@@ -857,6 +862,51 @@ sys.exit(os.waitstatus_to_exitcode(status))`;
           result.stdout,
           new RegExp(`Optional pi-web-access: ${status}\\.`),
         );
+        if (input.startsWith("perhaps")) {
+          const hangingSetup = fixture({ piWebAccessHangs: true });
+          try {
+            const hangingEnv: NodeJS.ProcessEnv = {
+              ...hangingSetup.env,
+              PTY_RUNNER_DEADLINE_SECONDS: "2.5",
+            };
+            delete hangingEnv.PI_HERDSMAN_WEB_ACCESS;
+            const hanging = spawnSync("python3", ["-c", ptyRunner, installer], {
+              env: hangingEnv,
+              input: "y\n",
+              encoding: "utf8",
+              timeout: 10_000,
+            });
+            const hangingTimedOut =
+              hanging.error !== undefined &&
+              "code" in hanging.error &&
+              hanging.error.code === "ETIMEDOUT";
+            assert.equal(
+              hangingTimedOut,
+              false,
+              "Python runner deadline must fire before Node's outer timeout",
+            );
+            assert.equal(hanging.status, 124, hanging.stderr);
+            assert.match(hanging.stdout, /Install pi-web-access\? \[y\/N\]/u);
+            assert.match(
+              readFileSync(hangingSetup.log, "utf8"),
+              /^pi install npm:pi-web-access --no-approve$/mu,
+            );
+            assert.match(
+              hanging.stderr,
+              /TimeoutError: PTY runner deadline expired/u,
+            );
+            assert.match(
+              hanging.stderr,
+              /PTY_CLEANUP group_gone=true leader_reaped=true/u,
+            );
+            assert.doesNotMatch(
+              hanging.stderr,
+              /Process group remained|PTY child leader remained unreaped/u,
+            );
+          } finally {
+            rmSync(hangingSetup.root, { recursive: true, force: true });
+          }
+        }
       } finally {
         rmSync(setup.root, { recursive: true, force: true });
       }
