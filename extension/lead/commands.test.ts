@@ -580,6 +580,22 @@ test("ordinary Agent Details order native and appended context by launch mode", 
       emptyFirstFragment: true,
       allFragmentsEmpty: true,
     },
+    {
+      name: "multiple definition layer changes",
+      frontmatter: { inheritGlobalContext: true, inheritProjectContext: true },
+      expected: ["definition body"],
+      layers: [
+        {
+          scope: "global",
+          path: "/reviewer.md",
+          supplied: { description: "Updated", model: "new-model" },
+          before: { description: "Original", model: "old-model" },
+          after: { description: "Updated", model: "new-model" },
+          body: "definition body",
+          bodyAction: "inherit",
+        },
+      ],
+    },
   ]) {
     const choices = ["agents", "reviewer", "details", undefined, undefined];
     let displayed: string[] | undefined;
@@ -599,18 +615,20 @@ test("ordinary Agent Details order native and appended context by launch mode", 
       contextAgentDefinitions: async () => ({ definitions: [definition] }),
       inspectAgentDefinition: () => ({
         definition,
-        layers: scenario.emptyFirstFragment
-          ? [
-              {
-                scope: "global",
-                path: "/reviewer.md",
-                supplied: {},
-                after: {},
-                body: "",
-                bodyAction: "append",
-              },
-            ]
-          : [],
+        layers:
+          scenario.layers ??
+          (scenario.emptyFirstFragment
+            ? [
+                {
+                  scope: "global",
+                  path: "/reviewer.md",
+                  supplied: {},
+                  after: {},
+                  body: "",
+                  bodyAction: "append",
+                },
+              ]
+            : []),
         bodyFragments: scenario.emptyFirstFragment
           ? [
               { path: "/empty.md", scope: "global", body: "@empty.md" },
@@ -685,6 +703,15 @@ test("ordinary Agent Details order native and appended context by launch mode", 
         inspectedSections!.some((section) => section.content === ""),
         false,
       );
+    } else if (scenario.layers) {
+      const definitionSection = inspectedSections!.find(
+        (section) => section.title === "Herdsman definition",
+      );
+      assert.deepEqual(definitionSection?.changes, [
+        "global · reviewer.md",
+        "  ~ description: Original → Updated",
+        "  ~ model: old-model → new-model",
+      ]);
     } else if (scenario.emptyFirstFragment) {
       const firstVisible = inspectedSections!.find(
         (section) => section.content === "definition body",

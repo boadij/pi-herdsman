@@ -6152,6 +6152,22 @@ Use **strict review** for \`controller.ts\`.
     );
     assert.match(expandedSections, /Responsibilities[\s\S]*Coordinate work/u);
     assert.doesNotMatch(expandedSections, /Ctrl\+O to expand/u);
+    const renderedSectionLines = expandedSectionsBox.render(80);
+    const definitionHeading = renderedSectionLines.findIndex((line) =>
+      line.includes("1. Definition"),
+    );
+    const contextHeading = renderedSectionLines.findIndex((line) =>
+      line.includes("2. Pi context"),
+    );
+    assert.ok(definitionHeading >= 0 && contextHeading > definitionHeading);
+    const separatorsBetweenSources = renderedSectionLines
+      .slice(definitionHeading + 1, contextHeading)
+      .filter((line) => /^─+$/u.test(line.trim()));
+    assert.equal(
+      separatorsBetweenSources.length,
+      2,
+      "expected a header/body divider and a distinct divider before the next source",
+    );
     for (const line of expandedSectionsBox.render(24))
       assert.ok(visibleWidth(line) <= 24);
   }
