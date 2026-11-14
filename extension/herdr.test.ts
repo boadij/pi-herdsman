@@ -311,6 +311,15 @@ test("retained pane proof requires coherent original terminal and complete settl
     inventoryCount: 2,
   });
   assert.equal(
+    (
+      await prove(pane, shell, [
+        { pane_id: "unrelated-pane", workspace_id: "unrelated-workspace" },
+      ])
+    ).result,
+    true,
+    "an unrelated Agent without optional name metadata does not block proof",
+  );
+  assert.equal(
     (await prove({ ...pane, terminal_id: "replacement" }, shell)).result,
     false,
   );
@@ -364,6 +373,96 @@ test("retained pane proof requires coherent original terminal and complete settl
     false,
     "matching session evidence on another pane is rejected without an agent registration",
   );
+});
+
+test("retained pane proof ignores unrelated inventory changes between observations", async () => {
+  const target = {
+    workspaceId: "workspace-1",
+    paneId: "pane-1",
+    terminalId: "terminal-1",
+    launchShellPid: 10,
+    cwd: "/tmp",
+    alias: "agent-run",
+    session: { id: "session-1" },
+  };
+  const pane = {
+    pane_id: "pane-1",
+    workspace_id: "workspace-1",
+    terminal_id: "terminal-1",
+    cwd: "/tmp",
+    focused: true,
+    revision: 1,
+  };
+  const shell = {
+    pane_id: "pane-1",
+    shell_pid: 10,
+    foreground_process_group_id: 10,
+    foreground_processes: [{ pid: 10, argv0: "/bin/zsh" }],
+  };
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  let observation = 0;
+  const pi = {
+    exec: async (_command: string, args: string[]) => {
+      if (args[0] === "api" && args[1] === "snapshot") {
+        observation++;
+        return response({
+          snapshot: {
+            panes: [
+              {
+                ...pane,
+                ...(observation === 2 ? { focused: false, revision: 2 } : {}),
+              },
+              ...(observation === 2
+                ? [
+                    {
+                      pane_id: "unrelated-pane",
+                      workspace_id: "unrelated-workspace",
+                      terminal_id: "unrelated-terminal",
+                      cwd: "/other",
+                      focused: true,
+                      revision: 5,
+                    },
+                  ]
+                : []),
+            ],
+            agents:
+              observation === 2
+                ? [
+                    {
+                      pane_id: "unrelated-pane",
+                      workspace_id: "unrelated-workspace",
+                      status: "idle",
+                      revision: 7,
+                    },
+                  ]
+                : [],
+            workspaces: [
+              { workspace_id: "workspace-1", revision: observation },
+              ...(observation === 2
+                ? [{ workspace_id: "unrelated-workspace", revision: 3 }]
+                : []),
+            ],
+            focused_pane_id: observation === 1 ? "pane-1" : "unrelated-pane",
+            revision: observation,
+          },
+        });
+      }
+      if (args[0] === "pane" && args[1] === "process-info")
+        return response({ process_info: shell });
+      throw new Error("unexpected Herdr call: " + args.join(" "));
+    },
+  } as any;
+
+  assert.equal(
+    await verifyRetainedHerdrPane(pi, { cwd: "/tmp" } as any, target),
+    true,
+    "unrelated pane, Agent, workspace, focus, and revision changes are ignored",
+  );
+  assert.equal(observation, 2);
 });
 
 test("retained pane close revalidates and verifies exact pane disappearance", async () => {

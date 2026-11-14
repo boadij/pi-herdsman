@@ -6316,6 +6316,157 @@ test("retained pane remains unknown when its session is reported on another unre
   }
 });
 
+test("direct owner can stop a lost Agent with its exact retained pane", async () => {
+  setLeadEnvironment();
+  const label = "retained-pane-recovery";
+  const state = {
+    ...managedState(label, undefined, recoveryIdentity(label)),
+    terminalId: "original-retained-terminal",
+    launchShellPid: 123,
+  };
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  writeAgentState(mailbox, state);
+  let paneExists = true;
+  const paneCloses: string[][] = [];
+  const lifecycle = cascadeExecutor([]);
+  const pi = fakePi({
+    exec: (command, args, options) => {
+      if (command === "herdr" && isApiSnapshot(args))
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              snapshot: {
+                agents: [],
+                panes: paneExists
+                  ? [
+                      {
+                        pane_id: state.paneId,
+                        workspace_id: WORKSPACE,
+                        terminal_id: state.terminalId,
+                        cwd: state.cwd,
+                      },
+                    ]
+                  : [],
+                workspaces: [{ workspace_id: WORKSPACE }],
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (
+        command === "herdr" &&
+        args[0] === "pane" &&
+        args[1] === "process-info"
+      )
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              process_info: {
+                pane_id: state.paneId,
+                shell_pid: state.launchShellPid,
+                foreground_processes: [
+                  { pid: state.launchShellPid, argv0: "sh" },
+                ],
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (command === "herdr" && isPaneClose(args)) {
+        paneCloses.push(args);
+        assert.equal(args.at(-1), state.paneId);
+        paneExists = false;
+        return { stdout: "{}", stderr: "", code: 0 };
+      }
+      if (command === "herdr" && isAgentList(args))
+        return {
+          stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
+          stderr: "",
+          code: 0,
+        };
+      if (command === "herdr" && isPaneList(args))
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              panes: paneExists
+                ? [{ pane_id: state.paneId, workspace_id: WORKSPACE }]
+                : [],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return lifecycle.exec(command, args, options);
+    },
+  });
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, fakeContext());
+    for (let index = 0; index < 8; index++)
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const attention = pi.sent.find(
+      (message: any) => message.customType === "pi-herdsman-agent-lost",
+    ) as any;
+    assert.equal(attention?.details.agentLabel, label);
+    assert.ok(attention.details.availableActions.includes("stop"));
+    assert.match(String(attention.content), /stop_agent/);
+    assert.match(
+      String(attention.content),
+      /original pane is verified as settled/,
+    );
+
+    const listed = await agentTool(pi, "list").execute(
+      "id",
+      {},
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    const agent = listed.details.agents.find(
+      (candidate: any) => candidate.agent === label,
+    );
+    assert.equal(agent.state, "lost");
+    assert.ok(agent.available_tools.includes("stop_agent"));
+
+    const stopped = await agentTool(pi, "stop").execute(
+      "id",
+      { agent: label },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(stopped.details.ok, true, JSON.stringify(stopped.details));
+    assert.equal(paneCloses.length, 1);
+    assert.equal(paneCloses[0].at(-1), state.paneId);
+    assert.equal(paneExists, false, "the exact original pane must disappear");
+    assert.equal(readAgentState(mailbox), undefined);
+    const afterStop = await agentTool(pi, "list").execute(
+      "id",
+      {},
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(
+      afterStop.details.agents.some(
+        (candidate: any) => candidate.agent === label,
+      ),
+      false,
+      "the stopped generation must no longer block the owner",
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
 test("a lost parent retains its live child ancestry and closes child-first", async () => {
   setLeadEnvironment();
   const parent = {

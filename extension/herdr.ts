@@ -2724,8 +2724,13 @@ export type RetainedPaneTarget = Readonly<{
 }>;
 
 type RetainedPaneObservation = {
-  snapshot: HerdrSessionSnapshot;
-  pane: HerdrRecord;
+  pane: {
+    pane_id: string;
+    workspace_id: string;
+    terminal_id: string;
+    cwd: string;
+    agent_session: unknown;
+  };
   process: PaneProcess;
 };
 
@@ -2734,7 +2739,6 @@ function sameRetainedPaneObservation(
   right: RetainedPaneObservation,
 ): boolean {
   return (
-    JSON.stringify(left.snapshot) === JSON.stringify(right.snapshot) &&
     JSON.stringify(left.pane) === JSON.stringify(right.pane) &&
     JSON.stringify(left.process) === JSON.stringify(right.process)
   );
@@ -2760,24 +2764,11 @@ async function retainedPaneObservation(
 
   const snapshot = await herdrSessionSnapshot(pi, ctx, signal);
   if (
-    snapshot.panes.some(
-      (pane) => !pane || typeof pane.pane_id !== "string" || !pane.pane_id,
+    !snapshot.workspaces.some(
+      (item) => item?.workspace_id === target.workspaceId,
     ) ||
-    snapshot.agents.some(
-      (agent) => !agent || typeof agent.name !== "string" || !agent.name,
-    ) ||
-    snapshot.workspaces.some(
-      (item) =>
-        !item || typeof item.workspace_id !== "string" || !item.workspace_id,
-    ) ||
-    new Set(snapshot.panes.map((pane) => pane.pane_id)).size !==
-      snapshot.panes.length ||
-    new Set(snapshot.agents.map((agent) => agent.name)).size !==
-      snapshot.agents.length ||
-    new Set(snapshot.workspaces.map((item) => item.workspace_id)).size !==
-      snapshot.workspaces.length ||
     snapshot.workspaces.filter(
-      (item) => item.workspace_id === target.workspaceId,
+      (item) => item?.workspace_id === target.workspaceId,
     ).length !== 1
   )
     return undefined;
@@ -2831,7 +2822,16 @@ async function retainedPaneObservation(
   )
     return undefined;
 
-  return { snapshot, pane, process };
+  return {
+    pane: {
+      pane_id: pane.pane_id,
+      workspace_id: pane.workspace_id,
+      terminal_id: pane.terminal_id,
+      cwd: pane.cwd,
+      agent_session: pane.agent_session ?? null,
+    },
+    process,
+  };
 }
 
 async function proveRetainedHerdrPane(
