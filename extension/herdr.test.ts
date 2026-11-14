@@ -37,6 +37,8 @@ import {
   sameDirectory,
   stopHerdrAgentPreservingPane,
   closeHerdrPane,
+  closeRetainedHerdrPane,
+  verifyRetainedHerdrPane,
   rollbackHerdrStart,
   startHerdrAgent,
   startHerdrAgentInPane,
@@ -239,6 +241,436 @@ test("session snapshot accepts only coherent pane, agent, and workspace inventor
       /session inventory is unavailable/,
     );
   }
+});
+
+test("retained pane proof requires coherent original terminal and complete settled shell", async () => {
+  const target = {
+    workspaceId: "workspace-1",
+    paneId: "pane-1",
+    terminalId: "terminal-1",
+    launchShellPid: 10,
+    cwd: "/tmp",
+    alias: "agent-run",
+    session: { id: "session-1" },
+  };
+  const session = {
+    source: "herdr:pi",
+    agent: "pi",
+    kind: "id",
+    value: "session-1",
+  };
+  const pane = {
+    pane_id: "pane-1",
+    workspace_id: "workspace-1",
+    terminal_id: "terminal-1",
+    cwd: "/tmp",
+  };
+  const shell = {
+    pane_id: "pane-1",
+    shell_pid: 10,
+    foreground_process_group_id: 10,
+    foreground_processes: [{ pid: 10, argv0: "/bin/zsh" }],
+  };
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  const prove = async (
+    paneValue: Record<string, unknown>,
+    process: unknown,
+    agents: unknown[] = [],
+    otherPanes: unknown[] = [],
+  ) => {
+    let inventoryCount = 0;
+    const pi = {
+      exec: async (_command: string, args: string[]) => {
+        if (args[0] === "api" && args[1] === "snapshot") {
+          inventoryCount++;
+          return response({
+            snapshot: {
+              panes: [paneValue, ...otherPanes],
+              agents,
+              workspaces: [{ workspace_id: "workspace-1" }],
+            },
+          });
+        }
+        if (args[0] === "pane" && args[1] === "process-info")
+          return response({ process_info: process });
+        throw new Error("unexpected Herdr call: " + args.join(" "));
+      },
+    } as any;
+    return {
+      result: await verifyRetainedHerdrPane(pi, { cwd: "/tmp" } as any, target),
+      inventoryCount,
+    };
+  };
+
+  assert.deepEqual(await prove(pane, shell), {
+    result: true,
+    inventoryCount: 2,
+  });
+  assert.equal(
+    (
+      await prove(pane, shell, [
+        { pane_id: "unrelated-pane", workspace_id: "unrelated-workspace" },
+      ])
+    ).result,
+    true,
+    "an unrelated Agent without optional name metadata does not block proof",
+  );
+  assert.equal(
+    (await prove({ ...pane, terminal_id: "replacement" }, shell)).result,
+    false,
+  );
+  assert.equal((await prove(pane, { ...shell, shell_pid: 11 })).result, false);
+  assert.equal(
+    (
+      await prove(pane, {
+        pane_id: "pane-1",
+        shell_pid: 10,
+        foreground_process_group_id: 10,
+      })
+    ).result,
+    false,
+    "incomplete foreground observation is not an empty shell",
+  );
+  assert.equal(
+    (
+      await prove(pane, shell, [
+        { name: "replacement", pane_id: "pane-1", agent_session: session },
+      ])
+    ).result,
+    false,
+    "competing pane registration is rejected",
+  );
+  assert.equal(
+    (
+      await prove(pane, shell, [
+        { name: "elsewhere", pane_id: "other-pane", agent_session: session },
+      ])
+    ).result,
+    false,
+    "matching session registered elsewhere is rejected",
+  );
+  assert.equal(
+    (
+      await prove(
+        pane,
+        shell,
+        [],
+        [
+          {
+            pane_id: "other-pane",
+            workspace_id: "workspace-1",
+            terminal_id: "other-terminal",
+            cwd: "/tmp",
+            agent_session: session,
+          },
+        ],
+      )
+    ).result,
+    false,
+    "matching session evidence on another pane is rejected without an agent registration",
+  );
+});
+
+test("retained pane proof ignores unrelated inventory changes between observations", async () => {
+  const target = {
+    workspaceId: "workspace-1",
+    paneId: "pane-1",
+    terminalId: "terminal-1",
+    launchShellPid: 10,
+    cwd: "/tmp",
+    alias: "agent-run",
+    session: { id: "session-1" },
+  };
+  const pane = {
+    pane_id: "pane-1",
+    workspace_id: "workspace-1",
+    terminal_id: "terminal-1",
+    cwd: "/tmp",
+    focused: true,
+    revision: 1,
+  };
+  const shell = {
+    pane_id: "pane-1",
+    shell_pid: 10,
+    foreground_process_group_id: 10,
+    foreground_processes: [{ pid: 10, argv0: "/bin/zsh" }],
+  };
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  let observation = 0;
+  const pi = {
+    exec: async (_command: string, args: string[]) => {
+      if (args[0] === "api" && args[1] === "snapshot") {
+        observation++;
+        return response({
+          snapshot: {
+            panes: [
+              {
+                ...pane,
+                ...(observation === 2 ? { focused: false, revision: 2 } : {}),
+              },
+              ...(observation === 2
+                ? [
+                    {
+                      pane_id: "unrelated-pane",
+                      workspace_id: "unrelated-workspace",
+                      terminal_id: "unrelated-terminal",
+                      cwd: "/other",
+                      focused: true,
+                      revision: 5,
+                    },
+                  ]
+                : []),
+            ],
+            agents:
+              observation === 2
+                ? [
+                    {
+                      pane_id: "unrelated-pane",
+                      workspace_id: "unrelated-workspace",
+                      status: "idle",
+                      revision: 7,
+                    },
+                  ]
+                : [],
+            workspaces: [
+              { workspace_id: "workspace-1", revision: observation },
+              ...(observation === 2
+                ? [{ workspace_id: "unrelated-workspace", revision: 3 }]
+                : []),
+            ],
+            focused_pane_id: observation === 1 ? "pane-1" : "unrelated-pane",
+            revision: observation,
+          },
+        });
+      }
+      if (args[0] === "pane" && args[1] === "process-info")
+        return response({ process_info: shell });
+      throw new Error("unexpected Herdr call: " + args.join(" "));
+    },
+  } as any;
+
+  assert.equal(
+    await verifyRetainedHerdrPane(pi, { cwd: "/tmp" } as any, target),
+    true,
+    "unrelated pane, Agent, workspace, focus, and revision changes are ignored",
+  );
+  assert.equal(observation, 2);
+});
+
+test("retained pane close revalidates and verifies exact pane disappearance", async () => {
+  const environment = globalThis.process.env;
+  const previousWorkspace = environment.HERDR_WORKSPACE_ID;
+  environment.HERDR_WORKSPACE_ID = "workspace-1";
+  const target = {
+    workspaceId: "workspace-1",
+    paneId: "pane-1",
+    terminalId: "terminal-1",
+    launchShellPid: 10,
+    cwd: "/tmp",
+    alias: "agent-run",
+    session: { id: "session-1" },
+  };
+  const pane = {
+    pane_id: "pane-1",
+    workspace_id: "workspace-1",
+    terminal_id: "terminal-1",
+    cwd: "/tmp",
+  };
+  const shell = {
+    pane_id: "pane-1",
+    shell_pid: 10,
+    foreground_process_group_id: 10,
+    foreground_processes: [{ pid: 10, argv0: "/bin/zsh" }],
+  };
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  const calls: string[][] = [];
+  let closed = false;
+  const pi = {
+    exec: async (_command: string, args: string[]) => {
+      calls.push(args);
+      if (args[0] === "api" && args[1] === "snapshot")
+        return response({
+          snapshot: {
+            panes: closed ? [] : [pane],
+            agents: [],
+            workspaces: [{ workspace_id: "workspace-1" }],
+          },
+        });
+      if (args[0] === "pane" && args[1] === "process-info")
+        return response({ process_info: shell });
+      if (args[0] === "pane" && args[1] === "close") {
+        assert.deepEqual(args, ["pane", "close", "pane-1"]);
+        closed = true;
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      if (args[0] === "agent" && args[1] === "list")
+        return response({ agents: [] });
+      if (args[0] === "pane" && args[1] === "list")
+        return response({ panes: [] });
+      throw new Error("unexpected Herdr call: " + args.join(" "));
+    },
+  } as any;
+
+  try {
+    await closeRetainedHerdrPane(pi, { cwd: "/tmp" } as any, target);
+  } finally {
+    if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
+    else environment.HERDR_WORKSPACE_ID = previousWorkspace;
+  }
+  assert.equal(closed, true);
+  assert.equal(
+    calls.filter((args) => args[0] === "api" && args[1] === "snapshot").length,
+    2,
+    "the locked close proof uses two coherent observations",
+  );
+  assert.equal(
+    calls.some((args) => args[0] === "pane" && args[1] === "send-keys"),
+    false,
+  );
+});
+
+test("retained pane close refuses a replacement terminal without destructive action", async () => {
+  const environment = globalThis.process.env;
+  const previousWorkspace = environment.HERDR_WORKSPACE_ID;
+  environment.HERDR_WORKSPACE_ID = "workspace-1";
+  const target = {
+    workspaceId: "workspace-1",
+    paneId: "pane-1",
+    terminalId: "terminal-1",
+    launchShellPid: 10,
+    cwd: "/tmp",
+    alias: "agent-run",
+    session: { id: "session-1" },
+  };
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  const calls: string[][] = [];
+  try {
+    await assert.rejects(
+      closeRetainedHerdrPane(
+        {
+          exec: async (_command: string, args: string[]) => {
+            calls.push(args);
+            if (args[0] === "api" && args[1] === "snapshot")
+              return response({
+                snapshot: {
+                  panes: [
+                    {
+                      pane_id: "pane-1",
+                      workspace_id: "workspace-1",
+                      terminal_id: "replacement-terminal",
+                      cwd: "/tmp",
+                    },
+                  ],
+                  agents: [],
+                  workspaces: [],
+                },
+              });
+            throw new Error("unexpected Herdr call: " + args.join(" "));
+          },
+        } as any,
+        { cwd: "/tmp" } as any,
+        target,
+      ),
+      /ownership is unproven/,
+    );
+  } finally {
+    if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
+    else environment.HERDR_WORKSPACE_ID = previousWorkspace;
+  }
+  assert.equal(
+    calls.some((args) => args[0] === "pane" && args[1] === "close"),
+    false,
+  );
+});
+
+test("retained pane session evidence on an unregistered pane blocks proof and close", async () => {
+  const environment = globalThis.process.env;
+  const previousWorkspace = environment.HERDR_WORKSPACE_ID;
+  environment.HERDR_WORKSPACE_ID = "workspace-1";
+  const target = {
+    workspaceId: "workspace-1",
+    paneId: "pane-1",
+    terminalId: "terminal-1",
+    launchShellPid: 10,
+    cwd: "/tmp",
+    alias: "agent-run",
+    session: { id: "session-1" },
+  };
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  const calls: string[][] = [];
+  const pi = {
+    exec: async (_command: string, args: string[]) => {
+      calls.push(args);
+      if (args[0] === "api" && args[1] === "snapshot")
+        return response({
+          snapshot: {
+            panes: [
+              {
+                pane_id: "pane-1",
+                workspace_id: "workspace-1",
+                terminal_id: "terminal-1",
+                cwd: "/tmp",
+              },
+              {
+                pane_id: "other-pane",
+                workspace_id: "workspace-1",
+                terminal_id: "other-terminal",
+                cwd: "/tmp",
+                agent_session: {
+                  source: "herdr:pi",
+                  agent: "pi",
+                  kind: "id",
+                  value: "session-1",
+                },
+              },
+            ],
+            agents: [],
+            workspaces: [{ workspace_id: "workspace-1" }],
+          },
+        });
+      throw new Error("unexpected Herdr call: " + args.join(" "));
+    },
+  } as any;
+
+  try {
+    assert.equal(
+      await verifyRetainedHerdrPane(pi, { cwd: "/tmp" } as any, target),
+      false,
+      "read-only proof rejects a matching session on another pane",
+    );
+    await assert.rejects(
+      closeRetainedHerdrPane(pi, { cwd: "/tmp" } as any, target),
+      /ownership is unproven/,
+    );
+  } finally {
+    if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
+    else environment.HERDR_WORKSPACE_ID = previousWorkspace;
+  }
+  assert.equal(
+    calls.some((args) => args[0] === "pane" && args[1] === "close"),
+    false,
+    "session ambiguity must prevent physical closure",
+  );
 });
 
 test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async () => {

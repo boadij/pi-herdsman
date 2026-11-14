@@ -34,6 +34,8 @@ export interface ManagedAgentState {
   workspaceId: string;
   agentLabel: string;
   paneId: string;
+  terminalId?: string;
+  launchShellPid?: number;
   piSessionId: string;
   rootSessionId?: string;
   piSessionFile?: string;
@@ -544,6 +546,8 @@ function validate(
           "workspaceId",
           "agentLabel",
           "paneId",
+          "terminalId",
+          "launchShellPid",
           "piSessionId",
           "rootSessionId",
           "piSessionFile",
@@ -696,6 +700,23 @@ function validate(
   };
   if (kind === "state") {
     finite("updatedAt");
+    if ((v.terminalId === undefined) !== (v.launchShellPid === undefined))
+      throw new Error("Launch terminal identity fields must be paired");
+    if (
+      v.terminalId !== undefined &&
+      (typeof v.terminalId !== "string" ||
+        !v.terminalId.trim() ||
+        v.terminalId.length > 512)
+    )
+      throw new Error("Invalid mailbox terminal identity");
+    if (
+      v.launchShellPid !== undefined &&
+      (typeof v.launchShellPid !== "number" ||
+        !Number.isInteger(v.launchShellPid) ||
+        !Number.isFinite(v.launchShellPid) ||
+        v.launchShellPid <= 0)
+    )
+      throw new Error("Invalid mailbox launch shell PID");
     if (
       v.rootSessionId !== undefined &&
       (typeof v.rootSessionId !== "string" ||

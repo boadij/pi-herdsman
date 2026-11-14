@@ -180,13 +180,20 @@ unknown Agent automatically.
 
 `lost` means the expected physical execution is proven gone before a durable
 terminal result resolved the assignment. The durable mailbox remains owned and
-the assignment remains unresolved; loss is not completion or task failure.
+the assignment remains unresolved; loss is not completion or task failure. In
+the narrow retained-pane case, the original pane may remain: Herdsman classifies
+it as lost only when paired launch-time terminal/shell identity matches and
+fresh, repeated Herdr observations prove the pane is the original settled shell
+with no registered Agent or matching Pi session. A shell prompt or incomplete
+process observation alone never proves loss. The owner attention identifies
+this case, and `stop_agent` revalidates and closes that exact pane.
 Only the direct owner may use `stop_agent` to abandon the lost generation. When
 `stop_agent` is listed, use it before replacing it or continuing its saved
 session.
 If `stop_agent` is absent, resolve the condition blocking its stop preflight first.
-Herdsman never redelegates or continues it automatically. Moved or conflicting
-evidence is `unknown`, not `lost`, and remains fail-closed.
+Herdsman never redelegates or continues it automatically. Moved,
+conflicting, or incomplete evidence is `unknown`, not `lost`, and remains
+fail-closed.
 After a verified clean Agent stop, the direct owner may explicitly continue the exact
 saved session. A verified `/agents stop` can also preserve a versioned receipt
 in the owner's history for that explicit continuation. Stop never auto-restarts

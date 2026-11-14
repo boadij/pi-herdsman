@@ -23,12 +23,17 @@ cleanup
 gone
 ```
 
-If the expected pane, Pi session, and run-scoped alias are all absent from a
-coherent Herdr inventory before a durable result resolves the assignment, the
-assignment projects as `lost`. The mailbox remains the durable owner of that
-generation until the direct owner explicitly closes it; physical disappearance
-does not mean completion or task failure. Moved, conflicting, or incomplete
-evidence remains `unknown`.
+If the expected execution is proven gone from coherent Herdr evidence before
+a durable result resolves the assignment, the assignment projects as `lost`.
+Usually the expected pane, Pi session, and run-scoped alias are all absent. In
+the narrow retained-pane case, paired launch-time terminal/shell identity plus
+repeated fresh Herdr observations can prove that the original pane remains as a
+settled shell with no registered Agent or matching Pi session. A shell prompt
+alone or incomplete process information does not establish loss. The mailbox
+remains the durable owner of that generation until the direct owner explicitly
+closes it; physical disappearance does not mean completion or task failure.
+Moved, conflicting, or incomplete evidence remains `unknown`. A retained-pane
+stop revalidates and closes that exact original pane.
 
 The authoritative final result is correlated to the accepted assignment request
 ID.
