@@ -49,6 +49,21 @@ coordination does not imply persistence of external state.
 Expand Herdsman's ownership only when the additional responsibility is
 inherently part of Herdsman's job.
 
+## Specialize responsibility, reuse expertise
+
+Prefer focused Agents when a bounded task benefits from a distinct
+responsibility, capability set, or execution policy. A general-purpose Agent
+or direct execution is appropriate when additional delegation adds no value.
+
+Agent definitions establish specialization and expected outcomes. Skills
+provide reusable knowledge and procedures that multiple Agents may share;
+tools, extensions, and models provide execution capabilities. Herdsman
+coordinates the work without owning domain-specific behavior.
+
+Sharing skills does not share Agent responsibility or authority. Instructions
+and skills do not grant permissions; the effective tool policy and execution
+environment remain responsible for enforcing access.
+
 ## Keep optional capabilities optional
 
 External integrations must not become required dependencies of normal Herdsman
