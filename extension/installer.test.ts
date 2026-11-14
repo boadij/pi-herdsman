@@ -711,12 +711,32 @@ reaped = False
 status = 1
 deadline = time.monotonic() + float(os.environ.get("PTY_RUNNER_DEADLINE_SECONDS", "25"))
 
+permission_denied = False
+
 def process_group_exists():
+    global permission_denied
     try:
         os.killpg(pid, 0)
         return True
-    except ProcessLookupError:
-        return False
+    except OSError as error:
+        if error.errno == errno.ESRCH:
+            return False
+        if error.errno == errno.EPERM:
+            permission_denied = True
+            return True
+        raise
+
+def signal_process_group(sig):
+    global permission_denied
+    try:
+        os.killpg(pid, sig)
+    except OSError as error:
+        if error.errno == errno.ESRCH:
+            return
+        if error.errno == errno.EPERM:
+            permission_denied = True
+            return
+        raise
 
 def reap_leader():
     global reaped
@@ -732,10 +752,7 @@ def clean_process_group():
     if type(pid) is not int or pid <= 0:
         return True, reaped
     if process_group_exists():
-        try:
-            os.killpg(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        signal_process_group(signal.SIGTERM)
     end = time.monotonic() + 1
     while time.monotonic() < end:
         reap_leader()
@@ -743,10 +760,7 @@ def clean_process_group():
             break
         time.sleep(0.02)
     if process_group_exists():
-        try:
-            os.killpg(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        signal_process_group(signal.SIGKILL)
     end = time.monotonic() + 1
     while time.monotonic() < end:
         reap_leader()
@@ -815,6 +829,8 @@ except BaseException as error:
     clean, leader_reaped = clean_process_group()
     if not clean:
         sys.stderr.write("Process group remained after bounded SIGTERM/SIGKILL cleanup.\\n")
+        if permission_denied:
+            sys.stderr.write("Cleanup unverified: EPERM prevented proving process-group absence.\\n")
     if not leader_reaped:
         sys.stderr.write("PTY child leader remained unreaped after bounded cleanup.\\n")
     if clean and leader_reaped:
@@ -825,6 +841,8 @@ else:
     if not clean or not leader_reaped:
         if not clean:
             sys.stderr.write("Process group remained after bounded SIGTERM/SIGKILL cleanup.\\n")
+            if permission_denied:
+                sys.stderr.write("Cleanup unverified: EPERM prevented proving process-group absence.\\n")
         if not leader_reaped:
             sys.stderr.write("PTY child leader remained unreaped after bounded cleanup.\\n")
         sys.exit(125)
