@@ -753,16 +753,26 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   const contextMode =
                     current.name === "chief"
                       ? "Chief forced prompt includes only global user instructions; project context excluded"
-                      : inheritance
-                        ? inheritance.global && inheritance.project
-                          ? "Pi context inherited globally and from the project"
-                          : inheritance.global
-                            ? "Selected global Pi context"
-                            : inheritance.project
-                              ? "Selected project Pi context"
+                      : activeRole
+                        ? "Current Pi context from getSystemPromptOptions()"
+                        : inheritance
+                          ? inheritance.global &&
+                            inheritance.ancestor &&
+                            inheritance.project
+                            ? "Pi native context: global, ancestor, project"
+                            : [
+                                  inheritance.global && "global",
+                                  inheritance.ancestor && "ancestor",
+                                  inheritance.project && "project",
+                                ].filter(Boolean).length
+                              ? `Selected Pi context: ${[
+                                  inheritance.global && "global",
+                                  inheritance.ancestor && "ancestor",
+                                  inheritance.project && "project",
+                                ]
+                                  .filter(Boolean)
+                                  .join(", ")}`
                               : "Pi context files disabled"
-                        : activeRole
-                          ? "Current Pi context from getSystemPromptOptions()"
                           : "Coordinator profile context depends on its future session";
                   const rolePreview = activeRole
                     ? "active-session inputs"
@@ -838,7 +848,11 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                     );
                     const addGuidance = () =>
                       add("Herdsman shared guidance", "Managed launch input.");
-                    if (inheritance?.global && inheritance.project) {
+                    if (
+                      inheritance?.global &&
+                      inheritance.ancestor &&
+                      inheritance.project
+                    ) {
                       addGuidance();
                       addContexts();
                     } else {
@@ -949,7 +963,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                     inspector: {
                       summary: [
                         `${roleProfile ? rolePreview : "Future Agent launch"} · ${sources.length} source(s) · ${contextCount} Pi context files`,
-                        `Context: ${ctx.cwd} · ${contextMode}`,
+                        `${managedLeadProfile && !activeRole ? "Preview cwd" : "Context"}: ${ctx.cwd} · ${contextMode}`,
                         "Known-input preview only; provider/runtime transformations may add inputs.",
                       ],
                       sections,

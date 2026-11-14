@@ -2,6 +2,7 @@
 description: Focused verification agent for running tests, checks, and smoke scenarios against existing changes; use to report observed evidence, not implement fixes or review design
 extensions: [builtin:codemode]
 inheritGlobalContext: false
+inheritAncestorContext: false
 inheritProjectContext: true
 name: validator
 noExtensions: true

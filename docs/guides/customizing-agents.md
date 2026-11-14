@@ -222,6 +222,33 @@ launches, not already-running Leads. Use `stop_lead` followed by
 policy. Native extension/session reinitialization may resolve the delegation
 policy again; a live definition edit alone does not hot-apply it.
 
+### Automatically inherited Pi context
+
+The six bundled Agents and bundled `managed-lead` automatically inherit
+project context only: global Pi agent-directory context and filesystem ancestor
+context are disabled by default. The project boundary is the Git worktree root
+containing the Agent or Lead execution directory, including for linked
+worktrees. In a non-Git directory, the execution `cwd` itself is the project
+boundary. Pi's own context discovery supplies the files; Herdsman applies these
+scope choices to those discovered files.
+
+These flags are overridable launch defaults, not an isolation boundary. A
+matching global, project, or private definition can set
+`inheritGlobalContext`, `inheritAncestorContext`, and
+`inheritProjectContext` independently. Omitted fields inherit their effective
+lower-layer value; for a definition with no lower-layer value, project
+inheritance defaults to true only for `delegate`, and the global and ancestor
+flags follow the effective project value. A selective configuration uses
+Pi's discovery output while appending only files from enabled scopes; native
+Pi discovery is retained when all three scopes are enabled.
+
+The flags govern automatically discovered Pi context files only. They do not
+remove explicit instructions in definition bodies or referenced body files,
+nor task handoffs and other launch inputs. Runtime-only ordinary Lead,
+Orchestrator Lead, Manager, and Chief profiles remain unchanged and do not
+support these launch inheritance fields. Changes affect subsequent launches;
+they do not rewrite active sessions or their existing Pi context.
+
 ## Minimal model override
 
 ```markdown
@@ -238,7 +265,8 @@ The bundled reviewer body and omitted frontmatter remain inherited.
 
 For a matching higher-precedence definition:
 
-- omitted fields inherit;
+- omitted fields inherit the effective lower-layer value, including bundled
+  context-inheritance defaults;
 - strings and booleans replace;
 - arrays with plain entries replace wholesale, including `[]`;
 - `+name` and `-name` entries modify inherited arrays; in a mixed list,

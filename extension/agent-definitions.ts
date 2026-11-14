@@ -53,6 +53,7 @@ const BOOLEAN_CAPABILITY_FIELDS = new Set([
   "noSkills",
   "noExtensions",
   "inheritGlobalContext",
+  "inheritAncestorContext",
   "inheritProjectContext",
   "inheritSkills",
 ]);
@@ -133,6 +134,8 @@ export type Frontmatter = {
   extensions?: string[];
   agents?: string[];
   inheritGlobalContext?: boolean;
+  inheritAncestorContext?: boolean;
+  inheritProjectContext?: boolean;
   [key: string]: FrontmatterValue | undefined;
 };
 
@@ -1642,6 +1645,7 @@ export function agentDefinitionDelegationEnabled(
 
 export function contextInheritance(definition: AgentDefinition): {
   global: boolean;
+  ancestor: boolean;
   project: boolean;
 } {
   const project =
@@ -1651,7 +1655,59 @@ export function contextInheritance(definition: AgentDefinition): {
   const global =
     definition.frontmatter.inheritGlobalContext === true ||
     (definition.frontmatter.inheritGlobalContext === undefined && project);
-  return { global, project };
+  const ancestor =
+    definition.frontmatter.inheritAncestorContext === true ||
+    (definition.frontmatter.inheritAncestorContext === undefined && project);
+  return { global, ancestor, project };
+}
+
+function isWithinDirectory(directory: string, root: string): boolean {
+  const rel = relative(root, directory);
+  return (
+    rel === "" ||
+    (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+  );
+}
+
+function contextProjectRoot(cwd: string): string {
+  const canonicalCwd = realpathSync(cwd);
+  let output: string;
+  try {
+    output = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: canonicalCwd,
+      env: { ...process.env, LC_ALL: "C" },
+      encoding: "utf8",
+      timeout: 2_000,
+      maxBuffer: 8_192,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+  } catch (error) {
+    const failure = error as Error & {
+      code?: string;
+      status?: number | null;
+      stderr?: Buffer | string;
+    };
+    const diagnostic = failure.stderr?.toString() ?? "";
+    if (
+      failure.code === "ENOENT" ||
+      (failure.status === 128 && /not a git repository/u.test(diagnostic))
+    )
+      return canonicalCwd;
+    throw new Error(
+      `Cannot resolve context worktree for ${cwd}: ${diagnostic.trimEnd() || failure.message}`,
+      { cause: error },
+    );
+  }
+  const root = output.trim();
+  if (!isAbsolute(root))
+    throw new Error(`Invalid Git worktree root for ${cwd}: ${root}`);
+  const canonicalRoot = realpathSync(root);
+  if (!isWithinDirectory(canonicalCwd, canonicalRoot))
+    throw new Error(
+      `Git worktree root does not contain ${cwd}: ${canonicalRoot}`,
+    );
+  return canonicalRoot;
 }
 
 export function selectedAgentContextFiles(
@@ -1660,11 +1716,22 @@ export function selectedAgentContextFiles(
   loader: typeof loadProjectContextFiles = loadProjectContextFiles,
 ) {
   const inheritance = contextInheritance(definition);
-  if (!inheritance.global && !inheritance.project) return [];
+  if (!inheritance.global && !inheritance.ancestor && !inheritance.project)
+    return [];
   const agentDir = getAgentDir();
-  return loader({ cwd, agentDir }).filter((context) => {
-    const isGlobal = resolve(dirname(context.path)) === resolve(agentDir);
-    return isGlobal ? inheritance.global : inheritance.project;
+  const discovered = loader({ cwd, agentDir });
+  const boundary =
+    inheritance.project === inheritance.ancestor
+      ? undefined
+      : contextProjectRoot(cwd);
+  return discovered.filter((context) => {
+    const contextDir = dirname(context.path);
+    const isGlobal = resolve(contextDir) === resolve(agentDir);
+    if (isGlobal) return inheritance.global;
+    if (boundary === undefined) return inheritance.project;
+    return isWithinDirectory(realpathSync(contextDir), boundary)
+      ? inheritance.project
+      : inheritance.ancestor;
   });
 }
 
@@ -1742,7 +1809,7 @@ export function agentLaunchArgs(
       bodyPromptPathForLaunch,
     );
   const inheritance = contextInheritance(agent);
-  if (!inheritance.global || !inheritance.project) {
+  if (!inheritance.global || !inheritance.ancestor || !inheritance.project) {
     args.push("--no-context-files");
     for (const context of selectedAgentContextFiles(
       agent,
