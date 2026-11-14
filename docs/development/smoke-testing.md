@@ -240,11 +240,23 @@ verified; `npm run smoke` defaults to `core`.
 
 Required peer-federation CI runs the shared core acceptance independently for
 real containerized Managers (`manager-core`) and ordinary Leads (`lead-core`).
-Each verifies one successful request, the exact correlated reply persisted
-once, and A's assistant completion after that reply without another prompt.
+The Manager core enables the existing native Manager auto-activation before Pi
+starts and verifies authoritative Manager identity without submitting
+`/manager`. The ordinary Lead core starts one Pi session per machine directly
+in each root pane; it starts no Managers and performs no pane splits.
+
+Both phases retain the same authoritative role/session checks, remote peer
+discovery, correlated request/reply exchange, durable correspondence,
+acknowledgment, autonomous assistant completion, and cleanup. Core startup
+omits the comprehensive-only result importer, artifact files, and managed-Lead
+and researcher profiles.
+
 The comprehensive ordinary-Lead acceptance remains manually available as the
-`delivery` phase; it covers managed-Lead exclusion and delivery/recovery checks
-not included in the focused CI gate.
+`delivery` phase; it retains concurrent Managers and Ordinary Leads, explicit
+`/manager` activation, pane splits, and its artifact, exclusion, delivery, and
+recovery checks. The default comprehensive Manager recovery phase likewise
+retains explicit `/manager` activation and its existing lifecycle coverage.
+Neither comprehensive scenario is replaced by the focused core gate.
 
 Run the focused phases with
 `PEER_SMOKE_PHASE=manager-core node scripts/peer-federation-smoke.mjs` and

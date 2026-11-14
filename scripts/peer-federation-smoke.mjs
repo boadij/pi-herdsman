@@ -34,6 +34,7 @@ import {
 } from "./peer-federation-result.mjs";
 
 const phase = process.env.PEER_SMOKE_PHASE ?? "";
+const corePhase = phase === "manager-core" || phase === "lead-core";
 if (
   process.argv[2] !== "--cleanup" &&
   !["", "delivery", "manager-core", "lead-core"].includes(phase)
@@ -436,23 +437,25 @@ function cleanup() {
 if (process.argv[2] !== "--cleanup") {
   mkdirSync(root, { mode: 0o700 });
   save();
-  const importerEntry = join(root, "peer-result-import-entry.mjs");
-  const importerBundle = join(root, "peer-result-import.mjs");
-  writeFileSync(
-    importerEntry,
-    `import { readFileSync, writeFileSync } from "node:fs";\nimport { join } from "node:path";\nimport { importResultBindings } from ${JSON.stringify(`${process.cwd()}/extension/agent-controller.ts`)};\nexport default function(pi) { pi.registerCommand("peer-import-result", { description: "Import test-owned evidence through Herdman's result importer", handler(_args, ctx) { const dir = process.env.PI_CODING_AGENT_DIR; writeFileSync(join(dir, "peer-result-import.started"), "started"); try { const binding = JSON.parse(readFileSync(join(dir, "peer-result-binding.json"), "utf8")); importResultBindings(pi, ctx, [binding], "peer.fixture"); const found = ctx.sessionManager.getBranch().some((entry) => entry.type === "custom" && entry.customType === "pi-herdsman-result-ref" && entry.data?.ref === binding.ref && entry.data?.canonicalRef === binding.canonicalRef); if (!found) throw new Error("fixture result binding was not imported"); writeFileSync(join(dir, "peer-result-import.done"), JSON.stringify(binding)); } catch (error) { writeFileSync(join(dir, "peer-result-import.error"), String(error)); throw error; } } }); }\n`,
-    { mode: 0o600 },
-  );
-  const { build } = await import("esbuild");
-  await build({
-    entryPoints: [importerEntry],
-    outfile: importerBundle,
-    bundle: true,
-    platform: "node",
-    format: "esm",
-    target: "node22",
-    external: ["@earendil-works/pi-coding-agent", "@earendil-works/pi-ai"],
-  });
+  if (!corePhase) {
+    const importerEntry = join(root, "peer-result-import-entry.mjs");
+    const importerBundle = join(root, "peer-result-import.mjs");
+    writeFileSync(
+      importerEntry,
+      `import { readFileSync, writeFileSync } from "node:fs";\nimport { join } from "node:path";\nimport { importResultBindings } from ${JSON.stringify(`${process.cwd()}/extension/agent-controller.ts`)};\nexport default function(pi) { pi.registerCommand("peer-import-result", { description: "Import test-owned evidence through Herdman's result importer", handler(_args, ctx) { const dir = process.env.PI_CODING_AGENT_DIR; writeFileSync(join(dir, "peer-result-import.started"), "started"); try { const binding = JSON.parse(readFileSync(join(dir, "peer-result-binding.json"), "utf8")); importResultBindings(pi, ctx, [binding], "peer.fixture"); const found = ctx.sessionManager.getBranch().some((entry) => entry.type === "custom" && entry.customType === "pi-herdsman-result-ref" && entry.data?.ref === binding.ref && entry.data?.canonicalRef === binding.canonicalRef); if (!found) throw new Error("fixture result binding was not imported"); writeFileSync(join(dir, "peer-result-import.done"), JSON.stringify(binding)); } catch (error) { writeFileSync(join(dir, "peer-result-import.error"), String(error)); throw error; } } }); }\n`,
+      { mode: 0o600 },
+    );
+    const { build } = await import("esbuild");
+    await build({
+      entryPoints: [importerEntry],
+      outfile: importerBundle,
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      target: "node22",
+      external: ["@earendil-works/pi-coding-agent", "@earendil-works/pi-ai"],
+    });
+  }
 }
 
 try {
@@ -1119,13 +1122,15 @@ try {
       sessionDir: `${base}/sessions`,
       workspace: `${base}/workspace`,
     };
-    const importerPath = `${resources[side].runtime.piAgentDir}/extensions/peer-result-import.mjs`;
-    command("docker", [
-      "cp",
-      join(root, "peer-result-import.mjs"),
-      `${container}:${importerPath}`,
-    ]);
-    exec(side, ["chown", "herdsman:herdsman", importerPath]);
+    if (!corePhase) {
+      const importerPath = `${resources[side].runtime.piAgentDir}/extensions/peer-result-import.mjs`;
+      command("docker", [
+        "cp",
+        join(root, "peer-result-import.mjs"),
+        `${container}:${importerPath}`,
+      ]);
+      exec(side, ["chown", "herdsman:herdsman", importerPath]);
+    }
     command("docker", [
       "cp",
       "extension/storage.ts",
@@ -1222,8 +1227,12 @@ try {
         `smoke-faux/federated-peer-${side}`,
         "--extension",
         `${resources[side].runtime.piAgentDir}/extensions/smoke-faux.mjs`,
-        "--extension",
-        `${resources[side].runtime.piAgentDir}/extensions/peer-result-import.mjs`,
+        ...(!corePhase
+          ? [
+              "--extension",
+              `${resources[side].runtime.piAgentDir}/extensions/peer-result-import.mjs`,
+            ]
+          : []),
       ]);
     } catch (error) {
       let terminal = "terminal diagnostics unavailable";
@@ -1275,7 +1284,7 @@ try {
       ["git", "-C", resources[side].runtime.workspace, "init", "-q"],
       ["--user", "herdsman"],
     );
-    if (side === "b") {
+    if (side === "b" && !corePhase) {
       const replyHostPath = join(root, "reply.txt");
       writeFileSync(replyHostPath, `reply evidence for ${runId}\n`, {
         mode: 0o600,
@@ -1328,11 +1337,32 @@ try {
       ],
       ["--user", "herdsman"],
     );
+    if (phase === "lead-core") continue;
+    if (phase === "manager-core") {
+      exec(
+        side,
+        [
+          "node",
+          "-e",
+          `require("node:fs").writeFileSync(
+            process.env.PI_CODING_AGENT_DIR +
+              "/pi-herdsman/config.json",
+            JSON.stringify({ autoActivateManager: true })
+          )`,
+        ],
+        ["--user", "herdsman", ...herdrEnv(side)],
+      );
+    }
     startPeerPi(side, pane, "manager");
-    const submission = JSON.parse(
-      herdr(side, ["agent", "prompt", pane, "/manager"], { timeout: 30_000 }),
-    );
-    const nativeSessionFile = submission.result?.agent?.agent_session?.value;
+    const submission =
+      phase === "manager-core"
+        ? undefined
+        : JSON.parse(
+            herdr(side, ["agent", "prompt", pane, "/manager"], {
+              timeout: 30_000,
+            }),
+          );
+    const nativeSessionFile = submission?.result?.agent?.agent_session?.value;
     const nativeSessionId =
       typeof nativeSessionFile === "string"
         ? nativeSessionFile.match(/_([0-9a-f-]{36})\.jsonl$/u)?.[1]
@@ -1381,24 +1411,29 @@ try {
   // Lead on each machine. This makes the probe prove role isolation rather
   // than relying on a Manager session being reinterpreted as a Lead.
   const startOrdinaryLead = (side) => {
-    const split = JSON.parse(
-      herdr(side, [
-        "pane",
-        "split",
-        resources[side].paneId,
-        "--direction",
-        "down",
-        "--ratio",
-        "0.5",
-        "--cwd",
-        resources[side].runtime.workspace,
-      ]),
-    );
-    const pane = split.result?.pane?.pane_id;
-    if (!pane)
-      throw new Error(
-        `${side}: ordinary Lead pane split omitted pane identity`,
+    let pane;
+    if (phase === "lead-core") {
+      pane = resources[side].paneId;
+    } else {
+      const split = JSON.parse(
+        herdr(side, [
+          "pane",
+          "split",
+          resources[side].paneId,
+          "--direction",
+          "down",
+          "--ratio",
+          "0.5",
+          "--cwd",
+          resources[side].runtime.workspace,
+        ]),
       );
+      pane = split.result?.pane?.pane_id;
+      if (!pane)
+        throw new Error(
+          `${side}: ordinary Lead pane split omitted pane identity`,
+        );
+    }
     resources[side].ordinaryLeadPaneId = pane;
     startPeerPi(side, pane, "lead");
     // New sessions start as ordinary Leads; unlike Managers they need no role
@@ -1433,113 +1468,115 @@ try {
   };
   if (phase !== "manager-core") startOrdinaryLead("b");
 
-  // Create test-owned ordinary files. Result references are created below by
-  // each live Manager's actual local project-delegation/result-import path.
-  const specText = `# Federation smoke ${runId}\n\nRead this exact specification and report the supplied canonical artifact digest.\n`;
-  const managerSpecText = `# Manager federation smoke ${runId}\n\nPEER_E2E_MANAGER_FILE_CONTENT_V1\n`;
-  const escapedText = `${"é".repeat(39_000)}${'"\\\n\u0001'.repeat(3_500)}`;
-  const specHostPath = join(root, "spec.md");
-  const managerSpecHostPath = join(root, "manager-spec.md");
-  const escapedHostPath = join(root, "escaped.txt");
-  writeFileSync(specHostPath, specText, { mode: 0o600 });
-  writeFileSync(managerSpecHostPath, managerSpecText, { mode: 0o600 });
-  writeFileSync(escapedHostPath, escapedText, { mode: 0o600 });
-  command("docker", [
-    "cp",
-    specHostPath,
-    `${resources.a.container}:${resources.a.runtime.workspace}/spec.md`,
-  ]);
-  exec("a", [
-    "chown",
-    "herdsman:herdsman",
-    `${resources.a.runtime.workspace}/spec.md`,
-  ]);
-  command("docker", [
-    "cp",
-    managerSpecHostPath,
-    `${resources.a.container}:${resources.a.runtime.workspace}/manager-spec.md`,
-  ]);
-  exec("a", [
-    "chown",
-    "herdsman:herdsman",
-    `${resources.a.runtime.workspace}/manager-spec.md`,
-  ]);
-  command("docker", [
-    "cp",
-    escapedHostPath,
-    `${resources.a.container}:${resources.a.runtime.workspace}/escaped.txt`,
-  ]);
-  exec("a", [
-    "chown",
-    "herdsman:herdsman",
-    `${resources.a.runtime.workspace}/escaped.txt`,
-  ]);
-  command("docker", [
-    "cp",
-    "extension/storage.ts",
-    `${resources.a.container}:${fixturePath("a")}/storage.ts`,
-  ]);
-  command("docker", [
-    "cp",
-    "extension/storage.ts",
-    `${resources.b.container}:${fixturePath("b")}/storage.ts`,
-  ]);
-  command("docker", [
-    "cp",
-    "extension/peer-correspondence.ts",
-    `${resources.b.container}:${fixturePath("b")}/peer-correspondence.ts`,
-  ]);
-  command("docker", [
-    "cp",
-    "extension/peer-transport.ts",
-    `${resources.b.container}:${fixturePath("b")}/peer-transport.ts`,
-  ]);
-  command("docker", [
-    "cp",
-    "extension/lock.ts",
-    `${resources.b.container}:${fixturePath("b")}/lock.ts`,
-  ]);
   const digest = (value) => createHash("sha256").update(value).digest("hex");
-  resources.evidence = {
-    ...resources.evidence,
-    specSha256: digest(specText),
-    managerSpecSha256: digest(managerSpecText),
-    escapedSha256: digest(escapedText),
-    escapedBytes: Buffer.byteLength(escapedText),
-  };
-  for (const side of ["a", "b"]) {
-    const leadProfilePath = join(root, `managed-lead-${side}.md`);
-    writeFileSync(
-      leadProfilePath,
-      `---\nname: managed-lead\nmodel: smoke-faux/federated-peer-lead\ntools: [read]\nextensions: [${JSON.stringify(`${resources[side].runtime.piAgentDir}/extensions/smoke-faux.mjs`)}]\n---\n`,
-      { mode: 0o644 },
-    );
+  if (!corePhase) {
+    // Create test-owned ordinary files. Result references are created below by
+    // each live Manager's actual local project-delegation/result-import path.
+    const specText = `# Federation smoke ${runId}\n\nRead this exact specification and report the supplied canonical artifact digest.\n`;
+    const managerSpecText = `# Manager federation smoke ${runId}\n\nPEER_E2E_MANAGER_FILE_CONTENT_V1\n`;
+    const escapedText = `${"é".repeat(39_000)}${'"\\\n\u0001'.repeat(3_500)}`;
+    const specHostPath = join(root, "spec.md");
+    const managerSpecHostPath = join(root, "manager-spec.md");
+    const escapedHostPath = join(root, "escaped.txt");
+    writeFileSync(specHostPath, specText, { mode: 0o600 });
+    writeFileSync(managerSpecHostPath, managerSpecText, { mode: 0o600 });
+    writeFileSync(escapedHostPath, escapedText, { mode: 0o600 });
     command("docker", [
       "cp",
-      leadProfilePath,
-      `${resources[side].container}:${resources[side].runtime.piAgentDir}/coordinators/managed-lead.md`,
+      specHostPath,
+      `${resources.a.container}:${resources.a.runtime.workspace}/spec.md`,
     ]);
-    exec(side, [
+    exec("a", [
       "chown",
       "herdsman:herdsman",
-      `${resources[side].runtime.piAgentDir}/coordinators/managed-lead.md`,
+      `${resources.a.runtime.workspace}/spec.md`,
     ]);
-    const researcherProfilePath = join(root, `researcher-${side}.md`);
-    writeFileSync(
-      researcherProfilePath,
-      `---\nname: researcher\nmodel: smoke-faux/federated-peer-researcher\nnoExtensions: false\nextensions: [${JSON.stringify(`${resources[side].runtime.piAgentDir}/extensions/smoke-faux.mjs`)}]\ntools: [read]\n---\n`,
-      { mode: 0o644 },
-    );
     command("docker", [
       "cp",
-      researcherProfilePath,
-      `${resources[side].container}:${resources[side].runtime.piAgentDir}/agents/researcher.md`,
+      managerSpecHostPath,
+      `${resources.a.container}:${resources.a.runtime.workspace}/manager-spec.md`,
     ]);
-    exec(side, [
+    exec("a", [
       "chown",
       "herdsman:herdsman",
-      `${resources[side].runtime.piAgentDir}/agents/researcher.md`,
+      `${resources.a.runtime.workspace}/manager-spec.md`,
     ]);
+    command("docker", [
+      "cp",
+      escapedHostPath,
+      `${resources.a.container}:${resources.a.runtime.workspace}/escaped.txt`,
+    ]);
+    exec("a", [
+      "chown",
+      "herdsman:herdsman",
+      `${resources.a.runtime.workspace}/escaped.txt`,
+    ]);
+    command("docker", [
+      "cp",
+      "extension/storage.ts",
+      `${resources.a.container}:${fixturePath("a")}/storage.ts`,
+    ]);
+    command("docker", [
+      "cp",
+      "extension/storage.ts",
+      `${resources.b.container}:${fixturePath("b")}/storage.ts`,
+    ]);
+    command("docker", [
+      "cp",
+      "extension/peer-correspondence.ts",
+      `${resources.b.container}:${fixturePath("b")}/peer-correspondence.ts`,
+    ]);
+    command("docker", [
+      "cp",
+      "extension/peer-transport.ts",
+      `${resources.b.container}:${fixturePath("b")}/peer-transport.ts`,
+    ]);
+    command("docker", [
+      "cp",
+      "extension/lock.ts",
+      `${resources.b.container}:${fixturePath("b")}/lock.ts`,
+    ]);
+    resources.evidence = {
+      ...resources.evidence,
+      specSha256: digest(specText),
+      managerSpecSha256: digest(managerSpecText),
+      escapedSha256: digest(escapedText),
+      escapedBytes: Buffer.byteLength(escapedText),
+    };
+    for (const side of ["a", "b"]) {
+      const leadProfilePath = join(root, `managed-lead-${side}.md`);
+      writeFileSync(
+        leadProfilePath,
+        `---\nname: managed-lead\nmodel: smoke-faux/federated-peer-lead\ntools: [read]\nextensions: [${JSON.stringify(`${resources[side].runtime.piAgentDir}/extensions/smoke-faux.mjs`)}]\n---\n`,
+        { mode: 0o644 },
+      );
+      command("docker", [
+        "cp",
+        leadProfilePath,
+        `${resources[side].container}:${resources[side].runtime.piAgentDir}/coordinators/managed-lead.md`,
+      ]);
+      exec(side, [
+        "chown",
+        "herdsman:herdsman",
+        `${resources[side].runtime.piAgentDir}/coordinators/managed-lead.md`,
+      ]);
+      const researcherProfilePath = join(root, `researcher-${side}.md`);
+      writeFileSync(
+        researcherProfilePath,
+        `---\nname: researcher\nmodel: smoke-faux/federated-peer-researcher\nnoExtensions: false\nextensions: [${JSON.stringify(`${resources[side].runtime.piAgentDir}/extensions/smoke-faux.mjs`)}]\ntools: [read]\n---\n`,
+        { mode: 0o644 },
+      );
+      command("docker", [
+        "cp",
+        researcherProfilePath,
+        `${resources[side].container}:${resources[side].runtime.piAgentDir}/agents/researcher.md`,
+      ]);
+      exec(side, [
+        "chown",
+        "herdsman:herdsman",
+        `${resources[side].runtime.piAgentDir}/agents/researcher.md`,
+      ]);
+    }
   }
   save();
 
@@ -1603,6 +1640,13 @@ try {
           ["--user", "herdsman", ...herdrEnv(side)],
         ),
       );
+      if (
+        role === "lead" &&
+        Array.isArray(probe.peers) &&
+        probe.peers.some((peer) => peer?.role === "manager")
+      ) {
+        throw new Error(`${side}: lead-core unexpectedly started a Manager`);
+      }
       let status;
       if (role === "manager") {
         status = managerAuthorityStatus(probe, {
