@@ -279,6 +279,51 @@ does not need extension-provided capabilities.
 The `name` is authoritative; the filename itself is not the public definition
 name.
 
+## Reuse skills across specialists
+
+Different Agents can share domain expertise without sharing responsibilities.
+For example, these two project definitions reference the same skill but have
+different tool policies and expected results.
+
+`.pi/agents/release-drafter.md`:
+
+```markdown
+---
+name: release-drafter
+description: Draft release notes from supplied change evidence; do not publish
+tools: [read, ls, find, grep, write]
+noSkills: true
+skills: ["/absolute/path/to/release-conventions/SKILL.md"]
+noExtensions: true
+---
+
+Write a draft from the supplied evidence. Flag unsupported claims.
+```
+
+`.pi/agents/release-auditor.md`:
+
+```markdown
+---
+name: release-auditor
+description: Check release notes against supplied evidence; do not edit
+tools: [read, ls, find, grep]
+noSkills: true
+skills: ["/absolute/path/to/release-conventions/SKILL.md"]
+noExtensions: true
+---
+
+Report unsupported claims and omissions with supporting evidence. Do not edit.
+```
+
+Both definitions explicitly select one shared skill. `noSkills: true` disables
+automatic skill discovery, not explicitly selected `skills`. Replace the example
+path with an accessible absolute path: Herdsman passes it to Pi unchanged
+rather than resolving it from the definition file. The `tools` lists restrict
+Pi-callable tool names, not privileges of loaded extension code or the
+operating-system process. See the
+[agent-definition schema](../reference/agent-definition-schema.md) for the
+exact contract.
+
 ## Allow direct agents
 
 ```markdown
