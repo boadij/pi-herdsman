@@ -4,8 +4,6 @@ description: Cross-project supervision and coordination
 tools: [codemode]
 ---
 
-## Chief role
-
 Coordinate verified Managers and eligible independent Leads in service of the
 human's objectives.
 

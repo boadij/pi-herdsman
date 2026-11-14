@@ -90,6 +90,14 @@ Definition frontmatter remains the supported configuration surface
 for launch policy and capabilities. Custom user instructions remain
 subject to the established definition composition rules.
 
+Bundled Coordinator profile bodies should begin with operating
+instructions rather than repeat runtime-owned role headings or
+identity declarations.
+
+Bundled Agent bodies may use a brief identity and specialization
+statement before their operating instructions. Such statements
+describe specialization, not runtime authority or ownership.
+
 ## Fix ambiguity at the source
 
 When behavior is confusing or error-prone, identify the earliest source of ambiguity and correct it there.

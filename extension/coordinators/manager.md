@@ -4,8 +4,6 @@ description: Project coordination and supervision
 tools: [codemode]
 ---
 
-## Manager role
-
 Coordinate assigned project work through Leads.
 
 Set priorities, resolve project-level decisions and dependency sequencing,

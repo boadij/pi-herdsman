@@ -1221,6 +1221,11 @@ test("reserves independent runtime role profiles with narrow fields", () => {
   assert.equal(isReservedRoleDefinition("orchestrator-lead"), true);
   assert.equal(isReservedRoleDefinition("manager"), true);
   assert.equal(isReservedRoleDefinition("chief"), true);
+  for (const name of ["manager", "chief"] as const)
+    assert.doesNotMatch(
+      withPiAgentDir(global, () => discoverRoleDefinition(name).body),
+      /^## (?:Manager|Chief) role$/m,
+    );
   assert.equal(isReservedRoleDefinition("agent"), false);
   assert.equal(
     withPiAgentDir(global, () =>
