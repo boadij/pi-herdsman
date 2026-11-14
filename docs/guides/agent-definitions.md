@@ -279,6 +279,69 @@ does not need extension-provided capabilities.
 The `name` is authoritative; the filename itself is not the public definition
 name.
 
+## Compose specialist Agents
+
+Different Agents can share procedures while retaining distinct responsibilities,
+model choices, tools, and Pi extension behavior. When the same instructions are
+always needed, preload them through body `@file` references instead of making
+the Agent discover and read a skill. For example, assume the shared file
+`.pi/skills/release-conventions/SKILL.md` exists in the project.
+
+`.pi/agents/release-drafter.md`:
+
+```markdown
+---
+name: release-drafter
+description: Draft release notes from supplied change evidence; do not publish
+tools: [read, ls, find, grep, write]
+noSkills: true
+noExtensions: true
+---
+
+Use these shared release conventions:
+
+@../skills/release-conventions/SKILL.md
+
+Write a draft from the supplied evidence. Flag unsupported claims.
+```
+
+`.pi/agents/release-auditor.md`:
+
+```markdown
+---
+name: release-auditor
+description: Check release notes against supplied inline evidence; do not edit
+tools: []
+noSkills: true
+noExtensions: true
+extensions: ["/absolute/path/to/release-audit.ts"]
+---
+
+Use these shared release conventions:
+
+@../skills/release-conventions/SKILL.md
+
+Check the notes against evidence provided in the assignment text.
+Report unsupported claims and omissions without editing files.
+```
+
+Herdsman expands each whole-line `@file` reference into the Agent's system
+prompt at launch. This reuses the file's text, not Pi's native skill-discovery
+mechanism; `noSkills: true` disables automatic discovery. The content is
+included up front, including any skill frontmatter, and nested file references
+or scripts are not loaded automatically. For larger or optional procedures,
+use native `skills` instead to permit on-demand loading.
+
+The auditor has no ordinary callable tools, so its evidence must be available
+in the assignment text. Its optional `release-audit.ts` path illustrates a
+user-provided Pi extension that can specialize supported session hooks or
+model behavior; omit it if unneeded, or replace it with an existing accessible
+extension. `noExtensions: true` disables ordinary discovery, not explicitly
+listed `extensions`. Loading extension code is independent of model-callable
+`tools`; an empty tool allowlist is not an extension or process sandbox.
+See the [agent-definition schema](../reference/agent-definition-schema.md) and
+[Handoffs and files](handoffs.md) for the exact contracts.
+
 ## Allow direct agents
 
 ```markdown
