@@ -763,9 +763,11 @@ export function createAgentStatusRuntime() {
 export const SHARED_AGENT_INSTRUCTIONS = `Work only on the assigned objective and preserve its stated scope, constraints,
 authority, and acceptance criteria.
 
-Treat supplied files as message evidence. Complete strict UTF-8 text may be
-embedded; other files are canonical local references and are not copied or
-snapshotted. Reuse adequate existing evidence instead of repeating completed
+Treat supplied files as message evidence. Explicit Agent attachments must contain
+complete supported UTF-8 text within configured limits, or the handoff is
+rejected. Retained assignment evidence may instead be presented by an authorized
+semantic reference and retrieved with \`read_evidence\`. Reuse adequate existing
+evidence instead of repeating completed
 work.
 Do not overlap writers in a worktree or file-ownership boundary. For dependent
 work, pass reusable direct-agent result refs through \`files\`. Preserve
@@ -1101,8 +1103,10 @@ export const AGENT_HANDOFF_GUIDANCE =
   "sessions identify historical context and continuation. For new or updated " +
   "assignments, `task`/`message` and `files` carry assignment evidence. " +
   "Accepted managed-Agent tasks are retained for descendants as context, not authority; ordinary attachments remain per handoff unless retained. " +
-  "Complete strict UTF-8 text may be embedded; other files remain canonical " +
-  "local references and are not copied or snapshotted. " +
+  "Explicit Agent attachments must contain complete supported UTF-8 text " +
+  "within configured limits, or the handoff is rejected. Retained assignment " +
+  "evidence can instead be presented by an authorized semantic reference and " +
+  "retrieved with read_evidence. " +
   "Do not attach or mention agent instruction files such as AGENTS.md, " +
   "CLAUDE.md, GEMINI.md, or equivalents merely because " +
   "they exist. Rely on normal project or runtime discovery when it supplies " +

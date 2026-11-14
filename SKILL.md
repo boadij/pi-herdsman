@@ -150,9 +150,16 @@ Skills are separate. Attach a required SKILL.md only when the task needs it and
 the selected definition does not already provide that skill. Ordinary relevant
 source, documentation, configuration, and evidence files remain attachable.
 
-Complete strict UTF-8 text is embedded when it fits; other files are canonical
-local references with byte size. Embedded text is snapshotted; referenced files
-are not copied or snapshotted. files transfers inline content or canonical
+Attachment handling depends on the operation. Explicit Agent attachments and
+ordinary coordination attachments deliver only complete supported strict UTF-8
+text within the applicable per-file and complete-message limits; unsupported or
+non-fitting content rejects the operation rather than falling back to a local
+path. Initial `delegate_work` text attachments are retained as snapshots. When
+such a snapshot does not fit inline, it is represented by its semantic
+`evidence:` reference. Previously accepted required evidence can be forwarded
+by its authorized semantic reference; a reference alone does not grant access.
+Authorized recipients retrieve bounded content with `read_evidence`. Embedded
+content is a submission-time snapshot. `files` transfers content or evidence
 references, not tools or runtime capabilities.
 
 Pass relevant files and completed agent results through `files`. Agent
@@ -231,13 +238,13 @@ work still blocks escalation.
 Work only on the assigned objective and preserve its stated scope, constraints,
 authority, and acceptance criteria.
 
-Treat supplied files as message evidence. Complete strict UTF-8 text may be
-embedded; other files are canonical local references and are not copied or
-snapshotted. The exception is retained assignment evidence, including accepted
-managed-Agent tasks: supported text up to 1 MiB is preserved and automatically
-propagated to new descendants; unsupported or oversized evidence cannot be
-registered. Reference delivery to a preserved snapshot remains possible when
-supported text exceeds the inline limit. Reuse adequate existing evidence
+Treat supplied files as message evidence. Explicit Agent attachments must
+contain complete supported UTF-8 text within configured limits, or the handoff
+is rejected. Retained assignment evidence, including accepted managed-Agent
+tasks, is preserved and can be presented by an authorized semantic reference
+retrieved with `read_evidence`; supported text up to 1 MiB is retained and
+automatically propagated to new descendants, while unsupported or oversized
+evidence cannot be registered. Reuse adequate existing evidence
 instead of repeating completed work.
 Do not overlap writers in a worktree or file-ownership boundary. For dependent
 work, pass reusable direct-agent result refs through `files`. Preserve canonical

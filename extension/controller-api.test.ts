@@ -3134,10 +3134,11 @@ for (const reachable of [true, false]) {
 
 for (const scenario of [
   {
-    name: "accepts its branch worktree Lead",
+    name: "delivers and reads evidence from delegate_work's prepared assignment",
     moved: false,
     mismatchedPath: false,
     prospectivePath: false,
+    delegateWorkPrepared: true,
   },
   {
     name: "accepts its prospective session path before the file exists",
@@ -3188,6 +3189,20 @@ for (const scenario of [
   },
 ])
   test(`project assignment delivery ${scenario.name}`, async (t) => {
+    const preparedAssignmentCapture: {
+      assignment?: ReturnType<typeof listProjectAssignments>[number];
+    } = {};
+    if ("delegateWorkPrepared" in scenario && scenario.delegateWorkPrepared)
+      await runManagerStartupScenario(
+        "success",
+        false,
+        undefined,
+        "pane_not_found",
+        true,
+        { inlineAttachmentLimitBytes: 1024 },
+        preparedAssignmentCapture,
+      );
+    const preparedAssignment = preparedAssignmentCapture.assignment;
     setLeadEnvironment();
     process.env.HERDR_SOCKET_PATH = join(
       tmpdir(),
@@ -3196,7 +3211,7 @@ for (const scenario of [
     process.env.HERDR_WORKSPACE_ID = "branch-workspace";
     process.env.HERDR_PANE_ID = "lead-pane";
     process.env.HERDR_TAB_ID = "lead-tab";
-    const sessionId = randomUUID();
+    const sessionId = preparedAssignment?.id ?? randomUUID();
     const managerId = randomUUID();
     const sessionPath = join(tmpdir(), `${sessionId}.jsonl`);
     const checkoutPath = join(tmpdir(), `${sessionId}-checkout`);
@@ -3248,17 +3263,34 @@ for (const scenario of [
       ref: "result:researcher#1",
       canonicalRef: resultRef(randomUUID()),
     };
-    const assignment = {
-      version: 2 as const,
-      id: sessionId,
-      repoKey,
-      branch: "smoke/delivery-placement",
-      ...("legacy" in scenario && scenario.legacy
-        ? { piSessionFile: sessionPath }
-        : { checkoutPath }),
-      text: `deliver only in the assigned checkout\n${"evidence\n".repeat(4096)}`,
-      resultBindings: [expectedBinding],
-    };
+    const assignment = preparedAssignment
+      ? {
+          ...preparedAssignment,
+          repoKey,
+          branch: "smoke/delivery-placement",
+          checkoutPath,
+          piSessionFile: sessionPath,
+        }
+      : {
+          version: 2 as const,
+          id: sessionId,
+          repoKey,
+          branch: "smoke/delivery-placement",
+          ...("legacy" in scenario && scenario.legacy
+            ? { piSessionFile: sessionPath }
+            : { checkoutPath }),
+          text: `deliver only in the assigned checkout\n${"evidence\n".repeat(4096)}`,
+          resultBindings: [expectedBinding],
+        };
+    const retainedEvidence = preparedAssignment?.requiredEvidence?.find(
+      (evidence) =>
+        "path" in evidence &&
+        assignment.text.includes(`name="${evidence.ref}"`),
+    );
+    const retainedSnapshot =
+      retainedEvidence && "path" in retainedEvidence
+        ? retainedEvidence
+        : undefined;
     const publishAssignment = () => {
       writeProjectAssignment(runtime, assignment);
       writeChiefMessage(
@@ -3282,7 +3314,9 @@ for (const scenario of [
       const signal = listChiefMessagePaths(runtime, sessionId)
         .map((path) => readChiefMessage(path))
         .find((record) => record.kind === "project_assignment")!;
-      assert.ok(Buffer.byteLength(assignment.text, "utf8") > 16 * 1024);
+      if (preparedAssignment)
+        assert.ok(Buffer.byteLength(assignment.text, "utf8") < 16 * 1024);
+      else assert.ok(Buffer.byteLength(assignment.text, "utf8") > 16 * 1024);
       assert.ok(chiefMessageBytes(signal) <= COORDINATION_MESSAGE_MAX_BYTES);
       assert.equal(signal.text, "Project assignment ready.");
       assert.equal(signal.resultBindings, undefined);
@@ -3507,24 +3541,54 @@ for (const scenario of [
           );
         assert.ok(assignmentDelivery.content.includes(assignment.branch));
         assert.ok(assignmentDelivery.content.includes(assignment.text));
-        assert.ok(
-          Buffer.byteLength(assignmentDelivery.content, "utf8") > 8 * 1024,
-        );
-        assert.ok(
-          assignmentDelivery.content.includes(`${"evidence\n".repeat(4096)}`),
-        );
+        if (retainedSnapshot) {
+          const retained = retainedSnapshot;
+          assert.ok(retained.ref);
+          assert.ok(assignmentDelivery.content.includes(retained.ref));
+          assert.ok(!assignmentDelivery.content.includes(retained.path));
+          const readEvidence = pi.tools.find(
+            (tool) => tool.name === "read_evidence",
+          );
+          assert.ok(readEvidence, "the delivered Lead registers read_evidence");
+          const read = await readEvidence.execute(
+            "read",
+            { ref: retained.ref },
+            undefined,
+            undefined,
+            ctx,
+          );
+          assert.equal(
+            read.content[0]?.text,
+            `${"evidence\n".repeat(200)}\n[More evidence: call read_evidence with offset=201, byteOffset=0]`,
+          );
+        }
+        if (preparedAssignment) {
+          assert.ok(
+            Buffer.byteLength(assignmentDelivery.content, "utf8") < 16 * 1024,
+          );
+          assert.ok(retainedSnapshot?.ref);
+          assert.ok(assignmentDelivery.content.includes(retainedSnapshot.ref));
+        } else {
+          assert.ok(
+            Buffer.byteLength(assignmentDelivery.content, "utf8") > 8 * 1024,
+          );
+          assert.ok(
+            assignmentDelivery.content.includes(`${"evidence\n".repeat(4096)}`),
+          );
+        }
         assert.match(
           assignmentDelivery.content,
           /automatically hands every completed\s+direct-work response to the Manager role/,
         );
         assert.equal(assignmentDelivery.content.includes(sessionId), false);
-        assert.ok(
-          entries.some(
-            (entry: any) =>
-              entry.customType === "pi-herdsman-result-ref" &&
-              entry.data?.canonicalRef === expectedBinding.canonicalRef,
-          ),
-        );
+        if (!preparedAssignment)
+          assert.ok(
+            entries.some(
+              (entry: any) =>
+                entry.customType === "pi-herdsman-result-ref" &&
+                entry.data?.canonicalRef === expectedBinding.canonicalRef,
+            ),
+          );
       }
       if (scenario.prospectivePath || scenario.presentationThrows) {
         assert.equal(realFs.existsSync(sessionPath), false);
@@ -3598,6 +3662,20 @@ for (const scenario of [
         listProjectMessages(runtime, repoKey, assignment.branch).length,
         1,
       );
+      if (preparedAssignment) {
+        for (const message of listProjectMessages(
+          runtime,
+          repoKey,
+          assignment.branch,
+        ))
+          removeProjectMessageRaw(
+            runtime,
+            repoKey,
+            assignment.branch,
+            message.id,
+          );
+        removeProjectAssignment(runtime, repoKey, assignment.branch);
+      }
     } finally {
       if (scenario.mismatchedPath) realFs.rmSync(sessionPath, { force: true });
       nativeSessions.delete(sessionId);
@@ -3931,6 +4009,9 @@ async function runManagerStartupScenario(
   limits?: {
     inlineAttachmentLimitBytes?: number;
     mailboxPayloadLimitBytes?: number;
+  },
+  capture?: {
+    assignment?: ReturnType<typeof listProjectAssignments>[number];
   },
 ): Promise<void> {
   setLeadEnvironment();
@@ -4567,8 +4648,21 @@ async function runManagerStartupScenario(
         assert.match(starting.text, /<file name=.*>/);
         if (limits?.inlineAttachmentLimitBytes !== undefined) {
           assert.ok(Buffer.byteLength(starting.text, "utf8") < 16 * 1024);
-          assert.match(starting.text, /<file name=.* bytes="\d+" \/>/);
-          assert.doesNotMatch(starting.text, /evidence\n/);
+          const snapshot = starting.requiredEvidence?.find(
+            (evidence) =>
+              "path" in evidence && evidence.name === basename(attachmentPath),
+          );
+          assert.ok(snapshot && "path" in snapshot);
+          assert.ok(snapshot.ref);
+          assert.ok(starting.text.includes(`name="${snapshot.ref}"`));
+          assert.ok(!starting.text.includes(snapshot.path));
+          assert.ok(starting.text.includes("deliver the fresh assignment"));
+          realFs.writeFileSync(attachmentPath, "changed after acceptance");
+          assert.equal(
+            readRequiredEvidenceSnapshot(starting.id, snapshot),
+            "evidence\n".repeat(4096),
+          );
+          realFs.writeFileSync(attachmentPath, "evidence\n".repeat(4096));
         } else {
           assert.ok(Buffer.byteLength(starting.text, "utf8") > 16 * 1024);
           assert.match(starting.text, /evidence/);
@@ -6951,6 +7045,7 @@ async function runManagerStartupScenario(
       supervisionRuntime(),
       repoKey,
     )[0]!;
+    if (capture) capture.assignment = assignment;
     assert.deepEqual(Object.keys(assignment).sort(), [
       "branch",
       "checkoutPath",
@@ -7643,6 +7738,14 @@ async function runManagerStartupScenario(
       assert.equal(
         listProjectAssignments(supervisionRuntime(), repoKey)[0]?.id,
         childSession,
+      );
+    }
+    if (capture?.assignment) {
+      await pi.commandOptions.get("manager").handler("leave", ctx);
+      removeProjectAssignment(
+        supervisionRuntime(),
+        capture.assignment.repoKey,
+        capture.assignment.branch,
       );
     }
   } finally {
