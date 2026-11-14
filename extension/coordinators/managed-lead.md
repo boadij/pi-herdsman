@@ -1,6 +1,7 @@
 ---
 description: Manager-created project Lead for branch-scoped orchestration and integration
-inheritGlobalContext: true
+inheritGlobalContext: false
+inheritAncestorContext: false
 inheritProjectContext: true
 name: managed-lead
 extensions: [builtin:codemode]

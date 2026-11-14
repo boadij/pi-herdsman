@@ -551,8 +551,13 @@ test("ordinary Agent Details order native and appended context by launch mode", 
   for (const scenario of [
     {
       name: "native",
-      frontmatter: { inheritGlobalContext: true, inheritProjectContext: true },
+      frontmatter: {
+        inheritGlobalContext: true,
+        inheritAncestorContext: true,
+        inheritProjectContext: true,
+      },
       expected: [
+        "Pi native context: global, ancestor, project",
         "definition body",
         "Herdsman shared guidance",
         "context sentinel",
@@ -560,7 +565,11 @@ test("ordinary Agent Details order native and appended context by launch mode", 
     },
     {
       name: "selective",
-      frontmatter: { inheritGlobalContext: false, inheritProjectContext: true },
+      frontmatter: {
+        inheritGlobalContext: false,
+        inheritAncestorContext: true,
+        inheritProjectContext: true,
+      },
       expected: [
         "definition body",
         "context sentinel",
@@ -568,21 +577,46 @@ test("ordinary Agent Details order native and appended context by launch mode", 
       ],
     },
     {
+      name: "global and project but not ancestor",
+      frontmatter: {
+        inheritGlobalContext: true,
+        inheritAncestorContext: false,
+        inheritProjectContext: true,
+      },
+      expected: [
+        "Selected Pi context: global, project",
+        "definition body",
+        "context sentinel",
+      ],
+    },
+    {
       name: "empty first source",
-      frontmatter: { inheritGlobalContext: true, inheritProjectContext: true },
+      frontmatter: {
+        inheritGlobalContext: true,
+        inheritAncestorContext: true,
+        inheritProjectContext: true,
+      },
       expected: ["definition body"],
       emptyFirstFragment: true,
     },
     {
       name: "all fragments empty",
-      frontmatter: { inheritGlobalContext: true, inheritProjectContext: true },
+      frontmatter: {
+        inheritGlobalContext: true,
+        inheritAncestorContext: true,
+        inheritProjectContext: true,
+      },
       expected: [],
       emptyFirstFragment: true,
       allFragmentsEmpty: true,
     },
     {
       name: "multiple definition layer changes",
-      frontmatter: { inheritGlobalContext: true, inheritProjectContext: true },
+      frontmatter: {
+        inheritGlobalContext: true,
+        inheritAncestorContext: true,
+        inheritProjectContext: true,
+      },
       expected: ["definition body"],
       layers: [
         {
@@ -732,10 +766,16 @@ test("ordinary Agent Details order native and appended context by launch mode", 
 test("inactive Managed Lead Details include Working directory exactly once", async () => {
   const choices = ["roles", "managed-lead", "details", undefined, undefined];
   let details: any;
+  let selectedCwd: string | undefined;
   const definition = {
     name: "managed-lead",
     path: "/managed-lead.md",
-    frontmatter: { name: "managed-lead" },
+    frontmatter: {
+      name: "managed-lead",
+      inheritGlobalContext: false,
+      inheritAncestorContext: false,
+      inheritProjectContext: true,
+    },
     body: "Managed Lead instructions",
   };
   const runtime = createLeadCommandRuntime({
@@ -755,7 +795,10 @@ test("inactive Managed Lead Details include Working directory exactly once", asy
     roleActive: () => false,
     isCurrentChief: () => false,
     leadExecutionPresentation: () => ({ managed: false, mode: "flexible" }),
-    selectedAgentContextFiles: () => [],
+    selectedAgentContextFiles: (_definition: unknown, cwd: string) => {
+      selectedCwd = cwd;
+      return [{ path: "/workspace/AGENTS.md", content: "project context" }];
+    },
     agentDefinitionMetadata: () => ({ name: "managed-lead" }),
     formatAgentDefinitions: () => ["Managed Lead metadata"],
     appendDefinitionsEntry: (data: any) => {
@@ -772,6 +815,22 @@ test("inactive Managed Lead Details include Working directory exactly once", asy
   assert.ok(
     details,
     "Details should be appended for the prospective Managed Lead",
+  );
+  assert.equal(selectedCwd, "/workspace");
+  assert.match(
+    details.inspector.summary.join("\n"),
+    /Preview cwd: \/workspace/u,
+  );
+  assert.match(
+    details.inspector.summary.join("\n"),
+    /Selected Pi context: project/u,
+  );
+  assert.ok(
+    details.inspector.sections.some(
+      (section: any) =>
+        section.title === "Pi context" &&
+        section.source === "/workspace/AGENTS.md",
+    ),
   );
   assert.equal(
     details.inspector.sections.filter(

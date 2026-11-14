@@ -81,6 +81,7 @@ export function summarizeDefinitionLayerChanges(
     "extensions",
     "agents",
     "inheritGlobalContext",
+    "inheritAncestorContext",
     "inheritProjectContext",
     "inheritSkills",
   ] as const;
