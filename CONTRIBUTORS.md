@@ -9,6 +9,8 @@ authored the fix. Corrections and additions are welcome.
 
 - **[@767251930](https://github.com/767251930)** - Fixed Windows extended-path handling for repository and worktree identity ([PR #663](https://github.com/boadij/pi-herdsman/pull/663)).
 
+- **[@aholbreich](https://github.com/aholbreich)** - Preserved provider failure causes and failed model identity in managed-Agent execution-error results ([PR #966](https://github.com/boadij/pi-herdsman/pull/966)).
+
 - **[@awerner](https://github.com/awerner)** - Investigated Manager tool-selection failures and Agent model restoration and extension discovery ([issue #832](https://github.com/boadij/pi-herdsman/issues/832), [issue #853](https://github.com/boadij/pi-herdsman/issues/853), [issue #882](https://github.com/boadij/pi-herdsman/issues/882); follow-up [PR #868](https://github.com/boadij/pi-herdsman/pull/868), [PR #864](https://github.com/boadij/pi-herdsman/pull/864), [PR #883](https://github.com/boadij/pi-herdsman/pull/883)).
 
 - **[@Battlelamb](https://github.com/Battlelamb)** - Reported Agent discovery failures, Code Mode interoperability limitations, and an extension tool-name collision ([issue #880](https://github.com/boadij/pi-herdsman/issues/880), [issue #881](https://github.com/boadij/pi-herdsman/issues/881), [issue #869](https://github.com/boadij/pi-herdsman/issues/869); follow-up [PR #884](https://github.com/boadij/pi-herdsman/pull/884), [PR #885](https://github.com/boadij/pi-herdsman/pull/885)).
