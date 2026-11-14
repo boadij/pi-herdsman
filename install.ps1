@@ -31,6 +31,9 @@ function Version([string]$Command) {
 
 function Invoke-Bootstrap {
 try {
+    if ($env:PI_HERDSMAN_WEB_ACCESS -and $env:PI_HERDSMAN_WEB_ACCESS -notin @('install', 'skip')) {
+        Fail "PI_HERDSMAN_WEB_ACCESS must be 'install' or 'skip'."
+    }
     if ($env:OS -ne 'Windows_NT') { Fail 'This installer supports Windows only.' }
     if (-not [Environment]::Is64BitOperatingSystem) { Fail 'Windows bootstrap requires 64-bit Windows.' }
     try { $manifest = Invoke-RestMethod -Uri "https://registry.npmjs.org/$package/latest" -TimeoutSec 30 }
@@ -81,7 +84,37 @@ try {
     if ($LASTEXITCODE -ne 0) { Fail "Herdr integration verification failed with exit code $LASTEXITCODE." }
     if (-not (($integrationStatus -join "`n") -match '(?m)^pi: current \(v\d+\)(?: .+)?$')) { Fail "Herdr Pi integration is not enabled/current:`n$($integrationStatus -join "`n")" }
 
-    Write-Host "`nPi Herdsman package operation completed (target release $herdsmanVersion). Pi $installedPi and Herdr $installedHerdr are available.`n"
+    $webStatus = 'skipped'
+    if ($lines | Where-Object { $_ -match '^npm:pi-web-access(?:@\S+)?(?:\s+\(filtered\))?$' }) {
+        $webStatus = 'already installed'
+    } else {
+        $installWeb = $env:PI_HERDSMAN_WEB_ACCESS -eq 'install'
+        if (-not $env:PI_HERDSMAN_WEB_ACCESS) {
+            while ($true) {
+                try { $answer = Read-Host 'Install pi-web-access? [y/N]' }
+                catch { break }
+                if ($null -eq $answer -or $answer.Trim() -eq '') { break }
+                $normalizedAnswer = $answer.Trim().ToLowerInvariant()
+                if ($normalizedAnswer -in @('y', 'yes')) {
+                    $installWeb = $true
+                    break
+                }
+                if ($normalizedAnswer -in @('n', 'no')) { break }
+                Write-Host 'Please enter y or n.'
+            }
+        }
+        if ($installWeb) {
+            & $pi.Source install 'npm:pi-web-access' --no-approve
+            if ($LASTEXITCODE -ne 0) {
+                [Console]::Error.WriteLine("Pi Herdsman and Herdr installed successfully.`nOptional pi-web-access installation failed.`n`nRetry with:`n  pi install npm:pi-web-access")
+                Fail "Optional pi-web-access installation failed with exit code $LASTEXITCODE."
+            }
+            $webStatus = 'installed'
+        }
+    }
+
+    Write-Host "`nPi Herdsman package operation completed (target release $herdsmanVersion). Pi $installedPi and Herdr $installedHerdr are available."
+    Write-Host "Optional pi-web-access: $webStatus.`n"
     Write-Host "Next steps:`n  1. Open your project and run: herdr`n  2. Start Pi inside a Herdr pane: pi`n  3. In Pi, use /login if authentication is needed`n  4. Ask: Use scout to inspect this repository without changing files.`n  5. Open /herdsman for controls"
 } catch {
     [Console]::Error.WriteLine("  x $($_.Exception.Message)")

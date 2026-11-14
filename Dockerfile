@@ -5,6 +5,8 @@ ARG MISE_VERSION=2026.11.8
 
 FROM ${NODE_IMAGE} AS package
 
+ARG PI_WEB_ACCESS_VERSION=0.47.0
+
 WORKDIR /src
 
 COPY package.json package-lock.json ./
@@ -23,10 +25,23 @@ process.stdout.write(JSON.stringify(runtime));' > /runtime.json \
  && mv "$tarball" /pi-herdsman-seed.tgz \
  && mkdir /package \
  && tar -xzf /pi-herdsman-seed.tgz -C /package --strip-components=1 \
+ && web_tarball="$(npm pack "pi-web-access@${PI_WEB_ACCESS_VERSION}" --ignore-scripts --silent)" \
+ && mv "$web_tarball" /pi-web-access-seed.tgz \
+ && mkdir /package-web-access \
+ && tar -xzf /pi-web-access-seed.tgz -C /package-web-access --strip-components=1 \
+ && PI_WEB_ACCESS_VERSION="$PI_WEB_ACCESS_VERSION" node -e '\
+const fs = require("node:fs"); \
+const manifest = require("/package-web-access/package.json"); \
+if (manifest.name !== "pi-web-access" || manifest.version !== process.env.PI_WEB_ACCESS_VERSION) throw new Error("pi-web-access seed name/version mismatch"); \
+if (!Array.isArray(manifest.pi?.extensions) || !manifest.pi.extensions.includes("./dist")) throw new Error("pi-web-access seed has no declared ./dist extension entry"); \
+if (!fs.statSync("/package-web-access/dist/index.js").isFile()) throw new Error("pi-web-access seed is missing dist/index.js");' \
  && npm install --prefix /npm-seed --cache /npm-seed-cache \
-      --legacy-peer-deps --ignore-scripts --no-audit --no-fund /pi-herdsman-seed.tgz \
- && npm pkg set --prefix /npm-seed 'dependencies.pi-herdsman=*' \
- && diff -qr /package /npm-seed/node_modules/pi-herdsman
+      --legacy-peer-deps --ignore-scripts --no-audit --no-fund \
+      /pi-herdsman-seed.tgz /pi-web-access-seed.tgz \
+ && npm pkg set --prefix /npm-seed \
+      'dependencies.pi-herdsman=*' 'dependencies.pi-web-access=*' \
+ && diff -qr /package /npm-seed/node_modules/pi-herdsman \
+ && diff -qr /package-web-access /npm-seed/node_modules/pi-web-access
 
 FROM ghcr.io/jdx/mise:${MISE_VERSION} AS mise
 
@@ -148,6 +163,8 @@ COPY --from=package /package /opt/pi-herdsman
 COPY --from=package /npm-seed /opt/pi-herdsman-npm-seed
 COPY --from=package /npm-seed-cache /opt/pi-herdsman-npm-cache
 COPY --from=package /pi-herdsman-seed.tgz /opt/pi-herdsman-seed.tgz
+COPY --from=package /pi-web-access-seed.tgz /opt/pi-web-access-seed.tgz
+COPY --from=package /package-web-access/LICENSE /usr/share/doc/pi-herdsman/third-party/pi-web-access-LICENSE
 COPY --chmod=0755 docker/pi-herdsman-peer /usr/local/bin/pi-herdsman-peer
 COPY --chmod=0444 docker/AGENTS.md /AGENTS.md
 COPY docker/entrypoint.sh /usr/local/bin/container-entrypoint

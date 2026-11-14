@@ -44,6 +44,11 @@ process.stdout.write(String(result));
 }
 
 main() {
+  case "${PI_HERDSMAN_WEB_ACCESS:-}" in
+    install|skip|'') ;;
+    *) err "PI_HERDSMAN_WEB_ACCESS must be 'install' or 'skip'" ;;
+  esac
+
   need curl
   need node
   need npm
@@ -197,8 +202,44 @@ main() {
   herdr integration install pi
   herdr integration status >/dev/null
 
+  web_status=skipped
+  if printf '%s\n' "$packages" |
+    grep -Eq '^[[:space:]]*npm:pi-web-access(@[^[:space:]]+)?([[:space:]]+\(filtered\))?[[:space:]]*$'; then
+    web_status='already installed'
+  else
+    install_web=false
+    case "${PI_HERDSMAN_WEB_ACCESS:-}" in
+      install) install_web=true ;;
+      skip) ;;
+      '')
+        if (: </dev/tty >/dev/tty) 2>/dev/null; then
+          while :; do
+            printf 'Install pi-web-access? [y/N] ' >/dev/tty
+            if ! IFS= read -r answer </dev/tty; then
+              break
+            fi
+            case "$answer" in
+              y|Y|[Yy][Ee][Ss]) install_web=true; break ;;
+              ''|n|N|[Nn][Oo]) break ;;
+              *) printf 'Please enter y or n.\n' >/dev/tty ;;
+            esac
+          done
+        fi
+        ;;
+    esac
+    if [ "$install_web" = true ]; then
+      if pi install npm:pi-web-access --no-approve; then
+        web_status=installed
+      else
+        printf '\nPi Herdsman and Herdr installed successfully.\nOptional pi-web-access installation failed.\n\nRetry with:\n  pi install npm:pi-web-access\n' >&2
+        exit 1
+      fi
+    fi
+  fi
+
   printf '\nPi Herdsman package operation completed (target release %s). Pi %s and Herdr %s are available.\n' \
     "$herdsman_version" "$installed_pi" "$installed_herdr"
+  printf 'Optional pi-web-access: %s.\n' "$web_status"
   printf '\nNext steps:\n'
   printf '  1. Open your project and run: herdr\n'
   printf '  2. Start Pi inside a Herdr pane: pi\n'

@@ -82,7 +82,7 @@ jobs:
       - run: npm ci
       - name: Isolated Windows check-runner tests (temporary)
         if: matrix.os == 'windows-latest'
-        run: npm test -- --test-name-pattern="^(Windows PowerShell classifier distinguishes sanitized worker path reasons|Windows targeted CIM query identifies and cleans its exact test child)$" extension/check-runner.test.ts
+        run: npm test -- --test-timeout=20000 --test-name-pattern="^(Windows PowerShell classifier distinguishes sanitized worker path reasons|Windows targeted CIM query identifies and cleans its exact test child)$" extension/check-runner.test.ts
       - run: npm run check
 
   windows-bootstrap:
@@ -91,6 +91,8 @@ jobs:
     if: ${{ needs.scope.outputs.bootstrap == 'true' }}
     runs-on: windows-latest
     timeout-minutes: 20
+    env:
+      PI_HERDSMAN_WEB_ACCESS: skip
     steps:
       - uses: actions/checkout@v7
         with:

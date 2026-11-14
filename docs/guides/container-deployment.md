@@ -50,6 +50,31 @@ pi
 
 Use `/login` if Pi needs model-provider authentication.
 
+## Web access
+
+Fresh Pi environments in the Docker distribution include the optional
+`pi-web-access` extension. Initialization only seeds it for a fresh Pi home:
+existing Docker volumes keep their package state, and restarts do not restore a
+package you remove.
+
+Pi remains the package manager. Remove web access persistently with:
+
+```sh
+pi remove npm:pi-web-access
+```
+
+Install or restore it explicitly, or update it when desired:
+
+```sh
+pi install npm:pi-web-access
+pi update npm:pi-web-access
+```
+
+Start a new Pi session or run `/reload` in an existing session to adopt changed
+extension resources. Search providers may receive external requests. The
+extension executes third-party code in the Pi process with that process's
+permissions; its tool allowlist is not an operating-system sandbox.
+
 ## Add it to Herdr
 
 ```sh

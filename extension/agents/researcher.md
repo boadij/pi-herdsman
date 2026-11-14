@@ -12,6 +12,7 @@ tools:
     ls,
     find,
     grep,
+    web_enable,
     web_search,
     fetch_content,
     get_search_content,

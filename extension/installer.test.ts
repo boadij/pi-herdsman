@@ -68,10 +68,25 @@ function runWindowsBootstrap({
   installed = "",
   fail = "",
   status = "pi: current (v9) (C:\\mock\\integration)",
+  webAccess = "skip",
+  answer = "",
+  answers = [""],
+  inputFailure = false,
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-ps-test-"));
   const harness = join(root, "harness.ps1");
-  const values = { pi, herdr, node, installed, fail, status };
+  const values = {
+    pi,
+    herdr,
+    node,
+    installed,
+    fail,
+    status,
+    webAccess,
+    answer,
+    answers: answers[0] ? answers : answer ? [answer] : [],
+    inputFailure,
+  };
   const escaped = JSON.stringify(values).replaceAll("'", "''");
   writeFileSync(
     harness,
@@ -79,7 +94,9 @@ function runWindowsBootstrap({
 $ErrorActionPreference = 'Stop'
 $script:case = ConvertFrom-Json '${escaped}'
 $script:log = [System.Collections.Generic.List[string]]::new()
+$script:answerIndex = 0
 $script:LASTEXITCODE = 0
+if ($script:case.webAccess) { $env:PI_HERDSMAN_WEB_ACCESS = $script:case.webAccess } else { Remove-Item Env:PI_HERDSMAN_WEB_ACCESS -ErrorAction SilentlyContinue }
 . '${windowsInstaller.replaceAll("'", "''")}' -DefinitionsOnly
 function Invoke-RestMethod { [pscustomobject]@{ version='8.0.0'; engines=@{node='>=22.19.0'}; piHerdsman=@{runtime=@{pi='1.4.0';herdr=@{version='0.9.5'}}} } }
 function Resolve-Command([string]$Name) {
@@ -99,7 +116,8 @@ function Version([string]$Command) {
 function Invoke-WebRequest { param($Uri,$OutFile,[switch]$UseBasicParsing) Set-Content -Path $OutFile -Value 'mock installer' }
 function powershell.exe { $script:LASTEXITCODE=0; $env:Path += ';C:\\mock-installed' }
 function Invoke-UpstreamInstaller([string]$Url) { $script:log.Add("installer $Url") }
-function MockPi { param($Action,$Arg1,$Arg2,$Arg3) $script:LASTEXITCODE=0; if ($Action -eq 'list') { return $script:case.installed }; $script:log.Add("pi $Action $Arg1 $Arg2"); if ($script:case.fail -eq $Action) {$script:LASTEXITCODE=17} }
+function Read-Host { param($Prompt) $script:log.Add("prompt $Prompt"); if ($script:case.inputFailure) { throw 'No interactive host input' }; $answer = $script:case.answers[$script:answerIndex]; $script:answerIndex++; return $answer }
+function MockPi { param($Action,$Arg1,$Arg2,$Arg3) $script:LASTEXITCODE=0; if ($Action -eq 'list') { return $script:case.installed }; $script:log.Add("pi $Action $Arg1 $Arg2"); if ($script:case.fail -eq $Action -or ($Action -eq 'install' -and $Arg1 -eq 'npm:pi-web-access' -and $script:case.fail -eq 'web-install')) {$script:LASTEXITCODE=17} }
 function MockHerdr { param($Action,$Arg1,$Arg2) $script:LASTEXITCODE=0; if ($Action -eq 'integration' -and $Arg1 -eq 'status') { return $script:case.status }; $script:log.Add("herdr $Action $Arg1 $Arg2"); if ($script:case.fail -eq 'integration') {$script:LASTEXITCODE=19} }
 $failed = $false
 try { Invoke-Bootstrap } catch { $failed = $true; [Console]::Error.WriteLine($_.Exception.Message) }
@@ -133,6 +151,64 @@ test(
     assert.match(result.stdout, /pi install npm:pi-herdsman --no-approve/u);
     assert.match(result.stdout, /herdr integration install pi/u);
     assert.match(result.stdout, /Next steps:/u);
+  },
+);
+
+test(
+  "Windows bootstrap honors web-access overrides and skips unavailable host input",
+  { skip: process.platform !== "win32" },
+  () => {
+    const skipped = runWindowsBootstrap({ webAccess: "skip" });
+    assert.equal(skipped.status, 0, skipped.stderr);
+    assert.doesNotMatch(skipped.stdout, /prompt Install pi-web-access/u);
+    assert.doesNotMatch(skipped.stdout, /pi install npm:pi-web-access/u);
+    const installed = runWindowsBootstrap({ webAccess: "install" });
+    assert.equal(installed.status, 0, installed.stderr);
+    assert.match(
+      installed.stdout,
+      /pi install npm:pi-web-access --no-approve/u,
+    );
+    assert.doesNotMatch(installed.stdout, /prompt Install pi-web-access/u);
+    const unavailable = runWindowsBootstrap({
+      webAccess: "",
+      inputFailure: true,
+    });
+    assert.equal(unavailable.status, 0, unavailable.stderr);
+    assert.match(unavailable.stdout, /prompt Install pi-web-access/u);
+    assert.match(unavailable.stdout, /Optional pi-web-access: skipped/u);
+  },
+);
+
+test(
+  "Windows bootstrap reprompts after invalid input before accepting y or n",
+  { skip: process.platform !== "win32" },
+  () => {
+    for (const [answer, expectedStatus, expectedInstall] of [
+      ["y", "installed", true],
+      ["n", "skipped", false],
+    ] as const) {
+      const result = runWindowsBootstrap({
+        webAccess: "",
+        answers: ["perhaps", answer],
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /Please enter y or n\./u);
+      assert.equal(
+        (result.stdout.match(/prompt Install pi-web-access\? \[y\/N\]/gu) ?? [])
+          .length,
+        2,
+        result.stdout,
+      );
+      assert.match(
+        result.stdout,
+        new RegExp(`Optional pi-web-access: ${expectedStatus}\\.`),
+      );
+      assert.equal(
+        result.stdout.includes("pi install npm:pi-web-access --no-approve"),
+        expectedInstall,
+        result.stdout,
+      );
+    }
   },
 );
 
@@ -392,6 +468,8 @@ function fixture({
   piListFails = false,
   piInstallFails = false,
   piUpdateFails = false,
+  piWebAccessInstallFails = false,
+  piWebAccessHangs = false,
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-install-"));
   const bin = join(root, "bin");
@@ -470,7 +548,13 @@ case "\${1:-}" in
   install)
     printf 'pi %s\\n' "$*" >> "$FAKE_LOG"
     [ "$FAKE_PI_INSTALL_FAILS" != true ] || exit 1
-    printf '  %s\\n' "$2" > "$FAKE_PI_LIST"
+    if [ "$2" = npm:pi-web-access ]; then
+      [ "$FAKE_PI_WEB_ACCESS_INSTALL_FAILS" != true ] || exit 1
+      [ "$FAKE_PI_WEB_ACCESS_HANGS" != true ] || exec sleep 30
+      printf '  %s\\n' "$2" >> "$FAKE_PI_LIST"
+    else
+      printf '  %s\\n' "$2" > "$FAKE_PI_LIST"
+    fi
     ;;
   update)
     printf 'pi %s\\n' "$*" >> "$FAKE_LOG"
@@ -545,12 +629,444 @@ process.stdin.on("end", () => {
       FAKE_PI_LIST_FAILS: String(piListFails),
       FAKE_PI_INSTALL_FAILS: String(piInstallFails),
       FAKE_PI_UPDATE_FAILS: String(piUpdateFails),
+      FAKE_PI_WEB_ACCESS_INSTALL_FAILS: String(piWebAccessInstallFails),
+      FAKE_PI_WEB_ACCESS_HANGS: String(piWebAccessHangs),
       FAKE_HERDR_ASSET: herdrAsset,
       FAKE_PI_INSTALLER_TARGET: piInstallerVersion,
       FAKE_HERDR_TARGET: packageJson.piHerdsman.runtime.herdr.version,
     },
   };
 }
+
+test(
+  "native web-access selection is opt-in without a terminal and supports overrides",
+  { skip: process.platform === "win32" },
+  () => {
+    for (const [choice, expected] of [
+      ["skip", false],
+      ["install", true],
+    ] as const) {
+      const setup = fixture();
+      try {
+        const result = spawnSync("sh", [installer], {
+          env: { ...setup.env, PI_HERDSMAN_WEB_ACCESS: choice },
+          input: "y\\n",
+          encoding: "utf8",
+        });
+        assert.equal(result.status, 0, result.stderr);
+        assert.match(
+          result.stdout,
+          new RegExp(
+            `Optional pi-web-access: ${expected ? "installed" : "skipped"}\\.`,
+          ),
+        );
+        assert.equal(
+          (
+            readFileSync(setup.log, "utf8").match(
+              /^pi install npm:pi-web-access --no-approve$/gmu,
+            ) ?? []
+          ).length,
+          expected ? 1 : 0,
+        );
+      } finally {
+        rmSync(setup.root, { recursive: true, force: true });
+      }
+    }
+  },
+);
+
+const python3 = spawnSync("which", ["python3"], { encoding: "utf8" });
+const hasPython3 = python3.status === 0 && python3.stdout.trim().length > 0;
+
+test(
+  "native installer PTY prompts, reprompts invalid input, and cleans up timed-out children",
+  {
+    skip:
+      (process.platform !== "linux" && process.platform !== "darwin") ||
+      (process.platform === "linux" && !hasPython3),
+  },
+  () => {
+    assert.deepEqual(
+      hasPython3,
+      true,
+      "PTY regression requires python3 on macOS; python3 must be installed and available on PATH",
+    );
+    for (const [input, status] of [
+      ["perhaps\nyes\n", "installed"],
+      ["n\n", "skipped"],
+      ["\n", "skipped"],
+    ]) {
+      const setup = fixture();
+      try {
+        const env: NodeJS.ProcessEnv = { ...setup.env };
+        delete env.PI_HERDSMAN_WEB_ACCESS;
+        // Fork the installer under a real controlling PTY, then type answers
+        // through the PTY master only after each prompt is observed.
+        const ptyRunner = String.raw`import errno, os, pty, select, signal, sys, time
+answers = sys.stdin.buffer.read().splitlines(keepends=True)
+stage = "starting PTY child"
+captured = bytearray()
+pid = master = None
+reaped = False
+status = 1
+deadline = time.monotonic() + float(os.environ.get("PTY_RUNNER_DEADLINE_SECONDS", "25"))
+
+permission_denied = False
+
+def process_group_exists():
+    global permission_denied
+    try:
+        os.killpg(pid, 0)
+        return True
+    except OSError as error:
+        if error.errno == errno.ESRCH:
+            return False
+        if error.errno == errno.EPERM:
+            permission_denied = True
+            return True
+        raise
+
+def signal_process_group(sig):
+    global permission_denied
+    try:
+        os.killpg(pid, sig)
+    except OSError as error:
+        if error.errno == errno.ESRCH:
+            return
+        if error.errno == errno.EPERM:
+            permission_denied = True
+            return
+        raise
+
+def reap_leader():
+    global reaped
+    try:
+        waited, _ = os.waitpid(pid, os.WNOHANG)
+        if waited == pid:
+            reaped = True
+    except ChildProcessError:
+        reaped = True
+    return reaped
+
+def clean_process_group():
+    if type(pid) is not int or pid <= 0:
+        return True, reaped
+    if process_group_exists():
+        signal_process_group(signal.SIGTERM)
+    end = time.monotonic() + 1
+    while time.monotonic() < end:
+        reap_leader()
+        if not process_group_exists():
+            break
+        time.sleep(0.02)
+    if process_group_exists():
+        signal_process_group(signal.SIGKILL)
+    end = time.monotonic() + 1
+    while time.monotonic() < end:
+        reap_leader()
+        if not process_group_exists() and reaped:
+            break
+        time.sleep(0.02)
+    return not process_group_exists(), reaped
+
+try:
+    pid, master = pty.fork()
+    if pid == 0:
+        try:
+            os.execvp("sh", ["sh", sys.argv[1]])
+        except BaseException:
+            try:
+                os.write(2, b"PTY child exec failed\\n")
+            except BaseException:
+                pass
+            os._exit(127)
+    stage = "waiting for installer prompt"
+    sent = 0
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select([master], [], [], 0.1)
+        if ready:
+            try:
+                chunk = os.read(master, 4096)
+            except OSError as error:
+                if error.errno == errno.EIO:
+                    stage = "PTY returned EIO; checking child status"
+                    break
+                raise
+            if not chunk:
+                stage = "PTY returned EOF; checking child status"
+                break
+            captured.extend(chunk)
+            sys.stdout.buffer.write(chunk)
+            sys.stdout.buffer.flush()
+            prompts = captured.count(b"Install pi-web-access? [y/N]")
+            while sent < prompts and sent < len(answers):
+                os.write(master, answers[sent])
+                sent += 1
+                stage = "waiting for next observed prompt or child exit"
+        waited, child_status = os.waitpid(pid, os.WNOHANG)
+        if waited:
+            status = child_status
+            reaped = True
+            stage = "installer child exited and was reaped"
+            break
+    else:
+        raise TimeoutError("PTY runner deadline expired")
+    if not reaped:
+        stage = "waiting for installer child exit and reap"
+        while time.monotonic() < deadline:
+            waited, status = os.waitpid(pid, os.WNOHANG)
+            if waited:
+                reaped = True
+                stage = "installer child reaped"
+                break
+            time.sleep(0.02)
+        if not reaped:
+            raise TimeoutError("timed out waiting to reap installer child")
+except BaseException as error:
+    sys.stderr.write("Python PTY runner failed at stage: " + stage + "\\n")
+    sys.stderr.write("Captured PTY output:\\n" + captured.decode(errors="replace") + "\\n")
+    sys.stderr.write(type(error).__name__ + ": " + str(error) + "\\n")
+    clean, leader_reaped = clean_process_group()
+    if not clean:
+        sys.stderr.write("Process group remained after bounded SIGTERM/SIGKILL cleanup.\\n")
+        if permission_denied:
+            sys.stderr.write("Cleanup unverified: EPERM prevented proving process-group absence.\\n")
+    if not leader_reaped:
+        sys.stderr.write("PTY child leader remained unreaped after bounded cleanup.\\n")
+    if clean and leader_reaped:
+        sys.stderr.write("PTY_CLEANUP group_gone=true leader_reaped=true\\n")
+    sys.exit(124)
+else:
+    clean, leader_reaped = clean_process_group()
+    if not clean or not leader_reaped:
+        if not clean:
+            sys.stderr.write("Process group remained after bounded SIGTERM/SIGKILL cleanup.\\n")
+            if permission_denied:
+                sys.stderr.write("Cleanup unverified: EPERM prevented proving process-group absence.\\n")
+        if not leader_reaped:
+            sys.stderr.write("PTY child leader remained unreaped after bounded cleanup.\\n")
+        sys.exit(125)
+finally:
+    if master is not None:
+        os.close(master)
+sys.exit(os.waitstatus_to_exitcode(status))`;
+        const result = spawnSync("python3", ["-c", ptyRunner, installer], {
+          env,
+          input,
+          encoding: "utf8",
+          timeout: 30_000,
+        });
+        const timedOut =
+          result.error !== undefined &&
+          "code" in result.error &&
+          result.error.code === "ETIMEDOUT";
+        assert.equal(
+          timedOut,
+          false,
+          [
+            "Python PTY runner timed out after 30 seconds.",
+            "Captured PTY output:",
+            result.stdout,
+            "Runner diagnostics:",
+            result.stderr,
+            result.error?.message ?? "",
+          ].join("\\n"),
+        );
+        assert.equal(result.status, 0, result.stderr);
+        assert.ok(result.stdout.includes("Install pi-web-access? [y/N]"));
+        if (input.startsWith("perhaps"))
+          assert.ok(result.stdout.includes("Please enter y or n"));
+        assert.match(
+          result.stdout,
+          new RegExp(`Optional pi-web-access: ${status}\\.`),
+        );
+        if (input.startsWith("perhaps") && process.platform === "linux") {
+          const hangingSetup = fixture({ piWebAccessHangs: true });
+          try {
+            const hangingEnv: NodeJS.ProcessEnv = {
+              ...hangingSetup.env,
+              PTY_RUNNER_DEADLINE_SECONDS: "2.5",
+            };
+            delete hangingEnv.PI_HERDSMAN_WEB_ACCESS;
+            const hanging = spawnSync("python3", ["-c", ptyRunner, installer], {
+              env: hangingEnv,
+              input: "y\n",
+              encoding: "utf8",
+              timeout: 10_000,
+            });
+            const hangingTimedOut =
+              hanging.error !== undefined &&
+              "code" in hanging.error &&
+              hanging.error.code === "ETIMEDOUT";
+            assert.equal(
+              hangingTimedOut,
+              false,
+              "Python runner deadline must fire before Node's outer timeout",
+            );
+            assert.equal(hanging.status, 124, hanging.stderr);
+            assert.match(hanging.stdout, /Install pi-web-access\? \[y\/N\]/u);
+            assert.match(
+              readFileSync(hangingSetup.log, "utf8"),
+              /^pi install npm:pi-web-access --no-approve$/mu,
+            );
+            assert.match(
+              hanging.stderr,
+              /TimeoutError: PTY runner deadline expired/u,
+            );
+            assert.match(
+              hanging.stderr,
+              /PTY_CLEANUP group_gone=true leader_reaped=true/u,
+            );
+            assert.doesNotMatch(
+              hanging.stderr,
+              /Process group remained|PTY child leader remained unreaped/u,
+            );
+          } finally {
+            rmSync(hangingSetup.root, { recursive: true, force: true });
+          }
+        }
+      } finally {
+        rmSync(setup.root, { recursive: true, force: true });
+      }
+    }
+  },
+);
+
+test(
+  "selected native web access is not reinstalled on a later installer run",
+  { skip: process.platform === "win32" },
+  () => {
+    const setup = fixture();
+    try {
+      const env = { ...setup.env, PI_HERDSMAN_WEB_ACCESS: "install" };
+      const first = spawnSync("sh", [installer], { env, encoding: "utf8" });
+      assert.equal(first.status, 0, first.stderr);
+      const second = spawnSync("sh", [installer], { env, encoding: "utf8" });
+      assert.equal(second.status, 0, second.stderr);
+      assert.match(second.stdout, /Optional pi-web-access: already installed/u);
+      assert.equal(
+        (
+          readFileSync(setup.log, "utf8").match(
+            /^pi install npm:pi-web-access --no-approve$/gmu,
+          ) ?? []
+        ).length,
+        1,
+      );
+    } finally {
+      rmSync(setup.root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "native installer rejects invalid web-access overrides before modifying runtimes",
+  { skip: process.platform === "win32" },
+  () => {
+    const setup = fixture();
+    try {
+      const result = spawnSync("sh", [installer], {
+        env: { ...setup.env, PI_HERDSMAN_WEB_ACCESS: "yes" },
+        encoding: "utf8",
+      });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /PI_HERDSMAN_WEB_ACCESS must be/u);
+      assert.doesNotMatch(
+        readFileSync(setup.log, "utf8"),
+        /^(?:curl |herdr |pi )/mu,
+      );
+    } finally {
+      rmSync(setup.root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "native installer preserves exact existing web-access declarations and reports optional failure",
+  { skip: process.platform === "win32" },
+  () => {
+    for (const declaration of [
+      "npm:pi-web-access",
+      "npm:pi-web-access@0.47.0",
+      "npm:pi-web-access@^0.47.0 (filtered)",
+    ]) {
+      const setup = fixture({
+        initialPiList: `npm:pi-herdsman\n  ${declaration}\n`,
+      });
+      try {
+        const result = spawnSync("sh", [installer], {
+          env: { ...setup.env, PI_HERDSMAN_WEB_ACCESS: "install" },
+          encoding: "utf8",
+        });
+        assert.equal(result.status, 0, result.stderr);
+        assert.match(
+          result.stdout,
+          /Optional pi-web-access: already installed/u,
+        );
+        assert.doesNotMatch(
+          readFileSync(setup.log, "utf8"),
+          /^pi install npm:pi-web-access/mu,
+        );
+      } finally {
+        rmSync(setup.root, { recursive: true, force: true });
+      }
+    }
+    const similar = fixture({
+      initialPiList: "npm:pi-herdsman\nnpm:other-pi-web-access\n",
+    });
+    const failed = fixture({ piWebAccessInstallFails: true });
+    try {
+      const similarResult = spawnSync("sh", [installer], {
+        env: { ...similar.env, PI_HERDSMAN_WEB_ACCESS: "install" },
+        encoding: "utf8",
+      });
+      assert.equal(similarResult.status, 0, similarResult.stderr);
+      assert.match(
+        readFileSync(similar.log, "utf8"),
+        /^pi install npm:pi-web-access --no-approve$/mu,
+      );
+      const failureResult = spawnSync("sh", [installer], {
+        env: { ...failed.env, PI_HERDSMAN_WEB_ACCESS: "install" },
+        encoding: "utf8",
+      });
+      assert.notEqual(failureResult.status, 0);
+      assert.match(
+        failureResult.stderr,
+        /Pi Herdsman and Herdr installed successfully/u,
+      );
+      assert.match(
+        failureResult.stderr,
+        /Optional pi-web-access installation failed/u,
+      );
+      assert.match(failureResult.stderr, /pi install npm:pi-web-access/u);
+    } finally {
+      rmSync(similar.root, { recursive: true, force: true });
+      rmSync(failed.root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "piped native installer does not consume pipeline input as a web-access answer",
+  { skip: process.platform === "win32" },
+  () => {
+    const setup = fixture();
+    try {
+      const result = spawnSync("sh", [installer], {
+        env: setup.env,
+        input: "y\\n",
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /Optional pi-web-access: skipped/u);
+      assert.doesNotMatch(
+        readFileSync(setup.log, "utf8"),
+        /^pi install npm:pi-web-access/mu,
+      );
+    } finally {
+      rmSync(setup.root, { recursive: true, force: true });
+    }
+  },
+);
 
 test(
   "installer rejects a Node version below the published package requirement",
