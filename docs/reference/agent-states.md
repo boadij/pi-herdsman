@@ -5,13 +5,13 @@
 The public state is a safe-control projection built from live lifecycle and
 durable assignment/convergence evidence. It is not a raw herdr lifecycle string.
 
-| State      | Meaning                                                                                                               |
-| ---------- | --------------------------------------------------------------------------------------------------------------------- |
-| `working`  | An assignment is active; `stale` remains an advisory field on this state.                                             |
-| `blocked`  | Active assignment waits for an owner answer or another condition.                                                     |
-| `settling` | Assignment handoff, completion/result delivery, launch, direct-agent gate, or cleanup is converging.                  |
-| `unknown`  | Exact safe control state cannot be proved, including an idle restored conversation with an unresolved active request. |
-| `lost`     | Physical execution is proven absent before a durable terminal result; the assignment remains unresolved.              |
+| State      | Meaning                                                                                                                                                      |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `working`  | An assignment is active; `stale` remains an advisory field on this state.                                                                                    |
+| `blocked`  | Active assignment waits for an owner answer or another condition.                                                                                            |
+| `settling` | Assignment handoff, completion/result delivery, launch, direct-agent gate, or cleanup is converging.                                                         |
+| `unknown`  | Exact safe control state cannot be proved, including an idle restored conversation with an unresolved active request.                                        |
+| `lost`     | Physical execution is proven absent before a durable terminal result; the assignment remains unresolved, even if its verified original settled pane remains. |
 
 ## `available_tools` is authoritative
 
@@ -93,10 +93,15 @@ Herdsman may emit one generic `unknown` attention event for that unresolved
 episode. It does not add mutation actions, prove loss, or broaden `await_owner`.
 When exact physical evidence changes, re-evaluate the record from fresh state.
 
-`lost` is different: a coherent Herdr inventory proves the expected pane,
-session, and run-scoped alias are absent. It is not completion or task failure;
-use direct-owner `stop_agent` to abandon the unresolved generation when the
-applicable stop preflight succeeds. Lost attention may repeat for the direct
+`lost` is different: a coherent Herdr inventory proves the expected execution
+is gone. Usually the expected pane, session, and run-scoped alias are absent.
+A narrow retained-pane case also qualifies when paired launch-time terminal and
+shell identity matches, repeated fresh Herdr observations show the original pane
+contains its settled shell, and no Agent or matching Pi session remains
+registered. A shell prompt alone or incomplete process information never proves
+loss. The direct owner may use `stop_agent` to abandon the unresolved generation
+when the applicable stop preflight succeeds; for a retained pane, stop
+revalidates and closes that exact pane. Lost attention may repeat for the direct
 owner while the assignment remains unresolved.
 
 ## Result precedence and actions

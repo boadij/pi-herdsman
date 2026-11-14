@@ -2713,6 +2713,181 @@ async function proveExactRunningAgent(
   };
 }
 
+export type RetainedPaneTarget = Readonly<{
+  workspaceId: string;
+  paneId: string;
+  terminalId: string;
+  launchShellPid: number;
+  cwd: string;
+  alias: string;
+  session: ExpectedSession;
+}>;
+
+type RetainedPaneObservation = {
+  snapshot: HerdrSessionSnapshot;
+  pane: HerdrRecord;
+  process: PaneProcess;
+};
+
+function sameRetainedPaneObservation(
+  left: RetainedPaneObservation,
+  right: RetainedPaneObservation,
+): boolean {
+  return (
+    JSON.stringify(left.snapshot) === JSON.stringify(right.snapshot) &&
+    JSON.stringify(left.pane) === JSON.stringify(right.pane) &&
+    JSON.stringify(left.process) === JSON.stringify(right.process)
+  );
+}
+
+async function retainedPaneObservation(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  target: RetainedPaneTarget,
+  signal?: AbortSignal,
+): Promise<RetainedPaneObservation | undefined> {
+  if (
+    !target.workspaceId ||
+    !target.paneId ||
+    !target.terminalId ||
+    !Number.isInteger(target.launchShellPid) ||
+    target.launchShellPid <= 0 ||
+    !target.cwd ||
+    !target.alias ||
+    (!target.session.id && !target.session.path)
+  )
+    return undefined;
+
+  const snapshot = await herdrSessionSnapshot(pi, ctx, signal);
+  if (
+    snapshot.panes.some(
+      (pane) => !pane || typeof pane.pane_id !== "string" || !pane.pane_id,
+    ) ||
+    snapshot.agents.some(
+      (agent) => !agent || typeof agent.name !== "string" || !agent.name,
+    ) ||
+    snapshot.workspaces.some(
+      (item) =>
+        !item || typeof item.workspace_id !== "string" || !item.workspace_id,
+    ) ||
+    new Set(snapshot.panes.map((pane) => pane.pane_id)).size !==
+      snapshot.panes.length ||
+    new Set(snapshot.agents.map((agent) => agent.name)).size !==
+      snapshot.agents.length ||
+    new Set(snapshot.workspaces.map((item) => item.workspace_id)).size !==
+      snapshot.workspaces.length ||
+    snapshot.workspaces.filter(
+      (item) => item.workspace_id === target.workspaceId,
+    ).length !== 1
+  )
+    return undefined;
+
+  const panes = snapshot.panes.filter((pane) => pane.pane_id === target.paneId);
+  const pane = panes[0];
+  if (
+    panes.length !== 1 ||
+    !pane ||
+    pane.workspace_id !== target.workspaceId ||
+    pane.terminal_id !== target.terminalId ||
+    !sameCwd(pane.cwd, target.cwd) ||
+    (pane.agent_session != null &&
+      !matchesExpectedSession(pane.agent_session, target.session))
+  )
+    return undefined;
+
+  const sessionPanes = snapshot.panes.filter(
+    (item) =>
+      item.pane_id !== target.paneId &&
+      matchesExpectedSession(item.agent_session, target.session),
+  );
+  const sessionAgents = snapshot.agents.filter((agent) =>
+    matchesExpectedSession(agent.agent_session, target.session),
+  );
+  if (
+    sessionPanes.length > 0 ||
+    snapshot.agents.some(
+      (agent) => agent.name === target.alias || agent.pane_id === target.paneId,
+    ) ||
+    sessionAgents.length > 0
+  )
+    return undefined;
+
+  const process = await paneProcess(
+    pi,
+    ctx,
+    target.paneId,
+    signal,
+    undefined,
+    true,
+  );
+  if (
+    !process ||
+    process.pane_id !== target.paneId ||
+    process.shell_pid !== target.launchShellPid ||
+    !settledShell(
+      { pane_id: target.paneId, shell_pid: target.launchShellPid },
+      process,
+    )
+  )
+    return undefined;
+
+  return { snapshot, pane, process };
+}
+
+async function proveRetainedHerdrPane(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  target: RetainedPaneTarget,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  try {
+    const first = await retainedPaneObservation(pi, ctx, target, signal);
+    if (!first) return false;
+    const second = await retainedPaneObservation(pi, ctx, target, signal);
+    return !!second && sameRetainedPaneObservation(first, second);
+  } catch {
+    return false;
+  }
+}
+
+/** Read-only proof that the exact original pane remains as a settled shell. */
+export async function verifyRetainedHerdrPane(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  target: RetainedPaneTarget,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  return proveRetainedHerdrPane(pi, ctx, target, signal);
+}
+
+export async function closeRetainedHerdrPane(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  target: RetainedPaneTarget,
+  signal?: AbortSignal,
+): Promise<void> {
+  const release = await lockLifecycle(ctx, signal);
+  try {
+    if (!(await proveRetainedHerdrPane(pi, ctx, target, signal)))
+      error("close", `retained pane ${target.paneId} ownership is unproven`);
+    await runHerdr(pi, ctx, ["pane", "close", target.paneId], {
+      signal,
+      noResult: true,
+    });
+    await verifyHerdrPaneClosed(
+      pi,
+      ctx,
+      target.alias,
+      target.workspaceId,
+      target.paneId,
+      "close",
+      signal,
+    );
+  } finally {
+    release();
+  }
+}
+
 async function verifyHerdrPaneClosed(
   pi: ExtensionAPI,
   ctx: ExtensionContext,

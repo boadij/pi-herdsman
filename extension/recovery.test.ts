@@ -6200,6 +6200,122 @@ test("lost close fails closed when a result appears during its final proof", asy
   }
 });
 
+test("retained pane remains unknown when its session is reported on another unregistered pane", async () => {
+  setLeadEnvironment();
+  const label = "retained-session-relocated";
+  const state = {
+    ...managedState(label, undefined, recoveryIdentity(label)),
+    terminalId: "retained-terminal",
+    launchShellPid: 100,
+  };
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  writeAgentState(mailbox, state);
+  const lifecycle = cascadeExecutor([]);
+  const paneCloses: string[][] = [];
+  const processInfoCalls: string[][] = [];
+  let snapshotCalls = 0;
+  const pi = fakePi({
+    exec: (command, args, options) => {
+      if (command === "herdr" && isApiSnapshot(args)) {
+        snapshotCalls++;
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              snapshot: {
+                agents: [],
+                panes: [
+                  {
+                    pane_id: state.paneId,
+                    workspace_id: WORKSPACE,
+                    terminal_id: state.terminalId,
+                    cwd: state.cwd,
+                  },
+                  {
+                    pane_id: "other-pane-with-session",
+                    workspace_id: WORKSPACE,
+                    terminal_id: "other-terminal",
+                    cwd: state.cwd,
+                    agent_session: {
+                      source: "herdr:pi",
+                      agent: "pi",
+                      kind: "id",
+                      value: state.piSessionId,
+                    },
+                  },
+                ],
+                workspaces: [{ workspace_id: WORKSPACE }],
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (
+        command === "herdr" &&
+        args[0] === "pane" &&
+        args[1] === "process-info"
+      ) {
+        processInfoCalls.push(args);
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              process_info: {
+                pane_id: state.paneId,
+                shell_pid: state.launchShellPid,
+                foreground_processes: [
+                  { pid: state.launchShellPid, argv0: "sh" },
+                ],
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "herdr" && isPaneClose(args)) paneCloses.push(args);
+      return lifecycle.exec(command, args, options);
+    },
+  });
+  registerExtension!(pi.pi as never);
+  try {
+    const listed = await agentTool(pi, "list").execute(
+      "id",
+      {},
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    const agent = listed.details.agents.find(
+      (candidate: any) => candidate.agent === label,
+    );
+    assert.equal(agent.state, "unknown");
+    assert.equal(agent.available_tools.includes("stop_agent"), false);
+    assert.ok(
+      snapshotCalls >= 2,
+      "retained-pane proof should re-read Herdr inventory",
+    );
+    assert.equal(processInfoCalls.length, 0);
+
+    const stopped = await agentTool(pi, "stop").execute(
+      "id",
+      { agent: label },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(stopped.details.error.category, "target_ambiguous");
+    assert.ok(readAgentState(mailbox));
+    assert.deepEqual(paneCloses, []);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
 test("a lost parent retains its live child ancestry and closes child-first", async () => {
   setLeadEnvironment();
   const parent = {

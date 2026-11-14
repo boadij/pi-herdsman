@@ -83,14 +83,18 @@ successful tool results or directly mutate Herdsman or Herdr state. The
 simulated-only scenarios use real Pi, Herdsman, and Herdr; they do not replace
 live-model acceptance. `agent-crash-recovery` restarts its isolated Herdr server
 and reopens the exact owner session with its pending-child parent safely
-blocked or unknown. It resolves the original target through an exact persisted aborted
-result or one authorized stop receipt, then waits read-only for the persisted
-acknowledgment/absence of active work and physical quiescence before one exact
-session continuation. It verifies one correlated completed result and fails
-closed on incomplete state or process evidence. An advertised receiverless
-parent steer is attempted once and must be rejected. The process/server
-lifecycle and controller tools are real; the scenario never uses the default
-Herdr server.
+blocked or unknown. It resolves the original target through an exact persisted
+aborted result or one authorized stop receipt, then waits read-only for the
+persisted acknowledgment/absence of active work and physical quiescence before
+one exact session continuation. It verifies one correlated completed result
+and fails closed on incomplete state or process evidence. An advertised
+receiverless parent steer is attempted once and must be rejected. The
+process/server lifecycle and controller tools are real; the scenario never
+uses the default Herdr server. It does not terminate the accepted target while
+retaining its pane and therefore does not verify retained-pane crash recovery.
+Herdr exposes no supported host-aware process-signal operation in the CLI;
+this scenario must not signal or test liveness of a Herdr-reported PID from the
+controller process.
 Simulated runs do not require model credentials or inference, but retain runtime
 compatibility checks, build, isolation, Herdr setup, and cleanup. They are
 integration checks, not replacements for real-model acceptance.
@@ -182,9 +186,10 @@ owner delivery), `manager-handoff` (project-message retention during Manager
 absence and delivery after role reentry), `manager-merge` (Manager-driven
 no-remote fast-forward, untouched divergence refusal, Lead-driven
 reconciliation and validation, and exact automatic assignment/worktree
-retirement), `agent-crash-recovery` (full isolated
-Herdr server restart, exact owner-session reopen, safe pending-child projection,
-verified close receipt, and same-session new-generation continuation), and
+retirement), `agent-crash-recovery` (full isolated Herdr server restart,
+exact owner-session reopen, safe pending-child projection, verified recovery
+receipt, and same-session new-generation continuation; it does not exercise
+retained-pane crash recovery), and
 `terminal-failure` (assigned-Lead terminal failure and project reporting).
 `terminal-failure` creates an isolated Manager project and exactly assigned
 Lead, selects the isolated native faux `terminal-error` model only for that

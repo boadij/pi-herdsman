@@ -5653,6 +5653,32 @@ test("crash recovery faux performs only authorized stop or settled continuation"
   );
 });
 
+test("crash-recovery preserves server restart without local Herdr PID signaling", async () => {
+  const source = await readFile(
+    new URL("../scripts/smoke.mjs", import.meta.url),
+    "utf8",
+  );
+  const start = source.indexOf("async function runAgentCrashRecoverySmoke");
+  const end = source.indexOf("\nasync function ", start + 1);
+  assert.ok(start >= 0 && end > start, "crash-recovery scenario body missing");
+  const body = source.slice(start, end);
+  assert.match(body, /await restartNestedHerdr\(ctx\)/);
+  assert.doesNotMatch(body, /process\.kill\(/);
+  assert.doesNotMatch(body, /crash-recovery-target-process-exited/);
+  assert.doesNotMatch(body, /crash-recovery-owner-lost-notification/);
+  assert.match(body, /"crash-recovery-owner-reopened"/);
+
+  const restartStart = source.indexOf("async function restartNestedHerdr");
+  const restartEnd = source.indexOf("\nasync function ", restartStart + 1);
+  assert.ok(
+    restartStart >= 0 && restartEnd > restartStart,
+    "nested Herdr restart helper missing",
+  );
+  const restart = source.slice(restartStart, restartEnd);
+  assert.match(restart, /"crash-recovery-server-stopped"/);
+  assert.match(restart, /await waitForNestedHerdr\(ctx\)/);
+});
+
 test("crash-recovery uses the latest successful list_agents result after restart prompt", () => {
   const staleHistory = [
     { role: "user", content: "PI_HERDSMAN_CRASH_RECOVERY_INITIAL" },
