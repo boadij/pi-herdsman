@@ -25,11 +25,12 @@ parallelize tasks as results arrive. The execution path emerges at runtime,
 while Herdsman enforces delegation permissions, ownership, project assignments,
 and supervision.
 
-Specialize Agents by responsibility and reuse skills where expertise overlaps.
-Each Agent can have its own instructions, tools, and model, while Herdsman
-coordinates their bounded work without owning domain-specific behavior. Bring
-your own definitions or workflows; see [Agent definitions](docs/guides/agent-definitions.md)
-and [Coordination](docs/concepts/coordination.md#emergent-workflows-explicit-boundaries).
+Specialize Agents by responsibility and compose their execution capabilities
+through models, instructions, tools, and Pi extensions. Reuse shared expertise
+as preloaded instructions or on-demand skills. Herdsman coordinates bounded
+work without owning domain-specific behavior. Bring your own definitions or
+workflows; see [Agent definitions](docs/guides/agent-definitions.md) and
+[Coordination](docs/concepts/coordination.md#emergent-workflows-explicit-boundaries).
 
 ## Demo
 
