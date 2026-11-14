@@ -1673,7 +1673,7 @@ function contextProjectRoot(cwd: string): string {
   const canonicalCwd = realpathSync(cwd);
   let output: string;
   try {
-    output = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+    output = execFileSync("git", ["rev-parse", "--show-cdup"], {
       cwd: canonicalCwd,
       env: { ...process.env, LC_ALL: "C" },
       encoding: "utf8",
@@ -1699,10 +1699,12 @@ function contextProjectRoot(cwd: string): string {
       { cause: error },
     );
   }
-  const root = output.trim();
-  if (!isAbsolute(root))
-    throw new Error(`Invalid Git worktree root for ${cwd}: ${root}`);
-  const canonicalRoot = realpathSync(root);
+  const cdup = output.replace(/\r?\n$/u, "");
+  if (cdup.includes("\n") || cdup.includes("\r") || isAbsolute(cdup))
+    throw new Error(
+      `Invalid Git worktree-relative directory for ${cwd}: ${cdup}`,
+    );
+  const canonicalRoot = realpathSync(resolve(canonicalCwd, cdup || "."));
   if (!isWithinDirectory(canonicalCwd, canonicalRoot))
     throw new Error(
       `Git worktree root does not contain ${cwd}: ${canonicalRoot}`,

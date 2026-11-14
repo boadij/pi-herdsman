@@ -729,6 +729,68 @@ test("selects global, ancestor, and worktree context independently in native ord
   }
 });
 
+test(
+  "uses cwd-relative Git boundary despite an aliased absolute Git spelling",
+  { skip: process.platform === "win32" },
+  () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-herdsman-context-alias-"));
+    const repo = join(root, "repo");
+    const cwd = join(repo, "nested");
+    const fakeBin = join(root, "bin");
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(fakeBin);
+    execFileSync("git", ["init", "-q", repo]);
+    const calls = join(root, "git-calls");
+    const absoluteAlias = join(repo, "..", "repo");
+    const fakeGit = join(fakeBin, "git");
+    writeFileSync(
+      fakeGit,
+      `#!/bin/sh
+printf '%s\\n' "$*" >> '${calls}'
+case "$*" in
+  "rev-parse --show-cdup") printf '..\\n' ;;
+  "rev-parse --show-toplevel") printf '${absoluteAlias}\\n' ;;
+  *) exit 24 ;;
+esac
+`,
+    );
+    chmodSync(fakeGit, 0o755);
+
+    const ancestor = join(root, "AGENTS.md");
+    const project = join(repo, "AGENTS.md");
+    const local = join(cwd, "AGENTS.md");
+    for (const path of [ancestor, project, local]) writeFileSync(path, path);
+    const previousPath = process.env.PATH;
+    process.env.PATH = fakeBin;
+    try {
+      const selected = selectedAgentContextFiles(
+        {
+          name: "alias-test",
+          path: "/agent.md",
+          frontmatter: {
+            inheritGlobalContext: false,
+            inheritAncestorContext: false,
+            inheritProjectContext: true,
+          },
+          body: "",
+        },
+        cwd,
+        () => [
+          { path: ancestor, content: "ancestor" },
+          { path: project, content: "project" },
+          { path: local, content: "local" },
+        ],
+      ).map(({ path }) => path);
+
+      assert.deepEqual(selected, [project, local]);
+      assert.equal(readFileSync(calls, "utf8"), "rev-parse --show-cdup\n");
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  },
+);
+
 test("classifies linked-worktree and non-Git context boundaries", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-context-worktree-"));
   const primary = join(root, "primary");
@@ -800,6 +862,26 @@ test("classifies linked-worktree and non-Git context boundaries", () => {
         inheritProjectContext: false,
       }),
       [ancestor, primaryContext],
+    );
+    const linkedLaunchArgs = agentLaunchArgs(
+      definition({
+        inheritGlobalContext: false,
+        inheritAncestorContext: false,
+        inheritProjectContext: true,
+      }),
+      {
+        cwd,
+        bodyPromptPath: "/prompt",
+        loadProjectContextFiles: () => discovered,
+      },
+    );
+    assert.deepEqual(
+      linkedLaunchArgs.flatMap((argument, index) =>
+        argument === "--append-system-prompt"
+          ? [linkedLaunchArgs[index + 1]]
+          : [],
+      ),
+      [linkedContext, nestedContext],
     );
 
     const nonGit = join(root, "non-git");

@@ -70,6 +70,7 @@ import support, {
   readAgentState,
   seedLeadRole,
   realFs,
+  projectContextCwds,
   recoveryIdentity,
   registerExtension,
   registerExtensionForTest,
@@ -4041,6 +4042,7 @@ async function runManagerStartupScenario(
   const repoKey = realFs.mkdtempSync(join(tmpdir(), "herdsman-repo-key-"));
   const reconciliationId = randomUUID();
   const childSessionPath = join(tmpdir(), `lead-${randomUUID()}.jsonl`);
+  const contextCwdObservationStart = projectContextCwds.length;
   const existingGitWorktree = join(tmpdir(), `git-worktree-${randomUUID()}`);
   const survivingGitWorktree = join(
     tmpdir(),
@@ -4634,6 +4636,18 @@ async function runManagerStartupScenario(
         "--pane",
       ]);
       assert.equal(args[6], "child-pane");
+      if (mode === "success") {
+        assert.ok(
+          projectContextCwds
+            .slice(contextCwdObservationStart)
+            .includes(childPath),
+          "managed Lead resolves its context-enabled bundled definition at the assigned worktree",
+        );
+        assert.ok(
+          args.includes("--no-context-files"),
+          "managed Lead starts with selective context discovery",
+        );
+      }
       const approvalFlag = projectTrusted ? "--approve" : "--no-approve";
       assert.ok(args.includes(approvalFlag));
       assert.equal(
