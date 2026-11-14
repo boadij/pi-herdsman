@@ -172,8 +172,9 @@ profiles, not Pi launch definitions. They may configure only `name`,
 profiles reject `model`, `thinking`, `systemPromptMode`, `enabled`, `permission`,
 `noTools`,
 `noBuiltinTools`, `skills`, `noSkills`, `inheritSkills`, `extensions`,
-`noExtensions`, `inheritGlobalContext`, and `inheritProjectContext`.
-`bodyMode` is valid only on a matching overlay as described below.
+`noExtensions`, `inheritGlobalContext`, `inheritAncestorContext`, and
+`inheritProjectContext`. `bodyMode` is valid only on a matching overlay as
+described below.
 
 An omitted `tools` field inherits the value from lower-precedence definition
 layers. The bundled Flexible Lead leaves this field unspecified, preserving the
@@ -283,32 +284,60 @@ the fallback.
 
 ## Fields
 
-| Field                   | Accepted value                                                        | Omitted/default behavior                                               | Runtime/composition behavior                                                                                                                                                              |
-| ----------------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                  | non-empty string                                                      | required                                                               | Effective definition identity.                                                                                                                                                            |
-| `enabled`               | boolean                                                               | `true`                                                                 | `false` makes `delegate` and `continue` unavailable; it does not mutate an active agent.                                                                                                  |
-| `description`           | string                                                                | absent                                                                 | Display/selection description.                                                                                                                                                            |
-| `model`                 | non-empty string                                                      | spawning controller for fresh `delegate`; saved session for `continue` | Explicit value is passed as Pi model selection.                                                                                                                                           |
-| `thinking`              | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `false` | spawning controller for fresh `delegate`; saved session for `continue` | Explicit value wins; `false` launches as `off`.                                                                                                                                           |
-| `systemPromptMode`      | `append` or `replace`                                                 | `append`                                                               | Controls whether the effective body is appended to or replaces Pi's base system prompt. `replace` is an explicit escape hatch for ordinary custom definitions; `managed-lead` rejects it. |
-| `bodyMode`              | `append` or `replace`                                                 | `replace` for non-empty matching overlay body                          | Valid only when overlaying an existing lower-precedence definition; consumed during body composition.                                                                                     |
-| `noTools`               | boolean                                                               | Pi normal tool policy                                                  | `true` emits `--no-tools`; managed `await_owner` and `notify_owner` remain infrastructure.                                                                                                |
-| `noBuiltinTools`        | boolean                                                               | Pi normal built-in tool policy                                         | `true` emits `--no-builtin-tools`.                                                                                                                                                        |
-| `tools`                 | array of non-empty strings                                            | no explicit allowlist                                                  | Passed to Pi as a source-agnostic tool-name allowlist; matching overlay replaces whole array.                                                                                             |
-| `excludeTools`          | array of non-empty strings                                            | no explicit exclusions                                                 | Passed to Pi as source-agnostic tool-name exclusions; matching override replaces whole array.                                                                                             |
-| `permission`            | mapping                                                               | absent                                                                 | Opaque interoperability policy for permission-aware extensions; Pi Herdsman does not evaluate it.                                                                                         |
-| `noSkills`              | boolean                                                               | skills disabled unless `inheritSkills: true`                           | Controls Pi native skill discovery; explicit `skills` values are still passed separately.                                                                                                 |
-| `inheritSkills`         | boolean                                                               | does not enable by itself unless `true`                                | `true` changes omitted `noSkills` default so native skills remain available. Explicit `noSkills` wins.                                                                                    |
-| `skills`                | array of non-empty strings                                            | no explicit skill arguments                                            | Each value is passed unchanged as a Pi skill path/resource.                                                                                                                               |
-| `noExtensions`          | boolean                                                               | Pi normal extension policy                                             | `true` emits `--no-extensions`, except when the launched model needs extension discovery. Launcher-injected herdr infrastructure remains.                                                 |
-| `extensions`            | array of non-empty strings                                            | no extra extension arguments                                           | Each value is passed unchanged to Pi.                                                                                                                                                     |
-| `agents`                | array of unique non-empty definition names                            | all available Agents for Leads; no direct agents for other owners      | Fresh-delegation allowlist for direct Agent children.                                                                                                                                     |
-| `inheritProjectContext` | boolean                                                               | `true` only for definition name `delegate`; otherwise `false`          | Controls project context-file inheritance.                                                                                                                                                |
-| `inheritGlobalContext`  | boolean                                                               | follows effective `inheritProjectContext`                              | Controls global context-file inheritance.                                                                                                                                                 |
+| Field                    | Accepted value                                                        | Omitted/default behavior                                               | Runtime/composition behavior                                                                                                                                                              |
+| ------------------------ | --------------------------------------------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                   | non-empty string                                                      | required                                                               | Effective definition identity.                                                                                                                                                            |
+| `enabled`                | boolean                                                               | `true`                                                                 | `false` makes `delegate` and `continue` unavailable; it does not mutate an active agent.                                                                                                  |
+| `description`            | string                                                                | absent                                                                 | Display/selection description.                                                                                                                                                            |
+| `model`                  | non-empty string                                                      | spawning controller for fresh `delegate`; saved session for `continue` | Explicit value is passed as Pi model selection.                                                                                                                                           |
+| `thinking`               | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `false` | spawning controller for fresh `delegate`; saved session for `continue` | Explicit value wins; `false` launches as `off`.                                                                                                                                           |
+| `systemPromptMode`       | `append` or `replace`                                                 | `append`                                                               | Controls whether the effective body is appended to or replaces Pi's base system prompt. `replace` is an explicit escape hatch for ordinary custom definitions; `managed-lead` rejects it. |
+| `bodyMode`               | `append` or `replace`                                                 | `replace` for non-empty matching overlay body                          | Valid only when overlaying an existing lower-precedence definition; consumed during body composition.                                                                                     |
+| `noTools`                | boolean                                                               | Pi normal tool policy                                                  | `true` emits `--no-tools`; managed `await_owner` and `notify_owner` remain infrastructure.                                                                                                |
+| `noBuiltinTools`         | boolean                                                               | Pi normal built-in tool policy                                         | `true` emits `--no-builtin-tools`.                                                                                                                                                        |
+| `tools`                  | array of non-empty strings                                            | no explicit allowlist                                                  | Passed to Pi as a source-agnostic tool-name allowlist; matching overlay replaces whole array.                                                                                             |
+| `excludeTools`           | array of non-empty strings                                            | no explicit exclusions                                                 | Passed to Pi as source-agnostic tool-name exclusions; matching override replaces whole array.                                                                                             |
+| `permission`             | mapping                                                               | absent                                                                 | Opaque interoperability policy for permission-aware extensions; Pi Herdsman does not evaluate it.                                                                                         |
+| `noSkills`               | boolean                                                               | skills disabled unless `inheritSkills: true`                           | Controls Pi native skill discovery; explicit `skills` values are still passed separately.                                                                                                 |
+| `inheritSkills`          | boolean                                                               | does not enable by itself unless `true`                                | `true` changes omitted `noSkills` default so native skills remain available. Explicit `noSkills` wins.                                                                                    |
+| `skills`                 | array of non-empty strings                                            | no explicit skill arguments                                            | Each value is passed unchanged as a Pi skill path/resource.                                                                                                                               |
+| `noExtensions`           | boolean                                                               | Pi normal extension policy                                             | `true` emits `--no-extensions`, except when the launched model needs extension discovery. Launcher-injected herdr infrastructure remains.                                                 |
+| `extensions`             | array of non-empty strings                                            | no extra extension arguments                                           | Each value is passed unchanged to Pi.                                                                                                                                                     |
+| `agents`                 | array of unique non-empty definition names                            | all available Agents for Leads; no direct agents for other owners      | Fresh-delegation allowlist for direct Agent children.                                                                                                                                     |
+| `inheritProjectContext`  | boolean                                                               | `true` only for definition name `delegate`; otherwise `false`          | Controls context files at or below the execution project boundary.                                                                                                                        |
+| `inheritGlobalContext`   | boolean                                                               | follows effective `inheritProjectContext`                              | Controls context files from Pi's agent directory.                                                                                                                                         |
+| `inheritAncestorContext` | boolean                                                               | follows effective `inheritProjectContext`                              | Controls discovered context files above the execution project boundary.                                                                                                                   |
 
 `permission` is reserved for compatible permission extensions. Pi Herdsman
 accepts and preserves the mapping but does not validate its internal policy
 schema or make authorization decisions from it.
+
+## Automatic Pi context inheritance
+
+For managed Agent and managed-Lead launches, Pi Herdsman uses Pi's context
+discovery and applies the effective `inheritGlobalContext`,
+`inheritAncestorContext`, and `inheritProjectContext` scopes. The project
+boundary is the Git worktree root containing the execution `cwd` (including a
+linked worktree); for a non-Git directory, `cwd` itself is the boundary.
+Project context is discovered at and below that boundary, ancestor context is
+discovered above it, and global context comes from Pi's agent directory.
+When all three scopes are enabled Pi's native discovery remains active;
+otherwise Herdsman selectively appends only enabled scopes.
+
+All six bundled Agents and the bundled `managed-lead` select project-only
+inheritance: global and ancestor scopes are disabled, project scope is enabled.
+These are defaults, not restrictions. Matching higher-precedence definition
+overrides can enable or disable any scope; omitted values inherit the effective
+lower-precedence value. For custom definitions, omitted project inheritance
+defaults to `true` only for `delegate` and otherwise `false`, while omitted
+global and ancestor flags follow the effective project value.
+
+This policy concerns automatically discovered Pi context files only. Explicit
+instructions in a definition body, body-file references, task handoffs, and
+other launch inputs are not filtered by these flags. Context inheritance is not
+a security boundary: available filesystem tools and explicitly supplied
+instructions remain independent. Runtime-only Lead, Manager, and Chief
+profiles are not launch definitions and do not gain these inheritance fields.
 
 Arrays supplied by an override replace the complete inherited array, including
 an explicit `[]`.
@@ -479,7 +508,7 @@ For a newly constructed managed agent, the effective launch composition is:
 ```text
 Pi base system prompt
     ↓ effective body via systemPromptMode
-selected project/global context-file additions
+selected global, ancestor, or project context-file additions
     ↓
 shared herdr agent guidance
     ↓
@@ -528,6 +557,7 @@ extensions: ["/absolute/path/to/local-extension.ts"]
 agents: ["scout"]
 inheritProjectContext: true
 inheritGlobalContext: false
+inheritAncestorContext: false
 ---
 
 Additional local review instructions.

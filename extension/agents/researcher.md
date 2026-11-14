@@ -1,6 +1,7 @@
 ---
 description: External research specialist for questions that require web, documentation, standards, vendor, or other authoritative evidence beyond the repository; use for current facts, API behavior, comparisons, and source-backed recommendations
 inheritGlobalContext: false
+inheritAncestorContext: false
 inheritProjectContext: true
 name: researcher
 noSkills: true

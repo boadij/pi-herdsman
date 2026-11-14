@@ -82,6 +82,30 @@ const state: ManagedAgentState = {
   cwd: "/tmp",
   updatedAt: Date.now(),
 };
+test("managed state accepts paired optional launch identity only", (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "herdsman-launch-identity-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, "state.json");
+  writeAgentState(path, state);
+  assert.equal(readAgentState(path)?.terminalId, undefined);
+  writeAgentState(path, {
+    ...state,
+    terminalId: "terminal-1",
+    launchShellPid: 123,
+  });
+  assert.equal(readAgentState(path)?.launchShellPid, 123);
+  for (const invalid of [
+    { ...state, terminalId: "terminal-1" },
+    { ...state, launchShellPid: 123 },
+    { ...state, terminalId: "  ", launchShellPid: 123 },
+    { ...state, terminalId: "terminal-1", launchShellPid: 0 },
+    { ...state, terminalId: "terminal-1", launchShellPid: -1 },
+    { ...state, terminalId: "terminal-1", launchShellPid: 1.5 },
+    { ...state, terminalId: "t".repeat(513), launchShellPid: 123 },
+  ])
+    assert.throws(() => writeAgentState(path, invalid));
+});
+
 test("startup outcome is strict, transient, and independently awaited", async () => {
   const directory = mkdtempSync(join(tmpdir(), "herdsman-startup-"));
   try {

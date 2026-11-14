@@ -1,8 +1,8 @@
 import { strict as assert } from "node:assert";
 import {
+  chmodSync,
   mkdtempSync,
   mkdirSync,
-  existsSync,
   rmSync,
   readFileSync,
   realpathSync,
@@ -546,6 +546,9 @@ test("rejects malformed capability fields", () => {
     ["inheritGlobalContext", '"false"', /must be a boolean/],
     ["inheritGlobalContext", "1", /must be a boolean/],
     ["inheritGlobalContext", "yes", /must be a boolean/],
+    ["inheritAncestorContext", '"false"', /must be a boolean/],
+    ["inheritAncestorContext", "1", /must be a boolean/],
+    ["inheritAncestorContext", "yes", /must be a boolean/],
   ] as const)
     assert.throws(
       () =>
@@ -579,20 +582,30 @@ test("rejects malformed capability fields", () => {
     );
 });
 
-test("selects global and project context independently in native order", () => {
+test("selects global, ancestor, and worktree context independently in native order", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-context-"));
   const agentDir = join(root, "custom-agent-dir");
   const project = join(root, "project");
   const cwd = join(project, "nested");
   mkdirSync(agentDir);
   mkdirSync(cwd, { recursive: true });
+  execFileSync("git", ["init", "-q", project], { cwd: root });
   const global = join(agentDir, "AGENTS.md");
+  const ancestor = join(root, "AGENTS.md");
   const outer = join(project, "AGENTS.md");
   const inner = join(cwd, "AGENTS.md");
-  writeFileSync(global, "Global");
-  writeFileSync(outer, "Outer");
-  writeFileSync(inner, "Inner");
+  for (const [path, content] of [
+    [global, "Global"],
+    [ancestor, "Ancestor"],
+    [outer, "Project"],
+    [inner, "Inner"],
+  ])
+    writeFileSync(path, content);
 
+  const contexts = [global, ancestor, outer, inner].map((path) => ({
+    path,
+    content: path,
+  }));
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = agentDir;
   try {
@@ -602,80 +615,417 @@ test("selects global and project context independently in native order", () => {
     ) =>
       agentLaunchArgs(
         { name, path: "/agent.md", frontmatter, body: "Prompt" },
-        { bodyPromptPath: "/prompt", cwd },
+        {
+          bodyPromptPath: "/prompt",
+          cwd,
+          loadProjectContextFiles: () => contexts,
+        },
       );
     const noContext = ["--no-context-files"];
     const append = (path: string) => ["--append-system-prompt", path];
-    const projectContextPaths = [
-      ...(existsSync("/AGENTS.md") ? ["/AGENTS.md"] : []),
-      outer,
-      inner,
-    ];
     const noSkills = ["--no-skills"];
+    const select = (frontmatter: Record<string, string | boolean>) =>
+      selectedAgentContextFiles(
+        { name: "agent", path: "/agent.md", frontmatter, body: "" },
+        cwd,
+        () => contexts,
+      ).map(({ path }) => path);
 
-    assert.deepEqual(launch("agent", {}), [
-      "--append-system-prompt",
-      "/prompt",
-      ...noContext,
-      ...noSkills,
-    ]);
+    assert.deepEqual(
+      select({
+        inheritGlobalContext: false,
+        inheritAncestorContext: false,
+        inheritProjectContext: true,
+      }),
+      [outer, inner],
+    );
+    assert.deepEqual(
+      select({
+        inheritGlobalContext: true,
+        inheritAncestorContext: false,
+        inheritProjectContext: true,
+      }),
+      [global, outer, inner],
+    );
+    assert.deepEqual(
+      select({
+        inheritGlobalContext: false,
+        inheritAncestorContext: true,
+        inheritProjectContext: true,
+      }),
+      [ancestor, outer, inner],
+    );
+    assert.deepEqual(
+      select({
+        inheritGlobalContext: false,
+        inheritAncestorContext: true,
+        inheritProjectContext: false,
+      }),
+      [ancestor],
+    );
+    assert.deepEqual(
+      select({
+        inheritGlobalContext: false,
+        inheritProjectContext: true,
+      }),
+      [ancestor, outer, inner],
+    );
+    assert.deepEqual(
+      select({
+        inheritGlobalContext: false,
+        inheritAncestorContext: false,
+        inheritProjectContext: false,
+      }),
+      [],
+    );
+    assert.deepEqual(
+      launch("agent", {
+        inheritGlobalContext: true,
+        inheritAncestorContext: false,
+        inheritProjectContext: true,
+      }).filter((arg) => arg === "--no-context-files"),
+      ["--no-context-files"],
+    );
+    assert.equal(
+      launch("agent", {
+        inheritGlobalContext: true,
+        inheritAncestorContext: true,
+        inheritProjectContext: true,
+      }).includes("--no-context-files"),
+      false,
+    );
+    assert.equal(
+      launch("agent", {
+        inheritGlobalContext: false,
+        inheritAncestorContext: false,
+        inheritProjectContext: false,
+      }).filter((arg) => arg === "--append-system-prompt").length,
+      1,
+    );
     assert.deepEqual(launch("delegate", {}), [
       "--append-system-prompt",
       "/prompt",
       ...noSkills,
     ]);
-    for (const systemPromptMode of ["replace", "append"] as const) {
-      const prompt = [
-        systemPromptMode === "replace"
-          ? "--system-prompt"
-          : "--append-system-prompt",
-        "/prompt",
-      ];
-      for (const [frontmatter, contexts] of [
-        [{ inheritProjectContext: true, inheritGlobalContext: true }, []],
-        [
-          { inheritProjectContext: true, inheritGlobalContext: false },
-          [...noContext, ...projectContextPaths.flatMap(append)],
-        ],
-        [
-          { inheritProjectContext: false, inheritGlobalContext: true },
-          [...noContext, ...append(global)],
-        ],
-        [
-          { inheritProjectContext: false, inheritGlobalContext: false },
-          noContext,
-        ],
-      ] as const)
-        assert.deepEqual(
-          launch("agent", { ...frontmatter, systemPromptMode }),
-          [...prompt, ...contexts, ...noSkills],
-        );
-    }
-    const selected = selectedAgentContextFiles(
-      {
-        name: "agent",
-        path: "/agent.md",
-        frontmatter: {
-          inheritProjectContext: true,
-          inheritGlobalContext: false,
-        },
-        body: "",
-      },
-      cwd,
-      () => [
-        { path: global, content: "Global" },
-        { path: outer, content: "Outer" },
-        { path: inner, content: "Inner" },
-      ],
+    assert.deepEqual(
+      launch("agent", {
+        inheritGlobalContext: false,
+        inheritAncestorContext: false,
+        inheritProjectContext: true,
+      }).slice(1, 7),
+      ["/prompt", ...noContext, ...append(outer), ...append(inner)],
     );
     assert.deepEqual(
-      selected.map(({ path }) => path),
-      [outer, inner],
+      launch("agent", {
+        inheritGlobalContext: false,
+        inheritAncestorContext: false,
+        inheritProjectContext: false,
+      }).slice(1, 2),
+      ["/prompt"],
     );
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
   }
+});
+
+test(
+  "uses cwd-relative Git boundary despite an aliased absolute Git spelling",
+  { skip: process.platform === "win32" },
+  () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-herdsman-context-alias-"));
+    const repo = join(root, "repo");
+    const cwd = join(repo, "nested");
+    const fakeBin = join(root, "bin");
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(fakeBin);
+    execFileSync("git", ["init", "-q", repo]);
+    const calls = join(root, "git-calls");
+    const absoluteAlias = join(repo, "..", "repo");
+    const fakeGit = join(fakeBin, "git");
+    writeFileSync(
+      fakeGit,
+      `#!/bin/sh
+printf '%s\\n' "$*" >> '${calls}'
+case "$*" in
+  "rev-parse --show-cdup") printf '..\\n' ;;
+  "rev-parse --show-toplevel") printf '${absoluteAlias}\\n' ;;
+  *) exit 24 ;;
+esac
+`,
+    );
+    chmodSync(fakeGit, 0o755);
+
+    const ancestor = join(root, "AGENTS.md");
+    const project = join(repo, "AGENTS.md");
+    const local = join(cwd, "AGENTS.md");
+    for (const path of [ancestor, project, local]) writeFileSync(path, path);
+    const previousPath = process.env.PATH;
+    process.env.PATH = fakeBin;
+    try {
+      const selected = selectedAgentContextFiles(
+        {
+          name: "alias-test",
+          path: "/agent.md",
+          frontmatter: {
+            inheritGlobalContext: false,
+            inheritAncestorContext: false,
+            inheritProjectContext: true,
+          },
+          body: "",
+        },
+        cwd,
+        () => [
+          { path: ancestor, content: "ancestor" },
+          { path: project, content: "project" },
+          { path: local, content: "local" },
+        ],
+      ).map(({ path }) => path);
+
+      assert.deepEqual(selected, [project, local]);
+      assert.equal(readFileSync(calls, "utf8"), "rev-parse --show-cdup\n");
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  },
+);
+
+test("classifies linked-worktree and non-Git context boundaries", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-context-worktree-"));
+  const primary = join(root, "primary");
+  const linked = join(root, "linked");
+  const cwd = join(linked, "nested");
+  const global = join(root, "agent-dir");
+  mkdirSync(primary, { recursive: true });
+  mkdirSync(global);
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: primary });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: primary });
+  execFileSync("git", ["config", "user.email", "test@example.invalid"], {
+    cwd: primary,
+  });
+  writeFileSync(join(primary, "tracked"), "base");
+  execFileSync("git", ["add", "tracked"], { cwd: primary });
+  execFileSync("git", ["commit", "-q", "-m", "base"], { cwd: primary });
+  execFileSync("git", ["worktree", "add", "-q", "-b", "linked", linked], {
+    cwd: primary,
+  });
+  mkdirSync(cwd);
+  const ancestor = join(root, "AGENTS.md");
+  const primaryContext = join(primary, "AGENTS.md");
+  const linkedContext = join(linked, "AGENTS.md");
+  const nestedContext = join(cwd, "AGENTS.md");
+  const globalContext = join(global, "AGENTS.md");
+  for (const path of [
+    ancestor,
+    primaryContext,
+    linkedContext,
+    nestedContext,
+    globalContext,
+  ])
+    writeFileSync(path, path);
+
+  const discovered = [
+    globalContext,
+    ancestor,
+    primaryContext,
+    linkedContext,
+    nestedContext,
+  ].map((path) => ({ path, content: path }));
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = global;
+  try {
+    const definition = (frontmatter: Frontmatter): AgentDefinition => ({
+      name: "linked-test",
+      path: "/agent.md",
+      frontmatter,
+      body: "",
+    });
+    const load = (frontmatter: Frontmatter) =>
+      selectedAgentContextFiles(
+        definition(frontmatter),
+        cwd,
+        () => discovered,
+      ).map(({ path }) => path);
+    assert.deepEqual(
+      load({
+        inheritGlobalContext: false,
+        inheritAncestorContext: false,
+        inheritProjectContext: true,
+      }),
+      [linkedContext, nestedContext],
+    );
+    assert.deepEqual(
+      load({
+        inheritGlobalContext: false,
+        inheritAncestorContext: true,
+        inheritProjectContext: false,
+      }),
+      [ancestor, primaryContext],
+    );
+    const linkedLaunchArgs = agentLaunchArgs(
+      definition({
+        inheritGlobalContext: false,
+        inheritAncestorContext: false,
+        inheritProjectContext: true,
+      }),
+      {
+        cwd,
+        bodyPromptPath: "/prompt",
+        loadProjectContextFiles: () => discovered,
+      },
+    );
+    assert.deepEqual(
+      linkedLaunchArgs.flatMap((argument, index) =>
+        argument === "--append-system-prompt"
+          ? [linkedLaunchArgs[index + 1]]
+          : [],
+      ),
+      [linkedContext, nestedContext],
+    );
+
+    const nonGit = join(root, "non-git");
+    const nonGitCwd = join(nonGit, "nested");
+    mkdirSync(nonGitCwd, { recursive: true });
+    const parentContext = join(nonGit, "AGENTS.md");
+    const localContext = join(nonGitCwd, "AGENTS.md");
+    writeFileSync(parentContext, "parent");
+    writeFileSync(localContext, "local");
+    const projectOnly = definition({
+      inheritGlobalContext: false,
+      inheritAncestorContext: false,
+      inheritProjectContext: true,
+    });
+    const nonGitContexts = [
+      { path: parentContext, content: "parent" },
+      { path: localContext, content: "local" },
+    ];
+    assert.deepEqual(
+      selectedAgentContextFiles(
+        projectOnly,
+        nonGitCwd,
+        () => nonGitContexts,
+      ).map(({ path }) => path),
+      [localContext],
+    );
+
+    const unavailablePath = join(root, "no-git-executable");
+    mkdirSync(unavailablePath);
+    const previousPath = process.env.PATH;
+    process.env.PATH = unavailablePath;
+    try {
+      assert.deepEqual(
+        selectedAgentContextFiles(projectOnly, cwd, () => [
+          { path: ancestor, content: "ancestor" },
+          { path: linkedContext, content: "linked" },
+          { path: nestedContext, content: "nested" },
+        ]).map(({ path }) => path),
+        [nestedContext],
+      );
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+  }
+});
+
+test(
+  "surfaces unexpected Git worktree lookup failures",
+  { skip: process.platform === "win32" },
+  () => {
+    const root = mkdtempSync(
+      join(tmpdir(), "pi-herdsman-context-git-failure-"),
+    );
+    const repo = join(root, "repo");
+    const fakeBin = join(root, "bin");
+    mkdirSync(repo);
+    mkdirSync(fakeBin);
+    const fakeGit = join(fakeBin, "git");
+    writeFileSync(
+      fakeGit,
+      "#!/bin/sh\nprintf 'simulated git failure\\n' >&2\nexit 23\n",
+    );
+    chmodSync(fakeGit, 0o755);
+    execFileSync("git", ["init", "-q", repo]);
+    const context = join(repo, "AGENTS.md");
+    writeFileSync(context, "project");
+    const previousPath = process.env.PATH;
+    process.env.PATH = fakeBin;
+    try {
+      assert.throws(
+        () =>
+          selectedAgentContextFiles(
+            {
+              name: "failure-test",
+              path: "/agent.md",
+              frontmatter: {
+                inheritGlobalContext: false,
+                inheritAncestorContext: false,
+                inheritProjectContext: true,
+              },
+              body: "",
+            },
+            repo,
+            () => [{ path: context, content: "project" }],
+          ),
+        /Cannot resolve context worktree.*simulated git failure/u,
+      );
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  },
+);
+
+test("classifies symlinked context directories by their canonical targets", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-context-symlink-"));
+  const repo = join(root, "repo");
+  const cwd = join(repo, "nested");
+  const outside = join(root, "outside");
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(outside);
+  execFileSync("git", ["init", "-q", repo]);
+  const inRepoAlias = join(repo, "inside-alias");
+  const outsideAlias = join(repo, "outside-alias");
+  try {
+    symlinkSync(cwd, inRepoAlias, "dir");
+    symlinkSync(outside, outsideAlias, "dir");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES" || code === "ENOTSUP") {
+      t.skip(`directory symlinks are unavailable: ${code}`);
+      return;
+    }
+    throw error;
+  }
+  const insideContext = join(inRepoAlias, "AGENTS.md");
+  const outsideContext = join(outsideAlias, "AGENTS.md");
+  writeFileSync(join(cwd, "AGENTS.md"), "inside");
+  writeFileSync(join(outside, "AGENTS.md"), "outside");
+  const selected = selectedAgentContextFiles(
+    {
+      name: "symlink-test",
+      path: "/agent.md",
+      frontmatter: {
+        inheritGlobalContext: false,
+        inheritAncestorContext: false,
+        inheritProjectContext: true,
+      },
+      body: "",
+    },
+    cwd,
+    () => [
+      { path: outsideContext, content: "outside" },
+      { path: insideContext, content: "inside" },
+    ],
+  );
+  assert.deepEqual(
+    selected.map(({ path }) => path),
+    [insideContext],
+  );
 });
 
 test("managed launches retain the generic active-agent interoperability marker", () => {
@@ -744,7 +1094,9 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   );
   assert.equal(bundled.frontmatter.systemPromptMode, "append");
   assert.equal(bundled.frontmatter.inheritProjectContext, true);
-  assert.equal(bundled.frontmatter.inheritGlobalContext, true);
+  assert.equal(bundled.frontmatter.inheritGlobalContext, false);
+  assert.equal(bundled.frontmatter.inheritAncestorContext, false);
+  assert.ok(launchArgs.includes("--no-context-files"));
   assert.equal(bundled.frontmatter.enabled, undefined);
   assert.match(bundled.body, /Delegate bounded project execution/);
   assert.equal(
@@ -1214,6 +1566,9 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
   assert.equal(required.size, 6);
   for (const definition of definitions) {
     assert.equal(definition.frontmatter.systemPromptMode, "append");
+    assert.equal(definition.frontmatter.inheritGlobalContext, false);
+    assert.equal(definition.frontmatter.inheritAncestorContext, false);
+    assert.equal(definition.frontmatter.inheritProjectContext, true);
     assert.notEqual(definition.body.trim(), "");
     const launchArgs = agentLaunchArgs(definition, {
       bodyPromptPath: "/tmp/bundled-agent-prompt.md",

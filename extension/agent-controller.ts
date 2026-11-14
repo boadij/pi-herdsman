@@ -43,6 +43,7 @@ import {
   observeMailbox,
   observeNewAgentStates,
   readAgentState,
+  writeAgentState,
   readRequest,
   removeResult,
   removeAgentMailbox,
@@ -138,6 +139,8 @@ import {
   parseHerdrVersion,
   runHerdr,
   stopHerdrAgentPreservingPane,
+  verifyRetainedHerdrPane,
+  closeRetainedHerdrPane,
   matchesExpectedSession,
   sameCwd,
   sessionIdentity,
@@ -1773,7 +1776,7 @@ export type AgentSessionIdentity = {
 export type ManagedAgentPresence =
   | { kind: "live"; agent: any }
   | { kind: "unknown"; diagnostic: string; relatedAgents: any[] }
-  | { kind: "lost" };
+  | { kind: "lost"; retainedPane?: true };
 
 export type ManagedAgentSnapshot = {
   listed: any;
@@ -4161,106 +4164,140 @@ export async function managedAgentSnapshots(
       pendingOwners.add(`${state.workspaceId}\0${state.ownerSessionId}`);
     return pending;
   });
-  const agents = mailboxes.map(({ path, state }, index) => {
-    const presence = managedAgentPresence(state, inventory);
-    const agent = presence.kind === "live" ? presence.agent : undefined;
-    let agentDefinition: string;
-    try {
-      const cached = dependencies.runtimeForLabel(state.agentLabel);
-      agentDefinition = agentDefinitionForRuntime(
-        agent,
-        state,
-        cached,
-        allowTranscriptDefinitionFallback,
-      );
-    } catch {
-      agentDefinition = "unknown";
-    }
-    const session = agent && sessionIdentity(agent.agent_session);
-    const piSessionId =
-      session?.kind === "id" ? session.value : state.piSessionId;
-    const piSessionPath =
-      session?.kind === "path" ? session.value : state.piSessionFile;
-    const lifecycleState = agent
-      ? normalizeHerdrLifecycleState(agent)
-      : "unknown";
-    const controlLifecycleState =
-      lifecycleState === "idle" ||
-      lifecycleState === "working" ||
-      lifecycleState === "blocked" ||
-      lifecycleState === "done"
-        ? lifecycleState
-        : "unknown";
-    const completionPending = completedResultsPending[index]!;
-    const handoffPending = unacknowledgedRequestExists(path, state);
-    const liveState = agent
-      ? agentControlState(
-          controlLifecycleState,
-          state.activeRequestId,
-          completionPending,
-          handoffPending,
-          !!state.pendingAskId,
-          !!state.resultError,
+  const agents = await Promise.all(
+    mailboxes.map(async ({ path, state }, index) => {
+      let presence = managedAgentPresence(state, inventory);
+      if (
+        presence.kind === "unknown" &&
+        state.terminalId &&
+        state.launchShellPid !== undefined &&
+        inventory.panes.some(
+          (pane) =>
+            pane.pane_id === state.paneId &&
+            pane.workspace_id === state.workspaceId,
         )
-      : "unknown";
-    const pendingDirectChildWork = pendingOwners.has(durableIdentityKey(state));
-    const waitingForChildren =
-      !!state.activeRequestId &&
-      pendingDirectChildWork &&
-      (lifecycleState === "idle" || lifecycleState === "done") &&
-      !completionPending &&
-      !handoffPending &&
-      !state.resultError;
-    const existingLiveProjection = waitingForChildren ? "blocked" : liveState;
-    const projectedState =
-      completionPending || state.resultError
-        ? "settling"
-        : presence.kind === "lost"
-          ? "lost"
-          : presence.kind === "unknown"
-            ? "unknown"
-            : existingLiveProjection;
-    const steerable =
-      presence.kind === "live" &&
-      !state.pendingAskId &&
-      (projectedState === "working" || waitingForChildren);
-    const now = Date.now();
-    const listed = {
-      label: state.agentLabel,
-      kind: "pi",
-      state: projectedState,
-      steerable,
-      workspace_id: state.workspaceId,
-      pane_id: agent?.pane_id ?? state.paneId,
-      ...(agent?.tab_id ? { tab_id: agent.tab_id } : {}),
-      cwd: agent?.cwd ?? state.cwd,
-      ...(agent?.agent_session ? { agent_session: agent.agent_session } : {}),
-      pi_session_id: piSessionId,
-      pi_session_path: piSessionPath,
-      managed: true,
-      owner_session_id: state.ownerSessionId,
-      agent_definition: agentDefinition,
-      active_request_id: state.activeRequestId,
-      ...(presence.kind === "unknown"
-        ? { recovery_only: true, diagnostic: presence.diagnostic }
-        : {}),
-      ...(state.resultError ? { result_error: state.resultError } : {}),
-      ...(state.lastActivityAt !== undefined
-        ? {
-            last_activity_at: state.lastActivityAt,
-            ...(presence.kind === "live" &&
-            existingLiveProjection === "working" &&
-            state.activeRequestId &&
-            state.lastActivityAt <= now &&
-            now - state.lastActivityAt >= dependencies.staleAfterMs
-              ? { stale: true, inactive_ms: now - state.lastActivityAt }
-              : {}),
-          }
-        : {}),
-      ...(agent?.tokens ? { tokens: agent.tokens } : {}),
-    };
-    return { state, agentDefinition, lifecycleState, listed, presence };
-  });
+      ) {
+        const proven = await verifyRetainedHerdrPane(
+          pi,
+          ctx,
+          {
+            workspaceId: state.workspaceId,
+            paneId: state.paneId,
+            terminalId: state.terminalId,
+            launchShellPid: state.launchShellPid,
+            cwd: state.cwd,
+            alias: herdrAgentAlias(
+              state.workspaceId,
+              state.agentLabel,
+              state.runId,
+            ),
+            session: { id: state.piSessionId, path: state.piSessionFile },
+          },
+          signal,
+        );
+        if (proven) presence = { kind: "lost", retainedPane: true };
+      }
+      const agent = presence.kind === "live" ? presence.agent : undefined;
+      let agentDefinition: string;
+      try {
+        const cached = dependencies.runtimeForLabel(state.agentLabel);
+        agentDefinition = agentDefinitionForRuntime(
+          agent,
+          state,
+          cached,
+          allowTranscriptDefinitionFallback,
+        );
+      } catch {
+        agentDefinition = "unknown";
+      }
+      const session = agent && sessionIdentity(agent.agent_session);
+      const piSessionId =
+        session?.kind === "id" ? session.value : state.piSessionId;
+      const piSessionPath =
+        session?.kind === "path" ? session.value : state.piSessionFile;
+      const lifecycleState = agent
+        ? normalizeHerdrLifecycleState(agent)
+        : "unknown";
+      const controlLifecycleState =
+        lifecycleState === "idle" ||
+        lifecycleState === "working" ||
+        lifecycleState === "blocked" ||
+        lifecycleState === "done"
+          ? lifecycleState
+          : "unknown";
+      const completionPending = completedResultsPending[index]!;
+      const handoffPending = unacknowledgedRequestExists(path, state);
+      const liveState = agent
+        ? agentControlState(
+            controlLifecycleState,
+            state.activeRequestId,
+            completionPending,
+            handoffPending,
+            !!state.pendingAskId,
+            !!state.resultError,
+          )
+        : "unknown";
+      const pendingDirectChildWork = pendingOwners.has(
+        durableIdentityKey(state),
+      );
+      const waitingForChildren =
+        !!state.activeRequestId &&
+        pendingDirectChildWork &&
+        (lifecycleState === "idle" || lifecycleState === "done") &&
+        !completionPending &&
+        !handoffPending &&
+        !state.resultError;
+      const existingLiveProjection = waitingForChildren ? "blocked" : liveState;
+      const projectedState =
+        completionPending || state.resultError
+          ? "settling"
+          : presence.kind === "lost"
+            ? "lost"
+            : presence.kind === "unknown"
+              ? "unknown"
+              : existingLiveProjection;
+      const steerable =
+        presence.kind === "live" &&
+        !state.pendingAskId &&
+        (projectedState === "working" || waitingForChildren);
+      const now = Date.now();
+      const listed = {
+        label: state.agentLabel,
+        kind: "pi",
+        state: projectedState,
+        steerable,
+        workspace_id: state.workspaceId,
+        pane_id: agent?.pane_id ?? state.paneId,
+        ...(agent?.tab_id ? { tab_id: agent.tab_id } : {}),
+        cwd: agent?.cwd ?? state.cwd,
+        ...(agent?.agent_session ? { agent_session: agent.agent_session } : {}),
+        pi_session_id: piSessionId,
+        pi_session_path: piSessionPath,
+        managed: true,
+        owner_session_id: state.ownerSessionId,
+        agent_definition: agentDefinition,
+        active_request_id: state.activeRequestId,
+        ...(presence.kind === "unknown"
+          ? { recovery_only: true, diagnostic: presence.diagnostic }
+          : {}),
+        ...(state.resultError ? { result_error: state.resultError } : {}),
+        ...(state.lastActivityAt !== undefined
+          ? {
+              last_activity_at: state.lastActivityAt,
+              ...(presence.kind === "live" &&
+              existingLiveProjection === "working" &&
+              state.activeRequestId &&
+              state.lastActivityAt <= now &&
+              now - state.lastActivityAt >= dependencies.staleAfterMs
+                ? { stale: true, inactive_ms: now - state.lastActivityAt }
+                : {}),
+            }
+          : {}),
+        ...(agent?.tokens ? { tokens: agent.tokens } : {}),
+      };
+      return { state, agentDefinition, lifecycleState, listed, presence };
+    }),
+  );
   let rootOwners: VerifiedRootOwner[] = [];
   if (proveRoot) {
     try {
@@ -5313,6 +5350,7 @@ export function createAgentController(
     resultBindings: readonly ResultBinding[] = [],
     submitOptions: {
       waitForLock?: boolean;
+      launchIdentity?: { terminalId: string; launchShellPid: number };
       beforeWrite?: (publish: () => void) => Promise<void> | void;
       evidence?: {
         projectAssignmentId?: string;
@@ -5402,6 +5440,22 @@ export function createAgentController(
         operation,
         `Agent ${current.agentLabel}`,
       );
+      if (submitOptions.launchIdentity) {
+        if (
+          current.terminalId !== undefined ||
+          current.launchShellPid !== undefined
+        )
+          fail(
+            "target_ambiguous",
+            "Agent already has unexpected launch identity",
+            operation,
+          );
+        writeAgentState(runtime.mailboxPath, {
+          ...current,
+          ...submitOptions.launchIdentity,
+          updatedAt: Date.now(),
+        });
+      }
       if (
         kind === "steer" &&
         readUnacknowledgedRequest(runtime.mailboxPath, current)
@@ -6310,10 +6364,39 @@ export function createAgentController(
           "Managed agent has a durable result; close result delivery first",
           "close",
         );
-      const presence = managedAgentPresence(
-        current,
-        await herdrSessionSnapshot(pi, context, signal),
-      );
+      const inventory = await herdrSessionSnapshot(pi, context, signal);
+      let presence = managedAgentPresence(current, inventory);
+      const currentPaneId = current.paneId;
+      const currentWorkspaceId = current.workspaceId;
+      if (
+        presence.kind === "unknown" &&
+        current.terminalId &&
+        current.launchShellPid !== undefined &&
+        inventory.panes.some(
+          (pane) =>
+            pane.pane_id === currentPaneId &&
+            pane.workspace_id === currentWorkspaceId,
+        ) &&
+        (await verifyRetainedHerdrPane(
+          pi,
+          context,
+          {
+            workspaceId: current.workspaceId,
+            paneId: current.paneId,
+            terminalId: current.terminalId,
+            launchShellPid: current.launchShellPid,
+            cwd: current.cwd,
+            alias: herdrAgentAlias(
+              current.workspaceId,
+              current.agentLabel,
+              current.runId,
+            ),
+            session: { id: current.piSessionId, path: current.piSessionFile },
+          },
+          signal,
+        ))
+      )
+        presence = { kind: "lost", retainedPane: true };
       if (presence.kind === "unknown")
         fail(
           "target_ambiguous",
@@ -6377,6 +6460,51 @@ export function createAgentController(
             "Managed agent has a durable result; close result delivery first",
             "close",
           );
+        if (presence.kind === "lost" && presence.retainedPane) {
+          if (
+            current.terminalId !== state.terminalId ||
+            current.launchShellPid !== state.launchShellPid ||
+            !current.terminalId ||
+            current.launchShellPid === undefined
+          )
+            fail(
+              "target_ambiguous",
+              "Original retained pane identity changed before close",
+              "close",
+            );
+          await closeRetainedHerdrPane(
+            pi,
+            context,
+            {
+              workspaceId: current.workspaceId,
+              paneId: current.paneId,
+              terminalId: current.terminalId,
+              launchShellPid: current.launchShellPid,
+              cwd: current.cwd,
+              alias: herdrAgentAlias(
+                current.workspaceId,
+                current.agentLabel,
+                current.runId,
+              ),
+              session: { id: current.piSessionId, path: current.piSessionFile },
+            },
+            signal,
+          );
+          const after = readAgentState(mailbox);
+          if (
+            !after ||
+            !sameIdentity(after, current) ||
+            after.terminalId !== current.terminalId ||
+            after.launchShellPid !== current.launchShellPid ||
+            hasDurableResult(mailbox, after)
+          )
+            fail(
+              "target_ambiguous",
+              "Managed agent changed or produced a result during retained-pane close",
+              "close",
+            );
+          current = after;
+        }
       }
       try {
         if (
@@ -9421,6 +9549,21 @@ export function createAgentController(
             p.action,
             `Agent ${label} in pane ${started.paneId}`,
           );
+          const shellPid = started.shellProcess?.shell_pid;
+          if (
+            !Number.isInteger(shellPid) ||
+            shellPid! <= 0 ||
+            !started.terminalId?.trim()
+          )
+            fail(
+              "target_ambiguous",
+              "Original pane shell is unproven",
+              p.action,
+            );
+          const launchIdentity = {
+            terminalId: started.terminalId,
+            launchShellPid: shellPid!,
+          };
           const expectedHerdrAgent = herdrAgentAlias(
             workspaceId,
             label,
@@ -9556,6 +9699,7 @@ export function createAgentController(
             assignmentInput!.resultBindings,
             {
               waitForLock: true,
+              launchIdentity,
               evidence: evidenceMetadata,
               beforeWrite: async (publish) => {
                 assertRootDelegationAllowed();
@@ -10682,6 +10826,7 @@ export function createAgentController(
     availableActions: string[],
     nextReminderMs: number,
     signal: AbortSignal,
+    retainedPane = false,
   ):
     | (Parameters<ExtensionAPI["sendMessage"]>[0] & { content: string })
     | undefined => {
@@ -10728,7 +10873,9 @@ export function createAgentController(
     return {
       customType: "pi-herdsman-agent-lost",
       content: [
-        `Agent ${current.agentLabel} is still lost and its assignment remains unresolved.`,
+        retainedPane
+          ? `Agent ${current.agentLabel}'s managed execution is lost. Its original pane is verified as settled, but the assignment remains unresolved.`
+          : `Agent ${current.agentLabel} is still lost and its assignment remains unresolved.`,
         ...(latestRequestId ? [`Request: ${latestRequestId}`] : []),
         `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
         `Next reminder if unresolved: ~${formatHealthAttentionDuration(nextReminderMs)}`,
@@ -10885,6 +11032,7 @@ export function createAgentController(
       }
       if (agent.presence.kind === "lost" && !state.completedRequestId) {
         const episode = "lost";
+        const retainedPane = agent.presence.retainedPane === true;
         if (!attentionDue(state.runId, episode, now)) continue;
         const intervalMs = nextAttentionInterval(state.runId, episode);
         const message = prepareAgentLoss(
@@ -10894,6 +11042,7 @@ export function createAgentController(
           availableActions,
           intervalMs,
           signal,
+          retainedPane,
         );
         if (message)
           stageAttention({
@@ -10908,6 +11057,7 @@ export function createAgentController(
                 availableActions,
                 intervalMs,
                 signal,
+                retainedPane,
               ),
             onSubmitted: () =>
               recordAttention(state.runId, episode, intervalMs),

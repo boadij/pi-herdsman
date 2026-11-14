@@ -81,16 +81,19 @@ test("definition layer summaries show only safe, authoritative field changes", (
     supplied: {
       tools: ["read"],
       thinking: "high",
+      inheritAncestorContext: false,
       permission: { private: "do not display" },
     } as Frontmatter,
     before: {
       tools: ["read", "grep"],
       thinking: "low",
+      inheritAncestorContext: true,
       permission: { old: "secret" },
     },
     after: {
       tools: ["read"],
       thinking: "high",
+      inheritAncestorContext: false,
       permission: { private: "do not display" },
     },
     body: "Updated",
@@ -99,6 +102,7 @@ test("definition layer summaries show only safe, authoritative field changes", (
   assert.deepEqual(summarizeDefinitionLayerChanges(layer), [
     "~ thinking: low → high",
     "- tools: grep",
+    "~ inheritAncestorContext: true → false",
     "+ body: appended",
   ]);
 
