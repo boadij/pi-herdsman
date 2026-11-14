@@ -229,10 +229,16 @@ disappearance is not completion.
 
 Fresh delegation and historical-session continuation startup is bounded.
 
-When herdr returns a structured failure, Pi Herdsman preserves it. When startup
-returns empty or malformed output and no better structured error is available,
-the implementation can capture one bounded exact-pane diagnostic snapshot
-within the startup budget.
+When herdr returns a structured failure, Pi Herdsman preserves it. For a
+structured Herdr startup timeout, it also attempts one bounded exact-pane
+diagnostic snapshot within the startup budget. Empty or malformed startup
+output likewise triggers a snapshot when no better structured error is
+available.
+
+A timeout does not establish that Pi exited or that an extension failed. Any
+terminal diagnostic is evidence only; it does not establish ownership or make a
+failed Agent safe to remove. If the diagnostic reports an extension conflict,
+inspect the effective Pi package and extension configuration.
 
 Failures report the known stage and identities when available.
 

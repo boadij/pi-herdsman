@@ -244,6 +244,140 @@ for (const scenario of [
 }
 
 test(
+  "structured Herdr startup timeout reaches the delegating owner with Pi diagnostics",
+  { timeout: 40_000 },
+  async () => {
+    setLeadEnvironment();
+    const label = "structured-startup-timeout";
+    const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+    const diagnostic = 'Error: Failed to load extension: Tool "exec" conflicts';
+    let startAttempted = false;
+    const pi = fakePi({
+      exec: async (command, args, options) => {
+        if (
+          command === "herdr" &&
+          args[0] === "pane" &&
+          args[1] === "process-info" &&
+          startAttempted
+        )
+          return {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                process_info: {
+                  pane_id: args[args.indexOf("--pane") + 1],
+                  shell_pid: 123,
+                  foreground_process_group_id: 456,
+                  foreground_processes: [{ pid: 456, argv0: "pi" }],
+                },
+              },
+            }),
+            stderr: "",
+            code: 0,
+            killed: false,
+          };
+        if (command === "herdr" && isPreservePaneStop(args))
+          return {
+            stdout: "",
+            stderr: "synthetic preserving-stop failure",
+            code: 1,
+            killed: false,
+          };
+        if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
+          await startup.exec(command, args, options);
+          startAttempted = true;
+          return {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              error: {
+                code: "timeout",
+                message: "timed out waiting for agent startup",
+              },
+            }),
+            stderr: "",
+            code: 1,
+            killed: false,
+          };
+        }
+        if (command === "herdr" && args[0] === "pane" && args[1] === "read")
+          return { stdout: diagnostic, stderr: "", code: 0, killed: false };
+        return startup.exec(command, args, options);
+      },
+    });
+    registerExtension!(pi.pi as never);
+    pi.entries.push(...startupRoleHistory());
+    await pi.events.get("session_start")![0](
+      undefined,
+      fakeContext(pi.entries),
+    );
+    try {
+      const delegate = pi.tools.find((tool) => tool.name === "delegate_agent");
+      assert.ok(delegate);
+      const result = await delegate.execute(
+        "id",
+        { definition: "agent", label, task: "synthetic startup failure" },
+        undefined,
+        undefined,
+        fakeContext(pi.entries),
+      );
+
+      assert.equal(startAttempted, true);
+      assert.equal(result.details.error.category, "rollback_failure");
+      assert.equal(result.details.error.rollbackOccurred, true);
+      assert.equal(result.details.error.primary.category, "internal_failure");
+      assert.match(
+        result.details.error.primary.message,
+        /timed out waiting for agent startup/,
+      );
+      assert.match(
+        result.details.error.primary.message,
+        /Tool "exec" conflicts/,
+      );
+      assert.equal(result.details.error.details.stage, "agent_start");
+      assert.equal(result.details.error.details.herdrCode, "timeout");
+      assert.equal(result.details.error.details.paneSnapshot, diagnostic);
+      assert.ok(result.details.error.cleanup.message);
+
+      const modelFacingText = result.content
+        .filter((item: { type: string }) => item.type === "text")
+        .map((item: { text: string }) => item.text)
+        .join("\n");
+      assert.match(modelFacingText, /Agent delegate failed/);
+      assert.match(modelFacingText, /timed out waiting for agent startup/);
+      assert.match(modelFacingText, /Tool "exec" conflicts/);
+      const paneReads = pi.calls.filter(
+        (args) => args[0] === "pane" && args[1] === "read",
+      );
+      assert.equal(paneReads.length, 1);
+      assert.equal(
+        result.details.error.ids.paneId,
+        paneReads[0]?.[2],
+        "the failed identity should remain attached to rollback evidence",
+      );
+      assert.equal(result.details.error.cleanup.operation, "rollback");
+      const preservingStops = pi.calls.filter((args) =>
+        isPreservePaneStop(args),
+      );
+      assert.equal(preservingStops.length, 1);
+      assert.equal(
+        preservingStops[0]?.[2],
+        result.details.error.ids.paneId,
+        "preserving stop must target the exact failed startup pane",
+      );
+      assert.equal(
+        pi.calls.some((args) => isPaneClose(args) || isTabClose(args)),
+        false,
+        "startup timeout must not authorize unverified pane/tab removal",
+      );
+    } finally {
+      startup.stopMailboxConsumer();
+      pi.events.get("session_shutdown")?.[0]();
+      resetAgentMailbox(startup.mailbox);
+    }
+  },
+);
+
+test(
   "pane-not-ready failure retains bounded startup diagnostic and rolls back",
   { timeout: 40_000 },
   async () => {

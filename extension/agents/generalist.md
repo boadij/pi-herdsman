@@ -3,6 +3,7 @@ agents: [scout, researcher]
 description: General-purpose execution for bounded investigation, editing, and validation; use when work spans capabilities; prefer focused specialists for narrow tasks
 extensions: [builtin:codemode]
 inheritGlobalContext: false
+inheritAncestorContext: false
 inheritProjectContext: true
 name: generalist
 noExtensions: true

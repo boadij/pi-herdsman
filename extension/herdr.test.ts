@@ -2450,6 +2450,50 @@ test("minimum startup budget keeps the child timeout Herdr-supported", async () 
   }
 });
 
+test("structured agent start timeout captures bounded Pi diagnostics", async () => {
+  const diagnostic = `${"x".repeat(9000)}\nTool "exec" conflicts`;
+  const { failure, calls } = await executeFailedStart(
+    {
+      code: 1,
+      stdout: JSON.stringify({
+        error: {
+          code: "timeout",
+          message: "timed out waiting for agent startup",
+        },
+      }),
+      stderr: "",
+    },
+    { code: 0, killed: false, stdout: diagnostic, stderr: "" },
+    30_000,
+  );
+
+  assert.equal(failure.stage, "agent_start");
+  assert.equal(failure.cause.detail.details.herdrCode, "timeout");
+  const details = failure.cause.detail.details;
+  assert.ok(details);
+  assert.match(failure.cause.message, /timed out waiting for agent startup/);
+  assert.match(failure.cause.message, /Tool "exec" conflicts/);
+  assert.ok(Buffer.byteLength(details.paneSnapshot) <= 8192);
+  assert.equal(details.paneSnapshotAttempted, true);
+  const reads = calls.filter(
+    ({ args }) => args[0] === "pane" && args[1] === "read",
+  );
+  assert.equal(reads.length, 1);
+  assert.deepEqual(reads[0]?.args, [
+    "pane",
+    "read",
+    "pane-1",
+    "--source",
+    "recent-unwrapped",
+    "--lines",
+    "40",
+    "--format",
+    "text",
+    "--raw",
+  ]);
+  assert.equal(reads[0]!.timeout, 2000);
+});
+
 test("structured agent start failure never reads the pane", async () => {
   const { failure, calls } = await executeFailedStart({
     code: 1,
@@ -7427,6 +7471,128 @@ test("existing-pane startup waits for shell readiness before starting Pi", async
   } finally {
     if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
     else environment.HERDR_WORKSPACE_ID = previousWorkspace;
+  }
+});
+
+test("existing-pane structured startup timeout captures pane diagnostics", async () => {
+  const previousWorkspace = process.env.HERDR_WORKSPACE_ID;
+  process.env.HERDR_WORKSPACE_ID = "primary-workspace";
+  const calls: Array<{ args: string[]; timeout?: number }> = [];
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  const diagnostic = 'Error: Failed to load extension: Tool "exec" conflicts';
+  const pi = {
+    exec: async (
+      _command: string,
+      args: string[],
+      options?: { timeout?: number },
+    ) => {
+      calls.push({ args, timeout: options?.timeout });
+      const key = args.slice(0, 2).join(" ");
+      if (key === "workspace get")
+        return response({
+          workspace: {
+            worktree: { repo_key: "repo", is_linked_worktree: false },
+          },
+        });
+      if (key === "worktree list")
+        return response({
+          source: {
+            repo_key: "repo",
+            repo_name: "project",
+            source_workspace_id: "primary-workspace",
+          },
+          worktrees: [{ open_workspace_id: "target-workspace" }],
+        });
+      if (key === "pane list")
+        return response({
+          panes: [
+            {
+              pane_id: "target-pane",
+              workspace_id: "target-workspace",
+              tab_id: "target-tab",
+              terminal_id: "target-terminal",
+              cwd: "/tmp/target",
+            },
+          ],
+        });
+      if (key === "pane run" || key === "pane wait-output") return response({});
+      if (key === "pane process-info")
+        return response({
+          process_info: {
+            pane_id: "target-pane",
+            shell_pid: 33,
+            foreground_process_group_id: 33,
+            foreground_processes: [{ pid: 33, argv0: "/bin/zsh" }],
+          },
+        });
+      if (key === "pane get")
+        return response({
+          pane: {
+            pane_id: "target-pane",
+            workspace_id: "target-workspace",
+            tab_id: "target-tab",
+            terminal_id: "target-terminal",
+            cwd: "/tmp/target",
+          },
+        });
+      if (key === "agent start")
+        return {
+          code: 1,
+          stdout: JSON.stringify({
+            id: 1,
+            error: {
+              code: "timeout",
+              message: "timed out waiting for agent startup",
+            },
+          }),
+          stderr: "",
+        };
+      if (key === "pane read")
+        return { code: 0, stdout: diagnostic, stderr: "" };
+      throw new Error("unexpected Herdr call: " + args.join(" "));
+    },
+  } as any;
+  try {
+    await assert.rejects(
+      startHerdrAgentInPane(pi, { cwd: "/tmp/target" } as any, {
+        label: "lead",
+        runId: "lead-run",
+        cwd: "/tmp/target",
+        primaryWorkspaceId: "primary-workspace",
+        workspaceId: "target-workspace",
+        tabId: "target-tab",
+        paneId: "target-pane",
+      }),
+      (failure: unknown) => {
+        assert.ok(failure instanceof HerdrStartFailure);
+        assert.equal(failure.stage, "agent_start");
+        assert.ok(failure.cause instanceof OperationError);
+        const details = failure.cause.detail.details;
+        assert.ok(details);
+        assert.equal(details.herdrCode, "timeout");
+        assert.match(
+          failure.cause.message,
+          /timed out waiting for agent startup/,
+        );
+        assert.match(failure.cause.message, /Tool "exec" conflicts/);
+        assert.equal(details.paneSnapshot, diagnostic);
+        return true;
+      },
+    );
+
+    const reads = calls.filter(
+      ({ args }) => args[0] === "pane" && args[1] === "read",
+    );
+    assert.equal(reads.length, 1);
+    assert.equal(reads[0]?.args[2], "target-pane");
+    assert.equal(reads[0]?.timeout, 2000);
+  } finally {
+    if (previousWorkspace === undefined) delete process.env.HERDR_WORKSPACE_ID;
+    else process.env.HERDR_WORKSPACE_ID = previousWorkspace;
   }
 });
 
