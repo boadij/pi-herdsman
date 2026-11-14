@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.47.0](https://github.com/boadij/pi-herdsman/compare/v0.46.0...v0.47.0) (2026-11-14)
+
+
+### Features
+
+* **context:** scope bundled agents and managed leads to worktrees ([#973](https://github.com/boadij/pi-herdsman/issues/973)) ([f273fb7](https://github.com/boadij/pi-herdsman/commit/f273fb752277e4099bcaea1e007237e82ace2aed))
+* **onboarding:** integrate optional web access ([#965](https://github.com/boadij/pi-herdsman/issues/965)) ([4c4e0c8](https://github.com/boadij/pi-herdsman/commit/4c4e0c8df03d5e353af9664abae07d8d3e71e523))
+
+
+### Fixes
+
+* **agent:** preserve provider causes in execution-error results ([#966](https://github.com/boadij/pi-herdsman/issues/966)) ([c7c610b](https://github.com/boadij/pi-herdsman/commit/c7c610b0bf3b9add9c47ad77160d2a1a986a09fa))
+* **agent:** surface Pi errors on Herdr startup timeout ([#972](https://github.com/boadij/pi-herdsman/issues/972)) ([f90310a](https://github.com/boadij/pi-herdsman/commit/f90310a45ec28d610f92cdf8865b9bb9d6515d91))
+* **evidence:** expose retained refs in initial Lead assignments ([#968](https://github.com/boadij/pi-herdsman/issues/968)) ([31b2e2c](https://github.com/boadij/pi-herdsman/commit/31b2e2ca5649a950693d2eecea4d76dfb2654890))
+* **instructions:** clarify internal message provenance ([#976](https://github.com/boadij/pi-herdsman/issues/976)) ([a8456a2](https://github.com/boadij/pi-herdsman/commit/a8456a20f28d6fc9cbfc52cd8cb0524abeed6639))
+* **recovery:** recover verified orphaned agent panes ([#974](https://github.com/boadij/pi-herdsman/issues/974)) ([93bb4ec](https://github.com/boadij/pi-herdsman/commit/93bb4ec6cabb01f62c69c4778aaf1cd2a55f3543))
+
+
+### Documentation
+
+* credit [@aholbreich](https://github.com/aholbreich) for PR [#966](https://github.com/boadij/pi-herdsman/issues/966) ([#977](https://github.com/boadij/pi-herdsman/issues/977)) ([80b40a4](https://github.com/boadij/pi-herdsman/commit/80b40a4b50a98a60bfc90b73063ec2467b808f77))
+
 ## [0.46.0](https://github.com/boadij/pi-herdsman/compare/v0.45.0...v0.46.0) (2026-11-13)
 
 
