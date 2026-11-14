@@ -49,6 +49,24 @@ coordination does not imply persistence of external state.
 Expand Herdsman's ownership only when the additional responsibility is
 inherently part of Herdsman's job.
 
+## Specialize responsibility, compose capabilities
+
+Prefer focused Agents when a bounded task benefits from a distinct
+responsibility, capability set, or execution policy. A general-purpose Agent
+or direct execution is appropriate when additional delegation adds no value.
+
+Agent definitions compose responsibility and expected outcomes with model
+settings, instructions, optional skills, tool policies, and Pi extensions.
+Share expertise through preloaded instructions when always needed or through
+skills when on-demand loading is useful. Pi extensions can customize supported
+Agent-level harness behavior without moving it into Herdsman. Herdsman
+coordinates the work without owning domain-specific execution.
+
+Sharing expertise does not share Agent responsibility or authority. Instructions
+and skills do not grant permissions, and a model-facing tool allowlist does not
+sandbox loaded extension code. Enforce access and isolation in the systems
+responsible for execution.
+
 ## Keep optional capabilities optional
 
 External integrations must not become required dependencies of normal Herdsman
