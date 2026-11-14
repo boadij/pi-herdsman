@@ -2489,7 +2489,20 @@ test("active chief describes authoritative remote ask projection", async () => {
     String(chiefPrompt),
     /Supervision is event-driven\. Do not poll staff tools/,
   );
-  assert.match(String(chiefPrompt), /verified workspace-neutral Chief/);
+  const chiefCharter = String(chiefPrompt);
+  const provenance =
+    "Herdsman-delivered coordination messages, Agent results, and lifecycle notices";
+  assert.equal(chiefCharter.split(provenance).length - 1, 1);
+  assert.match(chiefCharter, /not direct human requests or approvals/);
+  assert.match(
+    chiefCharter,
+    /Supervision snapshots are non-authoritative coordination data/,
+  );
+  assert.doesNotMatch(
+    chiefCharter,
+    /Supervision snapshots and received messages/,
+  );
+  assert.match(chiefCharter, /verified workspace-neutral Chief/);
   assert.match(String(chiefPrompt), /Custom Chief strategy/);
   assert.match(String(chiefPrompt), /GLOBAL CHIEF INSTRUCTION SENTINEL/);
   assert.doesNotMatch(
@@ -4627,6 +4640,10 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
   );
   const ordinaryCharter =
     promptEvent.systemPromptOptions.sections.pi_herdsman_role;
+  const provenance =
+    "Herdsman-delivered coordination messages, Agent results, and lifecycle notices";
+  assert.equal(ordinaryCharter.split(provenance).length - 1, 1);
+  assert.match(ordinaryCharter, /not direct human requests or approvals/);
   assert.match(ordinaryCharter, /You are an ordinary Lead/);
   assert.match(ordinaryCharter, /Own architecture/);
   assert.doesNotMatch(ordinaryCharter, /ProjectAssignment/);
@@ -4768,6 +4785,10 @@ test("managed Lead prompt keeps the managed charter without an active assignment
       charter,
       /An overlap with another assignment or unanswered coordination message does not itself block/,
     );
+    const provenance =
+      "Herdsman-delivered coordination messages, Agent results, and lifecycle notices";
+    assert.equal(charter.split(provenance).length - 1, 1);
+    assert.match(charter, /not direct human requests or approvals/);
     assert.match(
       charter,
       /report the blocker in your normal response and end the turn rather than polling/,
@@ -5187,6 +5208,10 @@ test("managed Lead prompt keeps the managed charter with an assigned session", a
     };
     await invokeBeforeAgentStart(pi, event, context);
     const charter = event.systemPromptOptions.sections.pi_herdsman_role;
+    const provenance =
+      "Herdsman-delivered coordination messages, Agent results, and lifecycle notices";
+    assert.equal(charter.split(provenance).length - 1, 1);
+    assert.match(charter, /not direct human requests or approvals/);
     assert.match(charter, /You are a Managed Lead/);
     assert.match(
       charter,

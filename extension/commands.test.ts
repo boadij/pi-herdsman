@@ -4287,6 +4287,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     const rolePrompt =
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role;
+    const provenance =
+      "Herdsman-delivered coordination messages, Agent results, and lifecycle notices";
+    assert.equal(rolePrompt.split(provenance).length - 1, 1);
+    assert.match(rolePrompt, /not direct human requests or approvals/);
     assert.match(
       rolePrompt,
       /Independent assignments remain independent by default/,
