@@ -1266,13 +1266,20 @@ type SplitPlacement = {
   direction: "right" | "down";
 };
 
-function isUnstructuredResultFailure(value: unknown): value is OperationError {
+function shouldCaptureStartupDiagnostic(
+  value: unknown,
+): value is OperationError {
   if (!(value instanceof OperationError)) return false;
-  const classification = value.detail.details?.result as
-    { classification?: unknown } | undefined;
+
+  const details = value.detail.details;
+  const classification = (
+    details?.result as { classification?: unknown } | undefined
+  )?.classification;
+
   return (
-    classification?.classification === "empty" ||
-    classification?.classification === "malformed"
+    classification === "empty" ||
+    classification === "malformed" ||
+    details?.herdrCode === "timeout"
   );
 }
 
@@ -1828,7 +1835,7 @@ export async function startHerdrAgent(
           continue;
         }
         if (!busy) attempt.launchMayHaveStarted = true;
-        if (isUnstructuredResultFailure(failure))
+        if (shouldCaptureStartupDiagnostic(failure))
           throw withStartupDiagnostic(
             failure,
             await captureStartupDiagnostic(
@@ -2041,7 +2048,7 @@ export async function startHerdrAgentInPane(
           continue;
         }
         if (!busy) attempt.launchMayHaveStarted = true;
-        if (isUnstructuredResultFailure(failure))
+        if (shouldCaptureStartupDiagnostic(failure))
           throw withStartupDiagnostic(
             failure,
             await captureStartupDiagnostic(
