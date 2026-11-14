@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.47.1](https://github.com/boadij/pi-herdsman/compare/v0.47.0...v0.47.1) (2026-11-14)
+
+
+### Refactoring
+
+* **instructions:** deduplicate coordinator role headings ([#979](https://github.com/boadij/pi-herdsman/issues/979)) ([b3ef842](https://github.com/boadij/pi-herdsman/commit/b3ef842932d1a24cd8b0fb117f9983ba04d4f141))
+
+
+### Documentation
+
+* **agents:** explain specialization and harness composition ([#982](https://github.com/boadij/pi-herdsman/issues/982)) ([45d267b](https://github.com/boadij/pi-herdsman/commit/45d267ba24faef50ce5337fe37dd64b9dc4e75eb))
+
+
+### Tests
+
+* **ci:** initialize only required federation roles ([#980](https://github.com/boadij/pi-herdsman/issues/980)) ([28de378](https://github.com/boadij/pi-herdsman/commit/28de378bb856d27257711c8d7d87bad0a18eb48f))
+
 ## [0.47.0](https://github.com/boadij/pi-herdsman/compare/v0.46.0...v0.47.0) (2026-11-14)
 
 
