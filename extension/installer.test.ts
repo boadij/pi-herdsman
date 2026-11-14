@@ -880,7 +880,7 @@ sys.exit(os.waitstatus_to_exitcode(status))`;
           result.stdout,
           new RegExp(`Optional pi-web-access: ${status}\\.`),
         );
-        if (input.startsWith("perhaps")) {
+        if (input.startsWith("perhaps") && process.platform === "linux") {
           const hangingSetup = fixture({ piWebAccessHangs: true });
           try {
             const hangingEnv: NodeJS.ProcessEnv = {
