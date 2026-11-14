@@ -279,11 +279,13 @@ does not need extension-provided capabilities.
 The `name` is authoritative; the filename itself is not the public definition
 name.
 
-## Reuse skills across specialists
+## Compose specialist Agents
 
-Different Agents can share domain expertise without sharing responsibilities.
-For example, these two project definitions reference the same skill but have
-different tool policies and expected results.
+Different Agents can share procedures while retaining distinct responsibilities,
+model choices, tools, and Pi extension behavior. When the same instructions are
+always needed, preload them through body `@file` references instead of making
+the Agent discover and read a skill. For example, assume the shared file
+`.pi/skills/release-conventions/SKILL.md` exists in the project.
 
 `.pi/agents/release-drafter.md`:
 
@@ -293,9 +295,12 @@ name: release-drafter
 description: Draft release notes from supplied change evidence; do not publish
 tools: [read, ls, find, grep, write]
 noSkills: true
-skills: ["/absolute/path/to/release-conventions/SKILL.md"]
 noExtensions: true
 ---
+
+Use these shared release conventions:
+
+@../skills/release-conventions/SKILL.md
 
 Write a draft from the supplied evidence. Flag unsupported claims.
 ```
@@ -305,24 +310,37 @@ Write a draft from the supplied evidence. Flag unsupported claims.
 ```markdown
 ---
 name: release-auditor
-description: Check release notes against supplied evidence; do not edit
-tools: [read, ls, find, grep]
+description: Check release notes against supplied inline evidence; do not edit
+tools: []
 noSkills: true
-skills: ["/absolute/path/to/release-conventions/SKILL.md"]
 noExtensions: true
+extensions: ["/absolute/path/to/release-audit.ts"]
 ---
 
-Report unsupported claims and omissions with supporting evidence. Do not edit.
+Use these shared release conventions:
+
+@../skills/release-conventions/SKILL.md
+
+Check the notes against evidence provided in the assignment text.
+Report unsupported claims and omissions without editing files.
 ```
 
-Both definitions explicitly select one shared skill. `noSkills: true` disables
-automatic skill discovery, not explicitly selected `skills`. Replace the example
-path with an accessible absolute path: Herdsman passes it to Pi unchanged
-rather than resolving it from the definition file. The `tools` lists restrict
-Pi-callable tool names, not privileges of loaded extension code or the
-operating-system process. See the
-[agent-definition schema](../reference/agent-definition-schema.md) for the
-exact contract.
+Herdsman expands each whole-line `@file` reference into the Agent's system
+prompt at launch. This reuses the file's text, not Pi's native skill-discovery
+mechanism; `noSkills: true` disables automatic discovery. The content is
+included up front, including any skill frontmatter, and nested file references
+or scripts are not loaded automatically. For larger or optional procedures,
+use native `skills` instead to permit on-demand loading.
+
+The auditor has no ordinary callable tools, so its evidence must be available
+in the assignment text. Its optional `release-audit.ts` path illustrates a
+user-provided Pi extension that can specialize supported session hooks or
+model behavior; omit it if unneeded, or replace it with an existing accessible
+extension. `noExtensions: true` disables ordinary discovery, not explicitly
+listed `extensions`. Loading extension code is independent of model-callable
+`tools`; an empty tool allowlist is not an extension or process sandbox.
+See the [agent-definition schema](../reference/agent-definition-schema.md) and
+[Handoffs and files](handoffs.md) for the exact contracts.
 
 ## Allow direct agents
 
