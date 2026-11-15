@@ -587,7 +587,11 @@ try {
     const id = resources[side].container;
     const dir = resources[side].hostHome;
     command("docker", ["cp", join(dir, "id_ed25519"), `${id}:/tmp/peer_id`]);
-    command("docker", ["cp", join(dir, "id_ed25519.pub"), `${id}:/tmp/peer_id.pub`]);
+    command("docker", [
+      "cp",
+      join(dir, "id_ed25519.pub"),
+      `${id}:/tmp/peer_id.pub`,
+    ]);
     command("docker", [
       "exec",
       id,
