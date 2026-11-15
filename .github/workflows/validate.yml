@@ -206,7 +206,8 @@ jobs:
               jq -e '
                 .services.herdsman.network_mode == "service:tailscale" and
                 ((.services.herdsman.ports // []) | length) == 0 and
-                .services.tailscale.environment.TS_AUTH_ONCE == "true"
+                .services.tailscale.environment.TS_AUTH_ONCE == "true" and
+                .services.tailscale.environment.TS_ACCEPT_DNS == "true"
               ' <<< "$resolved" >/dev/null
             else
               jq -e '

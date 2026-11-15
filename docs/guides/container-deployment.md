@@ -158,6 +158,20 @@ not share `docker compose config` output while a key is configured: it can
 expose container environment values. The key-free recreate does not erase
 copies of credentials previously stored outside the active container.
 
+The Tailscale overlay accepts tailnet DNS settings by default
+(`TS_ACCEPT_DNS=true`). With MagicDNS enabled in the tailnet, processes
+inside Herdsman can resolve other tailnet machines by hostname. This also
+makes DNS behavior follow the tailnet configuration instead of Docker's
+defaults, which may affect Docker service-name resolution.
+
+From the Docker host, verify both tailnet and public DNS (replace
+`other-host` with another machine on your tailnet):
+
+```sh
+docker compose exec herdsman getent hosts other-host
+docker compose exec herdsman getent hosts github.com
+```
+
 Connect (with Tailscale and MagicDNS working on the client):
 
 ```sh

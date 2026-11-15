@@ -9,6 +9,7 @@ services:
       TS_STATE_DIR: /var/lib/tailscale
       TS_AUTH_ONCE: "true"
       TS_USERSPACE: "false"
+      TS_ACCEPT_DNS: "true"
 
     volumes:
       - tailscale-state:/var/lib/tailscale
