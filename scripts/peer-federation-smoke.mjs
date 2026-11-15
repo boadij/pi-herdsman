@@ -588,11 +588,16 @@ try {
     const dir = resources[side].hostHome;
     command("docker", ["cp", join(dir, "id_ed25519"), `${id}:/tmp/peer_id`]);
     command("docker", [
+      "cp",
+      join(dir, "id_ed25519.pub"),
+      `${id}:/tmp/peer_id.pub`,
+    ]);
+    command("docker", [
       "exec",
       id,
       "sh",
       "-c",
-      "install -d -m 0700 /home/herdsman/.ssh && install -m 0600 /tmp/peer_id /home/herdsman/.ssh/id_ed25519 && chown herdsman:herdsman /home/herdsman/.ssh/id_ed25519",
+      "install -d -m 0700 /home/herdsman/.ssh && install -m 0600 /tmp/peer_id /home/herdsman/.ssh/id_ed25519 && install -m 0644 /tmp/peer_id.pub /home/herdsman/.ssh/id_ed25519.pub && chown herdsman:herdsman /home/herdsman/.ssh/id_ed25519 /home/herdsman/.ssh/id_ed25519.pub",
     ]);
     const other = side === "a" ? "b" : "a";
     let key = "";

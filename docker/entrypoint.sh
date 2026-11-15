@@ -81,6 +81,24 @@ fi
 
 runuser -u herdsman -- chmod 0600 "$authorized_keys"
 
+client_key="$home/.ssh/id_ed25519"
+if [ ! -e "$client_key" ] && [ ! -L "$client_key" ] &&
+  [ ! -e "$client_key.pub" ] && [ ! -L "$client_key.pub" ]; then
+  runuser -u herdsman -- ssh-keygen -q -t ed25519 -N '' -f "$client_key"
+elif [ -s "$client_key" ] && [ ! -e "$client_key.pub" ] && [ ! -L "$client_key.pub" ]; then
+  runuser -u herdsman -- sh -c '
+    umask 077
+    pub="$(mktemp "$1.pub.XXXXXX")"
+    ssh-keygen -y -P "" -f "$1" > "$pub" && mv "$pub" "$1.pub" || {
+      rm -f "$pub"
+      exit 1
+    }
+  ' sh "$client_key"
+elif [ ! -s "$client_key" ] || [ ! -s "$client_key.pub" ]; then
+  echo "SSH client identity is incomplete; refusing to replace the existing key pair" >&2
+  exit 1
+fi
+
 runuser -u herdsman -- \
   env HOME="$home" PATH="$PATH" USER=herdsman LOGNAME=herdsman \
   node - "$home" <<'NODE'
