@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.48.0](https://github.com/boadij/pi-herdsman/compare/v0.47.1...v0.48.0) (2026-11-15)
+
+
+### Features
+
+* **docker:** add guided setup and persistent SSH client identity ([#986](https://github.com/boadij/pi-herdsman/issues/986)) ([645b498](https://github.com/boadij/pi-herdsman/commit/645b49853391feb88ce181eed2edefe166780005))
+
+
+### Fixes
+
+* **docker:** accept tailnet DNS in Tailscale overlay ([#983](https://github.com/boadij/pi-herdsman/issues/983)) ([4c76b10](https://github.com/boadij/pi-herdsman/commit/4c76b1092feb410347a0c8acfb90f390d1159ebe))
+
 ## [0.47.1](https://github.com/boadij/pi-herdsman/compare/v0.47.0...v0.47.1) (2026-11-14)
 
 
