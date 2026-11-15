@@ -59,6 +59,9 @@ exit 42
 SH
 chmod 0644 "$interrupt_fixture/interrupt-npm"
 
+echo 'stage: guided Docker setup'
+bash scripts/docker-setup.test.sh
+
 echo 'stage: build'
 docker build --platform linux/amd64 -t "$image" .
 
@@ -337,6 +340,12 @@ echo 'stage: offline seed, restart, and recreation'
 start_offline "$offline_home" "$offline_ssh"
 verify_seeded_package
 verify_web_access
+client_key_sha="$(docker exec "$name" sha256sum /home/herdsman/.ssh/id_ed25519 | cut -d' ' -f1)"
+client_public="$(docker exec "$name" awk '{print $2}' /home/herdsman/.ssh/id_ed25519.pub)"
+test -n "$client_public"
+test "$(docker exec "$name" stat -c %a /home/herdsman/.ssh/id_ed25519)" = 600
+# Recover an absent public key without rotating the persistent private identity.
+docker exec --user herdsman "$name" rm /home/herdsman/.ssh/id_ed25519.pub
 initial_seed_state="$(seed_state)"
 test "$(docker exec "$name" stat -c %u /home/herdsman/.pi/agent/settings.json)" = "$(docker exec "$name" id -u herdsman)"
 test "$(docker exec "$name" stat -c %u /home/herdsman/.pi/agent/npm/package-lock.json)" = "$(docker exec "$name" id -u herdsman)"
@@ -352,6 +361,8 @@ docker restart "$name" >/dev/null
 wait_after_restart
 verify_seeded_package
 verify_web_access
+test "$(docker exec "$name" sha256sum /home/herdsman/.ssh/id_ed25519 | cut -d' ' -f1)" = "$client_key_sha"
+test "$(docker exec "$name" awk '{print $2}' /home/herdsman/.ssh/id_ed25519.pub)" = "$client_public"
 test "$(seed_state)" = "$initial_seed_state"
 docker exec --user herdsman "$name" sh -c \
   'test "$(cat /home/herdsman/.pi/agent/npm/node_modules/pi-herdsman/.smoke-preserve)" = persistent-copy'
@@ -360,6 +371,8 @@ docker rm -f "$name" >/dev/null
 start_offline "$offline_home" "$offline_ssh"
 verify_seeded_package
 verify_web_access
+test "$(docker exec "$name" sha256sum /home/herdsman/.ssh/id_ed25519 | cut -d' ' -f1)" = "$client_key_sha"
+test "$(docker exec "$name" awk '{print $2}' /home/herdsman/.ssh/id_ed25519.pub)" = "$client_public"
 test "$(seed_state)" = "$before_recreation"
 docker exec --user herdsman "$name" sh -c \
   'test "$(cat /home/herdsman/.pi/agent/npm/node_modules/pi-herdsman/.smoke-preserve)" = persistent-copy'

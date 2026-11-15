@@ -19,8 +19,26 @@ mkdir -p pi-herdsman && cd pi-herdsman
 curl -fsSLO https://raw.githubusercontent.com/boadij/pi-herdsman/main/compose.yaml
 ```
 
-Choose [Tailscale](#use-tailscale) or a [host bind mount](#use-a-host-bind-mount)
-before first start if needed, to avoid changing networking or migrating data
+For guided setup on Linux or macOS, clone the repository and run:
+
+```sh
+git clone https://github.com/boadij/pi-herdsman.git
+cd pi-herdsman
+bash scripts/docker-setup.sh
+```
+
+The script selects standard Docker, Tailscale, or Tailscale with a bind-mounted
+home. It saves the selected Compose files in `.env`, preserves existing settings,
+uses your local SSH public key for initial inbound access, requests a Tailscale
+auth key when registration is needed, and verifies startup. It uses `sudo` for
+Docker access if necessary. Run it as your normal user, including for bind mounts.
+For a bind-mounted home, it initializes the directory with your UID/GID but does
+not change the ownership of existing data. Tailscale credentials entered through
+the prompt are not written to `.env` and are removed from the sidecar environment
+after successful registration.
+
+For manual setup, choose [Tailscale](#use-tailscale) or a
+[host bind mount](#use-a-host-bind-mount) before first start if needed, to avoid changing networking or migrating data
 later. The default named volumes require no permission setup. Optional deployments
 record their Compose file selection in a local `.env`, so subsequent commands
 use the same networking and storage configuration.
@@ -186,6 +204,21 @@ herdr machine add ssh://herdsman@pi-herdsman --label my-herd
 ```
 
 Tailscale provides networking only. SSH remains normal OpenSSH.
+
+On first start, the container also generates a passphrase-free Ed25519 SSH
+**client** key if no client key pair exists. The private key stays in the
+persistent `/home/herdsman/.ssh` directory and is never regenerated on
+restarts. To authorize outbound SSH access on another machine, obtain the
+public key from the Docker host:
+
+```sh
+docker compose exec herdsman cat /home/herdsman/.ssh/id_ed25519.pub
+```
+
+Add that key to the destination's `authorized_keys`. Never copy the private
+key. The container recovers a missing public key from an existing unencrypted
+private key, but does not overwrite incomplete or unusable identities. Protect
+the persistent home volume because the client private key has no passphrase.
 
 ## Update
 
