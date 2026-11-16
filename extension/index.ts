@@ -951,7 +951,7 @@ function registerExtensionImpl(
       pi.sendMessage(
         {
           customType: "pi-herdsman-agent-ask",
-          content: `Agent ${ask.agentLabel} needs your input:\n\n${ask.question}\n\nUse reply_agent with agent="${ask.agentLabel}" to answer this question.`,
+          content: `Agent ${ask.agentLabel} needs your input:\n\n${ask.question}\n\nUse reply_agent with agent="${ask.agentLabel}" to answer this question.\n\nReply only when you can provide the requested input or an\nactionable alternative. For an external condition that is not\nyet satisfied, leave the question pending rather than replying\nwith a promise to provide the answer later.`,
           display: true,
           details: {
             askId: ask.askId,
@@ -977,7 +977,13 @@ function registerExtensionImpl(
       pi.sendMessage(
         {
           customType: "pi-herdsman-agent-owner-message",
-          content: `Agent ${ownerMessage.agentLabel} notification:\n\n${ownerMessage.text}`,
+          content:
+            `Agent ${ownerMessage.agentLabel} notification:\n\n` +
+            `${ownerMessage.text}\n\n` +
+            "This is a nonblocking notification, not a pending " +
+            "await_owner request. Do not use reply_agent to " +
+            "acknowledge it. Use eligible Agent control only " +
+            "when an actual correction is needed.",
           display: true,
           details: {
             messageId: ownerMessage.messageId,

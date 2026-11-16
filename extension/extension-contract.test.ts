@@ -1136,7 +1136,7 @@ test("managed agents receive no peer tool and Chiefs expose only staff actively"
   );
   assert.equal(
     managed.tools.find((tool) => tool.name === "await_owner")?.promptSnippet,
-    "Ask this managed agent's direct owner for a required decision",
+    "Request essential input from this managed Agent's direct owner",
   );
   const askOwnerTool = managed.tools.find(
     (tool) => tool.name === "await_owner",

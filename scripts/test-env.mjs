@@ -5,3 +5,4 @@ process.env.PI_CODING_AGENT_DIR = join(
   tmpdir(),
   `pi-herdsman-test-${process.pid}`,
 );
+delete process.env.PI_HERDSMAN_RESTORE_MODEL;

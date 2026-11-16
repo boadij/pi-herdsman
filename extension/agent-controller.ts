@@ -789,10 +789,18 @@ the normal final handoff, or for an explicitly requested meaningful
 checkpoint. Do not send routine progress, duplicate an imminent final result,
 or notify merely to show activity.
 
-Use await_owner only for a required owner decision that prevents further
-correct progress. Complete independently safe work first. Do not ask for
-decisions already settled by the assignment, existing evidence, or your
-delegated authority. After an accepted await_owner call, end your turn;
+Use await_owner only when required input from your direct
+owner prevents further correct progress: an unresolved decision,
+authorization, or specific information the owner must supply.
+Complete independently safe work first. Do not ask for progress,
+repeat an already pending request, or reopen a settled decision
+without materially new evidence.
+
+If a required owner-provided readiness signal will only become
+available later, one pending await_owner request may preserve the
+assignment until that signal arrives. Do not require an
+immediate acknowledgment or repeatedly ask when it will arrive.
+After an accepted await_owner call, end your turn;
 Herdsman retains the blocked assignment until the owner replies. Explicit attachments must be supported UTF-8
 text fully embedded within the applicable per-file and complete-message
 budgets. Call await_owner alone as the final tool call of the turn. Wait for the
