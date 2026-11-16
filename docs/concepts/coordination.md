@@ -194,7 +194,7 @@ warnings may use nonblocking `message_supervisor`. This is ordinary
 coordination, not assignment state; there is no deduplication between a
 message and a later result.
 Project assignments end on successful Herdr worktree removal or verified Git
-checkout absence—not on settlement, review, or direct user interaction.
+checkout absence, not on settlement, review, or direct user interaction.
 Retirement preserves Managed Lead identity, session history and exact Agent
 ownership without asserting completion or acceptance. See
 [Project orchestration](../guides/project-orchestration.md) for the workflow.

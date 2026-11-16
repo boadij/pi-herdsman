@@ -8,17 +8,11 @@ the router to their exact contracts, not a second copy of them.
 ## Code-mode tool access
 
 Pi tools declared with `direct` exposure can be called by the model and through
-Pi's supported native nested-tool execution when active. The coordination tools
-supporting native programmatic invocation are `list_agents`, `steer_agent`,
-`interrupt_agent`, `reply_agent`, `stop_agent`, `inspect_agent`,
-`read_agent_transcript`, `read_evidence`, `list_staff`, `inspect_staff`,
-`read_staff_transcript`, `message_staff`, `delegate_work`, `resume_work`,
-`stop_lead`, `remove_worktree`, `integrate_branch`, `message_supervisor`,
-`list_peers`, `message_peer`, `attach_handoff`, `delegate_agent`, and
-`continue_agent`, and `notify_owner`. Delegation tools return after assignment acceptance, not
-completion; eventual results arrive through Herdsman's normal result-delivery
-mechanism. `await_owner` also remains `model-only` because it must be a direct,
-exclusive tool call in its turn. See
+Pi's supported native nested-tool execution when active. Herdsman's coordination
+tools use `direct` exposure except `await_owner`, which remains `model-only`
+because it must be called alone as the final tool call of its turn. Delegation
+tools return after assignment acceptance, not completion; eventual results
+arrive through Herdsman's normal result-delivery mechanism. See
 [`await_owner`](reference/await-owner.md) for its contract.
 
 Tool access still depends on the active role, ownership, extension loading, and
@@ -63,6 +57,9 @@ stop_agent
 inspect_agent
 read_agent_transcript
 ```
+
+For `read_evidence` and `attach_handoff`, see
+[Handoffs and files](guides/handoffs.md).
 
 Managed Agents contact their exact direct owner through
 [`notify_owner`](reference/notify-owner.md) for nonblocking information or
