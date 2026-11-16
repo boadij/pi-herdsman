@@ -120,14 +120,19 @@ jobs:
       - name: Check native Windows installer syntax
         shell: pwsh
         run: |
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path ./install.ps1).Path,
-            [ref]$tokens,
-            [ref]$errors
-          ) | Out-Null
-          if ($errors.Count) { throw ($errors | Out-String) }
+          foreach ($path in @('./install.ps1', './scripts/docker-setup.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count) { throw ($errors | Out-String) }
+          }
+      - name: Run mocked Docker setup regression
+        shell: pwsh
+        run: ./scripts/docker-setup.test.ps1
       - name: Install and verify Windows stack
         shell: pwsh
         run: |
@@ -184,6 +189,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: docker compose config
+      - name: Run mocked Docker setup regression
+        shell: bash
+        run: bash scripts/docker-setup.test.sh
       - name: Verify persistent optional Compose selections
         shell: bash
         run: |

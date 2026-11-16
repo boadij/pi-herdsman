@@ -11,43 +11,54 @@ with a prebuilt image, SSH access, and persistent Docker-managed volumes.
 You need Docker Compose and an SSH public key (for example,
 `~/.ssh/id_ed25519.pub`).
 
-If you cloned the repository, use its root directory. Otherwise, download
-the Compose file into a new directory:
+For guided setup on Linux or macOS, run the native Bash installer:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/boadij/pi-herdsman/main/scripts/docker-setup.sh | bash
+```
+
+On Windows with Docker Desktop, run the native PowerShell installer:
+
+```powershell
+irm https://raw.githubusercontent.com/boadij/pi-herdsman/main/scripts/docker-setup.ps1 | iex
+```
+
+The installer reuses the current checkout when run from its script file, or
+uses `$HOME/pi-herdsman` by default; set `PI_HERDSMAN_DIR` to choose another
+directory. It downloads only missing official Compose files, preserves local
+configuration and Docker volumes, validates the configuration, starts the
+container, and prints connection instructions. Have Docker Compose v2 and an
+SSH public key available. Setup checks the OpenSSH wire structure of the
+provided public key but does not perform cryptographic key or curve validation.
+A structurally valid but cryptographically invalid key (including an invalid
+ECDSA point) may therefore be accepted by setup and later fail during SSH
+authentication. The guided Windows flow currently offers standard Docker only;
+Windows Tailscale and host bind-mount setup are not advertised without platform
+acceptance evidence.
+
+When the Bash installer must use sudo, it preserves explicitly set
+`COMPOSE_FILE`, `COMPOSE_PATH_SEPARATOR`, `COMPOSE_PROJECT_NAME`,
+`PUID`, `PGID`, `HERDSMAN_SSH_PORT`, and `TAILSCALE_HOSTNAME`.
+It passes SSH authorization and a temporary Tailscale key only for startup
+or recreation as needed. Sudo policy must allow the requested names. Other
+environment overrides, including variables used by custom Compose files and
+Docker engine selection variables, are not preserved by the installer under
+sudo; configure them for the sudo environment or use direct Docker access.
+All installer operations after sudo selection use that sudo Docker engine.
+
+For direct Compose control, use the Compose file included in a checkout or
+download it into a new directory:
 
 ```sh
 mkdir -p pi-herdsman && cd pi-herdsman
 curl -fsSLO https://raw.githubusercontent.com/boadij/pi-herdsman/main/compose.yaml
-```
-
-For guided setup on Linux or macOS, clone the repository and run:
-
-```sh
-git clone https://github.com/boadij/pi-herdsman.git
-cd pi-herdsman
-bash scripts/docker-setup.sh
-```
-
-The script selects standard Docker, Tailscale, or Tailscale with a bind-mounted
-home. It saves the selected Compose files in `.env`, preserves existing settings,
-uses your local SSH public key for initial inbound access, requests a Tailscale
-auth key when registration is needed, and verifies startup. It uses `sudo` for
-Docker access if necessary. Run it as your normal user, including for bind mounts.
-For a bind-mounted home, it initializes the directory with your UID/GID but does
-not change the ownership of existing data. Tailscale credentials entered through
-the prompt are not written to `.env` and are removed from the sidecar environment
-after successful registration.
-
-For manual setup, choose [Tailscale](#use-tailscale) or a
-[host bind mount](#use-a-host-bind-mount) before first start if needed, to avoid changing networking or migrating data
-later. The default named volumes require no permission setup. Optional deployments
-record their Compose file selection in a local `.env`, so subsequent commands
-use the same networking and storage configuration.
-
-Start:
-
-```sh
 SSH_AUTHORIZED_KEYS="$(cat ~/.ssh/id_ed25519.pub)" docker compose up -d
 ```
+
+Choose [Tailscale](#use-tailscale) or a [host bind mount](#use-a-host-bind-mount)
+before first start if needed. Optional deployments record their Compose file
+selection in a local `.env`, so subsequent commands use the same networking
+and storage configuration.
 
 Connect from the Docker host:
 
