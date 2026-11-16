@@ -1238,7 +1238,7 @@ test("reserves independent runtime role profiles with narrow fields", () => {
   const [flexible, orchestrator] = withPiAgentDir(global, () =>
     discoverRoleDefinitions(),
   );
-  assert.equal(flexible!.frontmatter.tools, undefined);
+  assert.deepEqual(flexible!.frontmatter.tools, ["+codemode"]);
   assert.deepEqual(orchestrator!.frontmatter.tools, ["codemode"]);
   writeFileSync(
     join(agents, "orchestrator-lead.md"),
