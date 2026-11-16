@@ -3492,7 +3492,11 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     );
     assert.match(
       unresolvedStatus,
-      /A proven lost Agent remains unresolved; physical disappearance is not completion\./,
+      /When Agent work is unresolved, handle required control/u,
+    );
+    assert.doesNotMatch(
+      unresolvedStatus,
+      /physical disappearance is not completion/u,
     );
     assert.equal(
       readResult(childOneMailbox, childOne.activeRequestId!)?.text,
