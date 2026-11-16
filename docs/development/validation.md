@@ -7,24 +7,29 @@ run or a concrete environment blocker is recorded.
 
 ## Validation order
 
-Focused tests, smoke testing, review, and all intermediate checks happen first.
-Do not format during those phases. Once implementation and review are
-complete, run the following as the final pre-commit sequence:
+Complete implementation, focused tests, smoke testing, review, and all checks
+that may require source fixes before formatting. Fix failures and rerun affected
+checks while the code retains its working layout. Use this pre-commit sequence:
 
 ```sh
-# Final pre-commit mutation; run once only.
+# Resolve any failures before formatting.
+npm run typecheck
+npm run lint -- --deny-warnings
+npm run check
+
+# Final pre-commit source mutation.
 npm run format
 
 # Read-only verification before staging or committing.
 npm run format:check
-npm run typecheck
-npm run lint -- --deny-warnings
-npm run check
 git diff --check
 ```
 
-Do not run formatting again between these verification commands and staging or
-committing.
+Do not format during implementation, review, or corrective validation. After
+formatting, do not rerun typechecking, linting, or tests as part of the normal
+pre-commit sequence. If final verification fails or another change is needed,
+fix it, repeat the relevant pre-format checks, and format again only after
+those checks pass.
 
 TypeScript typechecking (`npm run typecheck`) and warning-free Oxlint
 (`npm run lint -- --deny-warnings`) are mandatory local and CI checks.
