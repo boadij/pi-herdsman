@@ -1608,6 +1608,38 @@ test("registered agent writes state, handles input, and settles one result", asy
   assert.ok(agent.events.has("agent_before_settle"));
 
   const context = fakeContext();
+  const validCandidateEvent: any = {
+    systemPromptOptions: { sections: {}, contextFiles: [] },
+  };
+  await agent.events.get("before_agent_start")![0](
+    validCandidateEvent,
+    context as any,
+  );
+  assert.doesNotMatch(
+    validCandidateEvent.systemPromptOptions.sections.pi_herdsman_agent,
+    /direct_owner_session:/,
+  );
+  process.env.PI_HERDSMAN_OWNER_SESSION_ID = "not-a-session-id";
+  const uninitializedEvent: any = {
+    systemPromptOptions: { sections: {}, contextFiles: [] },
+  };
+  await agent.events.get("before_agent_start")![0](
+    uninitializedEvent,
+    context as any,
+  );
+  assert.doesNotMatch(
+    uninitializedEvent.systemPromptOptions.sections.pi_herdsman_agent,
+    /direct_owner_session:/,
+  );
+
+  const nestedOwnerSessionId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  process.env.PI_HERDSMAN_OWNER_SESSION_ID = nestedOwnerSessionId;
+  process.env.PI_HERDSMAN_OWNER_DISPLAY = "agent:delegating-parent";
+  await agent.events.get("session_start")![0](undefined, context);
+  await new Promise((resolve) => setImmediate(resolve));
+  const initialized = readAgentState(mailbox);
+  assert.equal(initialized?.ownerSessionId, nestedOwnerSessionId);
+  assert.notEqual(initialized?.ownerSessionId, initialized?.rootSessionId);
   const promptEvent: any = {
     systemPromptOptions: { sections: {}, contextFiles: [] },
   };
@@ -1618,8 +1650,39 @@ test("registered agent writes state, handles input, and settles one result", asy
   );
   assert.match(
     promptEvent.systemPromptOptions.sections.pi_herdsman_agent,
-    /direct_owner: lead/,
+    /direct_owner: agent:delegating-parent/,
   );
+  assert.match(
+    promptEvent.systemPromptOptions.sections.pi_herdsman_agent,
+    new RegExp(`direct_owner_session: ${nestedOwnerSessionId}`),
+  );
+
+  process.env.PI_HERDSMAN_OWNER_SESSION_ID =
+    "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  const staleCandidateEvent: any = {
+    systemPromptOptions: { sections: {}, contextFiles: [] },
+  };
+  await agent.events.get("before_agent_start")![0](
+    staleCandidateEvent,
+    context as any,
+  );
+  assert.match(
+    staleCandidateEvent.systemPromptOptions.sections.pi_herdsman_agent,
+    new RegExp(`direct_owner_session: ${nestedOwnerSessionId}`),
+  );
+  process.env.PI_HERDSMAN_OWNER_SESSION_ID = "not-a-session-id";
+  const invalidIdentityEvent: any = {
+    systemPromptOptions: { sections: {}, contextFiles: [] },
+  };
+  await agent.events.get("before_agent_start")![0](
+    invalidIdentityEvent,
+    context as any,
+  );
+  assert.match(
+    invalidIdentityEvent.systemPromptOptions.sections.pi_herdsman_agent,
+    new RegExp(`direct_owner_session: ${nestedOwnerSessionId}`),
+  );
+  process.env.PI_HERDSMAN_OWNER_SESSION_ID = nestedOwnerSessionId;
   for (const owner of ["manager", "chief", "researcher:research"]) {
     process.env.PI_HERDSMAN_OWNER_DISPLAY = owner;
     const event: any = {
@@ -1641,10 +1704,9 @@ test("registered agent writes state, handles input, and settles one result", asy
     "agent_definitions" in promptEvent.systemPromptOptions.sections,
     false,
   );
-  agent.events.get("session_start")![0](undefined, context);
-  await new Promise((resolve) => setImmediate(resolve));
   const started = readAgentState(mailbox);
   assert.equal(started?.agentLabel, "registered-agent");
+  assert.equal(started?.ownerSessionId, nestedOwnerSessionId);
   assert.equal(started?.rootSessionId, LEAD_SESSION_ID);
   assert.equal(started?.activeRequestId, undefined);
   await agent.events.get("agent_settled")![0]({ aborted: false }, context);

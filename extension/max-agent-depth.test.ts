@@ -131,6 +131,26 @@ test("the roster advertises delegation only for children that may delegate", () 
   assert.match(String(advertised(managedScope(2), 4).tools), /default/);
 });
 
+test("effective parent and child capability rosters remain independent", () => {
+  const definitions = [
+    definition("parent", { tools: ["bash"], agents: ["reader"] }),
+    definition("reader", { tools: ["read"] }),
+  ];
+  const parent = visibleAgentCapabilities(definitions, { kind: "root" }).find(
+    ({ name }) => name === "parent",
+  )!;
+  assert.match(String(parent.tools), /bash/);
+  assert.deepEqual(parent.agents, ["reader"]);
+
+  const child = visibleAgentCapabilities(definitions, {
+    kind: "managed-agent",
+    depth: 1,
+    allowedAgentDefinitions: new Set(["reader"]),
+  }).find(({ name }) => name === "reader")!;
+  assert.match(String(child.tools), /read/);
+  assert.doesNotMatch(String(child.tools), /bash/);
+});
+
 test("the default limit is read from config when the caller passes none", () => {
   const definitions = [definition("worker", { agents: ["worker"] })];
   assert.deepEqual(
