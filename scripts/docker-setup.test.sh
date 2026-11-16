@@ -18,6 +18,14 @@ cat >"$work/bin/docker" <<'MOCK'
 printf 'docker %s\n' "$*" >>"$DOCKER_LOG"
 if [[ "${DOCKER_DIRECT_FAIL:-0}" == 1 && "${MOCK_SUDO:-0}" != 1 && "$1" == info ]]; then exit 1; fi
 if [[ "$1 $2" == "compose version" || "$1" == info ]]; then exit 0; fi
+if [[ "${CAPTURE_OVERRIDES:-0}" == 1 && "$1" == compose ]]; then
+  snapshot="$1 $2 ${3:-} ${4:-} ${5:-}"
+  for name in COMPOSE_FILE COMPOSE_PATH_SEPARATOR COMPOSE_PROJECT_NAME PUID PGID HERDSMAN_SSH_PORT TAILSCALE_HOSTNAME; do
+    if [[ ${!name+x} ]]; then value=${!name}; else value=$(sed -n "s/^$name=//p" .env | tail -n1); fi
+    snapshot+="|$name=$value"
+  done
+  printf '%s\n' "$snapshot" >>"$OVERRIDE_LOG"
+fi
 if [[ "$1 $2" == "compose run" ]]; then
   if [[ "$*" == *'id -u herdsman'* ]]; then printf '%s %s\n' "${MOCK_DEFAULT_UID:-1000}" "${MOCK_DEFAULT_GID:-1000}"; exit 0; fi
   [[ "${PERSISTENT_KEYS:-0}" == 1 ]]; exit
@@ -60,23 +68,24 @@ MOCK
 cat >"$work/bin/sudo" <<'MOCK'
 #!/usr/bin/env bash
 printf 'sudo %s\n' "$*" >>"$DOCKER_LOG"
-if [[ "$1" == --preserve-env=* ]]; then
+preserve_names=
+if [[ "${1:-}" == --preserve-env=* ]]; then
   [[ "${SUDO_PRESERVE_DENIED:-0}" != 1 ]] || { echo 'sudo: sorry, you are not allowed to preserve requested environment' >&2; exit 1; }
   preserve_names=${1#--preserve-env=}
-  case ",$preserve_names," in
-    *,SSH_AUTHORIZED_KEYS,*) [[ -n "${SSH_AUTHORIZED_KEYS:-}" ]] || exit 3; printf 'preserved-key-present\n' >>"$DOCKER_LOG" ;;
-  esac
-  case ",$preserve_names," in
-    *,TS_AUTHKEY,*) [[ -n "${TS_AUTHKEY:-}" ]] || exit 4; printf 'preserved-authkey-present\n' >>"$DOCKER_LOG" ;;
-  esac
   shift
-else
-  unset SSH_AUTHORIZED_KEYS TS_AUTHKEY
 fi
 [[ "$1" == docker ]] || exit 2
 shift
-MOCK_SUDO=1; export MOCK_SUDO
-exec docker "$@"
+args=(env -i "PATH=$PATH" "HOME=$HOME" "DOCKER_LOG=$DOCKER_LOG" "MOCK_SUDO=1")
+for name in CAPTURE_OVERRIDES OVERRIDE_LOG DOCKER_DIRECT_FAIL TAILSCALE_ORDER_TEST TAILSCALE_COUNT TAILSCALE_STATUS MOCK_DEFAULT_UID MOCK_DEFAULT_GID PERSISTENT_KEYS SSH_PORT; do
+  [[ ${!name+x} ]] && args+=("$name=${!name}")
+done
+IFS=, read -r -a names <<<"$preserve_names"
+for name in "${names[@]}"; do
+  [[ -z "$name" ]] && continue
+  [[ ${!name+x} ]] && args+=("$name=${!name}")
+done
+exec "${args[@]}" docker "$@"
 MOCK
 cat >"$work/bin/sleep" <<'MOCK'
 #!/usr/bin/env bash
@@ -323,7 +332,6 @@ bash "$root/scripts/docker-setup.sh" >"$work/sudo.out"
 grep -q '^docker info$' "$DOCKER_LOG"
 grep -q '^sudo docker info$' "$DOCKER_LOG"
 grep -q '^sudo --preserve-env=SSH_AUTHORIZED_KEYS docker compose up -d$' "$DOCKER_LOG"
-grep -q '^preserved-key-present$' "$DOCKER_LOG"
 grep -q '^startup-key-present$' "$DOCKER_LOG"
 ! grep -q "$test_key" "$DOCKER_LOG" "$work/sudo.out"
 grep -q 'Herdsman is ready' "$work/sudo.out"
@@ -333,7 +341,7 @@ export SUDO_PRESERVE_DENIED=1
 if bash "$root/scripts/docker-setup.sh" >"$work/sudo-denied.out" 2>&1; then
   echo 'Expected sudo preserve policy rejection.' >&2; exit 1
 fi
-grep -q 'sudo may deny preserving SSH_AUTHORIZED_KEYS' "$work/sudo-denied.out"
+grep -q 'sudo may deny preserving requested environment names' "$work/sudo-denied.out"
 ! grep -q "$test_key" "$DOCKER_LOG" "$work/sudo-denied.out"
 unset SUDO_PRESERVE_DENIED DOCKER_DIRECT_FAIL
 # Sudo Tailscale bootstrap passes the secret through a narrowly preserved env var, never argv.
@@ -345,11 +353,56 @@ cp "$root/compose.yaml" "$sudo_ts_project/compose.yaml"
 cp "$root/compose.tailscale.yaml" "$sudo_ts_project/compose.tailscale.yaml"
 : >"$DOCKER_LOG"; rm -f "$TAILSCALE_COUNT"
 bash "$root/scripts/docker-setup.sh" >"$work/sudo-tailscale.out"
-grep -Fx 'sudo --preserve-env=TS_AUTHKEY,SSH_AUTHORIZED_KEYS docker compose up -d --force-recreate tailscale' "$DOCKER_LOG"
-grep -Fx 'preserved-authkey-present' "$DOCKER_LOG"
+grep -Fx 'sudo --preserve-env=SSH_AUTHORIZED_KEYS,TS_AUTHKEY docker compose up -d --force-recreate tailscale' "$DOCKER_LOG"
 grep -Fx 'bootstrap-key-delivered-via-env' "$DOCKER_LOG"
 ! grep -q 'sudo-test-bootstrap-secret' "$DOCKER_LOG" "$work/sudo-tailscale.out"
 unset DOCKER_DIRECT_FAIL TAILSCALE_ORDER_TEST TAILSCALE_COUNT TS_AUTHKEY
+# Every sudo Compose operation sees the same explicit overrides, including empty IDs.
+export DOCKER_DIRECT_FAIL=1 CAPTURE_OVERRIDES=1 OVERRIDE_LOG="$work/overrides.log"
+export COMPOSE_FILE='compose.yaml;compose.tailscale.yaml' COMPOSE_PATH_SEPARATOR=';' COMPOSE_PROJECT_NAME=chosen-project
+export PUID='' PGID='' HERDSMAN_SSH_PORT=4321 TAILSCALE_HOSTNAME=chosen-host
+export TAILSCALE_ORDER_TEST=1 TAILSCALE_COUNT="$work/override-count" TS_AUTHKEY='override-bootstrap-secret'
+printf 'COMPOSE_FILE=compose.yaml\nCOMPOSE_PATH_SEPARATOR=:\nCOMPOSE_PROJECT_NAME=wrong\nPUID=999\nPGID=998\nHERDSMAN_SSH_PORT=1234\nTAILSCALE_HOSTNAME=wrong\n' >"$sudo_ts_project/.env"
+: >"$DOCKER_LOG"; : >"$OVERRIDE_LOG"; rm -f "$TAILSCALE_COUNT"
+bash "$root/scripts/docker-setup.sh" >"$work/override.out" 2>&1
+expected='|COMPOSE_FILE=compose.yaml;compose.tailscale.yaml|COMPOSE_PATH_SEPARATOR=;|COMPOSE_PROJECT_NAME=chosen-project|PUID=|PGID=|HERDSMAN_SSH_PORT=4321|TAILSCALE_HOSTNAME=chosen-host'
+grep -F "compose config --quiet" "$OVERRIDE_LOG" | grep -F "$expected"
+grep -F "compose up -d" "$OVERRIDE_LOG" | grep -F "$expected"
+grep -F "compose exec -T tailscale" "$OVERRIDE_LOG" | grep -F "$expected"
+test "$(grep -F "compose up -d --force-recreate tailscale" "$OVERRIDE_LOG" | grep -Fc "$expected")" -eq 2
+grep -F 'tailscale-recreate ' "$DOCKER_LOG" | tail -n1 | grep -Fx 'tailscale-recreate '
+! grep -F 'override-bootstrap-secret' "$DOCKER_LOG" "$work/override.out"
+! grep -F "$test_key" "$DOCKER_LOG" "$work/override.out"
+# Nonempty IDs also override conflicting .env values across the lifecycle.
+export PUID=2000 PGID=2001
+: >"$OVERRIDE_LOG"; rm -f "$TAILSCALE_COUNT"
+bash "$root/scripts/docker-setup.sh" >"$work/override-ids.out" 2>&1
+for operation in 'compose config --quiet' 'compose up -d' 'compose exec -T tailscale' 'compose up -d --force-recreate tailscale'; do
+  grep -F "$operation" "$OVERRIDE_LOG" | grep -Fq '|PUID=2000|PGID=2001|'
+done
+export PUID='' PGID=''
+# Standard mode exercises port lookup with the same overrides.
+export COMPOSE_FILE=compose.yaml
+: >"$OVERRIDE_LOG"
+bash "$root/scripts/docker-setup.sh" >"$work/override-port.out" 2>&1
+grep -F 'compose port herdsman 22' "$OVERRIDE_LOG" | grep -F '|COMPOSE_PROJECT_NAME=chosen-project|PUID=|PGID=|HERDSMAN_SSH_PORT=4321|TAILSCALE_HOSTNAME=chosen-host'
+unset DOCKER_DIRECT_FAIL CAPTURE_OVERRIDES OVERRIDE_LOG COMPOSE_FILE COMPOSE_PATH_SEPARATOR COMPOSE_PROJECT_NAME PUID PGID HERDSMAN_SSH_PORT TAILSCALE_HOSTNAME TAILSCALE_ORDER_TEST TAILSCALE_COUNT TS_AUTHKEY
+# Existing bind ownership and Compose both honor process IDs through sudo's environment reset.
+sudo_bind="$work/sudo-bind"
+mkdir -p "$sudo_bind/data/herdsman-home"
+cp "$root/compose.yaml" "$root/compose.tailscale.yaml" "$root/compose.bind-mount.yaml" "$sudo_bind/"
+export PI_HERDSMAN_DIR="$sudo_bind" DOCKER_DIRECT_FAIL=1 CAPTURE_OVERRIDES=1 OVERRIDE_LOG="$work/sudo-bind-overrides.log"
+export PUID="$(stat -c '%u' "$sudo_bind/data/herdsman-home")" PGID="$(stat -c '%g' "$sudo_bind/data/herdsman-home")"
+printf 'COMPOSE_FILE=compose.yaml:compose.tailscale.yaml:compose.bind-mount.yaml\nPUID=%s\nPGID=%s\n' "$((PUID + 1))" "$((PGID + 1))" >"$sudo_bind/.env"
+: >"$DOCKER_LOG"; : >"$OVERRIDE_LOG"
+bash "$root/scripts/docker-setup.sh" >"$work/sudo-bind.out" 2>&1
+grep -q 'Herdsman is ready' "$work/sudo-bind.out"
+grep -q '^sudo --preserve-env=PUID,PGID docker info$' "$DOCKER_LOG"
+for operation in 'compose config --quiet' 'compose up -d'; do
+  grep -F "$operation" "$OVERRIDE_LOG" | grep -Fq "|PUID=$PUID|PGID=$PGID|"
+done
+test "$PUID:$PGID" = "$(stat -c '%u:%g' "$sudo_bind/data/herdsman-home")"
+unset DOCKER_DIRECT_FAIL CAPTURE_OVERRIDES OVERRIDE_LOG PUID PGID
 # Bind mount rejects effective IDs from .env and process environment before startup.
 bind_mismatch="$work/bind-mismatch"
 mkdir -p "$bind_mismatch/data/herdsman-home"

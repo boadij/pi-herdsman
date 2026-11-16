@@ -6,11 +6,11 @@ tmp_files=()
 cleanup() {
   if [[ "${ts_bootstrap_active:-0}" == 1 ]]; then
     unset TS_AUTHKEY ts_authkey bootstrap_ts_authkey
-    if ! "${DOCKER[@]}" compose up -d --force-recreate tailscale; then
+    if ! docker_cmd compose up -d --force-recreate tailscale; then
       printf 'docker-setup: WARNING: failed to restore key-free Tailscale configuration.\\n' >&2
     else
       ts_bootstrap_active=0
-      "${DOCKER[@]}" compose up -d --force-recreate herdsman || printf 'docker-setup: WARNING: failed to recreate Herdsman in the restored Tailscale network namespace.\\n' >&2
+      docker_cmd compose up -d --force-recreate herdsman || printf 'docker-setup: WARNING: failed to recreate Herdsman in the restored Tailscale network namespace.\\n' >&2
     fi
   fi
   (("${#tmp_files[@]}" == 0)) || rm -f -- "${tmp_files[@]}"
@@ -30,12 +30,30 @@ mkdir -p -- "$project_dir" || die "cannot create deployment directory: $project_
 cd -- "$project_dir"
 
 command -v docker >/dev/null || die "Docker CLI is required; install Docker Desktop or Docker Engine first."
-DOCKER=(docker)
+use_sudo=0
+docker_cmd() {
+  if (( ! use_sudo )); then
+    docker "$@"
+    return
+  fi
+  local name names=
+  for name in COMPOSE_FILE COMPOSE_PATH_SEPARATOR COMPOSE_PROJECT_NAME PUID PGID HERDSMAN_SSH_PORT TAILSCALE_HOSTNAME; do
+    if [[ ${!name+x} ]]; then names+=${names:+,}$name; fi
+  done
+  if [[ "${1:-} ${2:-}" == "compose up" ]]; then
+    for name in SSH_AUTHORIZED_KEYS TS_AUTHKEY; do
+      if [[ ${!name+x} ]]; then names+=${names:+,}$name; fi
+    done
+  fi
+  local -a sudo_args=()
+  [[ -z "$names" ]] || sudo_args+=("--preserve-env=$names")
+  sudo "${sudo_args[@]}" docker "$@"
+}
 docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required."
 if ! docker info >/dev/null 2>&1; then
   command -v sudo >/dev/null || die "Docker engine is unavailable and sudo is not installed."
-  sudo docker compose version >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1 || die "Docker engine is unavailable; start Docker or grant access to Docker."
-  DOCKER=(sudo docker)
+  use_sudo=1
+  docker_cmd compose version >/dev/null && docker_cmd info >/dev/null || die "Docker engine is unavailable or sudo denied preserving required environment names; grant direct Docker access or allow the requested sudo --preserve-env names."
 fi
 
 env_file=.env
@@ -155,7 +173,7 @@ if [[ "$selection" == *compose.bind-mount.yaml* ]]; then
     printf 'PGID=%s\n' "$configured_gid" >>"$env_file"
   fi
   if [[ -z "$configured_uid" || -z "$configured_gid" ]]; then
-    container_ids=$("${DOCKER[@]}" compose run --rm --no-deps --entrypoint sh herdsman -c 'printf "%s %s" "$(id -u herdsman)" "$(id -g herdsman)"') || die "could not determine the Compose default Herdsman UID/GID."
+    container_ids=$(docker_cmd compose run --rm --no-deps --entrypoint sh herdsman -c 'printf "%s %s" "$(id -u herdsman)" "$(id -g herdsman)"') || die "could not determine the Compose default Herdsman UID/GID."
     read -r default_uid default_gid <<<"$container_ids"
     configured_uid=${configured_uid:-$default_uid}
     configured_gid=${configured_gid:-$default_gid}
@@ -170,8 +188,8 @@ if [[ -z "$ssh_key" ]]; then
     if [[ -r "$candidate" ]]; then ssh_key="$(<"$candidate")"; break; fi
   done
 fi
-"${DOCKER[@]}" compose config --quiet || die "Docker Compose configuration is invalid."
-if [[ -z "$ssh_key" ]] && ! "${DOCKER[@]}" compose run --rm --no-deps --entrypoint sh herdsman -c 'test -s /home/herdsman/.ssh/authorized_keys' >/dev/null 2>&1; then
+docker_cmd compose config --quiet || die "Docker Compose configuration is invalid."
+if [[ -z "$ssh_key" ]] && ! docker_cmd compose run --rm --no-deps --entrypoint sh herdsman -c 'test -s /home/herdsman/.ssh/authorized_keys' >/dev/null 2>&1; then
   if ! ( : </dev/tty ) 2>/dev/null; then
     die "an SSH public key is required for a fresh deployment; set SSH_AUTHORIZED_KEYS or run interactively."
   fi
@@ -270,16 +288,12 @@ if [[ -n "$ssh_key" ]]; then
   validate_ssh_public_key "$ssh_key" || die "SSH_AUTHORIZED_KEYS is not a structurally valid OpenSSH public key."
   export SSH_AUTHORIZED_KEYS="$ssh_key"
 fi
-if [[ "${DOCKER[0]}" == sudo && -n "$ssh_key" ]]; then
-  sudo --preserve-env=SSH_AUTHORIZED_KEYS docker compose up -d || die "Docker Compose could not start the deployment; sudo may deny preserving SSH_AUTHORIZED_KEYS. Allow only SSH_AUTHORIZED_KEYS with sudo --preserve-env, or grant direct Docker access."
-else
-  "${DOCKER[@]}" compose up -d || die "Docker Compose could not start the deployment."
-fi
+docker_cmd compose up -d || die "Docker Compose could not start the deployment; sudo may deny preserving requested environment names."
 
 if [[ "$selection" == *compose.tailscale.yaml* ]]; then
   authenticated=0
   for _ in {1..10}; do
-    if "${DOCKER[@]}" compose exec -T tailscale tailscale status --json 2>/dev/null | grep -Eq '"BackendState"[[:space:]]*:[[:space:]]*"Running"'; then authenticated=1; break; fi
+    if docker_cmd compose exec -T tailscale tailscale status --json 2>/dev/null | grep -Eq '"BackendState"[[:space:]]*:[[:space:]]*"Running"'; then authenticated=1; break; fi
     sleep 2
   done
   if (( ! authenticated )); then
@@ -292,31 +306,25 @@ if [[ "$selection" == *compose.tailscale.yaml* ]]; then
     fi
     [[ -n "$ts_authkey" ]] || die "Tailscale auth key is required."
     ts_bootstrap_active=1
-    if [[ "${DOCKER[0]}" == sudo ]]; then
-      export TS_AUTHKEY="$ts_authkey"
-      preserve_env=TS_AUTHKEY
-      [[ -z "$ssh_key" ]] || preserve_env+=",SSH_AUTHORIZED_KEYS"
-      sudo "--preserve-env=$preserve_env" docker compose up -d --force-recreate tailscale || bootstrap_status=$?
-      unset TS_AUTHKEY
-    else
-      TS_AUTHKEY="$ts_authkey" docker compose up -d --force-recreate tailscale || bootstrap_status=$?
-    fi
+    export TS_AUTHKEY="$ts_authkey"
+    docker_cmd compose up -d --force-recreate tailscale || bootstrap_status=$?
+    unset TS_AUTHKEY
     if [[ "${bootstrap_status:-0}" != 0 ]]; then
       unset ts_authkey bootstrap_ts_authkey
-      "${DOCKER[@]}" compose up -d --force-recreate tailscale || printf 'docker-setup: WARNING: failed to restore key-free Tailscale configuration.\n' >&2
+      docker_cmd compose up -d --force-recreate tailscale || printf 'docker-setup: WARNING: failed to restore key-free Tailscale configuration.\n' >&2
       die "Tailscale bootstrap failed."
     fi
     unset ts_authkey bootstrap_ts_authkey
     authenticated=0
     for _ in {1..30}; do
-      if "${DOCKER[@]}" compose exec -T tailscale tailscale status --json 2>/dev/null | grep -Eq '"BackendState"[[:space:]]*:[[:space:]]*"Running"'; then authenticated=1; break; fi
+      if docker_cmd compose exec -T tailscale tailscale status --json 2>/dev/null | grep -Eq '"BackendState"[[:space:]]*:[[:space:]]*"Running"'; then authenticated=1; break; fi
       sleep 2
     done
     cleanup_status=0
-    "${DOCKER[@]}" compose up -d --force-recreate tailscale || cleanup_status=$?
+    docker_cmd compose up -d --force-recreate tailscale || cleanup_status=$?
     if (( cleanup_status == 0 )); then
       ts_bootstrap_active=0
-      "${DOCKER[@]}" compose up -d --force-recreate herdsman || cleanup_status=$?
+      docker_cmd compose up -d --force-recreate herdsman || cleanup_status=$?
     fi
     (( authenticated )) || die "Tailscale authentication did not complete."
     (( cleanup_status == 0 )) || die "Tailscale authenticated, but key-free configuration restoration failed."
@@ -325,12 +333,12 @@ fi
 
 ready=0
 for _ in {1..30}; do
-  if "${DOCKER[@]}" compose exec -T herdsman sh -c 'test -d /run/sshd && grep -q ":0016 " /proc/net/tcp /proc/net/tcp6' >/dev/null 2>&1; then ready=1; break; fi
+  if docker_cmd compose exec -T herdsman sh -c 'test -d /run/sshd && grep -q ":0016 " /proc/net/tcp /proc/net/tcp6' >/dev/null 2>&1; then ready=1; break; fi
   sleep 2
 done
 (( ready )) || die "Herdsman did not become ready; inspect with: docker compose logs herdsman"
 printf 'Herdsman is ready in %s\n' "$project_dir"
-compose_env="$( "${DOCKER[@]}" compose config --environment 2>/dev/null || true )"
+compose_env="$( docker_cmd compose config --environment 2>/dev/null || true )"
 compose_value() {
   local name=$1 default=$2 value
   value="$(printf '%s\n' "$compose_env" | sed -n "s/^$name=//p" | head -n 1)"
@@ -344,7 +352,7 @@ if [[ "$selection" == *compose.tailscale.yaml* ]]; then
   hostname=${TAILSCALE_HOSTNAME:-$(compose_value TAILSCALE_HOSTNAME "$dotenv_hostname")}
   printf 'Connect with: ssh herdsman@%s\n' "${hostname:-pi-herdsman}"
 else
-  published_port=$("${DOCKER[@]}" compose port herdsman 22 | awk -F: 'NF {port=$NF} END {gsub(/[^0-9]/, "", port); print port}')
+  published_port=$(docker_cmd compose port herdsman 22 | awk -F: 'NF {port=$NF} END {gsub(/[^0-9]/, "", port); print port}')
   [[ "$published_port" =~ ^[0-9]+$ ]] || die "could not determine the published Herdsman SSH port."
   printf 'Connect with: ssh -p %s herdsman@localhost\n' "$published_port"
 fi

@@ -36,6 +36,16 @@ authentication. The guided Windows flow currently offers standard Docker only;
 Windows Tailscale and host bind-mount setup are not advertised without platform
 acceptance evidence.
 
+When the Bash installer must use sudo, it preserves explicitly set
+`COMPOSE_FILE`, `COMPOSE_PATH_SEPARATOR`, `COMPOSE_PROJECT_NAME`,
+`PUID`, `PGID`, `HERDSMAN_SSH_PORT`, and `TAILSCALE_HOSTNAME`.
+It passes SSH authorization and a temporary Tailscale key only for startup
+or recreation as needed. Sudo policy must allow the requested names. Other
+environment overrides, including variables used by custom Compose files and
+Docker engine selection variables, are not preserved by the installer under
+sudo; configure them for the sudo environment or use direct Docker access.
+All installer operations after sudo selection use that sudo Docker engine.
+
 For direct Compose control, use the Compose file included in a checkout or
 download it into a new directory:
 
