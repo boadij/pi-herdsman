@@ -4456,13 +4456,22 @@ export function registerLeadRuntime(
       !restoredExecution.managed &&
       toolChangeIndex > checkpointIndex
     ) {
-      const policy = configuredToolPolicy(restoredExecution.definition, []);
-      if (policy.mode === "inherit") {
+      const projection = inheritedProjectionFor(
+        mode,
+        restoredExecution.definition,
+        baseline,
+        leadToolState.projectLeadTools(baseline, restoredExecution.definition),
+      );
+      if (projection) {
         const excluded = (name: string) =>
-          policy.excluded.some((pattern) => matchesToolPattern(pattern, name));
+          projection.excluded.some((pattern) =>
+            matchesToolPattern(pattern, name),
+          );
         leadToolState.setLeadTools(
           leadToolState.normalizeBaseTools([
-            ...restoredTools.filter((name) => !excluded(name)),
+            ...restoredTools.filter(
+              (name) => !excluded(name) && !projection.injected.includes(name),
+            ),
             ...baseline.filter(excluded),
           ]),
         );
