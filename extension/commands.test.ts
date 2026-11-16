@@ -1916,6 +1916,13 @@ test("session tree restoration respects checkpoint order and tool policies", asy
       restored: ["read"],
       expected: ["read", ...leadTools],
     },
+    {
+      name: "relative CodeMode is projected without entering the inherited baseline",
+      branch: [checkpoint("flexible", ["read"]), toolChange(["history"])],
+      restored: ["read", "history", "codemode"],
+      extraTools: ["codemode"],
+      expected: ["read", "history", "codemode", ...leadTools],
+    },
   ];
   for (const scenario of cases) {
     await t.test(scenario.name, async (t) => {
@@ -1931,7 +1938,12 @@ test("session tree restoration respects checkpoint order and tool policies", asy
       }
       const pi = fakeChiefPi({
         activeTools: ["read", "bash"],
-        allTools: [{ name: "history" }],
+        allTools: [
+          { name: "history" },
+          ...("extraTools" in scenario ? scenario.extraTools : []).map(
+            (name) => ({ name }),
+          ),
+        ],
       });
       const context = fakeContext(pi.entries, scenario.branch) as any;
       context.cwd = cwd;
@@ -1946,6 +1958,13 @@ test("session tree restoration respects checkpoint order and tool policies", asy
           new Set(scenario.expected),
         );
         assert.equal(pi.entries.length, entriesBefore);
+        if ("extraTools" in scenario) {
+          await pi.commandOptions.get("lead").handler("orchestrate", context);
+          assert.deepEqual(sessionLeadExecutionState(pi.entries)?.leadTools, [
+            "read",
+            "history",
+          ]);
+        }
         if (scenario.profile === "excludeTools: [bash]") {
           writeFileSync(
             join(cwd, ".pi", "coordinators", "flexible-lead.md"),
