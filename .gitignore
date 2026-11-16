@@ -13,4 +13,5 @@ dist/
 *.p12
 *.pfx
 /video/
+/data/herdsman-home/
 .local
