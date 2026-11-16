@@ -125,95 +125,295 @@ test("Lead startup attestation requires the exact session and a fresh generation
   );
 });
 
-test("removal permission confirmation is scoped, cancellable, and skips no-op writes", async () => {
+function settingsSessionProof(ctx: any) {
+  let agent: any = {
+    pane_id: "pane",
+    tab_id: "tab",
+    workspace_id: "workspace",
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: ctx.sessionManager.getSessionId(),
+    },
+  };
+  let extraAgents: any[] = [];
+  return {
+    setAgent(value: any) {
+      agent = value;
+    },
+    setExtraAgents(value: any[]) {
+      extraAgents = value;
+    },
+    host: {
+      listAgents: async () => ({
+        agents: [...(agent ? [agent] : []), ...extraAgents],
+      }),
+      runHerdr: async () => ({ agent }),
+      isPiAgent: (value: any) => value?.agent_session?.source === "herdr:pi",
+      expectedSession: (id: string, path?: string) => ({ id, path }),
+    },
+  };
+}
+
+test("repository settings work without Manager and revalidate identity and policy", async () => {
   const { isWorktreeRemovalPreapproved, setWorktreeRemovalPreapproved } =
     await import("../config.ts");
-  const { herdsmanConfigPath } = await import("../storage.ts");
-  const manager = {
-    repoKey: `/verified-${randomUUID()}`,
-    workspaceId: "workspace",
-  };
-  let current: typeof manager | undefined = manager;
-  let repoKey = manager.repoKey;
+  const repoKey = `/verified-${randomUUID()}`;
+  const previousWorkspace = process.env.HERDR_WORKSPACE_ID;
+  const previousPane = process.env.HERDR_PANE_ID;
+  const previousTab = process.env.HERDR_TAB_ID;
+  process.env.HERDR_WORKSPACE_ID = "workspace";
+  process.env.HERDR_PANE_ID = "pane";
+  process.env.HERDR_TAB_ID = "tab";
   const ctx = fakeContext() as any;
+  const proof = settingsSessionProof(ctx);
   ctx.hasUI = true;
-  let confirmations = 0;
+  let checkoutPath = "/checkout";
   let confirm = async () => true;
-  ctx.ui.confirm = async (title: string, message: string, options: any) => {
+  let confirmations = 0;
+  ctx.ui.confirm = async (_title: string, message: string) => {
+    assert.ok(message.includes(repoKey));
     confirmations++;
-    assert.match(title, /Allow worktree removal/);
-    assert.match(message, new RegExp(manager.repoKey));
-    assert.equal(options.signal, ctx.signal);
     return confirm();
   };
   const runtime = createLeadProjectRuntime({
     pi: {},
     leadRuntime: {},
-    activeRole: () => "manager",
-    currentManager: async () => current,
-    sameManagerDescriptor: (a: unknown, b: unknown) => a === b,
-    worktreeGroupScope: async () => ({ repoKey }),
+    activeRole: () => "lead",
+    ...proof.host,
+    localRepositoryScope: async () => ({
+      repoKey,
+      repoName: "repo",
+      checkoutPath,
+      isPrimary: true,
+    }),
   } as any);
   try {
+    const policy = await runtime.getRemovalPreauthorization(ctx);
+    assert.equal(policy.enabled, false);
+    const matchingAgent = {
+      pane_id: "pane",
+      tab_id: "tab",
+      workspace_id: "workspace",
+      agent_session: {
+        source: "herdr:pi",
+        agent: "pi",
+        kind: "id",
+        value: ctx.sessionManager.getSessionId(),
+      },
+    };
+    for (const conflicting of [
+      { ...matchingAgent, workspace_id: "other" },
+      { ...matchingAgent, pane_id: "other" },
+      { ...matchingAgent, tab_id: "other" },
+      {
+        ...matchingAgent,
+        agent_session: { ...matchingAgent.agent_session, value: "other" },
+      },
+      undefined,
+    ]) {
+      proof.setAgent(conflicting);
+      await assert.rejects(
+        runtime.getRemovalPreauthorization(ctx),
+        /identity.*(conflicting|unavailable)/,
+      );
+    }
+    proof.setAgent(matchingAgent);
+    for (const field of ["pane_id", "tab_id", "workspace_id"] as const) {
+      const malformed = { ...matchingAgent, [field]: undefined };
+      proof.setExtraAgents([malformed]);
+      await assert.rejects(
+        runtime.getRemovalPreauthorization(ctx),
+        /identity.*conflicting/,
+      );
+      await assert.rejects(
+        runtime.setRemovalPreauthorization(true, ctx, policy.identity),
+        /identity.*conflicting/,
+      );
+      assert.equal(isWorktreeRemovalPreapproved(repoKey), false);
+    }
+    proof.setExtraAgents([]);
     ctx.hasUI = false;
     await assert.rejects(
       runtime.setRemovalPreauthorization(true, ctx),
       /interactive/,
     );
     ctx.hasUI = true;
-    const replaced = { ...manager, repoKey: `/other-${randomUUID()}` };
-    current = replaced;
-    repoKey = replaced.repoKey;
-    await assert.rejects(
-      runtime.setRemovalPreauthorization(true, ctx, manager as any),
-      /authority changed/,
-    );
-    assert.equal(isWorktreeRemovalPreapproved(replaced.repoKey), false);
-    current = manager;
-    repoKey = "/other-repository";
-    await assert.rejects(
-      runtime.setRemovalPreauthorization(true, ctx),
-      /not authoritative/,
-    );
-    repoKey = manager.repoKey;
     confirm = async () => false;
-    assert.equal(await runtime.setRemovalPreauthorization(true, ctx), false);
-    assert.equal(isWorktreeRemovalPreapproved(manager.repoKey), false);
+    assert.equal(
+      await runtime.setRemovalPreauthorization(true, ctx, policy.identity),
+      false,
+    );
+    assert.equal(isWorktreeRemovalPreapproved(repoKey), false);
     confirm = async () => {
-      current = undefined;
+      checkoutPath = "/changed";
       return true;
     };
     await assert.rejects(
-      runtime.setRemovalPreauthorization(true, ctx),
-      /authority changed/,
+      runtime.setRemovalPreauthorization(true, ctx, policy.identity),
+      /changed/,
     );
-    assert.equal(isWorktreeRemovalPreapproved(manager.repoKey), false);
-    current = manager;
-    const controller = new AbortController();
-    ctx.signal = controller.signal;
+    assert.equal(isWorktreeRemovalPreapproved(repoKey), false);
+    checkoutPath = "/checkout";
     confirm = async () => {
-      controller.abort();
+      proof.setExtraAgents([{ ...matchingAgent, pane_id: undefined }]);
       return true;
     };
-    await assert.rejects(runtime.setRemovalPreauthorization(true, ctx), {
-      name: "AbortError",
-    });
-    assert.equal(isWorktreeRemovalPreapproved(manager.repoKey), false);
-    ctx.signal = undefined;
+    await assert.rejects(
+      runtime.setRemovalPreauthorization(true, ctx, policy.identity),
+      /identity.*conflicting/,
+    );
+    assert.equal(isWorktreeRemovalPreapproved(repoKey), false);
+    proof.setExtraAgents([]);
+    confirm = async () => {
+      proof.setAgent(undefined);
+      return true;
+    };
+    await assert.rejects(
+      runtime.setRemovalPreauthorization(true, ctx, policy.identity),
+      /identity.*unavailable/,
+    );
+    assert.equal(isWorktreeRemovalPreapproved(repoKey), false);
+    proof.setAgent(matchingAgent);
     confirm = async () => true;
-    assert.equal(await runtime.setRemovalPreauthorization(true, ctx), true);
-    assert.equal(isWorktreeRemovalPreapproved(manager.repoKey), true);
-    const before = realFs.statSync(herdsmanConfigPath()).ino;
+    assert.equal(
+      await runtime.setRemovalPreauthorization(true, ctx, policy.identity),
+      true,
+    );
     const count = confirmations;
-    assert.equal(await runtime.setRemovalPreauthorization(true, ctx), true);
+    assert.equal(
+      await runtime.setRemovalPreauthorization(true, ctx, policy.identity),
+      true,
+    );
     assert.equal(confirmations, count);
-    assert.equal(realFs.statSync(herdsmanConfigPath()).ino, before);
-    assert.equal(await runtime.setRemovalPreauthorization(false, ctx), true);
-    assert.equal(confirmations, count);
-    assert.equal(isWorktreeRemovalPreapproved(manager.repoKey), false);
+    assert.equal(
+      await runtime.setRemovalPreauthorization(false, ctx, policy.identity),
+      true,
+    );
+    assert.equal(isWorktreeRemovalPreapproved(repoKey), false);
   } finally {
-    if (isWorktreeRemovalPreapproved(manager.repoKey))
-      setWorktreeRemovalPreapproved(manager.repoKey, false);
+    if (isWorktreeRemovalPreapproved(repoKey))
+      setWorktreeRemovalPreapproved(repoKey, false);
+    if (previousWorkspace === undefined) delete process.env.HERDR_WORKSPACE_ID;
+    else process.env.HERDR_WORKSPACE_ID = previousWorkspace;
+    if (previousPane === undefined) delete process.env.HERDR_PANE_ID;
+    else process.env.HERDR_PANE_ID = previousPane;
+    if (previousTab === undefined) delete process.env.HERDR_TAB_ID;
+    else process.env.HERDR_TAB_ID = previousTab;
+  }
+});
+
+test("repository integration grants require confirmation and reject stale policy or identity", async () => {
+  const { readConfig, setManagerMergeOverride } = await import("../config.ts");
+  const repoKey = `/verified-${randomUUID()}`;
+  const previousWorkspace = process.env.HERDR_WORKSPACE_ID;
+  const previousPane = process.env.HERDR_PANE_ID;
+  const previousTab = process.env.HERDR_TAB_ID;
+  process.env.HERDR_WORKSPACE_ID = "workspace";
+  process.env.HERDR_PANE_ID = "pane";
+  process.env.HERDR_TAB_ID = "tab";
+  const ctx = fakeContext() as any;
+  const proof = settingsSessionProof(ctx);
+  ctx.hasUI = true;
+  let checkoutPath = "/checkout";
+  let confirm = async () => false;
+  ctx.ui.confirm = async (title: string) => {
+    assert.ok(title.includes(repoKey));
+    return confirm();
+  };
+  const runtime = createLeadProjectRuntime({
+    pi: {},
+    leadRuntime: {},
+    activeRole: () => "lead",
+    ...proof.host,
+    localRepositoryScope: async () => ({
+      repoKey,
+      repoName: "repo",
+      checkoutPath,
+      isPrimary: true,
+    }),
+  } as any);
+  try {
+    const { identity } = await runtime.getRemovalPreauthorization(ctx);
+    const global = readConfig().managerMergeEnabled;
+    setManagerMergeOverride(repoKey, false);
+    const expected = { global, override: false as const };
+    assert.equal(
+      await runtime.setRepositoryMergeOverride(true, ctx, identity, expected),
+      false,
+    );
+    assert.equal(readConfig().managerMergeOverrides[repoKey], false);
+    confirm = async () => {
+      checkoutPath = "/other";
+      return true;
+    };
+    await assert.rejects(
+      runtime.setRepositoryMergeOverride(true, ctx, identity, expected),
+      /changed/,
+    );
+    checkoutPath = "/checkout";
+    confirm = async () => {
+      proof.setExtraAgents([
+        {
+          agent_session: {
+            source: "herdr:pi",
+            agent: "pi",
+            kind: "id",
+            value: ctx.sessionManager.getSessionId(),
+          },
+        },
+      ]);
+      return true;
+    };
+    await assert.rejects(
+      runtime.setRepositoryMergeOverride(true, ctx, identity, expected),
+      /identity.*conflicting/,
+    );
+    assert.equal(readConfig().managerMergeOverrides[repoKey], false);
+    proof.setExtraAgents([]);
+    confirm = async () => {
+      proof.setAgent(undefined);
+      return true;
+    };
+    await assert.rejects(
+      runtime.setRepositoryMergeOverride(true, ctx, identity, expected),
+      /identity.*unavailable/,
+    );
+    assert.equal(readConfig().managerMergeOverrides[repoKey], false);
+    proof.setAgent({
+      pane_id: "pane",
+      tab_id: "tab",
+      workspace_id: "workspace",
+      agent_session: {
+        source: "herdr:pi",
+        agent: "pi",
+        kind: "id",
+        value: ctx.sessionManager.getSessionId(),
+      },
+    });
+    confirm = async () => {
+      setManagerMergeOverride(repoKey, "divergent");
+      return true;
+    };
+    await assert.rejects(
+      runtime.setRepositoryMergeOverride(true, ctx, identity, expected),
+      /policy changed/,
+    );
+    assert.equal(readConfig().managerMergeOverrides[repoKey], "divergent");
+    ctx.hasUI = false;
+    await assert.rejects(
+      runtime.setRepositoryMergeOverride(true, ctx, identity, expected),
+      /interactive/,
+    );
+  } finally {
+    setManagerMergeOverride(repoKey, undefined);
+    if (previousWorkspace === undefined) delete process.env.HERDR_WORKSPACE_ID;
+    else process.env.HERDR_WORKSPACE_ID = previousWorkspace;
+    if (previousPane === undefined) delete process.env.HERDR_PANE_ID;
+    else process.env.HERDR_PANE_ID = previousPane;
+    if (previousTab === undefined) delete process.env.HERDR_TAB_ID;
+    else process.env.HERDR_TAB_ID = previousTab;
   }
 });
 

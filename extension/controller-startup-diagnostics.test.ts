@@ -380,7 +380,7 @@ test(
 test(
   "pane-not-ready failure retains bounded startup diagnostic and rolls back",
   { timeout: 40_000 },
-  async () => {
+  async (t) => {
     setLeadEnvironment();
     const label = "pane-not-ready-diagnostic";
     const startup = startupExecutor(
@@ -438,8 +438,17 @@ test(
           };
         }
         const result = await startup.exec(command, args, options);
-        if (command === "herdr" && args[0] === "agent" && args[1] === "start")
+        if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
           realFs.rmSync(startup.mailbox, { recursive: true, force: true });
+          t.mock.timers.enable({ apis: ["setTimeout"] });
+          setImmediate(() => {
+            t.mock.timers.tick(29_999);
+            setImmediate(() => {
+              assert.equal(paneReadSeen, false);
+              t.mock.timers.tick(1);
+            });
+          });
+        }
         if (command === "herdr" && args[0] === "pane" && args[1] === "read") {
           paneReadSeen = true;
           operationController.abort();
@@ -507,7 +516,7 @@ test(
 test(
   "pane process diagnostic failure is optional and does not prevent rollback",
   { timeout: 40_000 },
-  async () => {
+  async (t) => {
     setLeadEnvironment();
     const label = "pane-not-ready-process-failure";
     const startup = startupExecutor(
@@ -537,8 +546,17 @@ test(
           return { stdout: "", stderr: "unavailable", code: 1, killed: false };
         }
         const result = await startup.exec(command, args, options);
-        if (command === "herdr" && args[0] === "agent" && args[1] === "start")
+        if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
           realFs.rmSync(startup.mailbox, { recursive: true, force: true });
+          t.mock.timers.enable({ apis: ["setTimeout"] });
+          setImmediate(() => {
+            t.mock.timers.tick(29_999);
+            setImmediate(() => {
+              assert.equal(paneReadSeen, false);
+              t.mock.timers.tick(1);
+            });
+          });
+        }
         if (command === "herdr" && args[0] === "pane" && args[1] === "read") {
           paneReadSeen = true;
           return { stdout: "pane output", stderr: "", code: 0, killed: false };

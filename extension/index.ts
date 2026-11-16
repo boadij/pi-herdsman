@@ -1754,6 +1754,9 @@ function registerExtensionImpl(
           ctx,
           expectedManager,
         ),
+      setRepositoryMergeOverride: (
+        ...args: Parameters<typeof projectRuntime.setRepositoryMergeOverride>
+      ) => projectRuntime.setRepositoryMergeOverride(...args),
       runHerdr,
       presentStopSummary,
       version: HERDSMAN_VERSION,

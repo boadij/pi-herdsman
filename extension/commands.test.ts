@@ -6301,7 +6301,7 @@ test("Project Manager menu Start uses the composed bootstrap transition", async 
   updateConfig("managerGitBootstrapWithoutConfirmation", true);
   const selected: Array<{ title: string; options: string[] }> = [];
   const choices: Array<string | undefined> = [
-    "Project management",
+    "Project management  Inactive",
     "Start Manager mode",
     undefined,
   ];
@@ -6320,7 +6320,7 @@ test("Project Manager menu Start uses the composed bootstrap transition", async 
     selected.map(({ title }) =>
       title === "Project management" ? title : "root",
     ),
-    ["root", "Project management", "root"],
+    ["root", "Project management", "Project management", "root"],
   );
   assert.equal(harness.confirmations, 0);
   assert.equal(
@@ -19268,25 +19268,17 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
   assert.equal(prompts[0]?.label, `Pi Herdsman · v${packageMetadata.version}`);
   assert.deepEqual(prompts[0]?.options, [
     "Session mode  flexible",
-    "Agent activity",
-    "Agent & role definitions",
-    "Project management",
-    "Usage & costs",
+    "Agents & definitions",
+    "Project management  Inactive",
+    "Chief coordination  Inactive",
     "Settings",
-    "Advanced…",
+    "Usage & costs",
   ]);
   assert.equal(prompts[1]?.label, "Settings");
   assert.deepEqual(prompts[1]?.options, [
-    "Agent pane layout  subtree",
-    "Default Lead execution  flexible",
-    "Manager auto-start  Global off · Effective off (global; untrusted project)",
-    "Manager Git setup prompt  Required",
-    "Context retirement  Global on · Effective on (global; untrusted project)",
-    "Manager local merge  Global off",
-    "Status widget rows  8",
-    "Max Agent depth  2",
-    "Message limits",
-    "Project overrides…",
+    "Sessions & agents",
+    "Manager & repositories",
+    "Interface",
   ]);
   assert.equal(prompts[2]?.label, prompts[0]?.label);
   assert.deepEqual(prompts[2]?.options, prompts[0]?.options);
@@ -19307,16 +19299,21 @@ test("Herdsman Agents row opens the focused Running, Layout, Stop all menu", asy
     menus.push({ label, options });
     if (label.startsWith("Pi Herdsman") && !openedAgents) {
       openedAgents = true;
-      return "Agent activity";
+      return "Agents & definitions";
     }
     return undefined;
   };
   try {
     await pi.commandOptions.get("herdsman").handler("", context);
-    const menu = menus.find(({ label }) => label === "Agent activity");
+    const menu = menus.find(({ label }) => label === "Agents & definitions");
     assert.deepEqual(
       menu?.options.map((option) => option.replace(/\s{2,}.*/u, "")),
-      ["Running agents", "Stop all agents…"],
+      [
+        "Running agents",
+        "Agent definitions",
+        "Coordinator profiles",
+        "Stop all agents…",
+      ],
     );
     assert.equal(menu?.options[0], "Running agents  0");
   } finally {
@@ -19359,18 +19356,22 @@ test("Herdsman menu filters Settings and handles empty results", async () => {
         return;
       }
       if (calls === 2) {
-        assert.match(render(), /→ Default Lead execution/u);
-        for (const character of "message limits")
+        selectTuiItem(component, "Sessions & agents");
+        return;
+      }
+      if (calls === 3) {
+        assert.match(render(), /→ Default Lead mode/u);
+        for (const character of "message size limits")
           component.handleInput(character);
-        assert.match(render(), /→ Message limits/u);
-        assert.doesNotMatch(render(), /Default Lead execution/u);
-        for (let i = 0; i < "message limits".length; i++)
+        assert.match(render(), /→ Message size limits/u);
+        assert.doesNotMatch(render(), /Default Lead mode/u);
+        for (let i = 0; i < "message size limits".length; i++)
           component.handleInput("\u007f");
-        assert.match(render(), /→ Default Lead execution/u);
+        assert.match(render(), /→ Default Lead mode/u);
         for (const character of "not-a-real-menu-item")
           component.handleInput(character);
         assert.match(render(), /No matching options/u);
-        assert.doesNotMatch(render(), /→ Default Lead execution/u);
+        assert.doesNotMatch(render(), /→ Default Lead mode/u);
         component.handleInput("\u001b");
         return;
       }
@@ -19378,7 +19379,7 @@ test("Herdsman menu filters Settings and handles empty results", async () => {
     });
   try {
     await pi.commandOptions.get("herdsman").handler("", context);
-    assert.equal(calls, 2);
+    assert.equal(calls, 5);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
   }
@@ -19487,7 +19488,7 @@ test("Herdsman root contextual help follows the selected row", async () => {
     }
     const help = (index: number) =>
       observed[index]?.find((line) =>
-        /Choose whether this session works directly|View and manage running Agents|Coordinate independent project work|View token usage and model costs|Inspect and edit Agent definitions/u.test(
+        /Choose whether this session works directly|Manage running Agents|Coordinate independent project work|Supervise Managers|Change Herdsman preferences|View token usage and model costs/u.test(
           line,
         ),
       ) ?? "";
@@ -19495,17 +19496,18 @@ test("Herdsman root contextual help follows the selected row", async () => {
       help(0),
       /Choose whether this session works directly or primarily delegates tasks\./u,
     );
-    assert.match(help(1), /View and manage running Agents\./u);
+    assert.match(help(1), /Manage running Agents and inspect definitions\./u);
     assert.match(
       help(2),
-      /Inspect and edit Agent definitions and Coordinator profiles\./u,
-    );
-    assert.match(
-      help(3),
       /Coordinate independent project work across Git branches\./u,
     );
     assert.match(
-      help(4),
+      help(3),
+      /Supervise Managers and unassigned Leads across Herdsman\./u,
+    );
+    assert.match(help(4), /Change Herdsman preferences\./u);
+    assert.match(
+      help(5),
       /View token usage and model costs for this session and its managed work\./u,
     );
   } finally {
@@ -19549,7 +19551,7 @@ test("Definitions contextual help uses the selected definition description", asy
           const selected = component
             .render(200)
             .find((line: string) => line.trimStart().startsWith("→"));
-          if (selected?.includes("Agent & role definitions")) {
+          if (selected?.includes("Agents & definitions")) {
             component.handleInput("\r");
             return;
           }
@@ -19895,41 +19897,38 @@ test("settings navigation exposes message limits and one rough token formatter",
     prompts.push({ label, options });
     if (prompts.length === 1)
       return options.find((option) => option === "Settings");
-    if (prompts.length === 2)
-      return options.find((option) => option.startsWith("Message limits"));
-    if (prompts.length === 3) return options[0];
-    if (prompts.length === 4) return options[1];
+    if (prompts.length === 2) return "Sessions & agents";
+    if (prompts.length === 3)
+      return options.find((option) => option.startsWith("Message size limits"));
+    if (prompts.length === 4) return options[0];
+    if (prompts.length === 5) return options[1];
     return undefined;
   };
   try {
     await command.handler("", context);
     assert.equal(prompts[1]?.label, "Settings");
     assert.deepEqual(prompts[1]?.options, [
-      "Agent pane layout  subtree",
-      "Default Lead execution  flexible",
-      "Manager auto-start  Global off · Effective off (global; untrusted project)",
-      "Manager Git setup prompt  Required",
-      "Context retirement  Global on · Effective on (global; untrusted project)",
-      "Manager local merge  Global off",
-      "Status widget rows  8",
-      "Max Agent depth  2",
-      "Message limits",
-      "Project overrides…",
+      "Sessions & agents",
+      "Manager & repositories",
+      "Interface",
     ]);
-    assert.equal(prompts[2]?.label, "Message limits");
-    assert.match(prompts[2]?.options[0] ?? "", /≈32,768 tokens/);
-    assert.match(prompts[2]?.options[1] ?? "", /≈32,768 tokens/);
+    assert.equal(prompts[2]?.label, "Sessions & agents");
+    assert.match(
+      prompts[2]?.options[3] ?? "",
+      /Message size limits.*Inline.*mailbox/u,
+    );
+    assert.equal(prompts[3]?.label, "Message limits");
     assert.ok(prompts.every(({ label }) => label !== "Scope"));
     assert.deepEqual(
-      prompts[2]?.options.map((option) => option.split("  ")[0]),
+      prompts[3]?.options.map((option) => option.split("  ")[0]),
       ["Inline attachments", "Mailbox payload"],
     );
     assert.match(
-      prompts[2]?.options[0] ?? "",
+      prompts[3]?.options[0] ?? "",
       /Inline attachments  128 KiB · ≈32,768 tokens/u,
     );
     assert.match(
-      prompts[2]?.options[1] ?? "",
+      prompts[3]?.options[1] ?? "",
       /Mailbox payload  128 KiB · ≈32,768 tokens/u,
     );
     assert.match(notices.at(-1) ?? "", /4 KiB · ≈1,024 tokens/);
@@ -19950,29 +19949,41 @@ test("settings toggles context retirement and retains its updated value", async 
   const menus: { label: string; options: string[] }[] = [];
   const notices: string[] = [];
   let rootSelections = 0;
+  let categorySelections = 0;
   context.ui.select = async (label: string, options: string[]) => {
     menus.push({ label, options });
     if (label.startsWith("Pi Herdsman"))
       return rootSelections++ % 2 === 0 ? "Settings" : undefined;
-    return readConfig().contextRetirement !== false
-      ? options.find((option) => option.includes("Context retirement"))
-      : undefined;
+    if (label === "Settings")
+      return categorySelections++ % 2 === 0 ? "Sessions & agents" : undefined;
+    if (
+      label === "Sessions & agents" &&
+      readConfig().contextRetirement !== false
+    )
+      return options.find((option) => option.includes("Context retirement"));
+    if (
+      label === "Context retirement" &&
+      readConfig().contextRetirement !== false
+    )
+      return options.find((option) => option.startsWith("Global default"));
+    if (label === "Global Context retirement") return "Off";
+    return undefined;
   };
   context.ui.notify = (message: string) => notices.push(message);
   try {
     await pi.commandOptions.get("herdsman").handler("", context);
     assert.match(
-      menus[1]?.options.find((option) =>
-        option.includes("Context retirement"),
-      ) ?? "",
+      menus
+        .find(({ label }) => label === "Sessions & agents")
+        ?.options.find((option) => option.includes("Context retirement")) ?? "",
       /Context retirement\s+Global on · Effective on/,
     );
     assert.equal(readConfig().contextRetirement, false);
-    assert.deepEqual(notices, ["Global context retirement: off"]);
+    assert.deepEqual(notices, ["Context retirement: off (global)."]);
     await pi.commandOptions.get("herdsman").handler("", context);
     assert.match(
       menus
-        .filter(({ label }) => label === "Settings")
+        .filter(({ label }) => label === "Sessions & agents")
         .at(-1)
         ?.options.find((option) => option.includes("Context retirement")) ?? "",
       /Context retirement\s+Global off · Effective off/,
@@ -19993,19 +20004,25 @@ test("Manager auto-start menu toggle does not change the running role", async ()
   context.mode = "rpc";
   const activeTools = pi.pi.getActiveTools();
   const notices: string[] = [];
-  let selection = 0;
+  const selections = [
+    "Settings",
+    "Manager & repositories",
+    "Manager auto-start",
+    "Global default",
+    "On",
+  ];
   context.ui.select = async (_title: string, options: string[]) => {
-    if (selection++ === 0) return "Settings";
-    return selection === 2
-      ? options.find((option) => option.includes("Manager auto-start"))
-      : undefined;
+    const selection = selections.shift();
+    return options.find(
+      (option) => option === selection || option.startsWith(`${selection}  `),
+    );
   };
   context.ui.notify = (message: string) => notices.push(message);
   try {
     await pi.commandOptions.get("herdsman").handler("", context);
     assert.equal(readConfig().autoActivateManager, true);
     assert.deepEqual(pi.pi.getActiveTools(), activeTools);
-    assert.deepEqual(notices, ["Global Manager auto-start: on"]);
+    assert.deepEqual(notices, ["Manager auto-start: on (global)."]);
   } finally {
     updateConfig("autoActivateManager", undefined);
     await pi.events.get("session_shutdown")?.[0]();
@@ -20023,15 +20040,17 @@ test("Manager Git confirmation Settings toggle updates global config without cha
   context.mode = "rpc";
   const activeTools = pi.pi.getActiveTools();
   const notices: string[] = [];
-  let selection = 0;
+  const selections = [
+    "Settings",
+    "Manager & repositories",
+    "Git initialization prompt",
+    "Skip confirmation on explicit Manager start",
+  ];
   context.ui.select = async (_title: string, options: string[]) => {
-    if (selection++ === 0) return "Settings";
-    if (selection === 2)
-      return options.find((option) =>
-        option.startsWith("Manager Git setup prompt"),
-      );
-    if (selection === 3) return "Skip confirmation on explicit Manager start";
-    return undefined;
+    const selection = selections.shift();
+    return options.find(
+      (option) => option === selection || option.startsWith(`${selection}  `),
+    );
   };
   context.ui.confirm = async () => true;
   context.ui.notify = (message: string) => notices.push(message);
@@ -20059,9 +20078,10 @@ test("registered RPC command edits project Manager auto-start Off then Inherit",
   context.mode = "rpc";
   let selections = [
     "Settings",
-    "Project overrides…",
+    "Manager & repositories",
     "Manager auto-start",
-    "Off for this project",
+    "Current project",
+    "Off",
     undefined,
     undefined,
     undefined,
@@ -20070,14 +20090,16 @@ test("registered RPC command edits project Manager auto-start Off then Inherit",
   context.ui.select = async (label: string, options: string[]) => {
     prompts.push({ label, options });
     const selection = selections.shift();
-    return options.find((option) => option === selection);
+    return options.find(
+      (option) => option === selection || option.startsWith(`${selection}  `),
+    );
   };
   try {
     await pi.commandOptions.get("herdsman").handler("", context);
-    assert.deepEqual(prompts[3]?.options, [
-      "Inherit global (on)",
-      "On for this project",
-      "Off for this project",
+    assert.deepEqual(prompts[4]?.options, [
+      "Inherit global (on)  current",
+      "On",
+      "Off",
     ]);
     assert.equal(readProjectOverrides(context).autoActivateManager, false);
     assert.equal(readConfig().autoActivateManager, true);
@@ -20085,8 +20107,9 @@ test("registered RPC command edits project Manager auto-start Off then Inherit",
 
     selections = [
       "Settings",
-      "Project overrides…",
+      "Manager & repositories",
       "Manager auto-start",
+      "Current project",
       "Inherit global (on)",
       undefined,
       undefined,
@@ -20100,7 +20123,8 @@ test("registered RPC command edits project Manager auto-start Off then Inherit",
     assert.equal(readConfig().autoActivateManager, true);
     assert.equal(readEffectiveConfig(context).autoActivateManager, true);
     assert.deepEqual(
-      prompts.filter(({ label }) => label === "Manager auto-start").length,
+      prompts.filter(({ label }) => label === "Project Manager auto-start")
+        .length,
       2,
     );
   } finally {
@@ -20133,22 +20157,19 @@ test("message limit edits stay in the submenu with the edited field selected", a
       renders.push(component.render(200));
       switch (customCalls++) {
         case 0:
-          for (let i = 0; i < 5; i++) component.handleInput("\u001b[B");
-          component.handleInput("\r");
+          selectTuiItem(component, "Settings");
           break;
         case 1:
-          for (let i = 0; i < 5; i++) component.handleInput("\u001b[B");
-          component.handleInput("\r");
+          selectTuiItem(component, "Sessions & agents");
           break;
         case 2:
-          component.handleInput("\r");
+          selectTuiItem(component, "Message size limits");
           break;
         case 3:
-          component.handleInput("\u001b[B");
-          component.handleInput("\r");
+          selectTuiItem(component, "Inline attachments");
           break;
         case 4:
-          component.handleInput("\u001b");
+          selectTuiItem(component, "4 KiB");
           break;
         default:
           component.handleInput("\u001b");
@@ -20156,9 +20177,9 @@ test("message limit edits stay in the submenu with the edited field selected", a
     });
   try {
     await pi.commandOptions.get("herdsman").handler("", context);
-    assert.ok(renders[4]?.some((line) => line.includes("Inline attachments")));
+    assert.ok(renders[5]?.some((line) => line.includes("Inline attachments")));
     assert.match(
-      renders[4]?.find((line) => line.includes("Inline attachments")) ?? "",
+      renders[5]?.find((line) => line.includes("Inline attachments")) ?? "",
       /^→/u,
     );
   } finally {
@@ -20193,9 +20214,9 @@ test("Running uses compact native options and focuses the freshly verified pane"
     if (prompt.startsWith("Pi Herdsman")) {
       if (!rootSelection) return undefined;
       rootSelection = false;
-      return "Agent activity";
+      return "Agents & definitions";
     }
-    if (prompt === "Agent activity") {
+    if (prompt === "Agents & definitions") {
       if (!agentsSelection) return undefined;
       agentsSelection = false;
       assert.equal(options[0], "Running agents  1 working");
@@ -20257,9 +20278,9 @@ test("Running explains how to delegate when no agents are running", async () => 
     if (prompt.startsWith("Pi Herdsman")) {
       if (!rootSelection) return undefined;
       rootSelection = false;
-      return "Agent activity";
+      return "Agents & definitions";
     }
-    if (prompt === "Agent activity") {
+    if (prompt === "Agents & definitions") {
       if (!agentsSelection) return undefined;
       agentsSelection = false;
       return options.find((option) => option.startsWith("Running"));
@@ -20355,9 +20376,9 @@ test("Running rejects duplicate rendered labels before focus", async (t) => {
     }
     if (prompt.startsWith("Pi Herdsman")) {
       rootSelections++;
-      return rootSelections === 1 ? "Agent activity" : undefined;
+      return rootSelections === 1 ? "Agents & definitions" : undefined;
     }
-    if (prompt === "Agent activity") {
+    if (prompt === "Agents & definitions") {
       agentsSelections++;
       return agentsSelections === 1
         ? options.find((option) => option.startsWith("Running"))
@@ -20458,9 +20479,9 @@ test("Running excludes lost and unknown durable generations", async () => {
     prompts.push({ label, options });
     if (label.startsWith("Pi Herdsman")) {
       rootSelections++;
-      return rootSelections === 1 ? "Agent activity" : undefined;
+      return rootSelections === 1 ? "Agents & definitions" : undefined;
     }
-    assert.equal(label, "Agent activity");
+    assert.equal(label, "Agents & definitions");
     assert.ok(options.includes("Running agents  1 unknown · 1 lost"));
     agentsSelections++;
     return agentsSelections === 1
@@ -20473,8 +20494,8 @@ test("Running excludes lost and unknown durable generations", async () => {
       prompts.map(({ label }) => label),
       [
         `Pi Herdsman · v${packageMetadata.version}`,
-        "Agent activity",
-        "Agent activity",
+        "Agents & definitions",
+        "Agents & definitions",
         `Pi Herdsman · v${packageMetadata.version}`,
       ],
     );
@@ -20585,9 +20606,9 @@ test("Running warns when the selected agent is replaced before focus", async () 
     if (prompt.startsWith("Pi Herdsman")) {
       if (!rootSelection) return undefined;
       rootSelection = false;
-      return "Agent activity";
+      return "Agents & definitions";
     }
-    if (prompt === "Agent activity") {
+    if (prompt === "Agents & definitions") {
       if (!agentsSelection) return undefined;
       agentsSelection = false;
       return options.find((option) => option.startsWith("Running"));
@@ -20792,7 +20813,7 @@ test("Running selects duplicate TUI labels by stable value and revalidates ident
       const lines = (): string[] => component.render(200);
       const call = customCall++;
       if (call === 0 || call === 3) {
-        selectTuiItem(component, "Agent activity");
+        selectTuiItem(component, "Agents & definitions");
         component.handleInput("\r");
         return;
       }

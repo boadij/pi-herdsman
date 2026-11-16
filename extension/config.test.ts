@@ -126,6 +126,42 @@ test("status widget rows validates, persists, and resets", () => {
   assert.equal(realFs.existsSync(configPath!), false);
 });
 
+test("reset skips absent keys but removes explicit default-valued overrides", () => {
+  for (const key of [
+    "statusWidgetMaxRows",
+    "maxAgentDepth",
+    "inlineAttachmentLimitBytes",
+    "mailboxPayloadLimitBytes",
+  ] as const) {
+    resetConfig();
+    updateConfig("contextRetirement", false);
+    const before: string = realFs.readFileSync(configPath!, "utf8");
+    const beforeStat: realFs.BigIntStats = realFs.statSync(configPath!, {
+      bigint: true,
+    });
+    updateConfig(key, undefined);
+    const afterStat: realFs.BigIntStats = realFs.statSync(configPath!, {
+      bigint: true,
+    });
+    assert.equal(realFs.readFileSync(configPath!, "utf8"), before, key);
+    assert.equal(
+      afterStat.ino,
+      beforeStat.ino,
+      `${key} must not replace the config file`,
+    );
+    updateConfig(key, DEFAULT_CONFIG[key]);
+    assert.equal(
+      JSON.parse(realFs.readFileSync(configPath!, "utf8"))[key],
+      DEFAULT_CONFIG[key],
+    );
+    updateConfig(key, undefined);
+    const stored = JSON.parse(realFs.readFileSync(configPath!, "utf8"));
+    assert.equal(Object.hasOwn(stored, key), false, key);
+    assert.equal(stored.contextRetirement, false);
+    assert.equal(readConfig()[key], DEFAULT_CONFIG[key]);
+  }
+});
+
 test("missing config resolves to defaults without creating storage", () => {
   resetConfig();
   assert.deepEqual(readConfig(), DEFAULT_CONFIG);

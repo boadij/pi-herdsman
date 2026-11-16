@@ -322,6 +322,7 @@ export function setManagerMergeOverride(
 export function setWorktreeRemovalPreapproved(
   repoKey: string,
   enabled: boolean,
+  expected?: boolean,
 ): void {
   if (!repoKey || typeof enabled !== "boolean")
     throw new Error(
@@ -334,6 +335,8 @@ export function setWorktreeRemovalPreapproved(
   try {
     const current = readRawConfig();
     const repos = new Set(current.worktreeRemovalPreapprovedRepos ?? []);
+    if (expected !== undefined && repos.has(repoKey) !== expected)
+      throw new Error("Removal policy changed before saving the setting");
     if (enabled) repos.add(repoKey);
     else repos.delete(repoKey);
     if (repos.size) current.worktreeRemovalPreapprovedRepos = [...repos];
@@ -581,6 +584,7 @@ export function updateConfig<K extends ConfigKey>(
       throw new Error(
         "Global Manager integration policy changed; reopen the selector.",
       );
+    if (value === undefined && !Object.hasOwn(current, key)) return;
     if (value !== undefined) {
       if (key === "statusWidgetMaxRows" && !validStatusWidgetMaxRows(value))
         throw new Error("Invalid Pi Herdsman config field statusWidgetMaxRows");

@@ -1376,8 +1376,8 @@ async function assertManagedLeadRole(
     return undefined;
   };
   await pi.commandOptions.get("herdsman")!.handler("", context);
-  assert.equal(menus[0]?.options[2]?.includes("active"), false);
-  assert.equal(menus[0]?.options[6]?.includes("Chief active"), false);
+  assert.equal(menus[0]?.options[2], "Project management  Inactive");
+  assert.equal(menus[0]?.options[3], "Chief coordination  Inactive");
   assert.equal(menus[1]?.title, "Managed orchestration");
   context.mode = "tui";
 }
@@ -4463,10 +4463,15 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
 
   const rpcRunningStatus = async () => {
     context.mode = "rpc";
-    const selections = ["Agent activity", "Running agents"];
+    const selections = ["Agents & definitions"];
     context.ui.select = async (_title, options) => {
       const selection = selections.shift();
-      return selection && options.includes(selection) ? selection : undefined;
+      return selection
+        ? options.find(
+            (option) =>
+              option === selection || option.startsWith(`${selection}  `),
+          )
+        : undefined;
     };
     await pi.commandOptions.get("herdsman")!.handler("", context);
     context.mode = "tui";

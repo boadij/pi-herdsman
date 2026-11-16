@@ -423,6 +423,7 @@ type LeadRuntimeOptions = {
     | "leadRuntime"
     | "currentManager"
     | "liveLead"
+    | "listAgents"
     | "liveAgent"
     | "managerLease"
     | "pi"
@@ -3633,6 +3634,7 @@ export function registerLeadRuntime(
       options.roleTransitionHost.removeProjectMessagesForAssignment,
     appendDurableError: options.herdRunServices.appendDurableError,
     writeProjectAssignment,
+    listAgents: options.identityHost.listAgents,
     liveAgent,
     liveLead,
     currentManager: (
@@ -3748,8 +3750,12 @@ export function registerLeadRuntime(
       projectRuntime.persistStopClosures(ctx, closures),
     getRemovalPreauthorization: (ctx: ExtensionContext) =>
       projectRuntime.getRemovalPreauthorization(ctx),
-    setRemovalPreauthorization: (enabled: boolean, ctx: ExtensionContext) =>
-      projectRuntime.setRemovalPreauthorization(enabled, ctx),
+    setRemovalPreauthorization: (
+      ...args: Parameters<typeof projectRuntime.setRemovalPreauthorization>
+    ) => projectRuntime.setRemovalPreauthorization(...args),
+    setRepositoryMergeOverride: (
+      ...args: Parameters<typeof projectRuntime.setRepositoryMergeOverride>
+    ) => projectRuntime.setRepositoryMergeOverride(...args),
     collectOwnedSessionUsage: (ctx) => {
       const managerActive =
         activeLeadRole(leadRuntime) === "manager" && !leadRuntime.roleSuspended;

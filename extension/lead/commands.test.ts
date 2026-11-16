@@ -13,18 +13,6 @@ import {
 import { fakeContext, WORKSPACE } from "../support.ts";
 import { createLeadCommandRuntime } from "./commands.ts";
 
-const menuManager = {
-  version: 1 as const,
-  leaseId: "lease",
-  claim: { pid: 1, id: "claim" },
-  piSessionId: "session",
-  paneId: "pane",
-  tabId: "tab",
-  workspaceId: "workspace",
-  repoKey: "/verified/repository",
-  createdAt: 1,
-};
-
 test("status widget rows Settings validates choices and reports persistence errors", async () => {
   for (const scenario of [
     { choices: ["5"], inputs: [], expected: [5], errors: 0 },
@@ -59,7 +47,7 @@ test("status widget rows Settings validates choices and reports persistence erro
       placementSettings: async () => ({ effective: "tab" }),
       validStatusWidgetMaxRows,
       selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
-        if (title === "Settings") {
+        if (title === "Interface") {
           assert.equal(
             items.find((item) => item.value === "status-widget-rows")
               .description,
@@ -75,13 +63,16 @@ test("status widget rows Settings validates choices and reports persistence erro
         updates.push(value);
       },
     } as any);
-    await runtime.openSettingsMenu({
-      isProjectTrusted: () => false,
-      ui: {
-        notify: (message: string, level?: string) =>
-          notices.push([message, level]),
-      },
-    } as any);
+    await runtime.openSettingsCategory(
+      {
+        isProjectTrusted: () => false,
+        ui: {
+          notify: (message: string, level?: string) =>
+            notices.push([message, level]),
+        },
+      } as any,
+      "interface",
+    );
     assert.deepEqual(updates, scenario.expected);
     assert.equal(
       notices.filter(([, level]) => level === "error").length,
@@ -98,7 +89,7 @@ test("status widget rows Settings validates choices and reports persistence erro
 test("max Agent depth Settings validates choices and reports persistence errors", async () => {
   for (const scenario of [
     { choices: ["4"], inputs: [], expected: [4], errors: 0 },
-    { choices: ["default"], inputs: [], expected: [2], errors: 0 },
+    { choices: ["default"], inputs: [], expected: [], errors: 0 },
     {
       choices: ["custom", "custom", "custom", "custom"],
       inputs: ["0", "-1", "1.5", " 6 "],
@@ -130,7 +121,7 @@ test("max Agent depth Settings validates choices and reports persistence errors"
       placementSettings: async () => ({ effective: "tab" }),
       validMaxAgentDepth,
       selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
-        if (title === "Settings") {
+        if (title === "Sessions & agents") {
           assert.equal(
             items.find((item) => item.value === "max-agent-depth").description,
             "2",
@@ -146,13 +137,16 @@ test("max Agent depth Settings validates choices and reports persistence errors"
         updates.push(value);
       },
     } as any);
-    await runtime.openSettingsMenu({
-      isProjectTrusted: () => false,
-      ui: {
-        notify: (message: string, level?: string) =>
-          notices.push([message, level]),
-      },
-    } as any);
+    await runtime.openSettingsCategory(
+      {
+        isProjectTrusted: () => false,
+        ui: {
+          notify: (message: string, level?: string) =>
+            notices.push([message, level]),
+        },
+      } as any,
+      "sessions",
+    );
     assert.deepEqual(updates, scenario.expected);
     assert.equal(
       notices.filter(([, level]) => level === "error").length,
@@ -185,14 +179,260 @@ test("Herdsman root renders when status and definition metadata fail", async () 
   } as any);
   assert.deepEqual(rootLabels, [
     "Session mode",
-    "Agent activity",
-    "Agent & role definitions",
+    "Agents & definitions",
     "Project management",
-    "Usage & costs",
+    "Chief coordination",
     "Settings",
-    "Advanced…",
+    "Usage & costs",
   ]);
   assert.deepEqual(notices, []);
+});
+
+test("Settings categories and Agents & definitions retain their selections", async () => {
+  const calls: { title: string; labels: string[]; selected?: string }[] = [];
+  const answers = ["manager", undefined, "interface", undefined, undefined];
+  const runtime = createLeadCommandRuntime({
+    readConfig: () => readConfig(),
+    placementSettings: async () => ({ effective: "tab" }),
+    selectMenu: async (
+      _ctx: unknown,
+      title: string,
+      items: any[],
+      selected?: string,
+    ) => {
+      calls.push({ title, labels: items.map((item) => item.label), selected });
+      return answers.shift();
+    },
+  } as any);
+  await runtime.openSettingsMenu({ isProjectTrusted: () => false } as any);
+  assert.deepEqual(calls[0]?.labels, [
+    "Sessions & agents",
+    "Manager & repositories",
+    "Interface",
+  ]);
+  assert.equal(calls[2]?.selected, "manager");
+  assert.equal(calls[4]?.selected, "interface");
+
+  const agentCalls: string[][] = [];
+  const agents = createLeadCommandRuntime({
+    controller: { sessionSignal: () => undefined },
+    loadStatusSnapshot: async () => ({ agents: [] }),
+    formatStatusCounts: () => "0",
+    selectMenu: async (_ctx: unknown, _title: string, items: any[]) => {
+      agentCalls.push(items.map((item) => item.label));
+      return undefined;
+    },
+  } as any);
+  await agents.openAgentsMenu({} as any);
+  assert.deepEqual(agentCalls[0], [
+    "Running agents",
+    "Agent definitions",
+    "Coordinator profiles",
+    "Stop all agents…",
+  ]);
+});
+
+test("Agent definitions remain available when running status fails", async () => {
+  const seen: { title: string; items: any[] }[] = [];
+  let loadedDefinitions = 0;
+  const runtime = createLeadCommandRuntime({
+    controller: { sessionSignal: () => undefined },
+    loadStatusSnapshot: async () => {
+      throw new Error("status failed");
+    },
+    contextAgentDefinitions: async () => {
+      loadedDefinitions++;
+      return { definitions: [], roleDefinitions: [], projectTrusted: false };
+    },
+    selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
+      seen.push({ title, items });
+      return seen.length === 1 ? "agent-definitions" : undefined;
+    },
+  } as any);
+  await runtime.openAgentsMenu({
+    isProjectTrusted: () => false,
+    ui: { notify: () => undefined },
+  } as any);
+  assert.equal(seen[0]?.items[0]?.description, "Unavailable");
+  assert.equal(loadedDefinitions, 1);
+});
+
+test("Role menus retain selection and refresh active state after operations", async () => {
+  let active = true;
+  const selections: (string | undefined)[] = [];
+  const labels: string[][] = [];
+  const answers = ["refresh", "leave", undefined];
+  const runtime = createLeadCommandRuntime({
+    roleActive: () => active,
+    transitionRole: async (_role: string, leave: boolean) => {
+      if (leave) active = false;
+      return "ok";
+    },
+    selectMenu: async (
+      _ctx: unknown,
+      _title: string,
+      items: any[],
+      selected: string | undefined,
+    ) => {
+      selections.push(selected);
+      labels.push(items.map((i) => i.value));
+      return answers.shift();
+    },
+  } as any);
+  await runtime.openRoleMenu("chief", {
+    ui: { notify: () => undefined },
+  } as any);
+  assert.deepEqual(selections, [undefined, "refresh", "leave"]);
+  assert.deepEqual(labels[2], ["start"]);
+});
+
+test("Value menus identify current options in text and message row shows effective limits", async () => {
+  const menus: { title: string; items: any[]; selected?: string }[] = [];
+  const runtime = createLeadCommandRuntime({
+    readConfig: () => ({
+      ...readConfig(),
+      defaultLeadExecution: "orchestrate",
+      managerGitBootstrapWithoutConfirmation: false,
+      maxAgentDepth: 7,
+      statusWidgetMaxRows: 5,
+    }),
+    messageLimits: async () => ({
+      inline: { bytes: 4096 },
+      mailbox: { bytes: 16384 },
+    }),
+    formatMessageLimit: (n: number) => `${n / 1024} KiB`,
+    placementSettings: async () => ({ effective: "tab" }),
+    getRemovalPreauthorization: async () => ({
+      repoKey: "/repo",
+      enabled: false,
+      identity: {},
+    }),
+    selectMenu: async (
+      _ctx: unknown,
+      title: string,
+      items: any[],
+      selected?: string,
+    ) => {
+      menus.push({ title, items, selected });
+      return undefined;
+    },
+  } as any);
+  const ctx = {
+    isProjectTrusted: () => false,
+    ui: { notify: () => undefined },
+  } as any;
+  await runtime.openSettingsCategory(ctx, "sessions");
+  assert.equal(
+    menus[0]?.items.find((i) => i.value === "message-limits").description,
+    "Inline 4 KiB · mailbox 16 KiB",
+  );
+  await runtime.openRemovalSetting(ctx);
+  const removal = menus.at(-1)!;
+  assert.equal(removal.selected, "required");
+  assert.equal(
+    removal.items.find((i) => i.value === "required").description,
+    "current",
+  );
+});
+
+test("Current setting choices remain visible after cursor movement and in non-TUI labels", async () => {
+  for (const scenario of [
+    {
+      action: "project",
+      answers: ["project", undefined, undefined],
+      title: "Project Manager auto-start",
+      current: "inherit",
+    },
+    {
+      action: "merge",
+      answers: ["repository", undefined, undefined],
+      title: "Local branch integration · /repo",
+      current: "inherit",
+    },
+    {
+      action: "merge",
+      answers: ["global", undefined, undefined],
+      title: "Global Manager local merge",
+      current: "off",
+    },
+    {
+      action: "sessions",
+      answers: ["default-lead-execution", undefined, undefined],
+      title: "Default Lead execution",
+      current: "flexible",
+    },
+    {
+      action: "sessions",
+      answers: ["max-agent-depth", undefined, undefined],
+      title: "Max Agent depth",
+      current: "default",
+    },
+    {
+      action: "manager",
+      answers: ["manager-git-bootstrap-confirmation", undefined, undefined],
+      title: "Manager Git setup prompt",
+      current: "required",
+    },
+    {
+      action: "interface",
+      answers: ["status-widget-rows", undefined, undefined],
+      title: "Status widget rows",
+      current: "default",
+    },
+    {
+      action: "limits",
+      answers: ["inlineAttachmentLimitBytes", undefined, undefined],
+      title: "Limit",
+      current: "4096",
+    },
+  ]) {
+    const answers = [...scenario.answers];
+    let found = false;
+    const runtime = createLeadCommandRuntime({
+      readConfig,
+      readProjectOverrides: () => ({}),
+      placementSettings: async () => ({ effective: "tab" }),
+      messageLimits: async () => ({
+        inline: { bytes: 4096 },
+        mailbox: { bytes: 16384 },
+      }),
+      formatMessageLimit: (bytes: number) => String(bytes),
+      getRemovalPreauthorization: async () => ({
+        repoKey: "/repo",
+        enabled: false,
+        identity: {},
+      }),
+      selectMenu: async (
+        _ctx: unknown,
+        title: string,
+        items: any[],
+        selected: string,
+      ) => {
+        if (title === scenario.title) {
+          found = true;
+          assert.equal(selected, scenario.current);
+          const current = items.find((item) => item.value === scenario.current);
+          // The non-TUI selector concatenates label and description, independent of cursor.
+          assert.match(
+            `${current.label}  ${current.description ?? ""}`,
+            /current/,
+          );
+        }
+        return answers.shift();
+      },
+    } as any);
+    const ctx = {
+      isProjectTrusted: () => true,
+      ui: { notify: () => undefined },
+    } as any;
+    if (scenario.action === "project")
+      await runtime.openProjectSetting(ctx, "autoActivateManager");
+    else if (scenario.action === "merge") await runtime.openMergeSetting(ctx);
+    else if (scenario.action === "limits")
+      await runtime.openMessageLimitsMenu(ctx);
+    else await runtime.openSettingsCategory(ctx, scenario.action);
+    assert.equal(found, true, scenario.title);
+  }
 });
 
 test("Herdsman role menus dispatch shared role commands", async () => {
@@ -235,6 +475,7 @@ test("Herdsman role menus dispatch shared role commands", async () => {
       const menus: { title: string; labels: string[] }[] = [];
       const overviews: string[] = [];
       let rootSelection = true;
+      let roleSelection = true;
       const host = {
         version: packageMetadata.version,
         leadExecutionPresentation: () => ({
@@ -255,9 +496,10 @@ test("Herdsman role menus dispatch shared role commands", async () => {
           if (title.startsWith("Pi Herdsman")) {
             if (!rootSelection) return undefined;
             rootSelection = false;
-            return role === "manager" ? "manager" : "advanced";
+            return role === "manager" ? "manager" : "chief";
           }
-          if (title === "Advanced") return "chief";
+          if (!roleSelection) return undefined;
+          roleSelection = false;
           return scenario.action;
         },
       } as any;
@@ -360,113 +602,134 @@ test("role overview bypasses the idle-gated refresh and invalid commands do noth
   }
 });
 
-test("Project override menu edits Off then Inherit without changing global Manager auto-start", async () => {
-  const menus: { title: string; selected?: string }[] = [];
-  const values: string[] = [];
+test("Settings categories expose only canonical entries and unavailable repository state", async () => {
+  const seen: Record<string, any[]> = {};
+  const runtime = createLeadCommandRuntime({
+    readConfig,
+    placementSettings: async () => ({ effective: "tab" }),
+    getRemovalPreauthorization: async () => {
+      throw new Error("No verified repository");
+    },
+    selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
+      seen[title] = items;
+      return undefined;
+    },
+  } as any);
+  const ctx = { isProjectTrusted: () => false } as any;
+  for (const category of ["sessions", "manager", "interface"])
+    await runtime.openSettingsCategory(ctx, category);
+  assert.deepEqual(
+    seen["Sessions & agents"]!.map((i) => i.value),
+    [
+      "default-lead-execution",
+      "context-retirement",
+      "max-agent-depth",
+      "message-limits",
+    ],
+  );
+  assert.deepEqual(
+    seen["Manager & repositories"]!.map((i) => i.value),
+    [
+      "auto-activate-manager",
+      "manager-git-bootstrap-confirmation",
+      "manager-merge",
+      "removal-confirmation",
+    ],
+  );
+  assert.deepEqual(
+    seen.Interface!.map((i) => i.value),
+    ["agent-layout", "status-widget-rows"],
+  );
+  assert.equal(
+    seen["Manager & repositories"]!.find(
+      (i) => i.value === "removal-confirmation",
+    ).description,
+    "Repository unavailable",
+  );
+});
+
+test("Project setting combines scopes and skips unchanged values", async () => {
+  const config = { ...readConfig(), autoActivateManager: true };
   const overrides: { autoActivateManager?: boolean } = {};
-  const global = { ...readConfig(), autoActivateManager: true };
+  const writes: unknown[] = [];
   const answers = [
-    "project-overrides",
-    "autoActivateManager",
+    "project",
     "off",
-    undefined,
-    "project-overrides",
-    "autoActivateManager",
+    "project",
+    "off",
+    "project",
     "inherit",
     undefined,
-    undefined,
   ];
+  const selections: (string | undefined)[] = [];
   const runtime = createLeadCommandRuntime({
-    readConfig: () => global,
-    placementSettings: async () => ({ effective: "tab" }),
+    readConfig: () => config,
     readProjectOverrides: () => ({ ...overrides }),
     updateProjectOverride: (
       _ctx: unknown,
       _key: string,
       value: boolean | undefined,
     ) => {
+      writes.push(value);
       if (value === undefined) delete overrides.autoActivateManager;
       else overrides.autoActivateManager = value;
-      values.push(value === undefined ? "inherit" : value ? "on" : "off");
     },
-    selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
-      const answer = answers.shift();
-      menus.push({
-        title,
-        selected: items.find(({ value }) => value === answer)?.value,
-      });
-      return answer;
-    },
-  } as any);
-  await runtime.openSettingsMenu({
-    isProjectTrusted: () => true,
-    ui: { notify: () => undefined },
-  } as any);
-  assert.deepEqual(values, ["off", "inherit"]);
-  assert.equal(Object.hasOwn(overrides, "autoActivateManager"), false);
-  assert.equal(global.autoActivateManager, true);
-  assert.deepEqual(
-    menus.map(({ title }) => title),
-    [
-      "Settings",
-      "Project overrides",
-      "Manager auto-start",
-      "Project overrides",
-      "Settings",
-      "Project overrides",
-      "Manager auto-start",
-      "Project overrides",
-      "Settings",
-    ],
-  );
-});
-
-test("Repository permissions exposes verified removal policy independently of project trust and storage", async () => {
-  const menuCalls: { title: string; items: any[] }[] = [];
-  const notices: string[] = [];
-  let stored: boolean | undefined;
-  const answers = ["removal-confirmation", "skip", undefined];
-  const runtime = createLeadCommandRuntime({
-    readConfig,
-    readProjectOverrides: () => {
-      throw new Error("untrusted project settings");
-    },
-    getRemovalPreauthorization: async () => ({
-      repoKey: "/verified/repository",
-      manager: menuManager,
-      enabled: false,
-    }),
-    setRemovalPreauthorization: async (
-      enabled: boolean,
+    selectMenu: async (
       _ctx: unknown,
-      expected: unknown,
+      _title: string,
+      _items: unknown,
+      selected: string,
     ) => {
-      assert.equal(expected, menuManager);
-      stored = enabled;
-      return true;
-    },
-    selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
-      menuCalls.push({ title, items });
+      selections.push(selected);
       return answers.shift();
     },
   } as any);
-  await runtime.openRepositoryPermissionsMenu({
-    isProjectTrusted: () => false,
-    ui: { notify: (message: string) => notices.push(message) },
+  await runtime.openProjectSetting(
+    { isProjectTrusted: () => true, ui: { notify: () => undefined } } as any,
+    "autoActivateManager",
+  );
+  assert.deepEqual(writes, [false, undefined]);
+  assert.equal(selections[2], "project");
+  assert.equal(config.autoActivateManager, true);
+});
+
+test("Removal selector passes verified identity and avoids unchanged writes", async () => {
+  const identity = { repository: "verified" };
+  let writes = 0;
+  let choice = "required";
+  const runtime = createLeadCommandRuntime({
+    getRemovalPreauthorization: async () => ({
+      repoKey: "/verified/repository",
+      identity,
+      enabled: false,
+    }),
+    setRemovalPreauthorization: async (
+      value: boolean,
+      _ctx: unknown,
+      expected: unknown,
+    ) => {
+      assert.equal(value, true);
+      assert.equal(expected, identity);
+      writes++;
+      return true;
+    },
+    selectMenu: async (
+      _ctx: unknown,
+      title: string,
+      _items: unknown,
+      selected: string,
+    ) => {
+      assert.match(title, /\/verified\/repository/);
+      assert.equal(selected, "required");
+      return choice;
+    },
   } as any);
-  assert.equal(
-    menuCalls[0]?.title,
-    "Repository permissions · /verified/repository",
-  );
-  assert.deepEqual(
-    menuCalls[0]?.items.map(({ value }) => value),
-    ["removal-confirmation", "merge-permission"],
-  );
-  assert.equal(menuCalls[1]?.title, "Worktree removal approval");
-  assert.equal(stored, true);
-  assert.deepEqual(notices, [
-    "Worktree removal approval skipped for /verified/repository.",
-  ]);
+  const ctx = { ui: { notify: () => undefined } } as any;
+  await runtime.openRemovalSetting(ctx);
+  assert.equal(writes, 0);
+  choice = "skip";
+  await runtime.openRemovalSetting(ctx);
+  assert.equal(writes, 1);
 });
 
 test("Git setup selector confirms new skip and revokes without confirmation", async () => {
@@ -488,227 +751,186 @@ test("Git setup selector confirms new skip and revokes without confirmation", as
         written = value;
       },
       selectMenu: async (_ctx: unknown, title: string) =>
-        title === "Settings"
+        title === "Manager & repositories"
           ? selection++
             ? undefined
             : "manager-git-bootstrap-confirmation"
           : choice,
     } as any);
-    await runtime.openSettingsMenu({
-      isProjectTrusted: () => false,
-      ui: {
-        confirm: async () => {
-          confirmations++;
-          return accepted;
+    await runtime.openSettingsCategory(
+      {
+        isProjectTrusted: () => false,
+        ui: {
+          confirm: async () => {
+            confirmations++;
+            return accepted;
+          },
+          notify: () => undefined,
         },
-        notify: () => undefined,
-      },
-    } as any);
+      } as any,
+      "manager",
+    );
     assert.equal(confirmations, confirms);
     assert.equal(written, expected);
   }
 });
 
-test("global integration refuses policy changes during selection or confirmation", async () => {
-  for (const changeDuring of ["selection", "confirmation"] as const) {
-    let current: false | true | "divergent" =
-      changeDuring === "selection" ? true : false;
-    let selections = 0;
-    let confirmations = 0;
+test("Global integration confirms increases and rejects stale changes", async () => {
+  for (const during of ["selection", "confirmation"] as const) {
+    let current: false | true | "divergent" = false;
+    let scopeCalls = 0;
+    let confirms = 0;
     const writes: unknown[] = [];
     const notices: string[] = [];
     const runtime = createLeadCommandRuntime({
       readConfig: () => ({ ...readConfig(), managerMergeEnabled: current }),
-      placementSettings: async () => ({ effective: "tab" }),
-      updateConfig: (_key: string, value: unknown) => writes.push(value),
-      selectMenu: async (_ctx: unknown, title: string) => {
-        if (title === "Settings")
-          return selections++ === 0 ? "manager-merge" : undefined;
-        if (changeDuring === "selection") current = false;
-        return "fast-forward";
+      getRemovalPreauthorization: async () => {
+        throw new Error("unavailable");
       },
+      selectMenu: async (_ctx: unknown, title: string) => {
+        if (title === "Local branch integration")
+          return scopeCalls++ ? undefined : "global";
+        if (during === "selection") current = true;
+        return "divergent";
+      },
+      updateConfig: (_key: string, value: unknown) => writes.push(value),
     } as any);
-    await runtime.openSettingsMenu({
-      isProjectTrusted: () => false,
+    await runtime.openMergeSetting({
       ui: {
-        notify: (message: string) => notices.push(message),
+        notify: (m: string) => notices.push(m),
         confirm: async () => {
-          confirmations++;
-          current = "divergent";
+          confirms++;
+          if (during === "confirmation") current = true;
           return true;
         },
       },
     } as any);
+    assert.equal(confirms, 1);
     assert.deepEqual(writes, []);
-    assert.equal(confirmations, changeDuring === "confirmation" ? 1 : 0);
-    assert.match(notices[0]!, /policy changed; reopen/);
+    assert.match(notices[0]!, /policy changed/);
   }
 });
 
-test("global integration handles a change at the locked update", async () => {
-  let selections = 0;
-  let policy: false | true = true;
+test("Global integration preserves locked compare-and-set and no-op", async () => {
+  let scopeCalls = 0;
+  const writes: unknown[] = [];
   const notices: string[] = [];
   const runtime = createLeadCommandRuntime({
-    readConfig: () => ({ ...readConfig(), managerMergeEnabled: policy }),
-    placementSettings: async () => ({ effective: "tab" }),
+    readConfig: () => ({ ...readConfig(), managerMergeEnabled: true }),
+    getRemovalPreauthorization: async () => {
+      throw new Error("unavailable");
+    },
     selectMenu: async (_ctx: unknown, title: string) =>
-      title === "Settings"
-        ? selections++ === 0
-          ? "manager-merge"
+      title === "Local branch integration"
+        ? scopeCalls++ < 2
+          ? "global"
           : undefined
-        : "fast-forward",
-    updateConfig: (_key: string, _value: unknown, expected: unknown) => {
-      assert.equal(expected, true);
-      policy = false;
-      throw new Error(
-        "Global Manager integration policy changed; reopen the selector.",
-      );
+        : scopeCalls === 1
+          ? "fast-forward"
+          : "off",
+    updateConfig: (_key: string, value: unknown, expected: unknown) => {
+      writes.push([value, expected]);
+      throw new Error("policy changed; reopen");
     },
   } as any);
-  await runtime.openSettingsMenu({
-    isProjectTrusted: () => false,
-    ui: { notify: (message: string) => notices.push(message) },
+  await runtime.openMergeSetting({
+    ui: { notify: (m: string) => notices.push(m) },
   } as any);
-  assert.equal(policy, false);
-  assert.match(notices[0]!, /policy changed; reopen/);
+  assert.deepEqual(writes, [[false, true]]);
+  assert.match(notices[0]!, /policy changed/);
 });
 
-test("repository integration inheritance and explicit grants require confirmation", async () => {
-  for (const scenario of [
-    { override: false as false | undefined, choice: "inherit" },
-    { override: undefined, choice: "divergent" },
-  ]) {
+test("Repository integration delegates inheritance and explicit grants to guarded setter", async () => {
+  for (const [override, choice] of [
+    [false, "inherit"],
+    [undefined, "divergent"],
+  ] as const) {
+    const identity = { verified: true };
+    const writes: unknown[] = [];
     const config = {
       ...readConfig(),
       managerMergeEnabled: "divergent" as const,
       managerMergeOverrides:
-        scenario.override === undefined
-          ? {}
-          : { "/verified/repository": scenario.override },
+        override === undefined ? {} : { "/repo": override },
     };
-    const answers = ["merge-permission", scenario.choice, undefined];
-    let confirmations = 0;
+    const answers = ["repository", choice, undefined];
     const runtime = createLeadCommandRuntime({
       readConfig: () => config,
       getRemovalPreauthorization: async () => ({
-        repoKey: "/verified/repository",
-        manager: menuManager,
+        repoKey: "/repo",
         enabled: false,
+        identity,
       }),
       selectMenu: async () => answers.shift(),
-    } as any);
-    await runtime.openRepositoryPermissionsMenu({
-      ui: {
-        notify: () => undefined,
-        confirm: async () => {
-          confirmations++;
-          return false;
-        },
+      setRepositoryMergeOverride: async (...args: unknown[]) => {
+        writes.push(args);
+        return false;
       },
     } as any);
-    assert.equal(confirmations, 1);
+    const ctx = { ui: { notify: () => undefined } } as any;
+    await runtime.openMergeSetting(ctx);
+    assert.deepEqual(writes, [
+      [
+        choice === "inherit" ? undefined : "divergent",
+        ctx,
+        identity,
+        { global: "divergent", override },
+      ],
+    ]);
   }
 });
 
-test("repository merge refuses stale global, override, and Manager identity", async () => {
-  for (const change of ["global", "override", "manager"] as const) {
-    const config = {
-      ...readConfig(),
-      managerMergeEnabled: "divergent" as false | true | "divergent",
-      managerMergeOverrides: {
-        "/verified/repository": false as false | true | "divergent",
-      },
-    };
-    const answers = ["merge-permission", "inherit"];
-    const notices: string[] = [];
-    let manager = menuManager;
-    const runtime = createLeadCommandRuntime({
-      readConfig: () => config,
-      getRemovalPreauthorization: async () => ({
-        repoKey: "/verified/repository",
-        manager,
-        enabled: false,
-      }),
-      selectMenu: async () => answers.shift(),
-    } as any);
-    await runtime.openRepositoryPermissionsMenu({
-      ui: {
-        notify: (message: string) => notices.push(message),
-        confirm: async () => {
-          if (change === "global") config.managerMergeEnabled = true;
-          if (change === "override")
-            config.managerMergeOverrides["/verified/repository"] = true;
-          if (change === "manager")
-            manager = { ...menuManager, leaseId: "replacement" };
-          return true;
-        },
-      },
-    } as any);
-    assert.match(notices[0]!, /changed; reopen/);
-  }
-});
-
-test("Settings isolates malformed project settings and untrusted projects inherit global values", async () => {
-  const menus: { label: string; options: string[] }[] = [];
+test("Repository merge errors are reported and unchanged overrides are not written", async () => {
+  const answers = ["repository", "off", "repository", "inherit", undefined];
   const notices: string[] = [];
-  const updates: boolean[] = [];
-  let trusted = true;
-  let reads = 0;
-  let settingSelection = 0;
+  let writes = 0;
   const runtime = createLeadCommandRuntime({
-    readConfig: () => ({ ...readConfig(), autoActivateManager: true }),
-    placementSettings: async () => ({ effective: "tab" }),
-    readProjectOverrides: () => {
-      reads++;
-      throw new Error("malformed project settings");
-    },
-    updateConfig: (_key: string, value: boolean) => updates.push(value),
-    selectMenu: async (_ctx: unknown, label: string, items: any[]) => {
-      menus.push({
-        label,
-        options: items.map(({ label, description }) =>
-          description ? `${label}  ${description}` : label,
-        ),
-      });
-      if (label === "Settings")
-        return settingSelection++ === 0
-          ? trusted
-            ? "auto-activate-manager"
-            : "project-overrides"
-          : undefined;
-      return undefined;
+    readConfig: () => ({
+      ...readConfig(),
+      managerMergeEnabled: true,
+      managerMergeOverrides: { "/repo": false },
+    }),
+    getRemovalPreauthorization: async () => ({
+      repoKey: "/repo",
+      enabled: false,
+      identity: {},
+    }),
+    selectMenu: async () => answers.shift(),
+    setRepositoryMergeOverride: async () => {
+      writes++;
+      throw new Error("Repository or session changed; reopen the selector");
     },
   } as any);
-  const context = {
-    isProjectTrusted: () => trusted,
+  await runtime.openMergeSetting({
     ui: { notify: (message: string) => notices.push(message) },
-  } as any;
-  await runtime.openSettingsMenu(context);
-  assert.match(
-    menus[0]?.options[2] ?? "",
-    /Global on · Project value unavailable/u,
-  );
-  assert.deepEqual(updates, [false], "global settings remain editable");
-  assert.equal(
-    reads,
-    2,
-    "the trusted settings menu reloads its project snapshot after edits",
-  );
+  } as any);
+  assert.equal(writes, 1);
+  assert.match(notices[0]!, /changed; reopen/);
+});
 
-  trusted = false;
-  settingSelection = 0;
-  menus.length = 0;
-  await runtime.openSettingsMenu(context);
-  assert.match(
-    menus[0]?.options[2] ?? "",
-    /Effective on \(global; untrusted project\)/u,
-  );
-  assert.equal(reads, 2, "untrusted projects do not read project settings");
-  assert.deepEqual(notices, [
-    "Global Manager auto-start: off",
-    "Project overrides are unavailable because this project is not trusted.",
-  ]);
+test("Invalid and untrusted project settings leave global editing available", async () => {
+  for (const trusted of [true, false]) {
+    const answers = ["project", "global", "off", undefined];
+    const notices: string[] = [];
+    const writes: unknown[] = [];
+    const runtime = createLeadCommandRuntime({
+      readConfig: () => ({ ...readConfig(), autoActivateManager: true }),
+      readProjectOverrides: () => {
+        throw new Error("malformed");
+      },
+      updateConfig: (_key: string, value: unknown) => writes.push(value),
+      selectMenu: async () => answers.shift(),
+    } as any);
+    await runtime.openProjectSetting(
+      {
+        isProjectTrusted: () => trusted,
+        ui: { notify: (m: string) => notices.push(m) },
+      } as any,
+      "autoActivateManager",
+    );
+    assert.deepEqual(writes, [false]);
+    assert.match(notices[0]!, trusted ? /unavailable/ : /not trusted/);
+  }
 });
 
 test("Definitions retains the last selected Agent when returning to its list", async () => {

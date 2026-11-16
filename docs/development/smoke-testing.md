@@ -460,17 +460,18 @@ In a lead session with UI:
 
 ### `/herdsman` and `/agents`
 
-Verify both `/herdsman` and `/agents` open the same seven destinations
-`Session mode`, `Agent activity`, `Agent & role definitions`, `Project management`,
-`Usage & costs`, `Settings`, and `Advanced…`.
-Verify active role state is secondary metadata and selected-row contextual help
-updates in the TUI. `/herdsman → Agent activity` opens only `Running agents` and
-`Stop all agents…`, with the running count as secondary metadata. Verify
-`Settings → Agent pane layout` opens the placement selector. `Session mode` shows the current ordinary mode and opens the flexible /
-orchestrate selector; an assigned Lead shows managed with `managed-lead` help
-and no ordinary mode choices. `/lead` opens the same selector, while
-`/lead flexible` and `/lead orchestrate` select directly through that control.
-Verify Managed Leads cannot select ordinary modes or activate Manager/Chief.
+Verify both `/herdsman` and `/agents` open the same six destinations:
+`Session mode`, `Agents & definitions`, `Project management`, `Chief coordination`,
+`Settings`, and `Usage & costs`. Verify active role state is secondary metadata
+and selected-row contextual help updates in the TUI. `Agents & definitions`
+groups running agents, definitions, Coordinator profiles, and stop-all. Verify
+`Settings` has `Sessions & agents`, `Manager & repositories`, and `Interface`,
+and that `Interface → Agent pane layout` opens the placement selector. Session
+mode shows the current ordinary mode and opens the flexible / orchestrate
+selector; an assigned Lead shows managed with `managed-lead` help and no ordinary
+mode choices. `/lead` opens the same selector, while `/lead flexible` and `/lead
+orchestrate` select directly through that control. Verify Managed Leads cannot
+select ordinary modes or activate Manager/Chief.
 Using disposable project data only, fork and clone an assigned Lead and verify
 new exact ordinary session IDs, no inherited assignment/Agent ownership or
 role/profile policy, and unchanged source identity through tree navigation and
@@ -479,15 +480,16 @@ disposable checkout through confirmed Herdr removal; verify managed · retired
 and exact-owner recovery without fresh delegation. Exercise unavailable evidence
 and verify managed · unavailable denies fresh work. Native history copying does
 not create an independent checkout or reset process configuration. Record each
-interactive result explicitly; simulated smoke does not prove these checks. Settings contains Default Lead execution,
-Manager auto-start, Context retirement, and Message limits. Verify changing
+interactive result explicitly; simulated smoke does not prove these checks. Settings contains Default Lead mode,
+Manager auto-start, Context retirement, and Message size limits. Verify changing
 the default affects a future ordinary session without changing the current
 session.
 
-Navigate to Project management and Chief mode from the menus. Confirm their
+Navigate to Project management and Chief coordination from the menus. Confirm their
 Start, Overview, Refresh profile, and Leave actions use the existing `/manager` and `/chief`
-role behavior. With an active Manager, verify pending-removal review and repository
-permissions are available. Using disposable settings, check native grant
+role behavior. With an active Manager, verify pending-removal review is available. Before
+activating Manager, verify repository settings are available for a verified
+repository. Using disposable settings, check native grant
 confirmation and cancellation for removal and integration permissions, including
 inheritance; verify cancellation leaves policy unchanged.
 

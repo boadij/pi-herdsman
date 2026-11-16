@@ -50,7 +50,7 @@ an ordinary Git primary workspace.
 
 For a non-Git workspace, explicitly running `/manager` or choosing
 **Project management > Start Manager mode** asks you to confirm the exact
-directory by default. The global **Manager Git setup prompt** setting can skip that prompt for
+directory by default. The global **Git initialization prompt** setting can skip that prompt for
 explicit activation after confirmation. Initialization creates a
 local repository with an empty initial commit; existing files are not
 committed. Manager activation then uses its normal verification and eligibility
@@ -362,9 +362,10 @@ tool records a pending request and returns immediately; review it with
 reload and appears in native Pi status; it is intent, not deletion authority.
 The exact bare `/manager remove` opens review, while `/manager remove ` starts
 branch completion. Removal asks for typed `remove` unless this exact repository
-has been preauthorized by a human with `/manager removal-confirmation skip` or **Project management > Repository
-permissions**. A new grant requires native confirmation. Repository integration
-permissions are configured there separately and show their effective source.
+has been preauthorized by a human with `/manager removal-confirmation skip` or **Settings > Manager & repositories > Worktree removal approval**. A new grant requires native confirmation. Repository integration permissions are configured separately under **Settings >
+Manager & repositories > Local branch integration** and show their effective
+source. Both settings are available without activating Manager when repository
+identity is verified.
 Neither task completion, review, nor inactivity is approval. All paths validate
 the exact Manager assignment and linked checkout, refuse dirty or ambiguous
 targets, and use Herdr's non-forced worktree removal. A running assigned Lead

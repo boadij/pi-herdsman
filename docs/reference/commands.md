@@ -36,9 +36,10 @@ For the Herdsman commands above, replacing `/herdsman` with `/agents` is
 equivalent. The role commands are separate from these aliases.
 
 `/herdsman` opens the native Pi menu titled with the running Pi Herdsman package
-version. Its seven destinations are `Session mode`, `Agent activity`, `Agent & role definitions`, `Project management`,
-`Usage & costs`, `Settings`, and `Advanced…`. Active role state is secondary row
-metadata; the TUI updates contextual help for the selected row.
+version. Its six destinations are `Session mode`, `Agents & definitions`,
+`Project management`, `Chief coordination`, `Settings`, and `Usage & costs`.
+Active role state is secondary row metadata; the TUI updates contextual help for
+the selected row.
 
 In the TUI, every Herdsman selection menu supports fuzzy filtering. Type to
 narrow the current menu by label, visible setting value, or additional search
@@ -61,27 +62,30 @@ cannot activate Manager or Chief, including after retirement. Use native Pi
 separate Git checkout or fresh process configuration. In Manager or Chief mode, `/lead` changes the
 underlying ordinary Lead preference without replacing the active role tools.
 
-Selecting `Agent activity` opens `Running agents` and `Stop all agents…`; the
-running count appears in this submenu. The root does not depend on Agent status
-or definitions to render. `Agent & role definitions` contains `Agent definitions`
-and `Coordinator profiles`.
+Selecting `Agents & definitions` opens `Running agents`, `Agent definitions`,
+`Coordinator profiles`, and `Stop all agents…`. The root does not depend on
+Agent status or definitions to render.
 
-`Settings` contains `Default Lead execution`, `Manager auto-start`,
-`Manager Git setup prompt`, `Agent pane layout`, `Context retirement`,
-`Manager local merge`, `Status widget rows`, `Max Agent depth`,
-`Message limits`, and `Project overrides…`. The default Lead execution is
-`flexible` and applies only when a future ordinary Lead session has no persisted execution choice; changing
-it does not change the current session. Manager auto-start and context
-retirement show their effective values and identify project overrides, when
-present. Global controls edit global defaults only. `Project overrides…` lets a trusted
-project choose Inherit, On, or Off for Manager auto-start and Context retirement;
-it writes the existing `.pi/settings.json` `piHerdsman` settings. Invalid or
-untrusted project settings do not prevent global controls from being used. An
-active Manager can inspect and change repository permissions under `Project
-management` → `Repository permissions`, independently of project trust. The
-verified repository’s removal approval and local integration policies are stored
-in user-level Herdsman authorization, not project settings.
-`Message limits` edits the user-wide inline attachment and mailbox payload
+`Settings` groups controls under `Sessions & agents`, `Manager & repositories`,
+and `Interface`. These contain, respectively:
+
+- `Default Lead mode`, `Context retirement`, `Maximum delegation depth`, and
+  `Message size limits`;
+- `Manager auto-start`, `Git initialization prompt`, `Local branch integration`,
+  and `Worktree removal approval`;
+- `Agent pane layout` and `Status widget rows`.
+
+The default Lead mode applies only when a future ordinary Lead session has no
+persisted execution choice; changing it does not change the current session.
+Manager auto-start and context retirement offer global and trusted-project
+choices within each setting. Project inheritance removes the stored property in
+`.pi/settings.json`; invalid or untrusted project settings do not prevent global
+controls from being used. Local branch integration offers global and verified
+repository choices within the same setting. Repository permissions are stored
+in user-level Herdsman authorization, not project settings. They can be managed
+without an active Manager when the repository identity is verified; granting
+permission requires interactive confirmation.
+`Message size limits` edits the user-wide inline attachment and mailbox payload
 limits. It is available only to a lead Pi session with UI.
 Current values and presets show a rough token equivalent using four UTF-8
 bytes per token. The enforced limits are bytes, not tokens.
@@ -226,7 +230,7 @@ session's settings.
 lower-precedence value to become effective. It does not necessarily inherit
 the active session's setting.
 
-## `/herdsman` → Agent activity → Running agents
+## `/herdsman` → Agents & definitions → Running agents
 
 Select a live managed agent from the shared status projection to focus its pane.
 Pi Herdsman refreshes and verifies the exact label, pane, and session identity
@@ -263,9 +267,8 @@ independent failures.
 Use ordinary `stop_agent` for normal targeted model-driven control.
 
 `Project management` offers `Start Manager mode` when inactive, or `Project
-overview`, `Pending removal requests`, `Repository permissions`, `Refresh
-Manager profile`, and `Leave Manager mode` while active. `Advanced…` opens
-`Chief mode`, which offers the corresponding Chief actions. These menu actions
+overview`, `Pending removal requests`, `Refresh Manager profile`, and `Leave Manager
+mode` while active. `Chief coordination` offers the corresponding Chief actions. These menu actions
 use the same commands as `/manager` and `/chief`; they do not add role
 eligibility or authority rules.
 
@@ -281,7 +284,7 @@ holds the lease, activation fails and the
 caller remains an ordinary Lead. When an eligible `/manager` activation is
 requested in a non-Git workspace, `/manager` and **Start Manager mode** ask for
 confirmation naming the exact directory by default. The global Settings option
-**Manager Git setup prompt** is required by default; selecting Skip requires
+**Git initialization prompt** is required by default; selecting Skip requires
 confirmation and skips
 only this prompt for explicit starts. Either way, initialization creates a local
 Git repository and one empty initial commit; existing files remain uncommitted
@@ -357,13 +360,14 @@ native Pi status and survives `/reload` of the same session. Approval still
 uses the exact typed word `remove` unless the current repository has been
 explicitly preauthorized by a human.
 
-An active Manager can inspect or change repository-scoped removal approval with
-`/manager removal-confirmation [required|skip]` or `Project management` →
-`Repository permissions`. `skip` requests a native confirmation naming the
+An interactive user can inspect or change repository-scoped removal approval with
+`/manager removal-confirmation [required|skip]` or `Settings` →
+`Manager & repositories` → `Worktree removal approval`, without activating Manager.
+A verified repository identity is required. `skip` requests a native confirmation naming the
 verified repository; `required` restores per-removal confirmation immediately.
 The bare command reports the effective policy. The opt-in waives only the extra
-prompt. Repository permissions also exposes the effective local integration
-policy and its global or repository source. Granting increased integration
+prompt. `Local branch integration` also shows the effective policy and its global or
+repository source. Granting increased integration
 authority, including through inheritance, or creating a positive repository
 override requires confirmation.
 
