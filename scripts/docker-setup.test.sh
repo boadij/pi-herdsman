@@ -10,8 +10,20 @@ export SSH_AUTHORIZED_KEYS="$test_key"
 export OFFICIAL_COMPOSE="$root/compose.yaml"
 cat >"$work/bin/ssh-keygen" <<'MOCK'
 #!/usr/bin/env bash
-echo invoked >"$SSH_KEYGEN_MARKER"
-exit 127
+echo invoked >>"$SSH_KEYGEN_MARKER"
+case "${KEYGEN_MODE:-fail}:$1" in
+  generate:-q) printf private >"${@: -1}"; printf '%s\n' "$TEST_KEY" >"${@: -1}.pub" ;;
+  generation-race:-q) printf private >"${@: -1}"; printf '%s\n' "$TEST_KEY" >"${@: -1}.pub"; printf rival >"$HOME/.ssh/id_ed25519" ;;
+  directory-race:-q|symlink-race:-q)
+    printf private >"${@: -1}"; printf '%s\n' "$TEST_KEY" >"${@: -1}.pub"
+    if [[ "$KEYGEN_MODE" == directory-race ]]; then mkdir "$HOME/.ssh/$RACE_TARGET"; else ln -s "$RACE_DIR" "$HOME/.ssh/$RACE_TARGET"; fi ;;
+  directory-race:-y|symlink-race:-y)
+    if [[ "$KEYGEN_MODE" == directory-race ]]; then mkdir "$HOME/.ssh/id_ed25519.pub"; else ln -s "$RACE_DIR" "$HOME/.ssh/id_ed25519.pub"; fi
+    printf '%s\n' "$TEST_KEY" ;;
+  recover:-y) printf '%s\n' "$TEST_KEY" ;;
+  race:-y) printf rival >"$HOME/.ssh/id_ed25519.pub"; printf '%s\n' "$TEST_KEY" ;;
+  *) exit 127 ;;
+esac
 MOCK
 cat >"$work/bin/docker" <<'MOCK'
 #!/usr/bin/env bash
@@ -32,6 +44,7 @@ if [[ "$1 $2" == "compose run" ]]; then
 fi
 if [[ "$1 $2 $3" == "compose up -d" ]]; then
   [[ -n "${SSH_AUTHORIZED_KEYS:-}" ]] && printf 'startup-key-present\n' >>"$DOCKER_LOG"
+  [[ -z "${KEY_CAPTURE:-}" ]] || printf '%s' "${SSH_AUTHORIZED_KEYS:-}" >"$KEY_CAPTURE"
 fi
 if [[ "$1 $2" == "compose config" && "$3" == --environment ]]; then
   if [[ -n "${TAILSCALE_HOSTNAME:-}" ]]; then printf 'TAILSCALE_HOSTNAME=%s\n' "$TAILSCALE_HOSTNAME"
@@ -101,7 +114,7 @@ while (($#)); do
 done
 exit 2
 MOCK
-chmod +x "$work/bin/docker" "$work/bin/sudo" "$work/bin/sleep" "$work/bin/curl"
+chmod +x "$work/bin/ssh-keygen" "$work/bin/docker" "$work/bin/sudo" "$work/bin/sleep" "$work/bin/curl"
 export PATH="$work/bin:$PATH" SSH_KEYGEN_MARKER="$work/ssh-keygen-invoked" COMPOSE_ROOT="$root" DOCKER_LOG="$work/docker.log"
 printf 'CUSTOM=value\n' >"$work/project/.env"
 printf '\n' | script -qec "bash \"$root/scripts/docker-setup.sh\"" /dev/null
@@ -195,13 +208,103 @@ if bash "$root/scripts/docker-setup.sh" </dev/null >"$work/authkey-no-edit.out" 
 fi
 cmp <(printf 'TS_AUTHKEY=secret-value\nCUSTOM=untouched\n') "$work/project/.env"
 printf 'COMPOSE_FILE=compose.yaml\n' >"$work/project/.env"
-# A fresh deployment without a key still fails before starting the service.
+# Fresh noninteractive setup generates and supplies the exact public key.
 unset SSH_AUTHORIZED_KEYS
-export PERSISTENT_KEYS=0
-if bash "$root/scripts/docker-setup.sh" </dev/null >"$work/fresh.out" 2>&1; then
-  echo 'Expected fresh setup without SSH authorization to fail.' >&2; exit 1
+export PERSISTENT_KEYS=0 TEST_KEY="$test_key" KEY_CAPTURE="$work/key-capture" KEYGEN_MODE=generate
+bash "$root/scripts/docker-setup.sh" </dev/null >"$work/fresh.out"
+grep -q 'Generated SSH login identity' "$work/fresh.out"
+cmp "$KEY_CAPTURE" <(printf '%s' "$(<"$HOME/.ssh/id_ed25519.pub")")
+test -s "$HOME/.ssh/id_ed25519"
+cp "$HOME/.ssh/id_ed25519" "$work/original-private"
+cp "$HOME/.ssh/id_ed25519.pub" "$work/original-public"
+rm "$SSH_KEYGEN_MARKER"
+bash "$root/scripts/docker-setup.sh" </dev/null >"$work/reuse.out"
+test ! -e "$SSH_KEYGEN_MARKER"
+cmp "$work/original-public" "$HOME/.ssh/id_ed25519.pub"
+cmp "$work/original-private" "$HOME/.ssh/id_ed25519"
+# Recover a private-only identity, preserving the private file.
+rm "$HOME/.ssh/id_ed25519.pub"
+export KEYGEN_MODE=recover
+bash "$root/scripts/docker-setup.sh" </dev/null >"$work/recover.out"
+cmp "$work/original-private" "$HOME/.ssh/id_ed25519"
+cmp "$KEY_CAPTURE" <(printf '%s' "$(<"$HOME/.ssh/id_ed25519.pub")")
+# Failure and a competing public-key publisher must never overwrite either key.
+rm "$HOME/.ssh/id_ed25519.pub"
+for mode in fail race; do
+  export KEYGEN_MODE="$mode"
+  : >"$DOCKER_LOG"
+  if bash "$root/scripts/docker-setup.sh" </dev/null >"$work/$mode.out" 2>&1; then
+    echo "Expected $mode recovery to fail." >&2; exit 1
+  fi
+  ! grep -q 'docker compose up -d' "$DOCKER_LOG"
+  cmp "$work/original-private" "$HOME/.ssh/id_ed25519"
+  if [[ "$mode" == race ]]; then test "$(<"$HOME/.ssh/id_ed25519.pub")" = rival; rm "$HOME/.ssh/id_ed25519.pub"; fi
+done
+# A competing private-key publisher during generation must not be overwritten.
+rm "$HOME/.ssh/id_ed25519"
+export KEYGEN_MODE=generation-race
+: >"$DOCKER_LOG"
+if bash "$root/scripts/docker-setup.sh" </dev/null >"$work/generation-race.out" 2>&1; then
+  echo 'Expected generation race rejection.' >&2; exit 1
 fi
-grep -q 'an SSH public key is required for a fresh deployment' "$work/fresh.out"
+test "$(<"$HOME/.ssh/id_ed25519")" = rival
+! grep -q 'docker compose up -d' "$DOCKER_LOG"
+# Directories and symlinks to directories appearing after the check must not
+# redirect publication, expose a private key, or allow Compose startup.
+rm "$HOME/.ssh/id_ed25519"
+mkdir "$work/race-dir"
+export RACE_DIR="$work/race-dir"
+for mode in directory-race symlink-race; do
+  for target in id_ed25519 id_ed25519.pub; do
+    export KEYGEN_MODE="$mode" RACE_TARGET="$target"
+    : >"$DOCKER_LOG"
+    if bash "$root/scripts/docker-setup.sh" </dev/null >"$work/directory-generation.out" 2>&1; then
+      echo "Expected $mode generation rejection at $target." >&2; exit 1
+    fi
+    ! grep -q 'docker compose up -d' "$DOCKER_LOG"
+    if [[ "$mode" == directory-race ]]; then
+      test -z "$(find "$HOME/.ssh/$target" -mindepth 1 -print -quit)"
+      rmdir "$HOME/.ssh/$target"
+    else
+      test -L "$HOME/.ssh/$target"
+      test -z "$(find "$RACE_DIR" -mindepth 1 -print -quit)"
+      rm "$HOME/.ssh/$target"
+    fi
+    if [[ "$target" == id_ed25519.pub ]]; then
+      test "$(<"$HOME/.ssh/id_ed25519")" = private
+      rm "$HOME/.ssh/id_ed25519"
+    fi
+  done
+  cp "$work/original-private" "$HOME/.ssh/id_ed25519"
+  export KEYGEN_MODE="$mode"
+  : >"$DOCKER_LOG"
+  if bash "$root/scripts/docker-setup.sh" </dev/null >"$work/directory-recovery.out" 2>&1; then
+    echo "Expected $mode recovery rejection." >&2; exit 1
+  fi
+  ! grep -q 'docker compose up -d' "$DOCKER_LOG"
+  cmp "$work/original-private" "$HOME/.ssh/id_ed25519"
+  if [[ "$mode" == directory-race ]]; then
+    test -z "$(find "$HOME/.ssh/id_ed25519.pub" -mindepth 1 -print -quit)"
+    rmdir "$HOME/.ssh/id_ed25519.pub"
+  else
+    test -L "$HOME/.ssh/id_ed25519.pub"
+    test -z "$(find "$RACE_DIR" -mindepth 1 -print -quit)"
+    rm "$HOME/.ssh/id_ed25519.pub"
+  fi
+  rm "$HOME/.ssh/id_ed25519"
+done
+unset RACE_DIR RACE_TARGET
+# A dangling destination symlink is an existing identity, not a generation target.
+ln -s "$work/absent" "$HOME/.ssh/id_ed25519.pub"
+: >"$DOCKER_LOG"
+if bash "$root/scripts/docker-setup.sh" </dev/null >"$work/symlink.out" 2>&1; then
+  echo 'Expected incomplete identity rejection.' >&2; exit 1
+fi
+test -L "$HOME/.ssh/id_ed25519.pub"
+! grep -q 'docker compose up -d' "$DOCKER_LOG"
+rm "$HOME/.ssh/id_ed25519.pub"
+unset KEYGEN_MODE KEY_CAPTURE TEST_KEY
+rm -f "$SSH_KEYGEN_MARKER"
 export SSH_AUTHORIZED_KEYS="$test_key"
 unset PERSISTENT_KEYS
 rm -f "$work/project/compose.yaml"
