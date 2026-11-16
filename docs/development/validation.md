@@ -226,7 +226,8 @@ remains unchanged and does not replace hosted integration acceptance.
 Simulated acceptance uses real Pi, Herdsman, and Herdr processes without model
 credentials. It does not verify real-model decisions. CI runs `core`,
 `continuation`, `chief-tree`, `supervisor-agent`, `terminal-failure`,
-`agent-terminal-failure`, `manager-handoff`, and `agent-crash-recovery`.
+`agent-terminal-failure`, `manager-handoff`, `agent-crash-recovery`, and
+`deep-chain`.
 `manager-merge` is also supported but deliberately opt-in, not part of CI.
 
 `npm run validate` remains unchanged and does not run smoke. Manual/live smoke

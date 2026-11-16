@@ -24,7 +24,9 @@ Herdsman package version.
 /manager
 /manager refresh
 /manager leave
-/manager remove <branch>
+/manager remove [<branch>]
+/manager remove-preapproval [on|off]
+/manager forget <branch>
 /chief
 /chief refresh
 /chief leave
@@ -63,9 +65,11 @@ Selecting `Agents` opens the focused `Running`, `Layout`, and `Stop all…` menu
 Its running count and current layout are secondary metadata. The root does not
 depend on Agent status or definitions to render.
 
-`Settings` contains `Default Lead execution`, `Manager auto-start`, `Context
-retirement`, `Project overrides…`, and `Message limits`. The default is `flexible` and applies only
-when a future ordinary Lead session has no persisted execution choice; changing
+`Settings` contains `Default Lead execution`, `Manager auto-start`,
+`Skip Manager Git setup confirmation`, `Context retirement`,
+`Manager local merge`, `Status widget rows`, `Max Agent depth`,
+`Message limits`, and `Project overrides…`. The default Lead execution is
+`flexible` and applies only when a future ordinary Lead session has no persisted execution choice; changing
 it does not change the current session. Manager auto-start and context
 retirement show their effective values and identify project overrides, when
 present. Global controls edit global defaults only. `Project overrides…` lets a trusted
@@ -75,8 +79,7 @@ untrusted project settings do not prevent global controls from being used. An
 active Manager can also inspect and change the verified repository's worktree
 removal confirmation policy here. That choice is stored in user-level Herdsman
 authorization, not project settings; enabling still requires typing `enable`.
-The
-Message limits view edits the user-wide inline attachment and mailbox payload
+`Message limits` edits the user-wide inline attachment and mailbox payload
 limits. It is available only to a lead Pi session with UI.
 Current values and presets show a rough token equivalent using four UTF-8
 bytes per token. The enforced limits are bytes, not tokens.
@@ -295,11 +298,12 @@ turn to become idle. `/manager refresh` revalidates and applies the active
 Manager definition after the current turn becomes idle; a failed refresh keeps
 the previous profile. Refresh requires active Manager mode.
 Manager definitions accept trusted project and global overlays; omitted fields
-inherit from lower-precedence definitions, including the bundled empty ordinary
-tool allowlist. Manager defaults to coordination-only tools. Custom Manager
-definitions can explicitly enable ordinary tools. Leaving Manager restores the
-session's ordinary Lead tool baseline and selected execution profile. Their
-`agents` allowlist independently controls fresh direct delegation. See
+inherit from lower-precedence definitions. See the
+[Agent-definition schema](agent-definition-schema.md#reserved-coordinator-definitions)
+for the current ordinary-tool defaults and override behavior.
+
+Leaving Manager restores the session's ordinary Lead tool baseline and selected
+execution profile. Their `agents` allowlist independently controls fresh direct delegation. See
 [Coordination](../concepts/coordination.md) for the role and project boundaries.
 
 The effective `Manager auto-start` setting optionally makes a new session

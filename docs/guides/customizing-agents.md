@@ -52,9 +52,10 @@ inheritance, or permission policy are not supported.
 
 The bundled `flexible-lead` leaves `tools` unspecified, preserving Pi's normal
 ordinary tool baseline, and supplies flexible direct/delegated-work guidance.
-The bundled `orchestrator-lead` sets `tools: []`, leaving only mandatory
-Herdsman coordination tools available. Inspection and execution are delegated
-to Agents by default. Example user overlay to opt into direct tools:
+The bundled `orchestrator-lead` selects `tools: [codemode]`, making Pi's
+native Code Mode available when loaded while keeping other ordinary tools
+disabled. Inspection and execution are delegated to Agents by default.
+For example, an overlay can opt into direct tools:
 
 ```markdown
 ---
@@ -69,7 +70,7 @@ Use the repository's documented smoke command when validating integration work.
 An explicit tool list selects registered ordinary tools; exclusions are then
 applied. At the effective-definition level, `tools: []` disables ordinary
 tools, whereas an absent `tools` field preserves Pi's normal selection.
-Overlays that omit `tools` still inherit the bundled `[]`. Herdsman-owned
+Overlays that omit `tools` still inherit the bundled `[codemode]`. Herdsman-owned
 tools cannot be enabled through a profile, and required Lead coordination
 tools are retained. A configured tool that is not registered
 is simply unavailable. Profile resolution respects project trust. Definition
@@ -104,8 +105,9 @@ Leads use `managed-lead` instead.
 The reserved `manager` and `chief` definitions customize the existing
 supervisory roles without granting or changing authority. Both support the
 runtime-profile fields described in the [schema](../reference/agent-definition-schema.md).
-Manager and Chief default to `tools: []`, exposing only their required
-coordination capabilities. Manager's saved ordinary Lead tool baseline remains
+Manager and Chief default to `tools: [codemode]`: when Pi loads Code Mode,
+that is their only ordinary tool alongside mandatory Herdsman coordination
+capabilities. Manager's saved ordinary Lead tool baseline remains
 intact and is restored when Manager mode ends. Explicit trusted-project or
 global Manager overrides can enable registered ordinary tools. Matching tools
 that register after activation are included at the next Manager run or
@@ -164,24 +166,26 @@ Use the read tool when a supervised decision requires checking a local artifact.
 
 `managed-lead` is the reserved definition for Manager-created/assigned project
 Leads. Every assigned Lead uses it, independently of the ordinary execution
-mode. It follows the same `bundled < global < trusted project` precedence, but it is launch
+mode. It follows the Coordinator precedence described above, but it is launch
 configuration rather than an Agent: it is excluded from the Agent roster
 and cannot be delegated to. It appears under `Coordinators`, with
 Model, Thinking, and Details settings but no `Enabled` action. These settings
 do not add it to Agent discovery or delegation.
 
-The bundled default is coordination-only (`tools: []`): mandatory Herdsman
-coordination tools remain available, while ordinary inspection and execution
-are delegated to managed Agents. Manager owns project supervision and
+The bundled default selects `tools: [codemode]`, alongside mandatory
+Herdsman coordination tools. Inspection and execution are delegated to
+managed Agents by default. Manager owns project supervision and
 assignment boundaries; the Lead owns technical decisions and execution
 orchestration.
 Herdsman automatically hands off the normal assignment response, deferring it
 until delegated Agent work settles. See [Project orchestration](project-orchestration.md)
 for the automatic result and `message_supervisor` coordination contract.
-Managed Leads use it to contact their assigned Manager; ordinary Leads and
-Managers use it to contact Chief. Override the same name
-when a project or user deliberately needs a different prompt, model, thinking
-level, tool policy, skill policy, or extension policy:
+Managed Leads use it to contact their assigned Manager. Other roles follow
+verified direct-supervisor routing; see
+[Supervisor tools](../reference/supervisor.md).
+
+Override the same name when a project or user deliberately needs a different
+prompt, model, thinking level, tool policy, skill policy, or extension policy:
 
 ```markdown
 ---

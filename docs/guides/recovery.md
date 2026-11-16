@@ -357,8 +357,8 @@ existing recovery and continuation controls. Transcript history and
 working-tree changes are preserved, and the interrupted assignment is not
 replayed automatically.
 
-A process that is otherwise unmanaged—for example, one launched outside Herdr
-without a valid managed-Agent environment—does not receive the root Lead
+A process that is otherwise unmanaged (for example, one launched outside Herdr
+without a valid managed-Agent environment) does not receive the root Lead
 quarantine. If Pi is launched without Herdsman's extension, Herdsman cannot
 enforce tool restrictions at all. Separately, when the extension detects an
 invalid partial managed-Agent environment, its fail-closed hooks disable tools
