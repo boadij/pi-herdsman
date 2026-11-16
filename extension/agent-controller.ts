@@ -1082,11 +1082,13 @@ function agentToolName(action: string): string {
 export const AGENT_DEFINITION_ENTRY = "pi-herdsman-agent-definition";
 export const AGENT_EXECUTION_OWNERSHIP_GUIDANCE =
   "Each unresolved unit of work has one executor. Using delegate_agent transfers that assignment's execution ownership to the Agent until it resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own.";
+const AGENT_UNRESOLVED_NAVIGATION_GUIDANCE =
+  "When Agent work is unresolved, handle required control, then continue only necessary work you still own or end the turn without concluding; results or attention resume the session automatically. Do not poll with status requests, sleep, or other waiting mechanisms.";
 export const AGENT_UNRESOLVED_GUIDANCE =
   "Use list_agents when fresh Agent state or ownership is materially needed for a control or recovery decision, or to refresh the definition roster; do not use it for progress polling. " +
   "Follow current available_tools and revalidation: steer_agent queues a cooperative correction for Pi to deliver after the current assistant turn and its tool calls reach a steering boundary; it does not preempt the current operation. interrupt_agent cancels the current operation and replaces its direction. " +
   "Use reply_agent only to answer that Agent's exact pending await_owner question. stop_agent abandons an eligible Agent generation and its unfinished assignment. inspect_agent provides bounded live terminal/process evidence; read_agent_transcript provides bounded persisted conversation/tool evidence. " +
-  "When Agent work is unresolved, handle required control, then continue only necessary work you still own or end the turn without concluding; results or attention resume the session automatically. Do not poll with status requests, sleep, or other waiting mechanisms. " +
+  `${AGENT_UNRESOLVED_NAVIGATION_GUIDANCE} ` +
   "Stale health attention is diagnosis, not progress polling: use attached evidence first and, when absent or insufficient, perform at most one bounded diagnostic read before passive waiting. A repeated reminder for the same stale episode is additional recovery evidence: unchanged qualifying activity means the Agent has not crossed an execution boundary since the previous reminder. A steer queued during that unchanged episode cannot have taken effect yet. Do not repeat diagnostic reads solely because a reminder fired. Continue waiting only while existing evidence still positively supports a legitimate long-running operation; otherwise use interrupt_agent to stop the current operation and continue the same assignment. " +
   "A proven lost Agent remains unresolved; physical disappearance is not completion. A physically unknown Agent remains fail-closed: do not control, close, replace, or infer completion of that generation. Unknown Agent identity does not by itself prove a currently active competing writer. For a concrete recovery decision, use available current evidence and at most one bounded diagnostic read when necessary; distinguish historical Agent identity from current execution and delegated scope. Continue necessary independent work that remains authorized and has no unresolved execution conflict. Do not take over the Agent's unresolved assignment. Do not take over or replace unresolved delegated work until the current generation is resolved or explicitly closed. If evidence is insufficient to exclude competing execution, preserve the affected scope and identify the specific missing evidence or external action. Do not repeat the same identity investigation without new evidence.";
 export const AGENT_DELEGATION_GUIDANCE =
@@ -7177,7 +7179,7 @@ export function createAgentController(
       const content = `Delegation status: ${active}; ${pending}; ${unresolved}.`;
       return {
         content: unresolvedDirectChildCount
-          ? `${content} ${AGENT_EXECUTION_OWNERSHIP_GUIDANCE} ${AGENT_UNRESOLVED_GUIDANCE}`
+          ? `${content} ${AGENT_EXECUTION_OWNERSHIP_GUIDANCE} ${AGENT_UNRESOLVED_NAVIGATION_GUIDANCE}`
           : content,
         activeDirectChildCount,
         pendingDirectResultCount,
@@ -10330,7 +10332,7 @@ export function createAgentController(
               pi.sendMessage(
                 {
                   customType: "pi-herdsman-delegation-guidance",
-                  content: `${AGENT_EXECUTION_OWNERSHIP_GUIDANCE} ${AGENT_UNRESOLVED_GUIDANCE}`,
+                  content: `${AGENT_EXECUTION_OWNERSHIP_GUIDANCE} ${AGENT_UNRESOLVED_NAVIGATION_GUIDANCE}`,
                   display: false,
                 },
                 { triggerTurn: true, deliverAs: "steer" },
