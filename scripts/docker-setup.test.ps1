@@ -17,9 +17,16 @@ function global:ssh-keygen { throw 'ssh-keygen must not be required by setup tes
 $script:dockerCalls = [Collections.Generic.List[string]]::new()
 $script:hasPersistentAuthorizedKeys = $true
 $script:dockerOSType = 'linux'
+$script:sshPort = 2200
 function docker {
   $call = $args -join ' '
   $script:dockerCalls.Add($call)
+  if ($call -eq 'compose port herdsman 22') {
+    $global:LASTEXITCODE = 0
+    $configuredPort = Select-String -Path (Join-Path $project '.env') -Pattern '^HERDSMAN_SSH_PORT=(\d+)$' | Select-Object -First 1
+    if ($configuredPort) { return "0.0.0.0:$($configuredPort.Matches[0].Groups[1].Value)" }
+    return "0.0.0.0:$($script:sshPort)"
+  }
   if ($call -eq 'info --format {{.OSType}}') {
     $global:LASTEXITCODE = 0
     return $script:dockerOSType
@@ -31,7 +38,8 @@ function docker {
   $global:LASTEXITCODE = 0
 }
 function Invoke-WebRequest {
-  param([string] $Uri, [string] $OutFile)
+  param([string] $Uri, [string] $OutFile, [switch] $UseBasicParsing)
+  Assert $UseBasicParsing 'Compose download omitted -UseBasicParsing.'
   [IO.File]::WriteAllText($OutFile, 'services: {}')
 }
 function Read-Host { param([string] $Prompt); return '' }
@@ -46,14 +54,17 @@ try {
   Assert (-not ($script:dockerCalls -contains 'compose up -d')) 'Deployment started on a Windows-container engine.'
   $script:dockerOSType = 'linux'
   $script:dockerCalls.Clear()
-  [IO.File]::WriteAllText((Join-Path $project '.env'), "CUSTOM=value`n")
-  . (Join-Path $root 'scripts/docker-setup.ps1')
+  [IO.File]::WriteAllText((Join-Path $project '.env'), "CUSTOM=value`nHERDSMAN_SSH_PORT=2200`n")
+  $setupOutput = @(. (Join-Path $root 'scripts/docker-setup.ps1'))
+  Assert (($setupOutput -join "`n") -match 'ssh -p 2200 herdsman@localhost') 'Connection command ignored the customized published SSH port.'
   $envFile = Get-Content -Raw (Join-Path $project '.env')
   Assert ($envFile.Contains('CUSTOM=value')) 'Existing .env setting was lost.'
+  Assert ($envFile.Contains('HERDSMAN_SSH_PORT=2200')) 'Custom SSH port setting was lost.'
   Assert ($envFile.Contains('COMPOSE_FILE=compose.yaml')) 'Default Compose selection was not saved.'
   Assert ((Test-Path (Join-Path $project 'compose.yaml'))) 'Missing Compose file was not downloaded.'
   Assert (($script:dockerCalls -contains 'compose config --quiet')) 'Compose validation was not called.'
   Assert (($script:dockerCalls -contains 'compose up -d')) 'Compose startup was not called.'
+  Assert (($script:dockerCalls -contains 'compose port herdsman 22')) 'Published SSH port was not queried from Compose.'
   Assert (-not (Get-ChildItem $project -Filter '*.tmp.*' -ErrorAction SilentlyContinue)) 'Temporary download remains.'
   # Persistent authorized_keys allow a repeat without a host-side key.
   Remove-Item Env:SSH_AUTHORIZED_KEYS

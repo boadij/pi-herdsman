@@ -15,22 +15,85 @@ exit 127
 MOCK
 cat >"$work/bin/docker" <<'MOCK'
 #!/usr/bin/env bash
+printf 'docker %s\n' "$*" >>"$DOCKER_LOG"
+if [[ "${DOCKER_DIRECT_FAIL:-0}" == 1 && "${MOCK_SUDO:-0}" != 1 && "$1" == info ]]; then exit 1; fi
 if [[ "$1 $2" == "compose version" || "$1" == info ]]; then exit 0; fi
-if [[ "$1 $2" == "compose run" ]]; then [[ "${PERSISTENT_KEYS:-0}" == 1 ]]; exit; fi
+if [[ "$1 $2" == "compose run" ]]; then
+  if [[ "$*" == *'id -u herdsman'* ]]; then printf '%s %s\n' "${MOCK_DEFAULT_UID:-1000}" "${MOCK_DEFAULT_GID:-1000}"; exit 0; fi
+  [[ "${PERSISTENT_KEYS:-0}" == 1 ]]; exit
+fi
+if [[ "$1 $2 $3" == "compose up -d" ]]; then
+  [[ -n "${SSH_AUTHORIZED_KEYS:-}" ]] && printf 'startup-key-present\n' >>"$DOCKER_LOG"
+fi
+if [[ "$1 $2" == "compose config" && "$3" == --environment ]]; then
+  if [[ -n "${TAILSCALE_HOSTNAME:-}" ]]; then printf 'TAILSCALE_HOSTNAME=%s\n' "$TAILSCALE_HOSTNAME"
+  elif [[ -f .env ]]; then sed -n 's/^TAILSCALE_HOSTNAME=//p' .env; fi
+  exit 0
+fi
+if [[ "$1 $2 $3" == "compose exec -T" && "$4" == tailscale ]]; then
+  if [[ "${TAILSCALE_ORDER_TEST:-0}" == 1 ]]; then
+    count=$(cat "$TAILSCALE_COUNT" 2>/dev/null || echo 0); count=$((count+1)); printf '%s' "$count" >"$TAILSCALE_COUNT"
+    if (( count <= 10 )); then printf '{"BackendState":"NeedsLogin"}\n'; else printf '{"BackendState":"Running"}\n'; fi
+  else
+    printf '{"BackendState":"%s"}\n' "${TAILSCALE_STATUS:-Running}"
+  fi
+  exit 0
+fi
 if [[ "$1 $2 $3" == "compose exec -T" ]]; then exit 0; fi
+if [[ "$1 $2 $3 $4 $5" == "compose up -d --force-recreate tailscale" ]]; then
+  printf 'tailscale-recreate %s\n' "${TS_AUTHKEY:+bootstrap}" >>"$DOCKER_LOG"
+  [[ -z "${TS_AUTHKEY:-}" ]] || printf 'bootstrap-key-delivered-via-env\n' >>"$DOCKER_LOG"
+  exit 0
+fi
+if [[ "$1 $2 $3 $4 $5" == "compose up -d --force-recreate herdsman" ]]; then
+  printf 'herdsman-recreate\n' >>"$DOCKER_LOG"
+  exit 0
+fi
+if [[ "$1 $2" == "compose port" ]]; then
+  port="$(sed -n 's/^HERDSMAN_SSH_PORT=//p' .env | tail -n1)"
+  printf '0.0.0.0:%s\n' "${port:-${SSH_PORT:-2222}}"
+  exit 0
+fi
 if [[ "$1 $2" == "compose" ]]; then exit 0; fi
+exit 0
+MOCK
+cat >"$work/bin/sudo" <<'MOCK'
+#!/usr/bin/env bash
+printf 'sudo %s\n' "$*" >>"$DOCKER_LOG"
+if [[ "$1" == --preserve-env=* ]]; then
+  [[ "${SUDO_PRESERVE_DENIED:-0}" != 1 ]] || { echo 'sudo: sorry, you are not allowed to preserve requested environment' >&2; exit 1; }
+  preserve_names=${1#--preserve-env=}
+  case ",$preserve_names," in
+    *,SSH_AUTHORIZED_KEYS,*) [[ -n "${SSH_AUTHORIZED_KEYS:-}" ]] || exit 3; printf 'preserved-key-present\n' >>"$DOCKER_LOG" ;;
+  esac
+  case ",$preserve_names," in
+    *,TS_AUTHKEY,*) [[ -n "${TS_AUTHKEY:-}" ]] || exit 4; printf 'preserved-authkey-present\n' >>"$DOCKER_LOG" ;;
+  esac
+  shift
+else
+  unset SSH_AUTHORIZED_KEYS TS_AUTHKEY
+fi
+[[ "$1" == docker ]] || exit 2
+shift
+MOCK_SUDO=1; export MOCK_SUDO
+exec docker "$@"
+MOCK
+cat >"$work/bin/sleep" <<'MOCK'
+#!/usr/bin/env bash
 exit 0
 MOCK
 cat >"$work/bin/curl" <<'MOCK'
 #!/usr/bin/env bash
+name=
 while (($#)); do
-  if [[ "$1" == -o ]]; then shift; cp "$OFFICIAL_COMPOSE" "$1"; exit; fi
+  if [[ "$1" == https://* ]]; then name=${1##*/}; fi
+  if [[ "$1" == -o ]]; then shift; cp "$COMPOSE_ROOT/$name" "$1"; exit; fi
   shift
 done
 exit 2
 MOCK
-chmod +x "$work/bin/docker" "$work/bin/curl"
-export PATH="$work/bin:$PATH" SSH_KEYGEN_MARKER="$work/ssh-keygen-invoked"
+chmod +x "$work/bin/docker" "$work/bin/sudo" "$work/bin/sleep" "$work/bin/curl"
+export PATH="$work/bin:$PATH" SSH_KEYGEN_MARKER="$work/ssh-keygen-invoked" COMPOSE_ROOT="$root" DOCKER_LOG="$work/docker.log"
 printf 'CUSTOM=value\n' >"$work/project/.env"
 printf '\n' | script -qec "bash \"$root/scripts/docker-setup.sh\"" /dev/null
 grep -Fx 'CUSTOM=value' "$work/project/.env"
@@ -189,4 +252,146 @@ if bash "$root/scripts/docker-setup.sh" >"$work/interrupted.out" 2>&1; then
   echo 'Expected interrupted setup to fail.' >&2; exit 1
 fi
 test -z "$(find "$interrupt_project" -name '*.tmp.*' -print -quit)"
+
+# Fresh option 3 prepares Linux bind storage with the invoking UID/GID and preserves existing data.
+cat >"$work/bin/curl" <<'MOCK'
+#!/usr/bin/env bash
+name=
+while (($#)); do
+  if [[ "$1" == https://* ]]; then name=${1##*/}; fi
+  if [[ "$1" == -o ]]; then shift; cp "$COMPOSE_ROOT/$name" "$1"; exit; fi
+  shift
+done
+exit 2
+MOCK
+chmod +x "$work/bin/curl"
+bind_project="$work/bind-project"
+mkdir -p "$bind_project"
+export PI_HERDSMAN_DIR="$bind_project"
+unset COMPOSE_FILE PUID PGID
+printf 'bind-data-preserved\n' >"$work/marker"
+printf '3\n' | script -qec "bash \"$root/scripts/docker-setup.sh\"" /dev/null >"$work/bind.out"
+test -d "$bind_project/data/herdsman-home"
+grep -Fx "PUID=$(id -u)" "$bind_project/.env"
+grep -Fx "PGID=$(id -g)" "$bind_project/.env"
+test ! -e "$bind_project/data/herdsman-home/marker"
+# Existing bind data and ownership are not replaced or chowned.
+printf 'keep\n' >"$bind_project/data/herdsman-home/keep"
+owner_before=$(stat -c '%u:%g' "$bind_project/data/herdsman-home")
+printf 'COMPOSE_FILE=compose.yaml:compose.tailscale.yaml:compose.bind-mount.yaml\n' >"$bind_project/.env"
+bash "$root/scripts/docker-setup.sh" >"$work/bind-repeat.out"
+test -f "$bind_project/data/herdsman-home/keep"
+test "$owner_before" = "$(stat -c '%u:%g' "$bind_project/data/herdsman-home")"
+# The published port comes from Compose, not the default.
+export PI_HERDSMAN_DIR="$work/project"
+printf 'COMPOSE_FILE=compose.yaml\nHERDSMAN_SSH_PORT=2200\n' >"$work/project/.env"
+unset SSH_PORT
+bash "$root/scripts/docker-setup.sh" >"$work/custom-port.out"
+grep -q 'ssh -p 2200 herdsman@localhost' "$work/custom-port.out"
+# Compose dotenv hostname override is reflected without printing effective config.
+ts_project="$work/tailscale-project"
+mkdir -p "$ts_project"
+export PI_HERDSMAN_DIR="$ts_project"
+printf 'COMPOSE_FILE=compose.yaml:compose.tailscale.yaml\nTAILSCALE_HOSTNAME=private-host.example\n' >"$ts_project/.env"
+cp "$root/compose.yaml" "$ts_project/compose.yaml"
+cp "$root/compose.tailscale.yaml" "$ts_project/compose.tailscale.yaml"
+unset TAILSCALE_HOSTNAME
+bash "$root/scripts/docker-setup.sh" >"$work/custom-hostname.out"
+grep -q 'ssh herdsman@private-host.example' "$work/custom-hostname.out" || { cat "$work/custom-hostname.out"; exit 1; }
+! grep -q 'services:' "$work/custom-hostname.out"
+# Bootstrap restores key-free Tailscale and recreates Herdsman after the namespace owner.
+order_project="$work/order-project"
+mkdir -p "$order_project"
+export PI_HERDSMAN_DIR="$order_project" TS_AUTHKEY='test-bootstrap-key' TAILSCALE_ORDER_TEST=1 TAILSCALE_COUNT="$work/tailscale-count"
+printf 'COMPOSE_FILE=compose.yaml:compose.tailscale.yaml\n' >"$order_project/.env"
+cp "$root/compose.yaml" "$order_project/compose.yaml"
+cp "$root/compose.tailscale.yaml" "$order_project/compose.tailscale.yaml"
+: >"$DOCKER_LOG"; rm -f "$TAILSCALE_COUNT"
+bash "$root/scripts/docker-setup.sh" >"$work/tailscale-order.out"
+grep -n '^docker compose up -d --force-recreate tailscale$' "$DOCKER_LOG" | head -n1 | cut -d: -f1 >"$work/bootstrap-line"
+grep -n '^docker compose up -d --force-recreate tailscale$' "$DOCKER_LOG" | tail -n1 | cut -d: -f1 >"$work/restore-line"
+grep -n '^docker compose up -d --force-recreate herdsman$' "$DOCKER_LOG" | tail -n1 | cut -d: -f1 >"$work/herdsman-line"
+test "$(cat "$work/bootstrap-line")" -lt "$(cat "$work/restore-line")"
+test "$(cat "$work/restore-line")" -lt "$(cat "$work/herdsman-line")"
+# A direct Docker permission failure selects sudo for subsequent engine operations.
+sudo_project="$work/sudo-project"
+mkdir -p "$sudo_project"
+export PI_HERDSMAN_DIR="$sudo_project" DOCKER_DIRECT_FAIL=1
+printf 'COMPOSE_FILE=compose.yaml\n' >"$sudo_project/.env"
+cp "$root/compose.yaml" "$sudo_project/compose.yaml"
+: >"$DOCKER_LOG"
+bash "$root/scripts/docker-setup.sh" >"$work/sudo.out"
+grep -q '^docker info$' "$DOCKER_LOG"
+grep -q '^sudo docker info$' "$DOCKER_LOG"
+grep -q '^sudo --preserve-env=SSH_AUTHORIZED_KEYS docker compose up -d$' "$DOCKER_LOG"
+grep -q '^preserved-key-present$' "$DOCKER_LOG"
+grep -q '^startup-key-present$' "$DOCKER_LOG"
+! grep -q "$test_key" "$DOCKER_LOG" "$work/sudo.out"
+grep -q 'Herdsman is ready' "$work/sudo.out"
+# A denied preserve policy produces a direct diagnostic and does not log the key.
+export SUDO_PRESERVE_DENIED=1
+: >"$DOCKER_LOG"
+if bash "$root/scripts/docker-setup.sh" >"$work/sudo-denied.out" 2>&1; then
+  echo 'Expected sudo preserve policy rejection.' >&2; exit 1
+fi
+grep -q 'sudo may deny preserving SSH_AUTHORIZED_KEYS' "$work/sudo-denied.out"
+! grep -q "$test_key" "$DOCKER_LOG" "$work/sudo-denied.out"
+unset SUDO_PRESERVE_DENIED DOCKER_DIRECT_FAIL
+# Sudo Tailscale bootstrap passes the secret through a narrowly preserved env var, never argv.
+sudo_ts_project="$work/sudo-tailscale-project"
+mkdir -p "$sudo_ts_project"
+export PI_HERDSMAN_DIR="$sudo_ts_project" DOCKER_DIRECT_FAIL=1 TS_AUTHKEY='sudo-test-bootstrap-secret' TAILSCALE_ORDER_TEST=1 TAILSCALE_COUNT="$work/sudo-tailscale-count"
+printf 'COMPOSE_FILE=compose.yaml:compose.tailscale.yaml\n' >"$sudo_ts_project/.env"
+cp "$root/compose.yaml" "$sudo_ts_project/compose.yaml"
+cp "$root/compose.tailscale.yaml" "$sudo_ts_project/compose.tailscale.yaml"
+: >"$DOCKER_LOG"; rm -f "$TAILSCALE_COUNT"
+bash "$root/scripts/docker-setup.sh" >"$work/sudo-tailscale.out"
+grep -Fx 'sudo --preserve-env=TS_AUTHKEY,SSH_AUTHORIZED_KEYS docker compose up -d --force-recreate tailscale' "$DOCKER_LOG"
+grep -Fx 'preserved-authkey-present' "$DOCKER_LOG"
+grep -Fx 'bootstrap-key-delivered-via-env' "$DOCKER_LOG"
+! grep -q 'sudo-test-bootstrap-secret' "$DOCKER_LOG" "$work/sudo-tailscale.out"
+unset DOCKER_DIRECT_FAIL TAILSCALE_ORDER_TEST TAILSCALE_COUNT TS_AUTHKEY
+# Bind mount rejects effective IDs from .env and process environment before startup.
+bind_mismatch="$work/bind-mismatch"
+mkdir -p "$bind_mismatch/data/herdsman-home"
+cp "$root/compose.yaml" "$bind_mismatch/compose.yaml"
+cp "$root/compose.tailscale.yaml" "$bind_mismatch/compose.tailscale.yaml"
+cp "$root/compose.bind-mount.yaml" "$bind_mismatch/compose.bind-mount.yaml"
+export PI_HERDSMAN_DIR="$bind_mismatch"
+printf 'COMPOSE_FILE=compose.yaml:compose.tailscale.yaml:compose.bind-mount.yaml\nPUID=999998\nPGID=%s\n' "$(id -g)" >"$bind_mismatch/.env"
+: >"$DOCKER_LOG"
+if bash "$root/scripts/docker-setup.sh" >"$work/dotenv-id-mismatch.out" 2>&1; then
+  echo 'Expected .env PUID mismatch.' >&2; exit 1
+fi
+grep -q 'effective PUID is 999998' "$work/dotenv-id-mismatch.out"
+! grep -q 'compose up -d' "$DOCKER_LOG"
+printf 'COMPOSE_FILE=compose.yaml:compose.tailscale.yaml:compose.bind-mount.yaml\nPUID=999998\nPGID=%s\n' "$(id -g)" >"$bind_mismatch/.env"
+export PUID="$(id -u)"
+: >"$DOCKER_LOG"
+bash "$root/scripts/docker-setup.sh" >"$work/env-id-override.out"
+grep -q 'Herdsman is ready' "$work/env-id-override.out"
+unset PUID
+# Empty .env values use Compose/container defaults, which must also match storage.
+printf 'COMPOSE_FILE=compose.yaml:compose.tailscale.yaml:compose.bind-mount.yaml\nPUID=\nPGID=\n' >"$bind_mismatch/.env"
+export MOCK_DEFAULT_UID=999997 MOCK_DEFAULT_GID="$(id -g)"
+: >"$DOCKER_LOG"
+if bash "$root/scripts/docker-setup.sh" >"$work/default-id-mismatch.out" 2>&1; then
+  echo 'Expected Compose default PUID mismatch.' >&2; exit 1
+fi
+grep -q 'effective PUID is 999997' "$work/default-id-mismatch.out"
+! grep -q 'compose up -d' "$DOCKER_LOG"
+test -d "$bind_mismatch/data/herdsman-home"
+test ! -e "$bind_mismatch/data/herdsman-home/changed"
+# An explicitly empty process variable overrides nonempty .env, then resolves to Compose's default.
+printf 'COMPOSE_FILE=compose.yaml:compose.tailscale.yaml:compose.bind-mount.yaml\nPUID=999998\nPGID=%s\n' "$(id -g)" >"$bind_mismatch/.env"
+export PUID='' MOCK_DEFAULT_UID=999997 MOCK_DEFAULT_GID="$(id -g)"
+: >"$DOCKER_LOG"
+if bash "$root/scripts/docker-setup.sh" >"$work/empty-process-id-mismatch.out" 2>&1; then
+  echo 'Expected empty process PUID to resolve to Compose default, not .env.' >&2; exit 1
+fi
+grep -q 'effective PUID is 999997' "$work/empty-process-id-mismatch.out"
+! grep -q 'compose up -d' "$DOCKER_LOG"
+test -d "$bind_mismatch/data/herdsman-home"
+unset PUID MOCK_DEFAULT_UID MOCK_DEFAULT_GID
+test ! -e "$SSH_KEYGEN_MARKER"
 echo 'Bash Docker setup mocked checks passed.'

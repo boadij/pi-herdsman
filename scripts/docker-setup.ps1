@@ -94,7 +94,7 @@ function Download-Compose([string] $Name) {
   if ($Name -notin @('compose.yaml', 'compose.tailscale.yaml', 'compose.bind-mount.yaml')) { return }
   $temp = Join-Path $script:ProjectDir (".$Name.tmp.$([guid]::NewGuid().ToString('N'))")
   try {
-    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/boadij/pi-herdsman/main/$Name" -OutFile $temp
+    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/boadij/pi-herdsman/main/$Name" -OutFile $temp -UseBasicParsing
     if (-not (Test-Path -LiteralPath $temp) -or (Get-Item -LiteralPath $temp).Length -eq 0) { Fail "download of $Name was empty." }
     if (-not (Test-Path -LiteralPath $Name)) { Move-Item -LiteralPath $temp -Destination $Name }
   } finally {
@@ -189,7 +189,10 @@ try {
   }
   if (-not $ready) { Fail 'Herdsman did not become ready; inspect with: docker compose logs herdsman' }
   Write-Output "Herdsman is ready in $script:ProjectDir"
-  Write-Output 'Connect with: ssh -p 2222 herdsman@localhost'
+  $publishedPort = & docker compose port herdsman 22
+  if ($LASTEXITCODE -ne 0 -or ($publishedPort | Out-String).Trim() -notmatch ':(\d+)$') { Fail 'could not determine the published Herdsman SSH port.' }
+  $sshPort = $Matches[1]
+  Write-Output "Connect with: ssh -p $sshPort herdsman@localhost"
   Write-Output 'Container SSH host key: docker compose exec herdsman cat /var/lib/herdsman/ssh/ssh_host_ed25519_key.pub'
 } finally {
   Pop-Location
