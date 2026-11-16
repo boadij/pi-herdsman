@@ -1940,9 +1940,7 @@ test("session tree restoration respects checkpoint order and tool policies", asy
         activeTools: ["read", "bash"],
         allTools: [
           { name: "history" },
-          ...(scenario.extraTools ?? []).map(
-            (name) => ({ name }),
-          ),
+          ...(scenario.extraTools ?? []).map((name) => ({ name })),
         ],
       });
       const context = fakeContext(pi.entries, scenario.branch) as any;
