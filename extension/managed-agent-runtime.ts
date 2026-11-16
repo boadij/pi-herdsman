@@ -1799,16 +1799,16 @@ export function registerManagedAgentAskOwnerTool(
     label: "Ask owner",
     exposure: "model-only",
     promptSnippet:
-      "Ask this managed agent's direct owner for a required decision",
+      "Request essential input from this managed Agent's direct owner",
     promptGuidelines: [FILE_HANDOFF_GUIDANCE],
     description:
-      "Ask your direct owner for a decision that is required to continue. Call this alone as the final tool call of the turn. Wait for the reply only after the tool confirms the question was sent; if rejected, address the error or report a non-empty blocker. Only one question may be outstanding.",
+      "Request a necessary owner decision, authorization, or specific input required to continue. A future readiness signal may remain pending until available. Do not use this for progress polling. Call alone as the final tool call of the turn; wait for the reply only after acceptance. Only one question may be outstanding.",
     executionMode: "sequential",
     parameters: Type.Object(
       {
         question: Type.String({
           minLength: 1,
-          description: "Non-empty decision question required to continue.",
+          description: "Non-empty request for required direct-owner input.",
         }),
         files,
       },

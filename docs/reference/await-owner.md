@@ -2,10 +2,17 @@
 
 [Documentation index](../README.md)
 
-`await_owner` is mandatory managed agent infrastructure for one direct-owner
-decision required to continue the current assignment.
+`await_owner` is mandatory managed agent infrastructure for necessary input
+from the direct owner that is required to continue the current assignment.
+This may be an unresolved decision, authorization, or specific information the
+owner must supply. It can also be a specific future readiness signal when the
+owner is the designated coordination point for providing it; the single pending
+question remains open until the owner can provide that signal.
 
-It is not a generic messaging channel.
+Agents should complete independently safe work first and must not use
+`await_owner` for progress polling or repeat a pending request without materially
+new evidence. It is not a generic messaging channel, arbitrary external wait,
+or event-subscription API.
 
 ## Availability
 
@@ -23,7 +30,9 @@ this infrastructure capability.
 }
 ```
 
-`question` must contain non-whitespace text.
+`question` must contain non-whitespace text describing the required owner
+input. When that input depends on a future condition, ask for the specific
+readiness information rather than requesting an immediate acknowledgment.
 `files` supplies supporting evidence using the same rules as `agent`: ordinary
 paths, exact reusable direct-agent refs such as `result:researcher#1`, and
 canonical `result:<request-id>` refs already supplied as evidence are accepted.
@@ -122,7 +131,9 @@ the same assignment with the owner answer.
 
 Only one `await_owner` question may be outstanding per assignment at a time.
 
-There is no ask timeout.
+There is no ask timeout. A reply should be sent only when the requested input
+or an actionable alternative is available. If an external condition is still
+unresolved, leave the question pending rather than promising to answer later.
 
 The agent must not guess the owner answer and complete while blocked.
 
