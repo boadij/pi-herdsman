@@ -278,7 +278,6 @@ test ! -e "$bind_project/data/herdsman-home/marker"
 # Existing bind data and ownership are not replaced or chowned.
 printf 'keep\n' >"$bind_project/data/herdsman-home/keep"
 owner_before=$(stat -c '%u:%g' "$bind_project/data/herdsman-home")
-printf 'COMPOSE_FILE=compose.yaml:compose.tailscale.yaml:compose.bind-mount.yaml\n' >"$bind_project/.env"
 bash "$root/scripts/docker-setup.sh" >"$work/bind-repeat.out"
 test -f "$bind_project/data/herdsman-home/keep"
 test "$owner_before" = "$(stat -c '%u:%g' "$bind_project/data/herdsman-home")"
