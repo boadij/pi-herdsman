@@ -191,14 +191,16 @@ Narrow further when useful:
 npm test -- --test-name-pattern="<pattern>" extension/<area>.test.ts
 ```
 
-Focused tests provide development feedback. Focused tests, smoke testing,
-review, and all intermediate checks must happen before formatting. Do not
-format during those phases. Before handoff, follow the detailed validation
-order in [Development validation](docs/development/validation.md): run
-`npm run format` once as the final pre-commit mutation, then run the read-only
-checks `npm run format:check`, `npm run typecheck`,
-`npm run lint -- --deny-warnings`, `npm run check`, and `git diff --check`
-before staging or committing.
+Focused tests provide development feedback. Complete implementation,
+focused tests, smoke testing, review, and checks that may require source fixes
+before formatting. Resolve `npm run typecheck`,
+`npm run lint -- --deny-warnings`, and `npm run check` failures while code
+retains its working layout. Follow the order in
+[Development validation](docs/development/validation.md): run `npm run format`
+only after those checks pass, as the final pre-commit mutation. Then run only
+`npm run format:check` and `git diff --check` before staging or committing.
+If a subsequent failure requires edits, repeat the relevant pre-format checks
+before formatting again.
 
 For changes crossing the real Pi/Herdr runtime boundary, prefer the relevant
 simulated smoke scenario first when it covers the behavior. Pi, Herdsman, and
