@@ -323,6 +323,7 @@ If a concrete cross-assignment blocker requires a scope, priority, sequencing,
 or other project-level decision not settled by existing user instructions,
 report the evidence and affected work to the user for direction before
 redirecting Leads. Keep unaffected assignments progressing independently.
+For a new objective requiring independent project-assignment ownership, use delegate_work when authorized; do not route it through message_staff to an unrelated existing Lead. message_staff changes or coordinates work within an existing assignment; resume_work recovers a paused assignment. list_staff reports current assignments and direct reports, not a limit on creating another assignment. Keep work with an existing Lead when the user intends that ownership and the existing assignment authorizes it.
 For assigned project work, use message_staff when the assignment is active, including when its Lead's runtime state is idle or done. Use resume_work to recover a paused assignment with fresh instructions. Unknown or conflicted assignment state is not evidence that the Lead is stopped. A successfully queued instruction must not be resent merely because the Lead was already running; queue acceptance is not delivery confirmation.
 ${SUPERVISION_EVENT_GUIDANCE}`;
 const SUPERVISION_CONTEXT_TYPE = "pi-herdsman-supervision-context";

@@ -4536,6 +4536,14 @@ test("replaced Lead strategy keeps its protected charter and coordination tools"
     const charter = sections.pi_herdsman_role;
     assert.match(charter, /You are an ordinary Lead/);
     assert.match(charter, /Own architecture/);
+    assert.match(
+      charter,
+      /Reassess the remaining authorized objective after each handoff, including verification and requested delivery/,
+    );
+    assert.match(
+      charter,
+      /Agent capability summaries do not prove installed tools, credentials, or external authorization/,
+    );
     assert.doesNotMatch(charter, /ProjectAssignment/);
     assert.doesNotMatch(charter, /fresh managed project execution/);
     assert.doesNotMatch(
@@ -4791,6 +4799,14 @@ test("managed Lead prompt keeps protected authority under a replacement overlay"
     await invokeBeforeAgentStart(pi, event, context);
     const charter = event.systemPromptOptions.sections.pi_herdsman_role;
     assert.match(charter, /You are a Managed Lead/);
+    assert.match(
+      charter,
+      /Reassess the remaining authorized objective after each handoff, including verification and requested delivery/,
+    );
+    assert.match(
+      charter,
+      /Agent capability summaries do not prove installed tools, credentials, or external authorization/,
+    );
     assert.match(
       charter,
       /When a proposed scope or continuing-requirement change needs Manager authorization, do not execute or delegate that change before the decision\./,
@@ -6075,6 +6091,19 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
     await invokeBeforeAgentStart(pi, event, context);
     const prompt = event.systemPromptOptions.sections.pi_herdsman_role;
     assert.match(prompt, /verified Manager for this Pi session/);
+    assert.match(
+      prompt,
+      /For a new objective requiring independent project-assignment ownership, use delegate_work when authorized/,
+    );
+    assert.match(
+      prompt,
+      /message_staff changes or coordinates work within an existing assignment/,
+    );
+    assert.match(prompt, /resume_work recovers a paused assignment/);
+    assert.match(
+      prompt,
+      /list_staff reports current assignments and direct reports, not a limit on creating another assignment/,
+    );
     assert.match(
       prompt,
       /Recovery of a Lead's directly owned Agents belongs to that Lead/,
