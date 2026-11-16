@@ -1157,15 +1157,12 @@ test("parent delegates two same-definition children with exact ownership", async
     const content = String((guidance[0].message as any).content);
     for (const phrase of [
       "Each unresolved unit of work has one executor.",
-      "steer_agent queues a cooperative correction",
-      "it does not preempt the current operation",
-      "A repeated reminder for the same stale episode is additional recovery evidence",
-      "A steer queued during that unchanged episode cannot have taken effect yet",
-      "otherwise use interrupt_agent",
-      "Do not take over the Agent's unresolved assignment.",
-      "Do not take over or replace unresolved delegated work until the current generation is resolved or explicitly closed.",
+      "end the turn without concluding",
+      "Do not poll with status requests",
     ])
       assert.ok(content.includes(phrase), phrase);
+    assert.doesNotMatch(content, /Stale health attention/u);
+    assert.doesNotMatch(content, /A proven lost Agent/u);
     const sharedGuidance = pi.tools
       .find((tool) => tool.name === "list_agents")!
       .promptGuidelines!.join(" ");

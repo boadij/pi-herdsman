@@ -342,7 +342,7 @@ test("combined status reports a completed agent as pending, not active", async (
           status.startsWith(
             "Delegation status: 0 active direct agents; 1 pending direct result; 1 direct agent assignment remains unresolved.",
           ) &&
-          status.includes("physical disappearance is not completion")
+          status.includes("end the turn without concluding")
         );
       }),
       true,
@@ -2149,9 +2149,7 @@ test("recovery redelivers an unpersisted child result and then cleans it safely"
         "Delegation status: 1 active direct agent; 0 pending direct results; 1 direct agent assignment remains unresolved.",
       ),
     );
-    assert.ok(
-      recoveredStatus.includes("physical disappearance is not completion"),
-    );
+    assert.ok(recoveredStatus.includes("end the turn without concluding"));
     assert.equal(
       (recoveryStatusCall.message as any).details.activeDirectChildCount,
       1,
