@@ -4395,12 +4395,14 @@ export function registerLeadRuntime(
       pi.setActiveTools(executionTools());
       return;
     }
+    const restoredTools = pi.getActiveTools();
+    const branch = ctx.sessionManager.getBranch();
+    const sessionId = ctx.sessionManager.getSessionId();
     let saved: LeadExecutionSessionState | undefined;
+    let branchRole: ReturnType<typeof roleHost.sessionLeadRoleState>;
     try {
-      saved = sessionLeadExecutionState(
-        ctx.sessionManager.getBranch(),
-        ctx.sessionManager.getSessionId(),
-      );
+      saved = sessionLeadExecutionState(branch, sessionId);
+      branchRole = roleHost.sessionLeadRoleState(branch, sessionId);
     } catch (error) {
       leadExecution = {
         mode:
@@ -4413,12 +4415,53 @@ export function registerLeadRuntime(
     }
     const baseline = saved
       ? [...saved.leadTools]
-      : leadToolState.normalizeBaseTools(pi.getActiveTools());
+      : leadToolState.normalizeBaseTools(restoredTools);
     const mode =
       saved?.mode ?? options.commandHost.readConfig().defaultLeadExecution;
     leadToolState.setLeadTools(baseline);
+    const currentExecution = () => leadExecution;
     leadExecution = { mode, valid: false, managed: !!leadExecution?.managed };
     await restoreLeadExecution(ctx);
+    let checkpointIndex = -1;
+    let toolChangeIndex = -1;
+    for (const [index, entry] of branch.entries()) {
+      if (
+        entry.type === "custom" &&
+        (entry.data as { sessionId?: string } | undefined)?.sessionId ===
+          sessionId &&
+        (entry.customType === "pi-herdsman-lead-execution" ||
+          entry.customType === "pi-herdsman-role")
+      )
+        checkpointIndex = index;
+      if (
+        entry.type === "message" &&
+        entry.message.role === "system" &&
+        ((entry.message.toolsAdded?.length ?? 0) > 0 ||
+          (entry.message.toolsRemoved?.length ?? 0) > 0)
+      )
+        toolChangeIndex = index;
+    }
+    const restoredExecution = currentExecution();
+    if (
+      saved &&
+      sessionKind?.kind === "ordinary" &&
+      (branchRole?.role ?? "lead") === "lead" &&
+      restoredExecution?.valid &&
+      !restoredExecution.managed &&
+      toolChangeIndex > checkpointIndex
+    ) {
+      const policy = configuredToolPolicy(restoredExecution.definition, []);
+      if (policy.mode === "inherit") {
+        const excluded = (name: string) =>
+          policy.excluded.some((pattern) => matchesToolPattern(pattern, name));
+        leadToolState.setLeadTools(
+          leadToolState.normalizeBaseTools([
+            ...restoredTools.filter((name) => !excluded(name)),
+            ...baseline.filter(excluded),
+          ]),
+        );
+      }
+    }
     pi.setActiveTools(executionTools());
   };
   const agentEvents = createLeadAgentEventRuntime({

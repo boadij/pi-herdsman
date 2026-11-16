@@ -1818,6 +1818,125 @@ test("session tree navigation restores each branch's execution mode, baseline, a
   }
 });
 
+test("session tree restoration respects checkpoint order and tool policies", async (t) => {
+  const checkpoint = (mode: string, tools: string[]) => ({
+    type: "custom",
+    customType: "pi-herdsman-lead-execution",
+    data: { sessionId: LEAD_SESSION_ID, mode, leadTools: tools },
+  });
+  const toolChange = (added: string[], removed: string[] = []) => ({
+    type: "message",
+    message: { role: "system", toolsAdded: added, toolsRemoved: removed },
+  });
+  const cases = [
+    {
+      name: "a newer Flexible checkpoint wins over an older wider selection",
+      branch: [toolChange(["history"]), checkpoint("flexible", ["read"])],
+      restored: ["read", "history"],
+      expected: ["read", ...leadTools],
+    },
+    {
+      name: "a newer same-session role checkpoint wins over a Pi tool change",
+      branch: [
+        checkpoint("flexible", ["read"]),
+        toolChange(["history"]),
+        {
+          type: "custom",
+          customType: "pi-herdsman-role",
+          data: {
+            sessionId: LEAD_SESSION_ID,
+            role: "lead",
+            leadTools: ["read"],
+          },
+        },
+      ],
+      restored: ["read", "history"],
+      expected: ["read", ...leadTools],
+    },
+    {
+      name: "a newer Orchestrate checkpoint keeps its restriction",
+      branch: [toolChange(["history"]), checkpoint("orchestrate", ["read"])],
+      restored: ["read", "history"],
+      expected: leadTools,
+    },
+    {
+      name: "an explicit Flexible policy does not inherit newer tools",
+      profile: "tools: [read]",
+      branch: [
+        checkpoint("flexible", ["read", "bash"]),
+        toolChange(["history"]),
+      ],
+      restored: ["read", "bash", "history"],
+      expected: ["read", ...leadTools],
+    },
+    {
+      name: "excluded tools remain unavailable with newer tool evidence",
+      profile: "excludeTools: [bash]",
+      branch: [
+        checkpoint("flexible", ["read", "bash"]),
+        toolChange(["history"]),
+      ],
+      restored: ["read", "history"],
+      expected: ["read", "history", ...leadTools],
+    },
+    {
+      name: "a newer removal does not resurrect a disabled tool",
+      branch: [
+        checkpoint("flexible", ["read", "bash"]),
+        toolChange([], ["bash"]),
+      ],
+      restored: ["read"],
+      expected: ["read", ...leadTools],
+    },
+  ];
+  for (const scenario of cases) {
+    await t.test(scenario.name, async (t) => {
+      setLeadEnvironment();
+      const cwd = mkdtempSync(join(tmpdir(), "herdsman-tree-policy-"));
+      t.after(() => rmSync(cwd, { recursive: true, force: true }));
+      if (scenario.profile) {
+        mkdirSync(join(cwd, ".pi", "coordinators"), { recursive: true });
+        writeFileSync(
+          join(cwd, ".pi", "coordinators", "flexible-lead.md"),
+          `---\nname: flexible-lead\n${scenario.profile}\n---\nflexible\n`,
+        );
+      }
+      const pi = fakeChiefPi({
+        activeTools: ["read", "bash"],
+        allTools: [{ name: "history" }],
+      });
+      const context = fakeContext(pi.entries, scenario.branch) as any;
+      context.cwd = cwd;
+      registerExtension!(pi.pi as never);
+      try {
+        await pi.events.get("session_start")![0](undefined, context);
+        pi.pi.setActiveTools(scenario.restored);
+        const entriesBefore = pi.entries.length;
+        await pi.events.get("session_tree")![0](undefined, context);
+        assert.deepEqual(
+          new Set(pi.pi.getActiveTools()),
+          new Set(scenario.expected),
+        );
+        assert.equal(pi.entries.length, entriesBefore);
+        if (scenario.profile === "excludeTools: [bash]") {
+          writeFileSync(
+            join(cwd, ".pi", "coordinators", "flexible-lead.md"),
+            "---\nname: flexible-lead\n---\nflexible\n",
+          );
+          await pi.commandOptions.get("lead").handler("orchestrate", context);
+          await pi.commandOptions.get("lead").handler("flexible", context);
+          assert.deepEqual(
+            new Set(pi.pi.getActiveTools()),
+            new Set(["read", "bash", "history", ...leadTools]),
+          );
+        }
+      } finally {
+        await pi.events.get("session_shutdown")?.[0]();
+      }
+    });
+  }
+});
+
 test("session startup restores execution from the selected branch only", async () => {
   setLeadEnvironment();
   const branchEntry = (mode: string, tools: string[]) => [

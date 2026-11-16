@@ -86,6 +86,129 @@ import support, {
 } from "./support.ts";
 const { readConfig, updateConfig } = await import("./config.ts");
 
+test("Pi tree navigation preserves a late inherited direct tool", async () => {
+  setLeadEnvironment();
+  const faux = fauxProvider({
+    provider: `tree-inheritance-${randomUUID()}`,
+    models: [{ id: "test", reasoning: false, input: ["text"] }],
+  });
+  const modelRuntime = await ModelRuntime.create({
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  modelRuntime.registerNativeProvider(faux.provider);
+  const settingsManager = SettingsManager.inMemory({
+    compaction: { enabled: false },
+  });
+  let api: any;
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    settingsManager,
+    noExtensions: true,
+    noContextFiles: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    extensionFactories: [
+      (extensionApi) => {
+        api = extensionApi;
+        extensionApi.on("session_start", () =>
+          extensionApi.setActiveTools(
+            extensionApi
+              .getActiveTools()
+              .filter((name) => name !== "late_tree_tool"),
+          ),
+        );
+        registerExtension!(extensionApi);
+      },
+      (extensionApi) => {
+        extensionApi.registerTool({
+          name: "late_tree_tool",
+          label: "late tree tool",
+          description: "A direct tool activated after Herdsman startup.",
+          exposure: "direct",
+          parameters: Type.Object({}),
+          execute: async () => ({
+            content: [{ type: "text", text: "unused" }],
+            details: undefined,
+          }),
+        });
+        extensionApi.on("session_start", () =>
+          extensionApi.setActiveTools([
+            ...extensionApi.getActiveTools(),
+            "late_tree_tool",
+          ]),
+        );
+      },
+    ],
+  });
+  await resourceLoader.reload();
+  const declarations: string[][] = [];
+  faux.setResponses(
+    Array.from({ length: 3 }, () => (context: any) => {
+      declarations.push(
+        getCurrentTools(context.messages).map((tool) => tool.name),
+      );
+      return fauxAssistantMessage("done");
+    }),
+  );
+  const { session } = await createAgentSession({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    modelRuntime,
+    model: faux.getModel()!,
+    settingsManager,
+    resourceLoader,
+    sessionManager: SessionManager.inMemory(WORKSPACE),
+  });
+  try {
+    await (session as any)._extensionRunner.emit({
+      type: "session_start",
+      reason: "startup",
+    });
+    const checkpoint = session.sessionManager
+      .getBranch()
+      .reverse()
+      .find(
+        (entry: any) =>
+          entry.type === "custom" &&
+          entry.customType === "pi-herdsman-lead-execution",
+      ) as any;
+    assert.ok(checkpoint);
+    assert.ok(!checkpoint.data.leadTools.includes("late_tree_tool"));
+    await session.prompt("first");
+    assert.ok(declarations[0]!.includes("late_tree_tool"));
+    const firstTurn = session.sessionManager.getLeafId()!;
+    assert.ok(
+      session.sessionManager
+        .getBranch()
+        .some(
+          (entry: any) =>
+            entry.type === "message" &&
+            entry.message.role === "system" &&
+            entry.message.toolsAdded?.some(
+              (tool: any) => tool.name === "late_tree_tool",
+            ),
+        ),
+    );
+    await session.prompt("second");
+    const result = await session.navigateTree(firstTurn);
+    assert.equal(result.cancelled, false);
+    assert.ok(
+      api.getActiveTools().includes("late_tree_tool"),
+      "late tool remains active after navigation",
+    );
+    await session.prompt("after navigation");
+    assert.ok(
+      declarations[2]!.includes("late_tree_tool"),
+      "late tool is declared on the next request",
+    );
+  } finally {
+    await session.dispose();
+  }
+});
+
 test("Pi 1.5.0 includes non-triggering startup messages in the first provider request", async () => {
   const faux = fauxProvider({
     provider: "herdsman-startup-fan-in-test",
