@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.49.0](https://github.com/boadij/pi-herdsman/compare/v0.48.0...v0.49.0) (2026-11-16)
+
+
+### Features
+
+* **docker:** support standalone cross-platform setup ([#988](https://github.com/boadij/pi-herdsman/issues/988)) ([f051582](https://github.com/boadij/pi-herdsman/commit/f051582e2a25c8a989fe0cb959a4aee7985e499c))
+
+
+### Fixes
+
+* **agent:** distinguish owner input from notifications ([#1004](https://github.com/boadij/pi-herdsman/issues/1004)) ([dacffc6](https://github.com/boadij/pi-herdsman/commit/dacffc628ef6839340c415191a67bd3bbe2c3210)), closes [#998](https://github.com/boadij/pi-herdsman/issues/998)
+* **coordination:** clarify assignment and execution routing ([#1005](https://github.com/boadij/pi-herdsman/issues/1005)) ([51aa9fe](https://github.com/boadij/pi-herdsman/commit/51aa9fe4a99931731fdef06c061059b05d4152f4)), closes [#990](https://github.com/boadij/pi-herdsman/issues/990) [#997](https://github.com/boadij/pi-herdsman/issues/997)
+* **coordination:** clarify identity, capabilities, and decision boundaries ([#996](https://github.com/boadij/pi-herdsman/issues/996)) ([7eecae3](https://github.com/boadij/pi-herdsman/commit/7eecae30fa6481e07200831e667ae2d55a35af3d))
+* **lead:** preserve inherited tools across tree navigation ([#1010](https://github.com/boadij/pi-herdsman/issues/1010)) ([764a85e](https://github.com/boadij/pi-herdsman/commit/764a85e47c77d7a121d0f445776a92fbf248881a)), closes [#1006](https://github.com/boadij/pi-herdsman/issues/1006)
+
+
+### Performance
+
+* **context:** keep Agent guidance decision-specific ([#1001](https://github.com/boadij/pi-herdsman/issues/1001)) ([2312f82](https://github.com/boadij/pi-herdsman/commit/2312f829f331f6466647e6983588c1d3dbc8d5f3)), closes [#993](https://github.com/boadij/pi-herdsman/issues/993)
+
+
+### Documentation
+
+* correct stale contracts and simplify documentation ownership ([#1000](https://github.com/boadij/pi-herdsman/issues/1000)) ([fc53c00](https://github.com/boadij/pi-herdsman/commit/fc53c00b340d99a75fe4f25d9443294507f91eaa))
+* run corrective validation before final formatting ([#994](https://github.com/boadij/pi-herdsman/issues/994)) ([c96a296](https://github.com/boadij/pi-herdsman/commit/c96a296345b7736dad301578c91354134f0fb94e))
+
+
+### Tests
+
+* **runtime:** isolate inherited model restoration in tests ([#1003](https://github.com/boadij/pi-herdsman/issues/1003)) ([ce17148](https://github.com/boadij/pi-herdsman/commit/ce17148916ab60c887054766e6b60ae285494b4b))
+
+
+### Other Changes
+
+* **deps:** update dependency oxlint to v1.94.0 ([#1009](https://github.com/boadij/pi-herdsman/issues/1009)) ([1f545cd](https://github.com/boadij/pi-herdsman/commit/1f545cd144211b0704fc44a691c8789b1ab89b9a))
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.11.9 ([#1008](https://github.com/boadij/pi-herdsman/issues/1008)) ([bc706be](https://github.com/boadij/pi-herdsman/commit/bc706be7c76088091184eeb8812f8bf35ec8f624))
+
 ## [0.48.0](https://github.com/boadij/pi-herdsman/compare/v0.47.1...v0.48.0) (2026-11-15)
 
 
