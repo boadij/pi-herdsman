@@ -85,7 +85,25 @@ function classify(paths) {
       continue;
     }
 
-    if (path === "install.ps1") {
+    if (path === "install.ps1" || path === "scripts/docker-setup.ps1") {
+      tests = true;
+      bootstrap = true;
+      continue;
+    }
+
+    if (path === "scripts/docker-setup.sh") {
+      tests = true;
+      config();
+      continue;
+    }
+
+    if (path === "scripts/docker-setup.test.sh") {
+      tests = true;
+      config();
+      continue;
+    }
+
+    if (path === "scripts/docker-setup.test.ps1") {
       tests = true;
       bootstrap = true;
       continue;
@@ -337,6 +355,46 @@ if (process.argv[2] === "--self-test") {
   });
 
   assert.deepEqual(classify(["install.ps1"]), {
+    format: false,
+    tests: true,
+    package: false,
+    container: "none",
+    smoke: false,
+    bootstrap: true,
+    peer: false,
+  });
+
+  assert.deepEqual(classify(["scripts/docker-setup.sh"]), {
+    format: false,
+    tests: true,
+    package: false,
+    container: "config",
+    smoke: false,
+    bootstrap: false,
+    peer: false,
+  });
+
+  assert.deepEqual(classify(["scripts/docker-setup.ps1"]), {
+    format: false,
+    tests: true,
+    package: false,
+    container: "none",
+    smoke: false,
+    bootstrap: true,
+    peer: false,
+  });
+
+  assert.deepEqual(classify(["scripts/docker-setup.test.sh"]), {
+    format: false,
+    tests: true,
+    package: false,
+    container: "config",
+    smoke: false,
+    bootstrap: false,
+    peer: false,
+  });
+
+  assert.deepEqual(classify(["scripts/docker-setup.test.ps1"]), {
     format: false,
     tests: true,
     package: false,
