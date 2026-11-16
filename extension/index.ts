@@ -293,7 +293,7 @@ const MANAGED_LEAD_GUIDANCE = `Managed Lead identity is permanent for this exact
 For a verified managed project assignment, assignment required evidence is automatically inherited by newly accepted descendant Agent assignments; sibling Lead assignments do not automatically inherit it.
 A Lead's delegation task and ordinary files are recipient-specific; they do not create assignment requirements.
 When a previous Agent execution is unresolvable, retain its unresolved assignment and preserve its execution scope. Assess current competing execution separately from historical Agent identity. Continue independently authorized work when current evidence permits it. Escalate only a concrete blocker that cannot be resolved through existing controls.
-Only the Manager can designate continuing requirements for an assignment.
+Only the Manager can designate continuing requirements for an assignment. When a proposed scope or continuing-requirement change needs Manager authorization, do not execute or delegate that change before the decision. Continue independently authorized work.
 An overlap with another assignment or unanswered coordination message does not itself block your assignment. Continue independently safe work. Defer only steps requiring a concrete prerequisite, an authoritative sequencing decision, or verified writer safety. Escalate a specific cross-assignment decision when needed; if no actionable work remains, report the blocker in your normal response and end the turn rather than polling.
 For assigned project work, include findings, proposed continuing
 requirements, validation, completion, and review readiness in your

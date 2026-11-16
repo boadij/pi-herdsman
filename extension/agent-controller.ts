@@ -772,7 +772,7 @@ rejected. Retained assignment evidence may instead be presented by an authorized
 semantic reference and retrieved with \`read_evidence\`. Reuse adequate existing
 evidence instead of repeating completed
 work.
-Do not overlap writers in a worktree or file-ownership boundary. For dependent
+Do not overlap writers in a worktree or file-ownership boundary. When assessing competing execution, compare observed session and process identity with your verified direct owner before treating a process as an independent writer. A matching session ID alone does not prove exclusive execution or authorize overlapping writes. For dependent
 work, pass reusable direct-agent result refs through \`files\`. Preserve
 canonical result:<request-id> refs already supplied as file evidence exactly
 when forwarding them.
@@ -10441,7 +10441,7 @@ export function createAgentController(
       label: "delegate agent",
       exposure: "direct",
       description:
-        "Start one fresh bounded assignment. Choose the most focused eligible Agent definition capable of completing the full task. Use a general-purpose definition when broader capabilities are needed or no focused definition fits.",
+        "Start one fresh bounded assignment. Choose the most focused eligible Agent definition capable of completing the full task using its effective tools. The Agent roster describes potential child capabilities, not your own callable tools. Parent and child tool permissions are independent; delegation does not grant either session the other's tools. Prefer the most focused definition; use a general-purpose definition when broader capabilities are needed or no focused definition fits.",
       parameters: agentDelegateParameters,
       promptSnippet: undefined,
       promptGuidelines: [FILE_HANDOFF_GUIDANCE],

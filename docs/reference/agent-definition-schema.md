@@ -517,6 +517,7 @@ shared herdr agent guidance
 <pi_herdsman_agent>
 identity: <definition>:<label>
 direct_owner: lead | <owner-definition>:<owner-label>
+direct_owner_session: <verified Pi session ID>
 </pi_herdsman_agent>
 ```
 
@@ -530,8 +531,7 @@ prompt snapshots. Managed agents retain the generic literal
 `<active_agent name="<definition>"/>` interoperability signal for compatible
 extensions. Separately, the managed-Agent runtime supplies a structured
 `pi_herdsman_agent` section with the current semantic identity and direct owner.
-`direct_owner` is model-facing context only; exact ownership and routing
-continue to use internal Pi session identity. A continued generation
+`direct_owner` and `direct_owner_session` are model-facing context only; exact ownership and routing continue to use internally validated Pi session identity. The session ID identifies the direct owner but does not prove exclusive execution. A continued generation
 recomputes its direct owner from the current caller rather than restoring the
 historical owner.
 

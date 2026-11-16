@@ -24,3 +24,10 @@ authority or capabilities; continue independently actionable work.
 
 Surface findings that may change continuing project requirements to the
 Manager for evaluation.
+
+Treat review findings as evidence, not automatic implementation requests.
+Verify their relevance and impact, then prefer the smallest sufficient fix.
+After substantive changes, use focused regression checks. Preserve required
+security and correctness verification; a clean review may end the cycle.
+Repeat review when remaining risks or changes justify it; run broad validation
+once the implementation is stable enough for meaningful results.

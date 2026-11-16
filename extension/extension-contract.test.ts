@@ -4737,8 +4737,18 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
   delete process.env.HERDR_PANE_ID;
 });
 
-test("managed Lead prompt keeps the managed charter without an active assignment", async () => {
+test("managed Lead prompt keeps protected authority under a replacement overlay", async () => {
   setLeadEnvironment();
+  const roleDirectory = join(PI_AGENT_ROOT, "coordinators");
+  realFs.mkdirSync(roleDirectory, { recursive: true });
+  const role = join(roleDirectory, "managed-lead.md");
+  const previousRole = realFs.existsSync(role)
+    ? readFileSync(role, "utf8")
+    : undefined;
+  writeFileSync(
+    role,
+    "---\nname: managed-lead\nbodyMode: replace\n---\nCustom Managed Lead strategy",
+  );
   const sessionId = randomUUID();
   const entries = [
     {
@@ -4781,6 +4791,11 @@ test("managed Lead prompt keeps the managed charter without an active assignment
     await invokeBeforeAgentStart(pi, event, context);
     const charter = event.systemPromptOptions.sections.pi_herdsman_role;
     assert.match(charter, /You are a Managed Lead/);
+    assert.match(
+      charter,
+      /When a proposed scope or continuing-requirement change needs Manager authorization, do not execute or delegate that change before the decision\./,
+    );
+    assert.match(charter, /Continue independently authorized work/);
     assert.match(
       charter,
       /An overlap with another assignment or unanswered coordination message does not itself block/,
@@ -4861,6 +4876,8 @@ test("managed Lead prompt keeps the managed charter without an active assignment
     assert.doesNotMatch(charter, /No active Herdsman role is verified/);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
+    if (previousRole === undefined) realFs.rmSync(role, { force: true });
+    else writeFileSync(role, previousRole);
     setLeadEnvironment();
   }
 });
@@ -5106,7 +5123,10 @@ test("managed Lead prompt keeps the managed charter with an assigned session", a
   const roleDirectory = join(PI_AGENT_ROOT, "coordinators");
   realFs.mkdirSync(roleDirectory, { recursive: true });
   const role = join(roleDirectory, "managed-lead.md");
-  writeFileSync(role, "---\nname: managed-lead\nagents: [agent]\n---\n");
+  writeFileSync(
+    role,
+    "---\nname: managed-lead\nagents: [agent]\nbodyMode: append\n---\n",
+  );
   process.env.HERDR_SOCKET_PATH = join(
     tmpdir(),
     `managed-prompt-${randomUUID()}.sock`,
@@ -5226,6 +5246,7 @@ test("managed Lead prompt keeps the managed charter with an assigned session", a
       /assignment required evidence is automatically inherited/,
     );
     assert.match(charter, /Avoid unsolicited routine progress updates/);
+
     assert.doesNotMatch(charter, /You are an ordinary Lead/);
     assert.doesNotMatch(charter, /No active Herdsman role is verified/);
   } finally {
@@ -5696,7 +5717,7 @@ test("pending retirement survives branch switch in the exact assigned checkout",
 });
 
 test("delegating agents receive only their allowed definition roster", async () => {
-  const mailbox = setAgentEnvironment("delegating-agent", ["scout"]);
+  const mailbox = setAgentEnvironment("delegating-agent", ["generalist"]);
   const controllerState = {
     ...managedState("delegating-agent"),
     piSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
@@ -5716,6 +5737,7 @@ test("delegating agents receive only their allowed definition roster", async () 
   ];
   const pi = fakePi({
     entries,
+    activeTools: ["delegate_agent"],
     exec: agentControllerExecutor(controllerState),
   });
   registerExtension!(pi.pi as never);
@@ -5743,6 +5765,10 @@ test("delegating agents receive only their allowed definition roster", async () 
   assert.match(
     event.systemPromptOptions.sections.pi_herdsman_agent,
     /direct_owner: lead/,
+  );
+  assert.match(
+    event.systemPromptOptions.sections.pi_herdsman_agent,
+    /direct_owner_session: a{8}-a{4}-4a{3}-8a{3}-a{12}/,
   );
   assert.match(
     event.systemPromptOptions.sections.delegating_agent_role,
@@ -5779,10 +5805,12 @@ test("delegating agents receive only their allowed definition roster", async () 
   );
   assert.deepEqual(
     roster.map((definition: Record<string, unknown>) => definition.name),
-    ["scout"],
+    ["generalist"],
   );
   assert.equal(roster[0].model, undefined);
   assert.equal(roster[0].thinking, undefined);
+  assert.ok(roster[0].tools.includes("bash"));
+  assert.ok(!pi.pi.getActiveTools().includes("bash"));
   assert.doesNotMatch(
     event.systemPromptOptions.sections.agent_definitions.split(
       "\n\nThis is the session-start definition snapshot.",
@@ -5801,7 +5829,7 @@ test("delegating agents receive only their allowed definition roster", async () 
   const delegateTool = pi.tools.find((tool) => tool.name === "delegate_agent")!;
   assert.equal(
     Value.Check(delegateTool.parameters, {
-      definition: "scout",
+      definition: "generalist",
       task: "review this",
     }),
     true,
@@ -5819,6 +5847,21 @@ test("delegating agents receive only their allowed definition roster", async () 
     agentListTool.description,
     /agent_(?:delegate|continue|steer|interrupt|reply|close|inspect|transcript)/,
   );
+  assert.match(delegateTool.description, /effective tools/);
+  assert.match(
+    delegateTool.description,
+    /potential child capabilities, not your own callable tools/,
+  );
+  assert.match(
+    delegateTool.description,
+    /Parent and child tool permissions are independent/,
+  );
+  assert.match(
+    delegateTool.description,
+    /delegation does not grant either session the other's tools/,
+  );
+  assert.ok(pi.pi.getActiveTools().includes("delegate_agent"));
+  assert.equal(pi.pi.getActiveTools().includes("bash"), false);
   const sharedGuidance = agentListTool.promptGuidelines?.join(" ") ?? "";
   assert.match(
     sharedGuidance,
@@ -6045,6 +6088,8 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
     assert.doesNotMatch(prompt, /You are the Lead for this Pi session\./);
     assert.match(prompt, /Supervision is event-driven/);
     assert.match(prompt, /Custom Manager strategy/);
+    assert.match(prompt, /verified Manager for this Pi session/);
+    assert.match(prompt, /Project execution belongs to assigned Leads/);
     assert.match(
       prompt,
       /Independent assignments remain independent by default/,
