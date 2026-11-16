@@ -50,8 +50,10 @@ frontmatter supports `name`, `description`, `body`, `tools`, and
 model, thinking, system-prompt launch mode, skills, extensions, context
 inheritance, or permission policy are not supported.
 
-The bundled `flexible-lead` leaves `tools` unspecified, preserving Pi's normal
-ordinary tool baseline, and supplies flexible direct/delegated-work guidance.
+The bundled `flexible-lead` selects `tools: [+codemode]`, adding Pi's native
+Code Mode when available while preserving Pi's normal ordinary tool baseline.
+If Code Mode is unavailable, the inherited tools remain unchanged. The profile
+also supplies flexible direct/delegated-work guidance.
 The bundled `orchestrator-lead` selects `tools: [codemode]`, making Pi's
 native Code Mode available when loaded while keeping other ordinary tools
 disabled. Inspection and execution are delegated to Agents by default.
