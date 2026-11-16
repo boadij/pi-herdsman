@@ -4458,7 +4458,9 @@ export function registerLeadRuntime(
       );
       if (projection) {
         const excluded = (name: string) =>
-          projection.excluded.some((pattern) => matchesToolPattern(pattern, name));
+          projection.excluded.some((pattern) =>
+            matchesToolPattern(pattern, name),
+          );
         leadToolState.setLeadTools(
           leadToolState.normalizeBaseTools([
             ...restoredTools.filter(
