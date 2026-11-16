@@ -162,11 +162,14 @@ project property. Global controls remain independent, and an explicit project
 value takes precedence over the global value. Untrusted projects cannot be read
 or edited through this menu. Changes follow the existing preference evaluation
 lifecycle and do not retroactively change an already-running role or operation.
-An active Manager also sees a worktree-removal confirmation policy row for its
-verified repository. This authorization is stored in user-level Herdsman
-configuration, not `.pi/settings.json` or project overrides. Enabling it still
-requires explicit typed confirmation; it waives only the extra per-removal
-prompt and never the guarded removal checks.
+An active Manager can access `Project management` → `Repository permissions`
+for the verified repository independently of project trust. Removal approval
+and local integration permissions are stored in user-level Herdsman
+configuration, not `.pi/settings.json` or project overrides. Skipping removal
+approval requires native confirmation and waives only the extra per-removal
+prompt, never the guarded removal checks. Integration grants, including effective
+escalation through inheritance and new positive repository overrides, require
+confirmation.
 Updates to an existing project settings file coordinate with Pi's settings
 lock. When `.pi/settings.json` does not exist yet, concurrent independent
 writers can still race: Pi checks for the missing file before acquiring the
@@ -188,9 +191,10 @@ general worktree-removal requests.
 The permission covers the selected integration mode and the operation's narrowly
 scoped guarded cleanup of an integrated source checkout; it does not grant
 arbitrary removal authority. Settings provides `Off / Fast-forward only /
-Conflict-free merges` globally, and verified Manager project overrides provide
+Conflict-free merges` globally, and verified Manager repository permissions provide
 `Inherit / Off / Fast-forward only / Conflict-free merges` controls for that
-repository. Enabling either requires typing `enable`. The policy is persisted
+repository. Increasing effective authority or creating a positive repository
+override requires native confirmation. The policy is persisted
 in user-wide Herdsman configuration, not project settings. `cleanup_pending`
 means integration succeeded but checkout removal and/or assignment retirement
 is incomplete; with permission still enabled, retrying the same accepted SHA

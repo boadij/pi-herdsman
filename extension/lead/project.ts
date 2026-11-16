@@ -1936,12 +1936,18 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
   const setRemovalPreauthorization = async (
     enabled: boolean,
     ctx: ExtensionContext,
+    expectedManager?: ManagerDescriptor,
   ) => {
     const manager = await host.currentManager(ctx);
     if (host.activeRole() !== "manager" || !manager || !ctx.hasUI)
       throw new Error(
         "Only an interactive active Manager can change this setting",
       );
+    if (
+      expectedManager &&
+      !host.sameManagerDescriptor(manager, expectedManager)
+    )
+      throw new Error("Manager authority changed before saving the setting");
     const group = await host.worktreeGroupScope(
       host.pi,
       ctx,
@@ -1950,17 +1956,37 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     );
     if (group.repoKey !== manager.repoKey)
       throw new Error("Manager worktree group is not authoritative");
-    if (enabled) {
-      const answer = await ctx.ui.input(
-        `Skip worktree removal confirmation for this verified repository?\n\n${manager.repoKey}\n\nSubsequent explicitly requested removals here can proceed without a per-removal prompt. All safety checks remain active. Type enable to confirm.`,
-        undefined,
+    ctx.signal?.throwIfAborted();
+    const alreadyEffective =
+      isWorktreeRemovalPreapproved(manager.repoKey) === enabled;
+    if (enabled && !alreadyEffective) {
+      const confirmed = await ctx.ui.confirm(
+        "Allow worktree removal without individual approval?",
+        [
+          `Repository: ${manager.repoKey}`,
+          "",
+          "The Manager may execute explicitly requested, eligible",
+          "worktree removals without asking again.",
+          "Existing safety checks remain active.",
+        ].join("\n"),
         { signal: ctx.signal },
       );
-      if (answer !== "enable") return false;
+      if (!confirmed) return false;
     }
+    ctx.signal?.throwIfAborted();
     const current = await host.currentManager(ctx);
-    if (!current || !host.sameManagerDescriptor(current, manager))
+    ctx.signal?.throwIfAborted();
+    if (
+      host.activeRole() !== "manager" ||
+      !current ||
+      !host.sameManagerDescriptor(current, manager)
+    )
       throw new Error("Manager authority changed before saving the setting");
+    if (alreadyEffective) {
+      if (isWorktreeRemovalPreapproved(manager.repoKey) !== enabled)
+        throw new Error("Removal policy changed before saving the setting");
+      return true;
+    }
     setWorktreeRemovalPreapproved(manager.repoKey, enabled);
     return isWorktreeRemovalPreapproved(manager.repoKey) === enabled;
   };
@@ -1977,9 +2003,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (group.repoKey !== manager.repoKey)
       throw new Error("Manager worktree group is not authoritative");
     const current = await host.currentManager(ctx);
-    if (!current || !host.sameManagerDescriptor(current, manager))
+    if (
+      host.activeRole() !== "manager" ||
+      !current ||
+      !host.sameManagerDescriptor(current, manager)
+    )
       throw new Error("Manager authority changed while reading this setting");
     return {
+      manager,
       repoKey: manager.repoKey,
       enabled: isWorktreeRemovalPreapproved(manager.repoKey),
     };

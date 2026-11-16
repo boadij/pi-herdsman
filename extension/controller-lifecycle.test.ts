@@ -4463,7 +4463,7 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
 
   const rpcRunningStatus = async () => {
     context.mode = "rpc";
-    const selections = ["Agents", "Running"];
+    const selections = ["Agent activity", "Running agents"];
     context.ui.select = async (_title, options) => {
       const selection = selections.shift();
       return selection && options.includes(selection) ? selection : undefined;

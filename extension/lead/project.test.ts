@@ -125,6 +125,98 @@ test("Lead startup attestation requires the exact session and a fresh generation
   );
 });
 
+test("removal permission confirmation is scoped, cancellable, and skips no-op writes", async () => {
+  const { isWorktreeRemovalPreapproved, setWorktreeRemovalPreapproved } =
+    await import("../config.ts");
+  const { herdsmanConfigPath } = await import("../storage.ts");
+  const manager = {
+    repoKey: `/verified-${randomUUID()}`,
+    workspaceId: "workspace",
+  };
+  let current: typeof manager | undefined = manager;
+  let repoKey = manager.repoKey;
+  const ctx = fakeContext() as any;
+  ctx.hasUI = true;
+  let confirmations = 0;
+  let confirm = async () => true;
+  ctx.ui.confirm = async (title: string, message: string, options: any) => {
+    confirmations++;
+    assert.match(title, /Allow worktree removal/);
+    assert.match(message, new RegExp(manager.repoKey));
+    assert.equal(options.signal, ctx.signal);
+    return confirm();
+  };
+  const runtime = createLeadProjectRuntime({
+    pi: {},
+    leadRuntime: {},
+    activeRole: () => "manager",
+    currentManager: async () => current,
+    sameManagerDescriptor: (a: unknown, b: unknown) => a === b,
+    worktreeGroupScope: async () => ({ repoKey }),
+  } as any);
+  try {
+    ctx.hasUI = false;
+    await assert.rejects(
+      runtime.setRemovalPreauthorization(true, ctx),
+      /interactive/,
+    );
+    ctx.hasUI = true;
+    const replaced = { ...manager, repoKey: `/other-${randomUUID()}` };
+    current = replaced;
+    repoKey = replaced.repoKey;
+    await assert.rejects(
+      runtime.setRemovalPreauthorization(true, ctx, manager as any),
+      /authority changed/,
+    );
+    assert.equal(isWorktreeRemovalPreapproved(replaced.repoKey), false);
+    current = manager;
+    repoKey = "/other-repository";
+    await assert.rejects(
+      runtime.setRemovalPreauthorization(true, ctx),
+      /not authoritative/,
+    );
+    repoKey = manager.repoKey;
+    confirm = async () => false;
+    assert.equal(await runtime.setRemovalPreauthorization(true, ctx), false);
+    assert.equal(isWorktreeRemovalPreapproved(manager.repoKey), false);
+    confirm = async () => {
+      current = undefined;
+      return true;
+    };
+    await assert.rejects(
+      runtime.setRemovalPreauthorization(true, ctx),
+      /authority changed/,
+    );
+    assert.equal(isWorktreeRemovalPreapproved(manager.repoKey), false);
+    current = manager;
+    const controller = new AbortController();
+    ctx.signal = controller.signal;
+    confirm = async () => {
+      controller.abort();
+      return true;
+    };
+    await assert.rejects(runtime.setRemovalPreauthorization(true, ctx), {
+      name: "AbortError",
+    });
+    assert.equal(isWorktreeRemovalPreapproved(manager.repoKey), false);
+    ctx.signal = undefined;
+    confirm = async () => true;
+    assert.equal(await runtime.setRemovalPreauthorization(true, ctx), true);
+    assert.equal(isWorktreeRemovalPreapproved(manager.repoKey), true);
+    const before = realFs.statSync(herdsmanConfigPath()).ino;
+    const count = confirmations;
+    assert.equal(await runtime.setRemovalPreauthorization(true, ctx), true);
+    assert.equal(confirmations, count);
+    assert.equal(realFs.statSync(herdsmanConfigPath()).ino, before);
+    assert.equal(await runtime.setRemovalPreauthorization(false, ctx), true);
+    assert.equal(confirmations, count);
+    assert.equal(isWorktreeRemovalPreapproved(manager.repoKey), false);
+  } finally {
+    if (isWorktreeRemovalPreapproved(manager.repoKey))
+      setWorktreeRemovalPreapproved(manager.repoKey, false);
+  }
+});
+
 test("stop Lead observes liveness after waiting for project-work serialization", async () => {
   const ctx = fakeContext() as any;
   const manager = {

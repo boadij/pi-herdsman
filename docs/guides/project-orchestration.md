@@ -49,9 +49,9 @@ scope at a time. No prior chat turn or existing linked worktree is required in
 an ordinary Git primary workspace.
 
 For a non-Git workspace, explicitly running `/manager` or choosing
-**Project Manager > Start Manager mode** asks you to confirm the exact
-directory by default. The global **Skip Manager Git setup confirmation**
-setting disables that prompt for explicit activation. Initialization creates a
+**Project management > Start Manager mode** asks you to confirm the exact
+directory by default. The global **Manager Git setup prompt** setting can skip that prompt for
+explicit activation after confirmation. Initialization creates a
 local repository with an empty initial commit; existing files are not
 committed. Manager activation then uses its normal verification and eligibility
 checks. Declining or a failed initialization leaves the session outside
@@ -358,12 +358,13 @@ separate checkout or process independently when needed; avoid overlapping writer
 For an explicitly requested checkout removal, an active Manager can use
 `/manager remove <branch>` or the `remove_worktree` staff tool. Normally the
 tool records a pending request and returns immediately; review it with
-`/manager remove`. The request remains on the active Pi session branch across
+`/manager remove` or **Project management > Pending removal requests**. The request remains on the active Pi session branch across
 reload and appears in native Pi status; it is intent, not deletion authority.
 The exact bare `/manager remove` opens review, while `/manager remove ` starts
 branch completion. Removal asks for typed `remove` unless this exact repository
-has been preauthorized by a human with `/manager remove-preapproval on` or the
-Project Overrides policy row.
+has been preauthorized by a human with `/manager removal-confirmation skip` or **Project management > Repository
+permissions**. A new grant requires native confirmation. Repository integration
+permissions are configured there separately and show their effective source.
 Neither task completion, review, nor inactivity is approval. All paths validate
 the exact Manager assignment and linked checkout, refuse dirty or ambiguous
 targets, and use Herdr's non-forced worktree removal. A running assigned Lead

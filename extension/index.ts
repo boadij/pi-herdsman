@@ -1689,17 +1689,71 @@ function registerExtensionImpl(
         { triggerTurn: false },
       );
     };
+    const reviewPendingRemoval = async (
+      ctx: ExtensionCommandContext,
+    ): Promise<void> => {
+      const pending = projectRuntime.listPendingRemovals(ctx);
+      if (!pending.length) {
+        ctx.ui.notify("There are no pending worktree removals.", "info");
+        return;
+      }
+      const selected = await selectMenu(
+        ctx,
+        "Review pending worktree removal",
+        pending.map(({ branch, checkoutPath }) => ({
+          value: branch,
+          label: `${branch} · ${checkoutPath}`,
+        })),
+      );
+      if (!selected) return;
+      const request = pending.find((item) => item.branch === selected);
+      if (!request) throw new Error("Pending removal is unavailable");
+      const action = await selectMenu(ctx, `Pending removal · ${selected}`, [
+        { value: "approve", label: "Approve removal…" },
+        { value: "dismiss", label: "Dismiss request" },
+      ]);
+      if (!action) return;
+      if (action === "dismiss") {
+        if (!projectRuntime.cancelPendingRemoval(request, ctx))
+          throw new Error("Pending removal changed; review the new request");
+        ctx.ui.notify(
+          `Pending removal of ${request.branch} dismissed.`,
+          "info",
+        );
+        return;
+      }
+      const result = await projectRuntime.approvePendingRemoval(request, ctx);
+      ctx.ui.notify(
+        result.content[0]?.text ?? "Removal finished.",
+        result.details.ok ||
+          ("cancelled" in result.details && result.details.cancelled)
+          ? "info"
+          : "warning",
+      );
+      return;
+    };
     let leadCommandRuntime: any;
     const leadCommandHost = {
       pi,
+      reviewPendingRemoval,
       persistStopClosures: (
         ctx: ExtensionContext,
         closures: Parameters<typeof projectRuntime.persistStopClosures>[1],
       ) => projectRuntime.persistStopClosures(ctx, closures),
       getRemovalPreauthorization: (ctx: ExtensionContext) =>
         projectRuntime.getRemovalPreauthorization(ctx),
-      setRemovalPreauthorization: (enabled: boolean, ctx: ExtensionContext) =>
-        projectRuntime.setRemovalPreauthorization(enabled, ctx),
+      setRemovalPreauthorization: (
+        enabled: boolean,
+        ctx: ExtensionContext,
+        expectedManager?: Parameters<
+          typeof projectRuntime.setRemovalPreauthorization
+        >[2],
+      ) =>
+        projectRuntime.setRemovalPreauthorization(
+          enabled,
+          ctx,
+          expectedManager,
+        ),
       runHerdr,
       presentStopSummary,
       version: HERDSMAN_VERSION,
@@ -1758,8 +1812,12 @@ function registerExtensionImpl(
         updateConfig("spawnPlacement", placement as SpawnPlacement),
       updateMessageLimit: (key: string, value: number | undefined) =>
         updateConfig(key as any, value),
-      updateConfig: (key: string, value: unknown) => {
-        updateConfig(key as any, value as any);
+      updateConfig: (
+        key: string,
+        value: unknown,
+        expectedManagerMergeEnabled?: import("./config.ts").ManagerMergeSetting,
+      ) => {
+        updateConfig(key as any, value as any, expectedManagerMergeEnabled);
         if (key === "statusWidgetMaxRows") {
           const rows =
             value === undefined
@@ -1793,7 +1851,7 @@ function registerExtensionImpl(
               "leave",
               "remove",
               "forget",
-              "remove-preapproval",
+              "removal-confirmation",
             ];
             const input = prefix.trimStart();
             const [command, branchPrefix] = input.split(/\s+/u);
@@ -1802,12 +1860,13 @@ function registerExtensionImpl(
                 value,
                 label: value,
               }));
-            if (command === "remove-preapproval")
-              return input.trim().split(/\s+/u).length === 2
-                ? ["on", "off"]
+            if (command === "removal-confirmation")
+              return input.includes(" ") &&
+                input.trim().split(/\s+/u).length <= 2
+                ? ["required", "skip"]
                     .filter((value) => value.startsWith(branchPrefix ?? ""))
                     .map((value) => ({
-                      value: `remove-preapproval ${value}`,
+                      value: `removal-confirmation ${value}`,
                       label: value,
                     }))
                 : null;
@@ -1838,88 +1897,42 @@ function registerExtensionImpl(
           },
           handler: async (rawArgs: string, ctx: ExtensionCommandContext) => {
             const args = rawArgs.trim().split(/\s+/u).filter(Boolean);
-            if (args[0] === "remove-preapproval") {
+            if (args[0] === "removal-confirmation") {
               if (args.length === 1) {
                 const policy =
                   await projectRuntime.getRemovalPreauthorization(ctx);
                 ctx.ui.notify(
-                  `Worktree removal confirmation: ${policy.enabled ? "skipped" : "required"} for ${policy.repoKey}.`,
+                  `Worktree removal approval: ${policy.enabled ? "Skipped" : "Required"} for ${policy.repoKey}.`,
                   "info",
                 );
                 return;
               }
-              if (args.length !== 2 || !["on", "off"].includes(args[1]!)) {
+              if (
+                args.length !== 2 ||
+                !["required", "skip"].includes(args[1]!)
+              ) {
                 ctx.ui.notify(
-                  "Usage: /manager remove-preapproval <on|off>",
+                  "Usage: /manager removal-confirmation [required|skip]",
                   "error",
                 );
                 return;
               }
-              const enabled = args[1] === "on";
+              const enabled = args[1] === "skip";
               const stored = await projectRuntime.setRemovalPreauthorization(
                 enabled,
                 ctx,
               );
               ctx.ui.notify(
-                `Skip worktree removal confirmation for ${enabled ? "this repository is On" : "this repository is Off"}${stored ? "." : "; setting unchanged."}`,
+                stored
+                  ? `Worktree removal approval: ${enabled ? "Skipped" : "Required"}.`
+                  : "Worktree removal approval setting unchanged.",
                 stored ? "info" : "warning",
               );
               return;
             }
             if (args[0] === "remove") {
               if (args.length === 1) {
-                const pending = projectRuntime.listPendingRemovals(ctx);
-                if (!pending.length) {
-                  ctx.ui.notify(
-                    "There are no pending worktree removals.",
-                    "info",
-                  );
-                  return;
-                }
-                const selected = await selectMenu(
-                  ctx,
-                  "Review pending worktree removal",
-                  pending.map(({ branch, checkoutPath }) => ({
-                    value: branch,
-                    label: `${branch} · ${checkoutPath}`,
-                  })),
-                );
-                if (!selected) return;
-                const request = pending.find(
-                  (item) => item.branch === selected,
-                );
-                if (!request) throw new Error("Pending removal is unavailable");
-                const action = await selectMenu(
-                  ctx,
-                  `Pending removal · ${selected}`,
-                  [
-                    { value: "approve", label: "Approve removal…" },
-                    { value: "dismiss", label: "Dismiss request" },
-                  ],
-                );
-                if (!action) return;
-                if (action === "dismiss") {
-                  if (!projectRuntime.cancelPendingRemoval(request, ctx))
-                    throw new Error(
-                      "Pending removal changed; review the new request",
-                    );
-                  ctx.ui.notify(
-                    `Pending removal of ${request.branch} dismissed.`,
-                    "info",
-                  );
-                  return;
-                }
-                const result = await projectRuntime.approvePendingRemoval(
-                  request,
-                  ctx,
-                );
-                ctx.ui.notify(
-                  result.content[0]?.text ?? "Removal finished.",
-                  result.details.ok ||
-                    ("cancelled" in result.details && result.details.cancelled)
-                    ? "info"
-                    : "warning",
-                );
+                await reviewPendingRemoval(ctx);
                 return;
               }
               if (args.length !== 2) {

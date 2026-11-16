@@ -200,6 +200,49 @@ test("Manager merge policy defaults off and repository overrides inherit, set, a
   assert.deepEqual(readConfig().worktreeRemovalPreapprovedRepos, []);
 });
 
+test("merge policy writes reject stale snapshots under the config lock", () => {
+  updateConfig("managerMergeEnabled", true);
+  const snapshot = readConfig();
+  updateConfig("managerMergeEnabled", false);
+  assert.throws(
+    () =>
+      updateConfig("managerMergeEnabled", true, snapshot.managerMergeEnabled),
+    /policy changed/,
+  );
+  assert.equal(readConfig().managerMergeEnabled, false);
+
+  updateConfig("managerMergeEnabled", "divergent", false);
+  setManagerMergeOverride("/repo-a", false);
+  const before = readConfig();
+  updateConfig("managerMergeEnabled", false);
+  assert.throws(
+    () =>
+      setManagerMergeOverride("/repo-a", undefined, {
+        global: before.managerMergeEnabled,
+        override: before.managerMergeOverrides["/repo-a"],
+      }),
+    /policy changed/,
+  );
+  assert.equal(readConfig().managerMergeOverrides["/repo-a"], false);
+
+  updateConfig("managerMergeEnabled", "divergent");
+  setManagerMergeOverride("/repo-a", true);
+  assert.throws(
+    () =>
+      setManagerMergeOverride("/repo-a", undefined, {
+        global: before.managerMergeEnabled,
+        override: before.managerMergeOverrides["/repo-a"],
+      }),
+    /policy changed/,
+  );
+  assert.equal(readConfig().managerMergeOverrides["/repo-a"], true);
+  setManagerMergeOverride("/repo-a", undefined, {
+    global: "divergent",
+    override: true,
+  });
+  assert.equal(readConfig().managerMergeOverrides["/repo-a"], undefined);
+});
+
 test("Manager merge policy supports explicit divergent grants and strictly validates values", () => {
   updateConfig("managerMergeEnabled", "divergent");
   assert.deepEqual(effectiveMergePolicy(readConfig(), "/repo-a"), {

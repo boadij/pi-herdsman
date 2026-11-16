@@ -461,12 +461,12 @@ In a lead session with UI:
 ### `/herdsman` and `/agents`
 
 Verify both `/herdsman` and `/agents` open the same seven destinations
-`Execution`, `Agents`, `Project manager`, `Session stats`, `Definitions`,
-`Settings`, and `Advanced…`.
+`Session mode`, `Agent activity`, `Agent & role definitions`, `Project management`,
+`Usage & costs`, `Settings`, and `Advanced…`.
 Verify active role state is secondary metadata and selected-row contextual help
-updates in the TUI. `/herdsman → Agents` opens only `Running`, `Layout`, and
-`Stop all…`, with the running count and effective placement as secondary
-metadata. `Execution` shows the current ordinary mode and opens the flexible /
+updates in the TUI. `/herdsman → Agent activity` opens only `Running agents` and
+`Stop all agents…`, with the running count as secondary metadata. Verify
+`Settings → Agent pane layout` opens the placement selector. `Session mode` shows the current ordinary mode and opens the flexible /
 orchestrate selector; an assigned Lead shows managed with `managed-lead` help
 and no ordinary mode choices. `/lead` opens the same selector, while
 `/lead flexible` and `/lead orchestrate` select directly through that control.
@@ -484,15 +484,18 @@ Manager auto-start, Context retirement, and Message limits. Verify changing
 the default affects a future ordinary session without changing the current
 session.
 
-Navigate to Project manager and Chief mode from the menus. Confirm their
+Navigate to Project management and Chief mode from the menus. Confirm their
 Start, Overview, Refresh profile, and Leave actions use the existing `/manager` and `/chief`
-role behavior.
+role behavior. With an active Manager, verify pending-removal review and repository
+permissions are available. Using disposable settings, check native grant
+confirmation and cancellation for removal and integration permissions, including
+inheritance; verify cancellation leaves policy unchanged.
 
 ### `/herdsman definitions`
 
 Verify the native `Agents & Coordinators` menu shows:
 
-- separate `Agents` and `Coordinators` lists, with reserved
+- separate `Agent definitions` and `Coordinator profiles` lists, with reserved
   `flexible-lead`, `orchestrator-lead`, `managed-lead`, `manager`, and `chief`
   in that canonical role order;
 - contributing source words `bundled`, `global`, `project`, and `private repo`, including
