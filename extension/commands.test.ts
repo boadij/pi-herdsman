@@ -815,6 +815,34 @@ test("Lead execution state is strict and profile tools preserve only Lead capabi
     }),
     [...baseline, "delegate_agent", "message_supervisor"],
   );
+  const flexibleWithCodeMode = {
+    name: "flexible-lead",
+    path: "flexible-lead.md",
+    frontmatter: { name: "flexible-lead", tools: ["+codemode"] },
+    body: "",
+  };
+  assert.deepEqual(
+    state.projectLeadTools(baseline, flexibleWithCodeMode),
+    [...baseline, "delegate_agent", "message_supervisor"],
+    "unregistered CodeMode must not change the inherited tool selection",
+  );
+  const withCodeMode = createLeadToolState(
+    () =>
+      [
+        "read",
+        "bash",
+        "grep",
+        "codemode",
+        "delegate_agent",
+        "message_supervisor",
+      ].map((name) => ({ name })),
+    ["delegate_agent"],
+    ["delegate_agent", "message_supervisor"],
+  );
+  assert.deepEqual(
+    withCodeMode.projectLeadTools(baseline, flexibleWithCodeMode),
+    [...baseline, "codemode", "delegate_agent", "message_supervisor"],
+  );
 });
 
 test("managed identity survives tree and assignment loss while native new-session history is isolated", async (t) => {
