@@ -71,8 +71,8 @@ Definitions that specify `noExtensions: true` also load only
 `extensions: [builtin:codemode]` explicitly. A user's higher-precedence overlay
 can remove `codemode` or its extension. Runtime role profiles cannot configure
 extensions, so the `codemode` tool is available there only when Pi has loaded
-its built-in extension. The Flexible Lead continues to inherit the user's
-ordinary Pi tool selection.
+its built-in extension. The Flexible Lead adds `codemode` when registered while
+preserving the user's ordinary Pi tool selection.
 
 Code Mode does not add `bash`, `edit`, or `write` to a role's tool policy.
 Ordinary Lead profiles with explicit tools also enforce that policy during
@@ -177,10 +177,10 @@ profiles reject `model`, `thinking`, `systemPromptMode`, `enabled`, `permission`
 described below.
 
 An omitted `tools` field inherits the value from lower-precedence definition
-layers. The bundled Flexible Lead leaves this field unspecified, preserving the
-ordinary Lead baseline. While that inheriting ordinary Lead projection is
-active, observed changes to Pi's active ordinary tools update the saved
-baseline before subsequent role reconciliation. Explicit allowlists and
+layers. The bundled Flexible Lead selects `tools: [+codemode]`, preserving the
+ordinary Lead baseline while adding Code Mode when available. While that
+relative ordinary Lead projection is active, observed changes to Pi's active
+ordinary tools update the saved baseline before subsequent role reconciliation. Explicit allowlists and
 `excludeTools` remain authoritative, and restrictive roles do not supply the
 ordinary baseline. Bundled Orchestrate Lead, Manager, and Chief definitions
 explicitly select `tools: [codemode]`, enabling Pi's native Code Mode when the
