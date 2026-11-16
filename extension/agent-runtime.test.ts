@@ -4645,7 +4645,7 @@ test("shared Agent instructions preserve shell and owner-communication guidance"
   );
   assert.match(
     SHARED_AGENT_INSTRUCTIONS,
-    /await_owner only for a required owner decision that prevents further\s+correct progress/u,
+    /await_owner only when required input from your direct\s+owner prevents further correct progress/u,
   );
   assert.match(SHARED_AGENT_INSTRUCTIONS, /normal final handoff/u);
 });
@@ -8370,6 +8370,11 @@ test("owner notification is retained until its exact persisted session receipt",
       (entry: any) => entry.customType === "pi-herdsman-agent-owner-message",
     ) as any[];
     assert.equal(sentMessages.length, 2);
+    assert.match(
+      sent.content,
+      /nonblocking notification, not a pending await_owner request/u,
+    );
+    assert.match(sent.content, /Do not use reply_agent to acknowledge it/u);
     assert.deepEqual(pi.sentMessageCalls[0]?.options, {
       triggerTurn: true,
       deliverAs: "steer",
@@ -8710,6 +8715,14 @@ test("owner ask waits while busy and delivers once after settlement", async () =
     assert.match(
       delivered.content,
       new RegExp(`Use reply_agent with agent="${label}"`),
+    );
+    assert.match(
+      delivered.content,
+      /Reply only when you can provide the requested input/u,
+    );
+    assert.match(
+      delivered.content,
+      /leave the question pending rather than replying/u,
     );
     assert.doesNotMatch(delivered.content, /agent action/i);
     assert.equal(
