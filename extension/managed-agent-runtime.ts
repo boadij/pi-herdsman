@@ -3055,9 +3055,11 @@ export function registerManagedAgentRuntime(
   pi.on("before_agent_start", (event: any, ctx: ExtensionContext) => {
     const definition = process.env.PI_HERDSMAN_AGENT_DEFINITION!;
     const label = process.env.PI_HERDSMAN_LABEL!;
+    const owner = execution.initialized ? execution.assignment : undefined;
     event.systemPromptOptions.sections.pi_herdsman_agent = [
       `identity: ${displayIdentity(definition, label)}`,
       `direct_owner: ${process.env.PI_HERDSMAN_OWNER_DISPLAY!}`,
+      ...(owner ? [`direct_owner_session: ${owner.ownerSessionId}`] : []),
     ].join("\n");
     if (delegationEnabled) {
       const roster = startupDefinitionRoster;

@@ -1263,8 +1263,37 @@ test("reserves independent runtime role profiles with narrow fields", () => {
     ),
     ["codemode"],
   );
+  const managerBody = withPiAgentDir(global, () =>
+    discoverRoleDefinition("manager").body.replaceAll(/\s+/g, " "),
+  );
+  assert.match(
+    managerBody,
+    /required outcome and let the Lead use its effective tools and eligible Agents/,
+  );
+  assert.match(
+    managerBody,
+    /An explicit human restriction on delegation takes precedence/,
+  );
+  assert.match(
+    managerBody,
+    /requested deliverable from final acceptance of remaining requirements/,
+  );
+  assert.match(managerBody, /Report incomplete verification explicitly/);
   const managed = withPiAgentDir(global, () =>
     discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME),
+  );
+  assert.match(
+    managed.body,
+    /Treat review findings as evidence, not automatic implementation requests/,
+  );
+  assert.match(
+    managed.body,
+    /Preserve required\s+security and correctness verification/,
+  );
+  assert.match(managed.body, /a clean review may end the cycle/);
+  assert.match(
+    managed.body,
+    /Repeat review when remaining risks or changes justify it/,
   );
   for (const definition of [orchestrator!, managed]) {
     assert.match(definition.body, /non-overlapping execution scopes/);
