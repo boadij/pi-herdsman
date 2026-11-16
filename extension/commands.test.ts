@@ -1940,7 +1940,7 @@ test("session tree restoration respects checkpoint order and tool policies", asy
         activeTools: ["read", "bash"],
         allTools: [
           { name: "history" },
-          ...("extraTools" in scenario ? scenario.extraTools : []).map(
+          ...(scenario.extraTools ?? []).map(
             (name) => ({ name }),
           ),
         ],
