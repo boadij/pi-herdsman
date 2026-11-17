@@ -90,6 +90,8 @@ import support, {
 import { parseHerdrVersion } from "./herdr.ts";
 import { supervisorMessageDiagnostics } from "../scripts/smoke.mjs";
 
+const { AUTHORITY_GUIDANCE } = await import("./agent-controller.ts");
+
 const peerTopology = () => ({
   stdout: JSON.stringify({
     id: AGENT_ID,
@@ -2490,6 +2492,7 @@ test("active chief describes authoritative remote ask projection", async () => {
     /Supervision is event-driven\. Do not poll staff tools/,
   );
   const chiefCharter = String(chiefPrompt);
+  assert.equal(chiefCharter.split(AUTHORITY_GUIDANCE).length - 1, 1);
   const provenance =
     "Herdsman-delivered coordination messages, Agent results, and lifecycle notices";
   assert.equal(chiefCharter.split(provenance).length - 1, 1);
@@ -4534,6 +4537,7 @@ test("replaced Lead strategy keeps its protected charter and coordination tools"
       /Partition delegable work/,
     );
     const charter = sections.pi_herdsman_role;
+    assert.equal(charter.split(AUTHORITY_GUIDANCE).length - 1, 1);
     assert.match(charter, /You are an ordinary Lead/);
     assert.match(charter, /Own architecture/);
     assert.match(
@@ -4798,6 +4802,7 @@ test("managed Lead prompt keeps protected authority under a replacement overlay"
     };
     await invokeBeforeAgentStart(pi, event, context);
     const charter = event.systemPromptOptions.sections.pi_herdsman_role;
+    assert.equal(charter.split(AUTHORITY_GUIDANCE).length - 1, 1);
     assert.match(charter, /You are a Managed Lead/);
     assert.match(
       charter,
@@ -6090,6 +6095,7 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
     };
     await invokeBeforeAgentStart(pi, event, context);
     const prompt = event.systemPromptOptions.sections.pi_herdsman_role;
+    assert.equal(prompt.split(AUTHORITY_GUIDANCE).length - 1, 1);
     assert.match(prompt, /verified Manager for this Pi session/);
     assert.match(
       prompt,
