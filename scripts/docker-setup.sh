@@ -35,7 +35,11 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-project_dir="${PI_HERDSMAN_DIR:-$PWD}"
+if [[ -n "${PI_HERDSMAN_DIR:-}" ]]; then
+  project_dir=$PI_HERDSMAN_DIR
+else
+  project_dir=$(pwd -P) || die "current directory is inaccessible; cd into an existing directory and rerun setup."
+fi
 mkdir -p -- "$project_dir" || die "cannot create deployment directory: $project_dir"
 cd -- "$project_dir" || die "cannot enter deployment directory: $project_dir"
 project_dir="$(pwd -P)"
@@ -441,7 +445,7 @@ fi
 if [[ -n "$running_herdsman" ]] && (( ! tailscale_enabled )) && grep -Fxq tailscale <<<"$services"; then
   authenticated=0
   for _ in {1..10}; do
-    if docker_cmd compose exec -T tailscale tailscale status --json 2>/dev/null | grep -Eq '"BackendState"[[:space:]]*:[[:space:]]*"Running"'; then authenticated=1; break; fi
+    if docker_cmd compose exec --interactive=false -T tailscale tailscale status --json 2>/dev/null | grep -Eq '"BackendState"[[:space:]]*:[[:space:]]*"Running"'; then authenticated=1; break; fi
     sleep 2
   done
   (( authenticated )) || die "existing Tailscale deployment is not registered or its status is unavailable; inspect with 'docker compose exec tailscale tailscale status' and recover explicitly with Docker/Tailscale before rerunning."
@@ -473,7 +477,7 @@ printf 'SSH authorization checked in the persistent home.\n'
 if (( tailscale_enabled )); then
   authenticated=0
   for _ in {1..10}; do
-    if docker_cmd compose exec -T tailscale tailscale status --json 2>/dev/null | grep -Eq '"BackendState"[[:space:]]*:[[:space:]]*"Running"'; then authenticated=1; break; fi
+    if docker_cmd compose exec --interactive=false -T tailscale tailscale status --json 2>/dev/null | grep -Eq '"BackendState"[[:space:]]*:[[:space:]]*"Running"'; then authenticated=1; break; fi
     sleep 2
   done
   if (( ! authenticated )); then
@@ -496,7 +500,7 @@ if (( tailscale_enabled )); then
     unset ts_authkey bootstrap_ts_authkey
     authenticated=0
     for _ in {1..30}; do
-      if docker_cmd compose exec -T tailscale tailscale status --json 2>/dev/null | grep -Eq '"BackendState"[[:space:]]*:[[:space:]]*"Running"'; then authenticated=1; break; fi
+      if docker_cmd compose exec --interactive=false -T tailscale tailscale status --json 2>/dev/null | grep -Eq '"BackendState"[[:space:]]*:[[:space:]]*"Running"'; then authenticated=1; break; fi
       sleep 2
     done
     cleanup_status=0
@@ -513,7 +517,7 @@ fi
 
 ready=0
 for _ in {1..30}; do
-  if docker_cmd compose exec -T herdsman sh -c 'test -d /run/sshd && grep -q ":0016 " /proc/net/tcp /proc/net/tcp6' >/dev/null 2>&1; then ready=1; break; fi
+  if docker_cmd compose exec --interactive=false -T herdsman sh -c 'test -d /run/sshd && grep -q ":0016 " /proc/net/tcp /proc/net/tcp6' >/dev/null 2>&1; then ready=1; break; fi
   sleep 2
 done
 (( ready )) || die "Herdsman did not become ready; inspect with: docker compose logs herdsman"

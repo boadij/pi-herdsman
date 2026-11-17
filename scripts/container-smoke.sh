@@ -141,6 +141,10 @@ echo 'stage: real guided Docker setup authorization'
   # Finish key selection, then explicitly approve the first deployment.
   run_setup "$(cat "$tmp/installer-key1.pub")" $'\ny\n'
   wait_for_setup_ssh "$tmp/installer-key1"
+  # Verify curl | bash cannot lose the rest of the script to a Compose probe.
+  cat "$setup_script" | "${clean_env[@]}" bash >"$tmp/installer-piped.log"
+  grep -q 'Herdsman is ready' "$tmp/installer-piped.log"
+  grep -q 'Connect with:' "$tmp/installer-piped.log"
   before="$(compose ps -q herdsman)"
   test -n "$before"
   outgoing="$(compose exec -T herdsman sha256sum /home/herdsman/.ssh/id_ed25519 | awk '{print $1}')"

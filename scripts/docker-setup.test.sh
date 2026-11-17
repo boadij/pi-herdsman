@@ -26,7 +26,7 @@ case "$*" in
     fi ;;
   'compose stop tailscale'|'stop sidecar') [[ ${STOP_FAIL:-0} != 1 ]] ;;
   'compose up -d --force-recreate herdsman') : ;;
-  'compose exec -T tailscale tailscale status --json')
+  'compose exec --interactive=false -T tailscale tailscale status --json')
     if [[ -e ${TS_STATE:-/nonexistent} || ${TS_READY:-0} == 1 ]]; then echo '{"BackendState":"Running"}'; else exit 1; fi ;;
   compose\ run*)
     auth_script=${@: -1}
@@ -67,6 +67,19 @@ printf '# preserved override\n' >"$PROJECT/compose.override.yaml"
 printf '# preserved env\n' >"$PROJECT/.env"
 cd "$PROJECT"
 cp compose.yaml "$work/base"; cp compose.override.yaml "$work/override"; cp .env "$work/env"
+# A deleted current directory must not be recreated from the inherited PWD.
+stale="$work/deleted-cwd"
+mkdir "$stale"
+(
+  cd "$stale"
+  rmdir "$stale"
+  if bash "$root/scripts/docker-setup.sh" </dev/null >"$work/deleted-cwd.out" 2>&1; then
+    echo 'deleted current directory accepted' >&2
+    exit 1
+  fi
+)
+grep -Fq 'current directory is inaccessible' "$work/deleted-cwd.out"
+[[ ! -e "$stale" && ! -e "$LOG" ]]
 export IDS=container RUNNING=container
 bash "$root/scripts/docker-setup.sh" </dev/null >"$work/output"
 grep -q 'Herdsman is ready' "$work/output"
@@ -210,7 +223,7 @@ export HERDSMAN_IDS=herdsman IDS=$'sidecar\nherdsman' RUNNING=herdsman MOCK_AUTH
 rm -f "$TS_STATE"; : >"$LOG"
 if bash "$root/scripts/docker-setup.sh" </dev/null >"$work/unregistered" 2>&1; then echo 'unregistered Tailscale deployment accepted' >&2; exit 1; fi
 grep -q 'existing Tailscale deployment is not registered or its status is unavailable' "$work/unregistered"
-grep -q '^compose exec -T tailscale tailscale status --json$' "$LOG"
+grep -q '^compose exec --interactive=false -T tailscale tailscale status --json$' "$LOG"
 ! grep -Eq '^compose (up|start|run)' "$LOG"
 ! grep -q 'Herdsman is ready' "$work/unregistered"
 # A registered repeat retains its sidecar and succeeds without recreation.
