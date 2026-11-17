@@ -35,7 +35,7 @@ $env:COMPOSE_FILE = ''
 $script:keygenCalls = 0
 $script:keygenFailure = $false
 $script:keygenRace = $false
-function global:ssh-keygen {
+function ssh-keygen {
   $script:keygenCalls++
   if ($script:keygenFailure) { $global:LASTEXITCODE = 1; return }
   $global:LASTEXITCODE = 0
@@ -219,9 +219,11 @@ try {
 
   # Exercise native argument serialization as well as the filesystem, in the
   # isolated home. PowerShell 7 supports testing all native argument modes.
-  Remove-Item Function:global:ssh-keygen
+  Remove-Item Function:ssh-keygen
   $nativeKeygen = Get-Command ssh-keygen -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($nativeKeygen) {
+    $resolvedKeygen = Get-Command ssh-keygen
+    Assert ($resolvedKeygen.CommandType -eq 'Application' -and $resolvedKeygen.Source -eq $nativeKeygen.Source) 'Installer ssh-keygen does not resolve to the native executable.'
     $env:COMPOSE_FILE = 'compose.yaml'
     $script:hasPersistentAuthorizedKeys = $false
     $modes = if (Get-Variable PSNativeCommandArgumentPassing -ErrorAction SilentlyContinue) { @('Legacy', 'Standard', 'Windows') } else { @('Legacy') }
@@ -242,6 +244,11 @@ try {
       Remove-Item -LiteralPath $privatePath, $publicPath
       & $nativeKeygen.Source -q -t ed25519 -N 'fixture-passphrase' -f $privatePath
       Assert ($LASTEXITCODE -eq 0) 'Could not create encrypted test identity.'
+      $PSNativeCommandUseErrorActionPreference = $false
+      & $nativeKeygen.Source -y -P 'wrong-passphrase' -f $privatePath 2>$null | Out-Null
+      Assert ($LASTEXITCODE -ne 0) 'Test identity accepted an incorrect passphrase.'
+      & $nativeKeygen.Source -y -P 'fixture-passphrase' -f $privatePath 2>$null | Out-Null
+      Assert ($LASTEXITCODE -eq 0) 'Test identity did not accept its passphrase.'
       Remove-Item -LiteralPath $publicPath
       $beforePrivate = [IO.File]::ReadAllBytes($privatePath)
       $startupCount = @($script:dockerCalls | Where-Object { $_ -eq 'compose up -d' }).Count
