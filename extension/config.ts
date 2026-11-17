@@ -272,6 +272,10 @@ export function effectiveMergePolicy(
 export function setManagerMergeOverride(
   repoKey: string,
   enabled: ManagerMergeSetting | undefined,
+  expected?: {
+    global: ManagerMergeSetting;
+    override: ManagerMergeSetting | undefined;
+  },
 ): void {
   if (
     !validRepoIdentity(repoKey) ||
@@ -286,6 +290,15 @@ export function setManagerMergeOverride(
   });
   try {
     const current = readRawConfig();
+    if (
+      expected &&
+      ((current.managerMergeEnabled ?? DEFAULT_CONFIG.managerMergeEnabled) !==
+        expected.global ||
+        current.managerMergeOverrides?.[repoKey] !== expected.override)
+    )
+      throw new Error(
+        "Manager integration policy changed; reopen the selector.",
+      );
     const overrides = { ...current.managerMergeOverrides };
     if (enabled === undefined) delete overrides[repoKey];
     else overrides[repoKey] = enabled;
@@ -309,6 +322,7 @@ export function setManagerMergeOverride(
 export function setWorktreeRemovalPreapproved(
   repoKey: string,
   enabled: boolean,
+  expected?: boolean,
 ): void {
   if (!repoKey || typeof enabled !== "boolean")
     throw new Error(
@@ -321,6 +335,8 @@ export function setWorktreeRemovalPreapproved(
   try {
     const current = readRawConfig();
     const repos = new Set(current.worktreeRemovalPreapprovedRepos ?? []);
+    if (expected !== undefined && repos.has(repoKey) !== expected)
+      throw new Error("Removal policy changed before saving the setting");
     if (enabled) repos.add(repoKey);
     else repos.delete(repoKey);
     if (repos.size) current.worktreeRemovalPreapprovedRepos = [...repos];
@@ -551,6 +567,7 @@ function writeConfigAtomically(
 export function updateConfig<K extends ConfigKey>(
   key: K,
   value: HerdsmanConfig[K] | undefined,
+  expectedManagerMergeEnabled?: ManagerMergeSetting,
 ): void {
   const path = herdsmanConfigPath();
   const release = claimProcessLock(`${path}.lock`, {
@@ -558,6 +575,16 @@ export function updateConfig<K extends ConfigKey>(
   });
   try {
     const current = readRawConfig();
+    if (
+      expectedManagerMergeEnabled !== undefined &&
+      (key !== "managerMergeEnabled" ||
+        (current.managerMergeEnabled ?? DEFAULT_CONFIG.managerMergeEnabled) !==
+          expectedManagerMergeEnabled)
+    )
+      throw new Error(
+        "Global Manager integration policy changed; reopen the selector.",
+      );
+    if (value === undefined && !Object.hasOwn(current, key)) return;
     if (value !== undefined) {
       if (key === "statusWidgetMaxRows" && !validStatusWidgetMaxRows(value))
         throw new Error("Invalid Pi Herdsman config field statusWidgetMaxRows");

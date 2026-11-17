@@ -94,7 +94,7 @@ and its direct agents have depth 2. An agent whose depth equals
 default) allows one delegating level, and `4` allows chains of four agents.
 The setting is read from this user-wide file only and cannot be overridden by
 project settings, so deeper nesting is always an explicit user-level opt-in. It
-is also available in the `/herdsman` Settings menu as Max Agent depth.
+is also available in the `/herdsman` Settings menu as Maximum delegation depth.
 
 The limit is read when `delegate_agent` or `continue_agent` prepares a launch
 and checked again immediately before the agent starts; a launch whose limit
@@ -155,18 +155,23 @@ when Manager is started explicitly. Automatic startup and session restoration
 never initialize Git because of this preference. Existing files remain
 uncommitted and absent from new worktrees until separately committed.
 
-The Settings menu edits global defaults and, in the `Project overrides…` submenu,
-trusted-project values for these two preferences. Choose `Inherit global`, `On
-for this project`, or `Off for this project`; inheritance removes the stored
-project property. Global controls remain independent, and an explicit project
-value takes precedence over the global value. Untrusted projects cannot be read
-or edited through this menu. Changes follow the existing preference evaluation
-lifecycle and do not retroactively change an already-running role or operation.
-An active Manager also sees a worktree-removal confirmation policy row for its
-verified repository. This authorization is stored in user-level Herdsman
-configuration, not `.pi/settings.json` or project overrides. Enabling it still
-requires explicit typed confirmation; it waives only the extra per-removal
-prompt and never the guarded removal checks.
+The Settings menu places global and trusted-project choices within `Manager
+auto-start` and `Context retirement`. Choose `Inherit global`, On, or Off for
+the project; inheritance removes the stored project property. An explicit
+project value takes precedence over the global value. Untrusted projects cannot
+be read or edited through this menu, but global controls remain available.
+Changes follow the existing preference evaluation lifecycle and do not
+retroactively change an already-running role or operation.
+
+`Settings` → `Manager & repositories` also provides repository removal approval
+and local integration settings independently of Manager activation and project
+trust, when repository identity is verified. These permissions are stored in
+user-level Herdsman configuration, not `.pi/settings.json`. Skipping removal
+approval requires native confirmation and waives only the extra per-removal
+prompt, never the guarded removal checks. Integration grants, including effective
+escalation through inheritance and new positive repository overrides, require
+confirmation. Repository identity and relevant state are revalidated before
+changes are stored.
 Updates to an existing project settings file coordinate with Pi's settings
 lock. When `.pi/settings.json` does not exist yet, concurrent independent
 writers can still race: Pi checks for the missing file before acquiring the
@@ -188,9 +193,10 @@ general worktree-removal requests.
 The permission covers the selected integration mode and the operation's narrowly
 scoped guarded cleanup of an integrated source checkout; it does not grant
 arbitrary removal authority. Settings provides `Off / Fast-forward only /
-Conflict-free merges` globally, and verified Manager project overrides provide
+Conflict-free merges` globally, and the verified repository setting provides
 `Inherit / Off / Fast-forward only / Conflict-free merges` controls for that
-repository. Enabling either requires typing `enable`. The policy is persisted
+repository. Increasing effective authority or creating a positive repository
+override requires native confirmation. The policy is persisted
 in user-wide Herdsman configuration, not project settings. `cleanup_pending`
 means integration succeeded but checkout removal and/or assignment retirement
 is incomplete; with permission still enabled, retrying the same accepted SHA
