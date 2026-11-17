@@ -155,8 +155,10 @@ try {
   $mounts = @($model.services.herdsman.volumes | Where-Object { $_.target -eq '/home/herdsman' })
   if ($mounts.Count -ne 1) { Fail 'expected exactly one Herdsman home mount.' }
   $mount = $mounts[0]
-  $uid = [string]$model.services.herdsman.environment.PUID
-  $gid = [string]$model.services.herdsman.environment.PGID
+  $configuredUid = [string]$model.services.herdsman.environment.PUID
+  $configuredGid = [string]$model.services.herdsman.environment.PGID
+  $uid = $configuredUid
+  $gid = $configuredGid
   if (-not $uid) { $uid = '1000' }
   if (-not $gid) { $gid = '1000' }
   if ($uid -notmatch '^[1-9][0-9]*$' -or $gid -notmatch '^[1-9][0-9]*$') {
@@ -193,6 +195,24 @@ try {
   }
   if ($mount.type -notin @('volume', 'bind')) { Fail 'unsupported Herdsman home mount type.' }
 
+  # Read numeric ownership through the Linux engine. Never chown an existing home.
+  $derivedUid = ''
+  $derivedGid = ''
+  if ($mount.type -eq 'bind' -and -not $configuredUid) {
+    $ownerText = & docker compose run --rm --no-deps -T --user '0:0' --entrypoint sh herdsman -c 'stat -c %u:%g /home/herdsman'
+    if ($LASTEXITCODE -ne 0 -or ($ownerText | Out-String).Trim() -notmatch '^([0-9]+):([0-9]+)$') { Fail 'could not inspect bind home ownership.' }
+    $ownerUid = $Matches[1]
+    $ownerGid = $Matches[2]
+    if ($ownerUid -match '^[1-9][0-9]*$' -and $ownerUid -ne '1000') {
+      $derivedUid = $ownerUid
+      $uid = $ownerUid
+      if (-not $configuredGid -and $ownerGid -match '^[1-9][0-9]*$') {
+        $derivedGid = $ownerGid
+        $gid = $ownerGid
+      }
+    }
+  }
+
   # Check the image account database and StrictModes without changing either.
   $preflightScript = @'
 set -eu
@@ -208,6 +228,78 @@ mode=$(stat -c %a /home/herdsman)
 '@
   & docker compose run --rm --no-deps -T --user '0:0' --entrypoint sh herdsman -c $preflightScript sh $uid $gid
   if ($LASTEXITCODE -ne 0) { Fail 'home ownership, permissions, or configured PUID/PGID conflict with the image; refusing startup.' }
+
+  # Numeric execution tests the actual access that the remapped account needs,
+  # including ACLs and read-only mounts, without modifying the image or home.
+  & docker compose run --rm --no-deps -T --user "${uid}:${gid}" --entrypoint sh herdsman -c 'test -w /home/herdsman'
+  if ($LASTEXITCODE -ne 0) { Fail 'home is not writable by the effective PUID/PGID; refusing startup.' }
+
+  if ($derivedUid) {
+    # Resolve a candidate dotenv file before changing the real one. This also
+    # catches shell overrides and Compose files that ignore these variables.
+    $candidate = Join-Path $script:ProjectDir ('.env.candidate.' + [guid]::NewGuid().ToString('N'))
+    try {
+      if (-not (Test-Path -LiteralPath $envPath -PathType Leaf)) {
+        Fail 'create an empty .env file and retry so derived IDs can be saved with rollback protection.'
+      }
+      [byte[]]$original = [IO.File]::ReadAllBytes($envPath)
+      $additions = "`nPUID=$derivedUid`n"
+      if ($derivedGid) { $additions += "PGID=$derivedGid`n" }
+      $bytes = [Text.Encoding]::UTF8.GetBytes($additions)
+      $stream = [IO.File]::Open($candidate, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+      try { $stream.Write($original, 0, $original.Length); $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+      $candidateText = & docker compose --env-file $candidate config --format json
+      if ($LASTEXITCODE -ne 0) { Fail 'could not resolve Compose with derived home IDs.' }
+      try { $candidateModel = ($candidateText | Out-String) | ConvertFrom-Json } catch { Fail 'Compose returned invalid configuration JSON for derived IDs.' }
+      if ([string]$candidateModel.services.herdsman.environment.PUID -cne $uid -or
+          $(if ([string]$candidateModel.services.herdsman.environment.PGID) { [string]$candidateModel.services.herdsman.environment.PGID } else { '1000' }) -cne $gid) {
+        Fail 'Compose does not apply derived home IDs; configure PUID and PGID explicitly.'
+      }
+      # IDs must not alter project, mount, image, or any other resolved setting.
+      $baseline = ($modelText | Out-String) | ConvertFrom-Json
+      foreach ($name in @('PUID', 'PGID')) {
+        $baseline.services.herdsman.environment.PSObject.Properties.Remove($name)
+        $candidateModel.services.herdsman.environment.PSObject.Properties.Remove($name)
+      }
+      if (($baseline | ConvertTo-Json -Depth 100 -Compress) -cne ($candidateModel | ConvertTo-Json -Depth 100 -Compress)) {
+        Fail 'derived home IDs change other Compose configuration; configure them explicitly.'
+      }
+      # Keep exclusive write/delete access through verification and rollback.
+      # Compose may read the file, but another Windows writer cannot replace it.
+      $stream = [IO.File]::Open($envPath, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
+      try {
+        if ($stream.Length -ne $original.Length) { Fail '.env changed while validating derived IDs; retry setup.' }
+        [byte[]]$current = [byte[]]::new($original.Length)
+        $offset = 0
+        while ($offset -lt $current.Length) {
+          $read = $stream.Read($current, $offset, $current.Length - $offset)
+          if ($read -eq 0) { Fail 'could not read .env while validating derived IDs.' }
+          $offset += $read
+        }
+        if ([Convert]::ToBase64String($current) -cne [Convert]::ToBase64String($original)) { Fail '.env changed while validating derived IDs; retry setup.' }
+        try {
+          $stream.Write($bytes, 0, $bytes.Length)
+          $stream.Flush()
+          $persistedText = & docker compose config --format json
+          if ($LASTEXITCODE -ne 0) { Fail 'could not resolve Compose after saving derived IDs.' }
+          try { $persisted = ($persistedText | Out-String) | ConvertFrom-Json } catch { Fail 'invalid Compose configuration after saving derived IDs.' }
+          $verified = ($candidateText | Out-String) | ConvertFrom-Json
+          if (($persisted | ConvertTo-Json -Depth 100 -Compress) -cne ($verified | ConvertTo-Json -Depth 100 -Compress)) {
+            Fail 'saved IDs do not resolve to the validated Compose configuration.'
+          }
+          $model = $persisted
+        } catch {
+          $failure = $_
+          try { $stream.SetLength($original.Length); $stream.Flush() } catch {
+            Fail "could not roll back .env after persistence failed; restore it before retrying. Rollback error: $($_.Exception.Message)"
+          }
+          throw $failure
+        }
+      } finally { $stream.Dispose() }
+    } finally {
+      Remove-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
+    }
+  }
 
   $keys = [Collections.Generic.List[string]]::new()
   # Compose has already applied interpolation, env files and precedence.

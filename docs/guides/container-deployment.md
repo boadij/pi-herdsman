@@ -364,7 +364,9 @@ configured, regardless of the user running setup. It preserves existing
 bind-home ownership and stops if the home or effective IDs are incompatible
 with non-root access. It does not recursively change ownership of existing
 data. Guided Windows setup requires an existing bind-mounted home and checks
-its access from a container; it does not create the home or derive its IDs.
+its ownership and access from a container. If PUID is unset, it can derive
+nonstandard IDs from that home and persist them after validating the resolved
+Compose configuration. It does not create or change ownership of the home.
 
 For a manually configured Linux or NAS bind mount, prepare the directory for
 the positive UID/GID the container will use:

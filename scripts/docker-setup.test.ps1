@@ -43,18 +43,65 @@ $script:composeKey = $null
 $script:networkMode = ''
 $script:sidecarImage = ''
 $script:containerInfo = $null
+$script:homeType = 'volume'
+$script:homeSource = 'home'
+$script:bindOwner = '2000:2000'
+$script:writable = $true
+$script:deriveModel = $false
+$script:ignoreDerived = $false
+$script:changeDerivedProject = $false
+$script:changeDerivedMount = $false
+$script:postWriteFailure = ''
+$script:concurrentBeforeWrite = $false
+$script:writeBlocked = $false
+$script:lockedReadObserved = $false
+$script:candidateResolved = $false
 function docker {
   $call = $args -join ' '
   $script:dockerCalls.Add($call)
-  if ($call -eq 'compose config --format json') {
+  if ($call -eq 'compose config --format json' -or $call -like 'compose --env-file * config --format json') {
     $global:LASTEXITCODE = 0
+    if ($args[1] -eq '--env-file') { $script:candidateResolved = $true }
+    if ($script:postWriteFailure -eq 'read-error' -and $call -eq 'compose config --format json' -and $script:candidateResolved) {
+      $global:LASTEXITCODE = 1
+      return
+    }
+    $resolvedUid = $script:modelUid
+    $resolvedGid = $script:modelGid
+    if ($script:deriveModel -and -not $script:ignoreDerived) {
+      $configEnv = if ($args[1] -eq '--env-file') { $args[2] } else { Join-Path $project '.env' }
+      if (Test-Path -LiteralPath $configEnv) {
+        $reader = [IO.StreamReader]::new([IO.File]::Open($configEnv, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite))
+        try {
+          while ($null -ne ($line = $reader.ReadLine())) {
+            if ($line -match '^PUID=(\d+)$') { $resolvedUid = $Matches[1] }
+            if ($line -match '^PGID=(\d+)$') { $resolvedGid = $Matches[1] }
+          }
+        } finally { $reader.Dispose() }
+      }
+    }
+    if ($script:concurrentBeforeWrite -and $args[1] -eq '--env-file') {
+      [IO.File]::AppendAllText((Join-Path $project '.env'), "CONCURRENT=value`n")
+    }
+    if ($script:deriveModel -and $call -eq 'compose config --format json' -and $resolvedUid -eq '2000') {
+      $script:lockedReadObserved = $true
+      try {
+        $writer = [IO.File]::Open((Join-Path $project '.env'), [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+        $writer.Dispose()
+      } catch { $script:writeBlocked = $true }
+      if ($script:postWriteFailure -eq 'error') { $global:LASTEXITCODE = 1; return }
+    }
     $effectiveKey = if ($null -ne $script:composeKey) { $script:composeKey } else { $env:SSH_AUTHORIZED_KEYS }
-    $services = @{ herdsman = @{ network_mode = $script:networkMode; environment = @{ PUID = $script:modelUid; PGID = $script:modelGid; SSH_AUTHORIZED_KEYS = $effectiveKey }; volumes = @(@{ type = 'volume'; source = 'home'; target = '/home/herdsman' }) } }
+    $resolvedSource = if ($script:changeDerivedMount -and $args[1] -eq '--env-file') { $script:homeSource + '-other' } else { $script:homeSource }
+    $services = @{ herdsman = @{ network_mode = $script:networkMode; environment = @{ PUID = $resolvedUid; PGID = $resolvedGid; SSH_AUTHORIZED_KEYS = $effectiveKey }; volumes = @(@{ type = $script:homeType; source = $resolvedSource; target = '/home/herdsman' }) } }
     if ($script:sidecarImage) { $services['vpn'] = @{ image = $script:sidecarImage } }
-    return (@{ name = 'test-project'; services = $services; volumes = @{ home = @{ name = 'test-project_home' } } } | ConvertTo-Json -Depth 8 -Compress)
+    $name = if (($script:changeDerivedProject -and $args[1] -eq '--env-file') -or ($script:postWriteFailure -eq 'mismatch' -and $call -eq 'compose config --format json' -and $resolvedUid -eq '2000')) { 'changed-project' } else { 'test-project' }
+    return (@{ name = $name; services = $services; volumes = @{ home = @{ name = 'test-project_home' } } } | ConvertTo-Json -Depth 8 -Compress)
   }
   if ($call -like 'ps -aq --filter *') { $global:LASTEXITCODE = 0; if ($script:containerInfo) { return 'container-id' }; return }
   if ($call -eq 'inspect container-id') { $global:LASTEXITCODE = 0; return (ConvertTo-Json -InputObject @($script:containerInfo) -Depth 8 -Compress) }
+  if ($call -like 'compose run --rm --no-deps -T --user 0:0 *stat -c*') { $global:LASTEXITCODE = 0; return $script:bindOwner }
+  if ($call -like 'compose run --rm --no-deps -T --user *test -w /home/herdsman') { $global:LASTEXITCODE = if ($script:writable) { 0 } else { 1 }; return }
   if ($call -like 'compose run --rm --no-deps -T --user 0:0 *') { $global:LASTEXITCODE = if ($script:preflightOk) { 0 } else { 1 }; return }
   if ($call -like 'compose run --rm --no-deps -T --user *') {
     $script:capturedKeys = @($input)
@@ -154,6 +201,77 @@ try {
     Assert (-not ($script:dockerCalls -contains 'compose up -d')) 'Invalid ID reached startup.'
     Set-Variable -Scope Script -Name $field -Value ''
   }
+  # Explicit nonstandard IDs must pass through unchanged for an existing home.
+  $script:homeType = 'bind'
+  $script:homeSource = Join-Path $project 'existing-home'
+  New-Item -ItemType Directory -Path $script:homeSource | Out-Null
+  $script:modelUid = '2000'
+  $script:modelGid = '2000'
+  $script:dockerCalls.Clear()
+  . (Join-Path $root 'scripts/docker-setup.ps1')
+  Assert (@($script:dockerCalls | Where-Object { $_ -like 'compose run --rm --no-deps -T --user 2000:2000 *authorized_keys*' }).Count -eq 1) 'Configured nonstandard IDs were not used for authorization.'
+  Assert (-not @($script:dockerCalls | Where-Object { $_ -match '\bchown\b' }).Count) 'Existing bind home ownership was changed.'
+  $script:modelUid = ''
+  $script:modelGid = ''
+  $script:deriveModel = $true
+  $originalEnv = [IO.File]::ReadAllText((Join-Path $project '.env'))
+  $originalEnvBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $project '.env')))
+  foreach ($failure in @('unwritable', 'ignored', 'project', 'mount')) {
+    $script:writable = $failure -ne 'unwritable'
+    $script:ignoreDerived = $failure -eq 'ignored'
+    $script:changeDerivedProject = $failure -eq 'project'
+    $script:changeDerivedMount = $failure -eq 'mount'
+    $script:dockerCalls.Clear()
+    $failed = $false
+    try { . (Join-Path $root 'scripts/docker-setup.ps1') } catch { $failed = $true }
+    Assert $failed "Derived-ID $failure case was accepted."
+    Assert ([IO.File]::ReadAllText((Join-Path $project '.env')) -ceq $originalEnv) "Derived-ID $failure changed .env."
+    Assert (-not @($script:dockerCalls | Where-Object { $_ -like '*authorized_keys*' -or $_ -eq 'compose up -d' }).Count) "Derived-ID $failure reached authorization or startup."
+  }
+  $script:writable = $true
+  $script:ignoreDerived = $false
+  $script:changeDerivedProject = $false
+  $script:changeDerivedMount = $false
+  foreach ($postFailure in @('error', 'mismatch', 'read-error')) {
+    $script:postWriteFailure = $postFailure
+    $script:candidateResolved = $false
+    $script:writeBlocked = $false
+    $script:dockerCalls.Clear()
+    $failed = $false
+    try { . (Join-Path $root 'scripts/docker-setup.ps1') } catch { $failed = $true }
+    Assert $failed "Post-write $postFailure was accepted."
+    Assert ([Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $project '.env'))) -ceq $originalEnvBytes) "Post-write $postFailure did not restore .env bytes."
+    if ($postFailure -ne 'read-error') { Assert $script:writeBlocked "Post-write $postFailure allowed a concurrent writer." }
+    Assert (-not @($script:dockerCalls | Where-Object { $_ -like '*authorized_keys*' -or $_ -eq 'compose up -d' }).Count) "Post-write $postFailure reached authorization or startup."
+  }
+  $script:postWriteFailure = ''
+  Remove-Item -LiteralPath (Join-Path $project '.env')
+  $failed = $false
+  try { . (Join-Path $root 'scripts/docker-setup.ps1') } catch { $failed = $_.Exception.Message -match 'create an empty .env' }
+  Assert $failed 'Missing .env did not fail safely before persistence.'
+  Assert (-not (Test-Path -LiteralPath (Join-Path $project '.env'))) 'Failed persistence created .env.'
+  [IO.File]::WriteAllText((Join-Path $project '.env'), $originalEnv)
+  $script:concurrentBeforeWrite = $true
+  $failed = $false
+  try { . (Join-Path $root 'scripts/docker-setup.ps1') } catch { $failed = $_.Exception.Message -match '.env changed' }
+  Assert $failed 'Concurrent .env edit was not rejected.'
+  Assert ([IO.File]::ReadAllText((Join-Path $project '.env')) -ceq ($originalEnv + "CONCURRENT=value`n")) 'Concurrent .env edit was overwritten.'
+  [IO.File]::WriteAllText((Join-Path $project '.env'), $originalEnv)
+  $script:concurrentBeforeWrite = $false
+  $script:writeBlocked = $false
+  $script:lockedReadObserved = $false
+  $script:dockerCalls.Clear()
+  . (Join-Path $root 'scripts/docker-setup.ps1')
+  Assert ($script:lockedReadObserved -and $script:writeBlocked) 'Post-write verification did not read while blocking a concurrent writer.'
+  $saved = [IO.File]::ReadAllText((Join-Path $project '.env'))
+  Assert ($saved -match '(?m)^PUID=2000$' -and $saved -match '(?m)^PGID=2000$') 'Derived IDs were not persisted.'
+  Assert (@($script:dockerCalls | Where-Object { $_ -like 'compose --env-file * config --format json' }).Count -eq 1) 'Derived model was not validated before persistence.'
+  Assert (@($script:dockerCalls | Where-Object { $_ -like '*2000:2000*test -w /home/herdsman' }).Count -eq 1) 'Derived-user writability was not checked.'
+  Assert (-not @($script:dockerCalls | Where-Object { $_ -match '\bchown\b' }).Count) 'Derivation changed existing ownership.'
+  [IO.File]::WriteAllText((Join-Path $project '.env'), $originalEnv)
+  $script:deriveModel = $false
+  $script:homeType = 'volume'
+  $script:homeSource = 'home'
   $script:preflightOk = $false
   $script:dockerCalls.Clear()
   $failed = $false
