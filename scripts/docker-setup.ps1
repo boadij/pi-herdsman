@@ -127,10 +127,6 @@ try {
   }
 
   $setting = Read-ComposeSetting $envPath
-  $separator = if ($env:COMPOSE_PATH_SEPARATOR) { $env:COMPOSE_PATH_SEPARATOR } else { ';' }
-  if ($setting -and (($setting -split [regex]::Escape($separator)) -contains 'compose.tailscale.yaml')) {
-    Fail 'Windows guided setup supports standard Docker only; configure Tailscale manually after Docker Desktop acceptance.'
-  }
   $existingCompose = $setting -or @( 'compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml' | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }).Count -gt 0
   if (-not $existingCompose) {
     $orphanedOverrides = @('compose.override.yaml', 'compose.override.yml', 'docker-compose.override.yaml', 'docker-compose.override.yml' | Where-Object { Test-Path -LiteralPath $_ })
@@ -140,174 +136,33 @@ try {
     Download-Compose 'compose.yaml'
   }
 
-  $modelText = & docker compose config --format json
+  & docker compose config --quiet
   if ($LASTEXITCODE -ne 0) { Fail 'could not resolve Compose configuration.' }
-  try { $model = ($modelText | Out-String) | ConvertFrom-Json } catch { Fail 'Compose returned invalid configuration JSON.' }
-  if (-not $model.services.herdsman) { Fail 'selected Compose configuration does not contain a herdsman service.' }
-  # Network namespace sharing requires sidecar lifecycle management, which the
-  # Windows guided flow does not implement. Inspect the merged model, not file names.
-  $sidecars = @($model.services.PSObject.Properties | Where-Object {
-    $_.Name -ieq 'tailscale' -or [string]$_.Value.image -match '(^|/)tailscale(?:/tailscale)?(?::|@|$)'
-  })
-  if ($sidecars.Count -gt 0 -or [string]$model.services.herdsman.network_mode -match '^service:') {
-    Fail 'Windows guided setup does not support Tailscale or service network namespace sharing; configure it manually.'
-  }
-  $mounts = @($model.services.herdsman.volumes | Where-Object { $_.target -eq '/home/herdsman' })
-  if ($mounts.Count -ne 1) { Fail 'expected exactly one Herdsman home mount.' }
-  $mount = $mounts[0]
-  $configuredUid = [string]$model.services.herdsman.environment.PUID
-  $configuredGid = [string]$model.services.herdsman.environment.PGID
-  $uid = $configuredUid
-  $gid = $configuredGid
-  if (-not $uid) { $uid = '1000' }
-  if (-not $gid) { $gid = '1000' }
-  if ($uid -notmatch '^[1-9][0-9]*$' -or $gid -notmatch '^[1-9][0-9]*$') {
-    Fail 'PUID and PGID must be positive decimal integers; use nonzero IDs.'
-  }
-  $projectName = [string]$model.name
-  if (-not $projectName) { Fail 'Compose did not report a project name.' }
-  $containers = @(& docker ps -aq --filter "label=com.docker.compose.project=$projectName")
-  if ($LASTEXITCODE -ne 0) { Fail 'could not inspect existing Compose containers.' }
+  $services = @(& docker compose config --services)
+  if ($LASTEXITCODE -ne 0 -or 'herdsman' -notin $services) { Fail 'selected Compose configuration does not contain a herdsman service.' }
+  $containers = @(& docker compose ps --all --quiet | Where-Object { $_ })
+  if ($LASTEXITCODE -ne 0) { Fail 'could not list existing Compose containers.' }
   foreach ($container in $containers) {
-    if (-not $container) { continue }
-    $inspectText = & docker inspect $container
-    if ($LASTEXITCODE -ne 0) { Fail 'could not inspect an existing Compose container.' }
-    try { $info = @(($inspectText | Out-String) | ConvertFrom-Json)[0] } catch { Fail 'Docker returned invalid container inspection JSON.' }
-    $workingDir = $info.Config.Labels.'com.docker.compose.project.working_dir'
-    if (-not $workingDir -or -not [string]::Equals([IO.Path]::GetFullPath($workingDir).TrimEnd('\', '/'), $script:ProjectDir.TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase)) {
-      Fail "Compose project '$projectName' belongs to '$workingDir', not '$script:ProjectDir'."
-    }
-    if ($info.Config.Labels.'com.docker.compose.service' -eq 'herdsman') {
-      $oldHome = @($info.Mounts | Where-Object { $_.Destination -eq '/home/herdsman' })
-      $expectedSource = if ($mount.type -eq 'volume') { $model.volumes.($mount.source).name } else { [IO.Path]::GetFullPath($mount.source) }
-      $oldSource = if ($mount.type -eq 'volume') { $oldHome[0].Name } else { $oldHome[0].Source }
-      $sourceComparison = if ($mount.type -eq 'volume') { [StringComparison]::Ordinal } else { [StringComparison]::OrdinalIgnoreCase }
-      if ($oldHome.Count -ne 1 -or $oldHome[0].Type -ne $mount.type -or -not [string]::Equals($oldSource, $expectedSource, $sourceComparison)) {
-        Fail 'existing Herdsman home mount differs from the selected configuration; refusing storage migration.'
-      }
+    $workingDir = (& docker inspect --format '{{index .Config.Labels `com.docker.compose.project.working_dir`}}' $container | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $workingDir -or -not [string]::Equals([IO.Path]::GetFullPath($workingDir).TrimEnd('\', '/'), $script:ProjectDir.TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase)) {
+      Fail "Compose containers belong to '$workingDir', not '$script:ProjectDir'."
     }
   }
-  # A path created on the Windows host cannot be safely chowned through a
-  # separately resolved Docker Desktop bind path: it may be replaced between
-  # creation and the engine's mount. Never let Compose create it implicitly.
-  # Check existing sources inside the Linux engine for actual access semantics.
-  if ($mount.type -eq 'bind' -and -not (Test-Path -LiteralPath $mount.source -PathType Container)) {
-    Fail 'bind-mounted home must already exist as a directory; create it manually and configure ownership and access for the effective PUID/PGID before setup. Setup will not create or chown it.'
+  $running = @(& docker compose ps --quiet herdsman | Where-Object { $_ })
+  if ($LASTEXITCODE -ne 0) { Fail 'could not list running Compose containers.' }
+  if ($containers.Count -gt 0 -and $running.Count -eq 0) {
+    if ((Read-Host 'Start the existing containers without recreating them? [y/N]') -notmatch '^(?i:y|yes)$') { return }
+    Invoke-Docker @('compose', 'start')
+    $running = @(& docker compose ps --quiet herdsman | Where-Object { $_ })
+    if ($LASTEXITCODE -ne 0 -or $running.Count -eq 0) { Fail 'Herdsman did not start; inspect existing containers and networking without recreating them.' }
   }
-  if ($mount.type -notin @('volume', 'bind')) { Fail 'unsupported Herdsman home mount type.' }
-
-  # Read numeric ownership through the Linux engine. Never chown an existing home.
-  $derivedUid = ''
-  $derivedGid = ''
-  if ($mount.type -eq 'bind' -and -not $configuredUid) {
-    $ownerText = & docker compose run --rm --no-deps -T --user '0:0' --entrypoint sh herdsman -c 'stat -c %u:%g /home/herdsman'
-    if ($LASTEXITCODE -ne 0 -or ($ownerText | Out-String).Trim() -notmatch '^([0-9]+):([0-9]+)$') { Fail 'could not inspect bind home ownership.' }
-    $ownerUid = $Matches[1]
-    $ownerGid = $Matches[2]
-    if ($ownerUid -match '^[1-9][0-9]*$' -and $ownerUid -ne '1000') {
-      $derivedUid = $ownerUid
-      $uid = $ownerUid
-      if (-not $configuredGid -and $ownerGid -match '^[1-9][0-9]*$') {
-        $derivedGid = $ownerGid
-        $gid = $ownerGid
-      }
-    }
-  }
-
-  # Check the image account database and StrictModes without changing either.
-  $preflightScript = @'
-set -eu
-uid=$1
-gid=$2
-current_uid=$(id -u herdsman)
-current_gid=$(id -g herdsman)
-if [ "$uid" != "$current_uid" ] && getent passwd "$uid" >/dev/null; then exit 1; fi
-if [ "$gid" != "$current_gid" ] && getent group "$gid" >/dev/null; then exit 1; fi
-owner=$(stat -c %u /home/herdsman)
-mode=$(stat -c %a /home/herdsman)
-{ [ "$owner" = 0 ] || [ "$owner" = "$uid" ]; } && [ $((0$mode & 022)) -eq 0 ]
-'@
-  & docker compose run --rm --no-deps -T --user '0:0' --entrypoint sh herdsman -c $preflightScript sh $uid $gid
-  if ($LASTEXITCODE -ne 0) { Fail 'home ownership, permissions, or configured PUID/PGID conflict with the image; refusing startup.' }
-
-  # Numeric execution tests the actual access that the remapped account needs,
-  # including ACLs and read-only mounts, without modifying the image or home.
-  & docker compose run --rm --no-deps -T --user "${uid}:${gid}" --entrypoint sh herdsman -c 'test -w /home/herdsman'
-  if ($LASTEXITCODE -ne 0) { Fail 'home is not writable by the effective PUID/PGID; refusing startup.' }
-
-  if ($derivedUid) {
-    # Resolve a candidate dotenv file before changing the real one. This also
-    # catches shell overrides and Compose files that ignore these variables.
-    $candidate = Join-Path $script:ProjectDir ('.env.candidate.' + [guid]::NewGuid().ToString('N'))
-    try {
-      if (-not (Test-Path -LiteralPath $envPath -PathType Leaf)) {
-        Fail 'create an empty .env file and retry so derived IDs can be saved with rollback protection.'
-      }
-      [byte[]]$original = [IO.File]::ReadAllBytes($envPath)
-      $additions = "`nPUID=$derivedUid`n"
-      if ($derivedGid) { $additions += "PGID=$derivedGid`n" }
-      $bytes = [Text.Encoding]::UTF8.GetBytes($additions)
-      $stream = [IO.File]::Open($candidate, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
-      try { $stream.Write($original, 0, $original.Length); $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
-      $candidateText = & docker compose --env-file $candidate config --format json
-      if ($LASTEXITCODE -ne 0) { Fail 'could not resolve Compose with derived home IDs.' }
-      try { $candidateModel = ($candidateText | Out-String) | ConvertFrom-Json } catch { Fail 'Compose returned invalid configuration JSON for derived IDs.' }
-      if ([string]$candidateModel.services.herdsman.environment.PUID -cne $uid -or
-          $(if ([string]$candidateModel.services.herdsman.environment.PGID) { [string]$candidateModel.services.herdsman.environment.PGID } else { '1000' }) -cne $gid) {
-        Fail 'Compose does not apply derived home IDs; configure PUID and PGID explicitly.'
-      }
-      # IDs must not alter project, mount, image, or any other resolved setting.
-      $baseline = ($modelText | Out-String) | ConvertFrom-Json
-      foreach ($name in @('PUID', 'PGID')) {
-        $baseline.services.herdsman.environment.PSObject.Properties.Remove($name)
-        $candidateModel.services.herdsman.environment.PSObject.Properties.Remove($name)
-      }
-      if (($baseline | ConvertTo-Json -Depth 100 -Compress) -cne ($candidateModel | ConvertTo-Json -Depth 100 -Compress)) {
-        Fail 'derived home IDs change other Compose configuration; configure them explicitly.'
-      }
-      # Keep exclusive write/delete access through verification and rollback.
-      # Compose may read the file, but another Windows writer cannot replace it.
-      $stream = [IO.File]::Open($envPath, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
-      try {
-        if ($stream.Length -ne $original.Length) { Fail '.env changed while validating derived IDs; retry setup.' }
-        [byte[]]$current = [byte[]]::new($original.Length)
-        $offset = 0
-        while ($offset -lt $current.Length) {
-          $read = $stream.Read($current, $offset, $current.Length - $offset)
-          if ($read -eq 0) { Fail 'could not read .env while validating derived IDs.' }
-          $offset += $read
-        }
-        if ([Convert]::ToBase64String($current) -cne [Convert]::ToBase64String($original)) { Fail '.env changed while validating derived IDs; retry setup.' }
-        try {
-          $stream.Write($bytes, 0, $bytes.Length)
-          $stream.Flush()
-          $persistedText = & docker compose config --format json
-          if ($LASTEXITCODE -ne 0) { Fail 'could not resolve Compose after saving derived IDs.' }
-          try { $persisted = ($persistedText | Out-String) | ConvertFrom-Json } catch { Fail 'invalid Compose configuration after saving derived IDs.' }
-          $verified = ($candidateText | Out-String) | ConvertFrom-Json
-          if (($persisted | ConvertTo-Json -Depth 100 -Compress) -cne ($verified | ConvertTo-Json -Depth 100 -Compress)) {
-            Fail 'saved IDs do not resolve to the validated Compose configuration.'
-          }
-          $model = $persisted
-        } catch {
-          $failure = $_
-          try { $stream.SetLength($original.Length); $stream.Flush() } catch {
-            Fail "could not roll back .env after persistence failed; restore it before retrying. Rollback error: $($_.Exception.Message)"
-          }
-          throw $failure
-        }
-      } finally { $stream.Dispose() }
-    } finally {
-      Remove-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
-    }
+  if ($containers.Count -eq 0 -and $env:TS_AUTHKEY) { Fail 'remove TS_AUTHKEY from the environment; Windows setup does not bootstrap Tailscale.' }
+  if ($containers.Count -eq 0 -and $existingCompose) {
+    Write-Output 'Existing configuration found. Inspect custom bind mounts and create their homes safely before startup; Windows setup does not initialize them.'
+    if ((Read-Host 'Start a new deployment with this configuration? [y/N]') -notmatch '^(?i:y|yes)$') { return }
   }
 
   $keys = [Collections.Generic.List[string]]::new()
-  # Compose has already applied interpolation, env files and precedence.
-  $effectiveKeys = [string]$model.services.herdsman.environment.SSH_AUTHORIZED_KEYS
-  if ($effectiveKeys) {
-    foreach ($line in ($effectiveKeys -split "`r?`n")) { if ($line.Trim()) { $keys.Add($line.Trim()) } }
-  }
   if (-not [Console]::IsInputRedirected) {
     foreach ($candidate in @((Join-Path $HOME '.ssh/id_ed25519.pub'), (Join-Path $HOME '.ssh/id_rsa.pub'))) {
       if ((Test-Path -LiteralPath $candidate -PathType Leaf) -and (Read-Host "Authorize public key $candidate to connect to Herdsman? [y/N]") -match '^(?i:y|yes)$') {
@@ -334,20 +189,31 @@ auth="$sshdir/authorized_keys"
 # Complete effective validation before touching any persistent authorization.
 keys=$(mktemp)
 trap 'rm -f "$keys"' EXIT HUP INT TERM
-while IFS= read -r key; do
-  [ -n "$key" ] || continue
-  fingerprint=$(printf '%s\n' "$key" | ssh-keygen -lf - | awk 'NR == 1 {print $2}')
-  [ -n "$fingerprint" ] || exit 1
-  printf '%s\n' "$key" >> "$keys"
-done
 [ -w "$home" ] || exit 1
 [ ! -L "$sshdir" ] && { [ ! -e "$sshdir" ] || [ -d "$sshdir" ]; } || exit 1
+[ ! -L "$auth" ] && { [ ! -e "$auth" ] || [ -f "$auth" ]; } || exit 1
+while IFS= read -r key || [ -n "$key" ]; do
+  case "$key" in *[![:space:]]*) ;; *) continue ;; esac
+  printf '%s\n' "$key"
+done > "$keys"
+# A removed container does not imply an unused home. Never restore stale
+# environment keys alongside a selection or into an initialized home.
+if [ ! -s "$keys" ]; then
+  entries=$(find "$home" -mindepth 1 -maxdepth 1 -print -quit) || exit 1
+  if [ -z "$entries" ]; then printf '%s\n' "${SSH_AUTHORIZED_KEYS:-}" > "$keys"; fi
+fi
+while IFS= read -r key; do
+  case "$key" in *[![:space:]]*) ;; *) continue ;; esac
+  fingerprint=$(printf '%s\n' "$key" | ssh-keygen -lf - | awk 'NR == 1 {print $2}')
+  [ -n "$fingerprint" ] || exit 1
+done < "$keys"
 mkdir -p "$sshdir"
 [ ! -L "$auth" ] && { [ ! -e "$auth" ] || [ -f "$auth" ]; } || exit 1
 touch "$auth"
 chmod 700 "$sshdir"
 chmod 600 "$auth"
 while IFS= read -r key; do
+  case "$key" in *[![:space:]]*) ;; *) continue ;; esac
   fingerprint=$(printf '%s\n' "$key" | ssh-keygen -lf - | awk 'NR == 1 {print $2}')
   if ! ssh-keygen -lf "$auth" 2>/dev/null | awk -v f="$fingerprint" '$2 == f {found=1} END {exit !found}'; then
     [ ! -s "$auth" ] || [ "$(tail -c 1 "$auth" | wc -l)" -ne 0 ] || printf '\n' >> "$auth"
@@ -356,25 +222,46 @@ while IFS= read -r key; do
 done < "$keys"
 ssh-keygen -lf "$auth" >/dev/null 2>&1
 '@
-  # Public keys are passed on stdin, never on the command line.
-  @($keys | ForEach-Object { ($_ -split '\s+', 3)[0..1] -join ' ' }) | & docker compose run --rm --no-deps -T --user "${uid}:${gid}" --entrypoint sh herdsman -c $authorizationScript
-  if ($LASTEXITCODE -ne 0) { Fail 'could not safely update authorized_keys, or no authorized keys exist.' }
-  Invoke-Docker @('compose', 'up', '-d')
+  # Base64 keeps shell programs free of native Windows argument quoting hazards.
+  # Public keys remain on stdin, never on the command line.
+  $encodedAuthorization = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($authorizationScript))
+  $decodeScript = 'set -f; IFS=; s=$(echo $1|base64 -d); shift; eval $s'
+  if ($containers.Count -gt 0 -and $keys.Count -eq 0) {
+    # Leave a running deployment and its authorization untouched unless asked.
+  } elseif ($containers.Count -gt 0) {
+    @($keys | ForEach-Object { ($_ -split '\s+', 3)[0..1] -join ' ' }) | & docker compose exec -T --user herdsman herdsman env -u SSH_AUTHORIZED_KEYS sh -c $decodeScript sh $encodedAuthorization
+    if ($LASTEXITCODE -ne 0) { Fail 'could not safely update authorized_keys.' }
+  } else {
+    # Resolve IDs inside the container from Compose's effective environment, never on the host.
+    $switchUser = @'
+set -eu
+uid=${PUID:-1000}; gid=${PGID:-1000}
+case "$uid:$gid" in *[!0-9:]*|0*:*|*:0*|:*|*:) exit 1;; esac
+set -f; IFS=
+s=$(echo $1 | base64 -d)
+exec setpriv --reuid $uid --regid $gid --clear-groups sh -c $s
+'@
+    $encodedSwitch = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($switchUser))
+    @($keys | ForEach-Object { ($_ -split '\s+', 3)[0..1] -join ' ' }) | & docker compose run --rm --no-deps -T --user '0:0' --entrypoint sh herdsman -c $decodeScript sh $encodedSwitch $encodedAuthorization
+    if ($LASTEXITCODE -ne 0) { Fail 'could not safely update authorized_keys, or no authorized keys exist.' }
+    Invoke-Docker @('compose', 'up', '-d')
+  }
   $ready = $false
   for ($attempt = 0; $attempt -lt 30; $attempt++) {
-    & docker compose exec -T herdsman sh -c 'test -d /run/sshd && grep -q ":0016 " /proc/net/tcp /proc/net/tcp6' *> $null
+    & docker compose exec -T herdsman sh -c 'test -d /run/sshd && grep -q :0016 /proc/net/tcp /proc/net/tcp6' *> $null
     if ($LASTEXITCODE -eq 0) { $ready = $true; break }
     Start-Sleep -Seconds 2
   }
   if (-not $ready) { Fail 'Herdsman did not become ready; inspect with: docker compose logs herdsman' }
   Write-Output "Herdsman is ready in $script:ProjectDir"
-  Write-Output "Compose project: $projectName; home storage: $($mount.type); UID/GID: ${uid}:${gid}"
   Write-Output 'SSH authorization checked against the persistent home.'
   Write-Output 'Container outgoing SSH public key: docker compose exec herdsman cat /home/herdsman/.ssh/id_ed25519.pub'
   $publishedPort = & docker compose port herdsman 22
-  if ($LASTEXITCODE -ne 0 -or ($publishedPort | Out-String).Trim() -notmatch ':(\d+)$') { Fail 'could not determine the published Herdsman SSH port.' }
-  $sshPort = $Matches[1]
-  Write-Output "Connect with: ssh -p $sshPort herdsman@localhost"
+  if ($LASTEXITCODE -eq 0 -and ($publishedPort | Out-String).Trim() -match ':(\d+)$') {
+    Write-Output "Connect with: ssh -p $($Matches[1]) herdsman@localhost"
+  } else {
+    Write-Output 'No published SSH port found. For Tailscale or custom networking, use the configured network address and SSH port.'
+  }
   Write-Output 'Container SSH host key: docker compose exec herdsman cat /var/lib/herdsman/ssh/ssh_host_ed25519_key.pub'
 } finally {
   Pop-Location
