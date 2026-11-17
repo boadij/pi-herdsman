@@ -3,48 +3,51 @@ set -Eeuo pipefail
 
 die() { printf 'docker-setup: %s\n' "$*" >&2; exit 1; }
 tmp_files=()
-tmp_key_dir=
+compose_extra_names=()
 cleanup() {
+  if [[ "${sidecar_reattach_pending:-0}" == 1 ]]; then
+    if [[ "${sidecar_reattach_started:-0}" == 1 ]]; then
+      printf 'docker-setup: WARNING: Herdsman reattachment was interrupted or failed; inspect its namespace and sidecar %s.\n' "${sidecar_array[0]}" >&2
+    elif [[ $(docker_cmd inspect --format '{{.State.Running}}' "${sidecar_array[0]}" 2>/dev/null) == true ]]; then
+      docker_cmd compose up -d --no-deps --force-recreate herdsman || printf 'docker-setup: WARNING: failed to reattach Herdsman to sidecar %s.\n' "${sidecar_array[0]}" >&2
+    else
+      printf 'docker-setup: WARNING: inspect sidecar %s and the Herdsman network namespace before retrying.\n' "${sidecar_array[0]}" >&2
+    fi
+  fi
   if [[ "${ts_bootstrap_active:-0}" == 1 ]]; then
     unset TS_AUTHKEY ts_authkey bootstrap_ts_authkey
     if ! docker_cmd compose up -d --force-recreate tailscale; then
-      printf 'docker-setup: WARNING: failed to restore key-free Tailscale configuration.\\n' >&2
+      printf 'docker-setup: WARNING: failed to restore key-free Tailscale configuration.\n' >&2
     else
       ts_bootstrap_active=0
-      docker_cmd compose up -d --force-recreate herdsman || printf 'docker-setup: WARNING: failed to recreate Herdsman in the restored Tailscale network namespace.\\n' >&2
+      docker_cmd compose up -d --force-recreate herdsman || printf 'docker-setup: WARNING: failed to recreate Herdsman in the restored Tailscale network namespace.\n' >&2
     fi
   fi
   (("${#tmp_files[@]}" == 0)) || rm -f -- "${tmp_files[@]}"
-  if [[ -n "$tmp_key_dir" ]]; then rm -f -- "$tmp_key_dir/id_ed25519" "$tmp_key_dir/id_ed25519.pub"; rmdir -- "$tmp_key_dir"; fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-script_path="${BASH_SOURCE[0]:-}"
-if [[ -n "${PI_HERDSMAN_DIR:-}" ]]; then
-  project_dir=$PI_HERDSMAN_DIR
-elif [[ -f "$script_path" && -f "$(dirname -- "$script_path")/../compose.yaml" ]]; then
-  project_dir="$(cd -- "$(dirname -- "$script_path")/.." && pwd)"
-else
-  project_dir="$HOME/pi-herdsman"
-fi
+project_dir="${PI_HERDSMAN_DIR:-$PWD}"
 mkdir -p -- "$project_dir" || die "cannot create deployment directory: $project_dir"
-cd -- "$project_dir"
+cd -- "$project_dir" || die "cannot enter deployment directory: $project_dir"
+project_dir="$(pwd -P)"
 
+command -v jq >/dev/null || die "jq is required to inspect the resolved Docker Compose configuration."
 command -v docker >/dev/null || die "Docker CLI is required; install Docker Desktop or Docker Engine first."
 use_sudo=0
 docker_cmd() {
   if (( ! use_sudo )); then
     docker "$@"
-    return
+    return $?
   fi
   local name names=
   for name in COMPOSE_FILE COMPOSE_PATH_SEPARATOR COMPOSE_PROJECT_NAME PUID PGID HERDSMAN_SSH_PORT TAILSCALE_HOSTNAME; do
     if [[ ${!name+x} ]]; then names+=${names:+,}$name; fi
   done
-  if [[ "${1:-} ${2:-}" == "compose up" ]]; then
-    for name in SSH_AUTHORIZED_KEYS TS_AUTHKEY; do
-      if [[ ${!name+x} ]]; then names+=${names:+,}$name; fi
+  if [[ "${1:-}" == compose ]]; then
+    for name in SSH_AUTHORIZED_KEYS TS_AUTHKEY "${compose_extra_names[@]}"; do
+      if [[ ${!name+x} && ",$names," != *",$name,"* ]]; then names+=${names:+,}$name; fi
     done
   fi
   local -a sudo_args=()
@@ -93,30 +96,44 @@ elif [[ -f "$env_file" ]]; then
   compose_setting="$(parse_compose_value "$(awk -F= '/^[[:space:]]*(export[[:space:]]+)?COMPOSE_FILE[[:space:]]*=/ {sub(/^[^=]*=/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit}' "$env_file")")"
 fi
 
+fresh_install=0
+native_file=
+for candidate in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
+  if [[ -f "$candidate" ]]; then native_file=$candidate; break; fi
+done
 if [[ -n "$compose_setting" ]]; then
   selection=$compose_setting
+elif [[ -n "$native_file" ]]; then
+  # Let Compose discover the base file and any native override itself.
+  selection=$native_file
 else
+  for candidate in compose.override.yaml compose.override.yml docker-compose.override.yaml docker-compose.override.yml; do
+    [[ ! -e "$candidate" ]] || die "incomplete Compose configuration: $candidate exists without a base file."
+  done
+  fresh_install=1
   [[ -t 0 ]] && tty=/dev/stdin || tty=/dev/tty
   [[ -r "$tty" ]] || die "interactive terminal required to choose deployment mode."
   printf 'Deployment: [1] Standard Docker (default) [2] Tailscale [3] Tailscale + host bind mount: ' >"$tty"
   IFS= read -r choice <"$tty" || die "could not read deployment choice."
   case "$choice" in
-    ""|1) selection=compose.yaml ;;
-    2) selection=compose.yaml:compose.tailscale.yaml ;;
-    3) selection=compose.yaml:compose.tailscale.yaml:compose.bind-mount.yaml ;;
+    ""|1) selected_files=(compose.yaml) ;;
+    2) selected_files=(compose.yaml compose.tailscale.yaml) ;;
+    3) selected_files=(compose.yaml compose.tailscale.yaml compose.bind-mount.yaml) ;;
     *) die "choose 1, 2, or 3." ;;
   esac
 fi
 
-if [[ "$selection" == *compose.bind-mount.yaml* && "$(uname -s)" != Linux ]]; then
-  die "the host bind-mount option is supported only on Linux."
+# Only construct a file list for a fresh deployment. Existing selections are
+# interpreted by Compose, including dotenv interpolation and project settings.
+if (( fresh_install )); then
+  separator=${COMPOSE_PATH_SEPARATOR:-}
+  if [[ -z "$separator" && -f "$env_file" && ! ${COMPOSE_PATH_SEPARATOR+x} ]]; then
+    separator="$(parse_compose_value "$(awk -F= '/^[[:space:]]*(export[[:space:]]+)?COMPOSE_PATH_SEPARATOR[[:space:]]*=/ {sub(/^[^=]*=/, ""); print; exit}' "$env_file")")"
+  fi
+  separator=${separator:-:}
+  [[ ${#separator} -eq 1 ]] || die "COMPOSE_PATH_SEPARATOR must be one character."
+  selection=$(IFS="$separator"; printf '%s' "${selected_files[*]}")
 fi
-
-# Reuse Compose's native separator, while recognizing only official files for download.
-separator=${COMPOSE_PATH_SEPARATOR:-:}
-[[ "$separator" == ":" || "$separator" == ";" ]] || separator=:
-IFS="$separator" read -r -a selected_files <<<"$selection"
-(("${#selected_files[@]}" > 0)) || die "COMPOSE_FILE is empty."
 tmp_files=()
 download_if_missing() {
   local name=$1 tmp
@@ -136,13 +153,14 @@ download_if_missing() {
   fi
   tmp_files=()
 }
-for file in "${selected_files[@]}"; do
-  [[ -n "$file" ]] || die "COMPOSE_FILE contains an empty entry."
-  download_if_missing "$file"
-  [[ -f "$file" ]] || die "required Compose file does not exist: $file"
-done
+if (( fresh_install )); then
+  for file in "${selected_files[@]}"; do
+    download_if_missing "$file"
+    [[ -f "$file" ]] || die "required Compose file does not exist: $file"
+  done
+fi
 
-if [[ -z "$compose_setting" ]]; then
+if (( fresh_install )) && [[ "$selection" != compose.yaml ]]; then
   umask 077
   if [[ -f "$env_file" ]]; then
     printf '\nCOMPOSE_FILE=%s\n' "$selection" >>"$env_file"
@@ -151,74 +169,114 @@ if [[ -z "$compose_setting" ]]; then
   fi
 fi
 
-if [[ "$selection" == *compose.bind-mount.yaml* ]]; then
-  home_dir=data/herdsman-home
-  home_was_present=0
-  [[ -d "$home_dir" ]] && home_was_present=1
-  mkdir -p -- "$home_dir" || die "cannot prepare bind-mounted home: $home_dir"
-  bind_uid=$(stat -c '%u' "$home_dir")
-  bind_gid=$(stat -c '%g' "$home_dir")
+# Ask Compose which shell variables its model interpolates. Preserve names,
+# never values, through sudo; do not expose privileged command-loader controls.
+if (( use_sudo )); then
+  compose_variables=$(docker compose config --variables 2>/dev/null) || die "cannot determine Compose interpolation variables; grant direct Docker access or use a Compose version supporting config --variables."
+  declare -A exported_names=()
+  while IFS= read -r name; do exported_names["$name"]=1; done < <(compgen -e)
+  while IFS= read -r line; do
+    name=${line%%=*}
+    [[ "$name" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ && ${exported_names[$name]+yes} ]] || continue
+    case "$name" in
+      PATH|IFS|ENV|BASH_ENV|SHELLOPTS|BASHOPTS|CDPATH|GLOBIGNORE|LD_*|DYLD_*|PYTHONPATH|PYTHONHOME|NODE_OPTIONS|PERL5OPT|RUBYOPT) continue ;;
+    esac
+    compose_extra_names+=("$name")
+  done <<<"$compose_variables"
+  unset compose_variables exported_names
+fi
+resolve_compose_model() {
+  local elevated direct
+  elevated=$(docker_cmd compose config --format json) || return 1
+  if (( use_sudo )); then
+    direct=$(docker compose config --format json) || return 1
+    [[ $(jq -cS . <<<"$direct") == "$(jq -cS . <<<"$elevated")" ]] || {
+      printf 'docker-setup: sudo changes the resolved Compose configuration; grant direct Docker access or allow the required interpolation environment.\n' >&2
+      return 1
+    }
+  fi
+  printf '%s' "$elevated"
+}
 
-  dotenv_id() {
-    local name=$1
-    parse_compose_value "$(awk -F= -v name="$name" '$0 ~ "^[[:space:]]*(export[[:space:]]+)?" name "[[:space:]]*=" {sub(/^[^=]*=/, ""); print; exit}' "$env_file")"
-  }
-  has_dotenv_id() { grep -Eq "^[[:space:]]*(export[[:space:]]+)?$1[[:space:]]*=" "$env_file"; }
-  configured_uid=${PUID-$(dotenv_id PUID)}
-  configured_gid=${PGID-$(dotenv_id PGID)}
-  if [[ -z "$configured_uid" ]] && ! has_dotenv_id PUID && [[ -z "${PUID+x}" ]] && (( ! home_was_present )); then
-    configured_uid=$(id -u)
-    printf 'PUID=%s\n' "$configured_uid" >>"$env_file"
-  fi
-  if [[ -z "$configured_gid" ]] && ! has_dotenv_id PGID && [[ -z "${PGID+x}" ]] && (( ! home_was_present )); then
-    configured_gid=$(id -g)
-    printf 'PGID=%s\n' "$configured_gid" >>"$env_file"
-  fi
-  if [[ -z "$configured_uid" || -z "$configured_gid" ]]; then
-    container_ids=$(docker_cmd compose run --rm --no-deps --entrypoint sh herdsman -c 'printf "%s %s" "$(id -u herdsman)" "$(id -g herdsman)"') || die "could not determine the Compose default Herdsman UID/GID."
-    read -r default_uid default_gid <<<"$container_ids"
-    configured_uid=${configured_uid:-$default_uid}
-    configured_gid=${configured_gid:-$default_gid}
-  fi
-  [[ "$configured_uid" == "$bind_uid" ]] || die "bind-mounted home $home_dir is owned by UID $bind_uid, but effective PUID is $configured_uid; preserve the data and set PUID to $bind_uid or use a directory owned by $configured_uid."
-  [[ "$configured_gid" == "$bind_gid" ]] || die "bind-mounted home $home_dir is owned by GID $bind_gid, but effective PGID is $configured_gid; preserve the data and set PGID to $bind_gid or use a directory owned by $configured_gid."
+# Inspect the effective model before starting or recreating any container.
+compose_model=$(resolve_compose_model) || die "could not resolve Docker Compose configuration safely."
+project_name=$(jq -er '.name | select(type == "string" and length > 0)' <<<"$compose_model") || die "Compose did not resolve a project name."
+home_mount=$(jq -ce '[.services.herdsman.volumes[]? | select(.target == "/home/herdsman")] | if length == 1 then .[0] else error("expected exactly one Herdsman home mount") end' <<<"$compose_model") || die "expected a Herdsman service with exactly one /home/herdsman mount."
+mount_type=$(jq -r '.type // ""' <<<"$home_mount")
+mount_source=$(jq -r '.source // ""' <<<"$home_mount")
+[[ "$mount_type" == bind || "$mount_type" == volume ]] && [[ -n "$mount_source" ]] || die "unsupported or missing Herdsman home mount source."
+if [[ "$mount_type" == volume ]]; then
+  mount_source=$(jq -r --arg source "$mount_source" '.volumes[$source].name // $source' <<<"$compose_model")
+fi
+configured_uid=$(jq -r '.services.herdsman.environment.PUID // ""' <<<"$compose_model")
+configured_gid=$(jq -r '.services.herdsman.environment.PGID // ""' <<<"$compose_model")
+for id_name in configured_uid configured_gid; do
+  id_value=${!id_name}
+  [[ -z "$id_value" || "$id_value" =~ ^[1-9][0-9]*$ ]] || die "${id_name#configured_} must be a positive decimal integer; use a non-zero PUID and PGID."
+done
+
+container_ids=$(docker_cmd ps -aq --filter "label=com.docker.compose.project=$project_name") || die "could not inspect existing Compose project containers."
+if [[ -n "$container_ids" ]]; then
+  # IDs are produced by Docker, not configuration input.
+  read -r -a container_id_array <<<"${container_ids//$'\n'/ }"
+  containers=$(docker_cmd inspect "${container_id_array[@]}") || die "could not inspect existing Compose project containers."
+  jq -e 'type == "array" and length > 0' <<<"$containers" >/dev/null || die "invalid container inspection result."
+  while IFS= read -r container; do
+    working_dir=$(jq -r '.Config.Labels["com.docker.compose.project.working_dir"] // ""' <<<"$container")
+    [[ -n "$working_dir" ]] || die "project $project_name has a container with no working-directory label; refusing takeover of $project_dir."
+    if [[ -d "$working_dir" ]]; then
+      working_dir=$(cd -- "$working_dir" && pwd -P) || die "cannot resolve existing project directory."
+    fi
+    [[ "$working_dir" == "$project_dir" ]] || die "Compose project $project_name belongs to $working_dir, not $project_dir; refusing takeover."
+    service=$(jq -r '.Config.Labels["com.docker.compose.service"] // ""' <<<"$container")
+    if [[ "$service" == herdsman ]]; then
+      existing_home=$(jq -ce '[.Mounts[]? | select(.Destination == "/home/herdsman")] | if length == 1 then .[0] else error("expected one home mount") end' <<<"$container") || die "existing Herdsman container has an ambiguous home mount."
+      existing_type=$(jq -r '.Type // ""' <<<"$existing_home")
+      existing_source=$(jq -r 'if .Type == "volume" then .Name else .Source end // ""' <<<"$existing_home")
+      [[ "$existing_type" == "$mount_type" && "$existing_source" == "$mount_source" ]] || die "existing Herdsman home mount $existing_type:$existing_source differs from configured $mount_type:$mount_source; refusing migration."
+    fi
+  done < <(jq -c '.[]' <<<"$containers")
 fi
 
-ssh_key="${SSH_AUTHORIZED_KEYS:-}"
-if [[ -z "$ssh_key" ]]; then
-  for candidate in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub"; do
-    if [[ -r "$candidate" ]]; then ssh_key="$(<"$candidate")"; break; fi
-  done
-fi
-docker_cmd compose config --quiet || die "Docker Compose configuration is invalid."
-if [[ -z "$ssh_key" ]] && ! docker_cmd compose run --rm --no-deps --entrypoint sh herdsman -c 'test -s /home/herdsman/.ssh/authorized_keys' >/dev/null 2>&1; then
-  key_path="$HOME/.ssh/id_ed25519"
-  public_path="$key_path.pub"
-  command -v ssh-keygen >/dev/null || die "ssh-keygen is required to generate or recover an SSH identity."
-  mkdir -p -m 0700 -- "$HOME/.ssh" || die "cannot create SSH directory."
-  if [[ -e "$key_path" || -L "$key_path" ]]; then
-    [[ ! -e "$public_path" && ! -L "$public_path" ]] || die "SSH identity is incomplete; refusing to overwrite existing files."
-    tmp_key_dir=$(mktemp -d "$HOME/.ssh/.identity.XXXXXX") || die "cannot prepare SSH public-key recovery."
-    tmp_pub="$tmp_key_dir/id_ed25519.pub"
-    ssh-keygen -y -P '' -f "$key_path" </dev/null >"$tmp_pub" && [[ -s "$tmp_pub" ]] || die "cannot recover SSH public key; existing private key was preserved."
-    ln -- "$tmp_pub" "$HOME/.ssh" || die "cannot publish recovered SSH public key without overwriting an existing file."
-    rm -f -- "$tmp_pub"
-    printf 'Recovered SSH public key: %s\n' "$public_path"
-  elif [[ -e "$public_path" || -L "$public_path" ]]; then
-    die "SSH identity is incomplete; refusing to overwrite existing files."
-  else
-    # Source basenames match the intended destination names. Linking into the
-    # SSH directory fails if that exact name exists, including a directory.
-    tmp_key_dir=$(mktemp -d "$HOME/.ssh/.identity.XXXXXX") || die "cannot prepare SSH identity generation."
-    (umask 077; ssh-keygen -q -t ed25519 -N '' -f "$tmp_key_dir/id_ed25519" </dev/null) || die "cannot generate SSH identity."
-    [[ -s "$tmp_key_dir/id_ed25519" && -s "$tmp_key_dir/id_ed25519.pub" ]] || die "cannot generate SSH identity."
-    ln -- "$tmp_key_dir/id_ed25519" "$HOME/.ssh" || die "cannot publish SSH private key without overwriting an existing file."
-    ln -- "$tmp_key_dir/id_ed25519.pub" "$HOME/.ssh" || die "cannot publish SSH public key without overwriting an existing file; generated private key was preserved."
-    printf 'Generated SSH login identity: %s\n' "$key_path"
+effective_uid=${configured_uid:-1000}
+effective_gid=${configured_gid:-1000}
+derived_uid= derived_gid=
+if [[ "$mount_type" == bind ]]; then
+  [[ "$(uname -s)" == Linux ]] || die "bind-mounted home preflight is supported only on Linux."
+  home_dir=$mount_source
+  [[ "$home_dir" == /* ]] || die "Compose did not resolve an absolute bind-mounted home path."
+  if [[ ! -e "$home_dir" && ! -L "$home_dir" ]]; then
+    mkdir -p -- "$(dirname -- "$home_dir")" || die "cannot prepare parent of $home_dir."
+    mkdir -- "$home_dir" || die "cannot create bind-mounted home: $home_dir."
+    chown "$effective_uid:$effective_gid" -- "$home_dir" || die "cannot set ownership of newly created $home_dir to $effective_uid:$effective_gid; arrange that ownership and rerun."
   fi
-  [[ -s "$public_path" ]] || die "SSH public key is missing or empty."
-  ssh_key="$(<"$public_path")"
+  [[ -d "$home_dir" && ! -L "$home_dir" ]] || die "bind-mounted home $home_dir is not a directory or is a symlink."
+  bind_uid=$(stat -c '%u' "$home_dir") || die "cannot inspect $home_dir."
+  bind_gid=$(stat -c '%g' "$home_dir") || die "cannot inspect $home_dir."
+  bind_mode=$(stat -c '%a' "$home_dir") || die "cannot inspect $home_dir."
+  # An existing nonstandard home can supply missing IDs, but only if Compose
+  # actually propagates the proposed values into the service environment.
+  if [[ -z "$configured_uid" && "$bind_uid" =~ ^[1-9][0-9]*$ && "$bind_uid" != 1000 ]]; then
+    derived_uid=$bind_uid
+    effective_uid=$bind_uid
+    export PUID=$bind_uid
+  fi
+  if [[ -n "$derived_uid" && -z "$configured_gid" && "$bind_gid" =~ ^[1-9][0-9]*$ ]]; then
+    derived_gid=$bind_gid
+    effective_gid=$bind_gid
+    export PGID=$bind_gid
+  fi
+  [[ "$bind_uid" == "$effective_uid" ]] || die "bind-mounted home $home_dir is owned by UID $bind_uid, but effective PUID is $effective_uid; preserve the data and configure a compatible non-zero PUID."
+  (( (8#$bind_mode & 022) == 0 && (8#$bind_mode & 0300) == 0300 )) || die "bind-mounted home $home_dir must be writable and searchable by its owner and not group/other writable."
+  if [[ -n "$derived_uid$derived_gid" ]]; then
+    derived_model=$(resolve_compose_model) || die "could not resolve derived home IDs."
+    [[ $(jq -c '{name, home: [.services.herdsman.volumes[]? | select(.target == "/home/herdsman")], volumes}' <<<"$compose_model") == "$(jq -c '{name, home: [.services.herdsman.volumes[]? | select(.target == "/home/herdsman")], volumes}' <<<"$derived_model")" ]] || die "derived IDs changed the Compose project or home mount; configure the IDs explicitly."
+    [[ -z "$derived_uid" || $(jq -r '.services.herdsman.environment.PUID // ""' <<<"$derived_model") == "$derived_uid" ]] || die "Compose does not apply the derived PUID; configure it explicitly."
+    [[ -z "$derived_gid" || $(jq -r '.services.herdsman.environment.PGID // ""' <<<"$derived_model") == "$derived_gid" ]] || die "Compose does not apply the derived PGID; configure it explicitly."
+    compose_model=$derived_model
+  fi
 fi
+
 validate_ssh_public_key() {
   local key=$1 type encoded tmp byte_count offset index component component_length component_start
   local -a bytes=()
@@ -304,13 +362,153 @@ validate_ssh_public_key() {
   (( offset == byte_count ))
 }
 
-if [[ -n "$ssh_key" ]]; then
-  validate_ssh_public_key "$ssh_key" || die "SSH_AUTHORIZED_KEYS is not a structurally valid OpenSSH public key."
-  export SSH_AUTHORIZED_KEYS="$ssh_key"
-fi
-docker_cmd compose up -d || die "Docker Compose could not start the deployment; sudo may deny preserving requested environment names."
+keys=()
+add_key_lines() {
+  local line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line=${line%$'\r'}
+    [[ -z "${line//[[:space:]]/}" ]] || keys+=("$line")
+  done <<<"$1"
+}
+resolved_keys=$(jq -r '.services.herdsman.environment.SSH_AUTHORIZED_KEYS // ""' <<<"$compose_model")
+[[ -z "$resolved_keys" ]] || add_key_lines "$resolved_keys"
 
-if [[ "$selection" == *compose.tailscale.yaml* ]]; then
+if ( : </dev/tty ) 2>/dev/null; then
+  for candidate in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub"; do
+    if [[ -f "$candidate" && -r "$candidate" ]]; then
+      printf 'Authorize public key %s to connect to Herdsman? [y/N] ' "$candidate" >/dev/tty
+      answer=
+      IFS= read -r answer </dev/tty || true
+      if [[ "$answer" =~ ^([yY]|[yY][eE][sS])$ ]]; then
+        add_key_lines "$(<"$candidate")"
+      fi
+    fi
+  done
+  while :; do
+    printf 'Additional public key or path to .pub file (Enter to finish): ' >/dev/tty
+    input_key=
+    IFS= read -r input_key </dev/tty || break
+    [[ -n "$input_key" ]] || break
+    if [[ -f "$input_key" && -r "$input_key" ]]; then
+      add_key_lines "$(<"$input_key")"
+    else
+      add_key_lines "$input_key"
+    fi
+  done
+fi
+normalized_keys=()
+for key in "${keys[@]}"; do
+  validate_ssh_public_key "$key" || die "SSH_AUTHORIZED_KEYS or selected key is not a structurally valid OpenSSH public key."
+  read -r algorithm material _ <<<"$key"
+  normalized_keys+=("$algorithm $material")
+done
+
+# The entrypoint refuses IDs already assigned to other image accounts.
+account_script='
+set -eu
+uid=$1 gid=$2
+current_uid=$(id -u herdsman)
+current_gid=$(id -g herdsman)
+if [ "$uid" != "$current_uid" ]; then
+  if getent passwd "$uid" >/dev/null; then exit 1; else status=$?; [ "$status" -eq 2 ] || exit 1; fi
+fi
+if [ "$gid" != "$current_gid" ]; then
+  if getent group "$gid" >/dev/null; then exit 1; else status=$?; [ "$status" -eq 2 ] || exit 1; fi
+fi
+while IFS= read -r key; do
+  [ -n "$key" ] || continue
+  fingerprint=$(printf "%s\\n" "$key" | ssh-keygen -lf - | awk "NR == 1 {print \$2}")
+  [ -n "$fingerprint" ] || exit 1
+done
+'
+account_image=$(jq -er '.services.herdsman.image | select(type == "string" and length > 0)' <<<"$compose_model") || die "cannot check image accounts without a resolved Herdsman image."
+account_platform=$(jq -r '.services.herdsman.platform // ""' <<<"$compose_model")
+platform_args=()
+[[ -z "$account_platform" ]] || platform_args=(--platform "$account_platform")
+printf '%s\n' "${normalized_keys[@]}" | docker_cmd run --rm -i --network none --user 0:0 "${platform_args[@]}" --entrypoint sh "$account_image" -c "$account_script" sh "$effective_uid" "$effective_gid" || die "image account or public-key preflight failed; verify the effective PUID, PGID, and selected keys."
+
+tailscale_enabled=0
+sidecar_restarted=0
+if jq -e '.services.herdsman.network_mode == "service:tailscale"' <<<"$compose_model" >/dev/null; then
+  tailscale_enabled=1
+  sidecar_ids=$(docker_cmd compose ps --all -q tailscale) || die "could not inspect Tailscale sidecar."
+  if [[ -n "$sidecar_ids" ]]; then
+    read -r -a sidecar_array <<<"${sidecar_ids//$'\n'/ }"
+    (( ${#sidecar_array[@]} == 1 )) || die "multiple Tailscale sidecars found; refusing to change their network namespace."
+    sidecar_running=$(docker_cmd inspect --format '{{.State.Running}}' "${sidecar_array[0]}") || die "could not inspect Tailscale sidecar state."
+    if [[ "$sidecar_running" == false ]]; then
+      running_herdsman=$(docker_cmd compose ps -q herdsman) || die "could not inspect the running Herdsman container."
+      if [[ -n "$running_herdsman" ]]; then sidecar_reattach_pending=1; fi
+      docker_cmd start "${sidecar_array[0]}" >/dev/null || die "could not start existing Tailscale sidecar ${sidecar_array[0]}; inspect its state and Herdsman network namespace."
+      sidecar_restarted=1
+      if [[ -n "$running_herdsman" ]]; then
+        sidecar_reattach_started=1
+        docker_cmd compose up -d --no-deps --force-recreate herdsman || die "Tailscale sidecar restarted but Herdsman could not be reattached; inspect sidecar ${sidecar_array[0]} and the Herdsman network namespace."
+        sidecar_reattach_pending=0
+        sidecar_restarted=0
+      fi
+    elif [[ "$sidecar_running" != true ]]; then
+      die "unexpected Tailscale sidecar state; refusing to change its namespace."
+    fi
+  else
+    docker_cmd compose up -d --no-recreate tailscale || die "could not start the Tailscale network namespace."
+  fi
+fi
+
+# Pass public keys only on stdin, and preserve existing restricted entries.
+authorization_script='
+set -eu
+umask 077
+home=/home/herdsman
+sshdir="$home/.ssh"
+auth="$sshdir/authorized_keys"
+keys=$(cat)
+# ssh-keygen can reject material that passes the host structural check.
+# Validate the complete batch before touching the persistent home.
+printf "%s\\n" "$keys" | while IFS= read -r key; do
+  [ -n "$key" ] || continue
+  fingerprint=$(printf "%s\\n" "$key" | ssh-keygen -lf - | awk "NR == 1 {print \$2}")
+  [ -n "$fingerprint" ] || exit 1
+done
+[ -w "$home" ] || exit 1
+[ ! -L "$sshdir" ] && { [ ! -e "$sshdir" ] || [ -d "$sshdir" ]; } || exit 1
+[ -d "$sshdir" ] || mkdir -m 700 "$sshdir"
+chmod 700 "$sshdir"
+[ ! -L "$auth" ] && { [ ! -e "$auth" ] || [ -f "$auth" ]; } || exit 1
+[ -e "$auth" ] || : >"$auth"
+chmod 600 "$auth"
+printf "%s\\n" "$keys" | while IFS= read -r key; do
+  [ -n "$key" ] || continue
+  fingerprint=$(printf "%s\\n" "$key" | ssh-keygen -lf - | awk "NR == 1 {print \$2}")
+  [ -n "$fingerprint" ] || exit 1
+  if ! ssh-keygen -lf "$auth" 2>/dev/null | awk -v f="$fingerprint" '\''$2 == f {found=1} END {exit !found}'\''; then
+    [ ! -s "$auth" ] || [ "$(tail -c 1 "$auth" | wc -l)" -ne 0 ] || printf "\\n" >>"$auth"
+    printf "%s\\n" "$key" >>"$auth"
+  fi
+done
+ssh-keygen -lf "$auth" >/dev/null 2>&1
+'
+printf '%s\n' "${normalized_keys[@]}" | docker_cmd compose run --rm --no-deps -T --user "$effective_uid:$effective_gid" --entrypoint sh herdsman -c "$authorization_script" || die "could not safely update authorized_keys, or no authorized keys exist."
+printf 'SSH authorization checked in the persistent home.\n'
+# Persist inferred IDs only after image, key, and persistent-home validation.
+if [[ -n "$derived_uid$derived_gid" ]]; then
+  umask 077
+  [[ -z "$derived_uid" ]] || printf '\nPUID=%s\n' "$derived_uid" >>"$env_file"
+  [[ -z "$derived_gid" ]] || printf '\nPGID=%s\n' "$derived_gid" >>"$env_file"
+fi
+if (( tailscale_enabled )); then
+  # The namespace owner was deliberately reused above. Do not let an ordinary
+  # deployment update recreate it implicitly before Herdsman is reattached.
+  if (( sidecar_restarted )); then
+    docker_cmd compose up -d --no-deps --force-recreate herdsman || die "Tailscale sidecar restarted but Herdsman could not be reattached; inspect their network namespaces."
+  else
+    docker_cmd compose up -d --no-deps herdsman || die "Docker Compose could not start Herdsman."
+  fi
+else
+  docker_cmd compose up -d || die "Docker Compose could not start the deployment; sudo may deny preserving requested environment names."
+fi
+
+if (( tailscale_enabled )); then
   authenticated=0
   for _ in {1..10}; do
     if docker_cmd compose exec -T tailscale tailscale status --json 2>/dev/null | grep -Eq '"BackendState"[[:space:]]*:[[:space:]]*"Running"'; then authenticated=1; break; fi
@@ -325,14 +523,22 @@ if [[ "$selection" == *compose.tailscale.yaml* ]]; then
       printf '\n' >/dev/tty
     fi
     [[ -n "$ts_authkey" ]] || die "Tailscale auth key is required."
-    ts_bootstrap_active=1
     export TS_AUTHKEY="$ts_authkey"
+    bootstrap_model=$(resolve_compose_model 2>/dev/null) || {
+      unset TS_AUTHKEY ts_authkey bootstrap_ts_authkey
+      die "could not safely resolve the temporary Tailscale bootstrap configuration."
+    }
+    if [[ $(jq -cS 'del(.services.tailscale.environment.TS_AUTHKEY)' <<<"$compose_model") != "$(jq -cS 'del(.services.tailscale.environment.TS_AUTHKEY)' <<<"$bootstrap_model")" ]]; then
+      unset TS_AUTHKEY ts_authkey bootstrap_ts_authkey bootstrap_model
+      die "TS_AUTHKEY changes Compose configuration outside the Tailscale bootstrap setting; refusing recreation."
+    fi
+    unset bootstrap_model
+    ts_bootstrap_active=1
     docker_cmd compose up -d --force-recreate tailscale || bootstrap_status=$?
     unset TS_AUTHKEY
     if [[ "${bootstrap_status:-0}" != 0 ]]; then
       unset ts_authkey bootstrap_ts_authkey
-      docker_cmd compose up -d --force-recreate tailscale || printf 'docker-setup: WARNING: failed to restore key-free Tailscale configuration.\n' >&2
-      die "Tailscale bootstrap failed."
+      die "Tailscale bootstrap failed; restoring the key-free sidecar and Herdsman namespace."
     fi
     unset ts_authkey bootstrap_ts_authkey
     authenticated=0
@@ -364,7 +570,7 @@ compose_value() {
   value="$(printf '%s\n' "$compose_env" | sed -n "s/^$name=//p" | head -n 1)"
   printf '%s' "${value:-$default}"
 }
-if [[ "$selection" == *compose.tailscale.yaml* ]]; then
+if (( tailscale_enabled )); then
   dotenv_hostname=""
   if [[ -f "$env_file" ]]; then
     dotenv_hostname="$(parse_compose_value "$(awk -F= '/^[[:space:]]*(export[[:space:]]+)?TAILSCALE_HOSTNAME[[:space:]]*=/ {sub(/^[^=]*=/, ""); print; exit}' "$env_file")")"
@@ -377,3 +583,4 @@ else
   printf 'Connect with: ssh -p %s herdsman@localhost\n' "$published_port"
 fi
 printf 'Container SSH host key: docker compose exec herdsman cat /var/lib/herdsman/ssh/ssh_host_ed25519_key.pub\n'
+printf 'Container outgoing SSH public key: docker compose exec herdsman cat /home/herdsman/.ssh/id_ed25519.pub\n'

@@ -102,15 +102,11 @@ function Download-Compose([string] $Name) {
   }
 }
 
-$scriptPath = $PSCommandPath
-if ($env:PI_HERDSMAN_DIR) {
-  $script:ProjectDir = $env:PI_HERDSMAN_DIR
-} elseif ($scriptPath -and (Test-Path -LiteralPath $scriptPath) -and
-  (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $scriptPath) '..\compose.yaml'))) {
-  $script:ProjectDir = [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $scriptPath) '..'))
+$script:ProjectDir = [IO.Path]::GetFullPath($(if ($env:PI_HERDSMAN_DIR) {
+  $env:PI_HERDSMAN_DIR
 } else {
-  $script:ProjectDir = Join-Path $HOME 'pi-herdsman'
-}
+  (Get-Location).ProviderPath
+}))
 New-Item -ItemType Directory -Force -Path $script:ProjectDir | Out-Null
 Push-Location $script:ProjectDir
 try {
@@ -131,93 +127,145 @@ try {
   }
 
   $setting = Read-ComposeSetting $envPath
-  if ($setting) {
-    $selection = $setting
-  } else {
-    $choice = Read-Host 'Deployment: [1] Standard Docker (default)'
-    if ($choice -and $choice -ne '1') { Fail 'The Windows guided setup supports standard Docker only.' }
-    $selection = 'compose.yaml'
-  }
-
   $separator = if ($env:COMPOSE_PATH_SEPARATOR) { $env:COMPOSE_PATH_SEPARATOR } else { ';' }
-  $files = $selection -split [regex]::Escape($separator)
-  if ($files -contains 'compose.tailscale.yaml') {
+  if ($setting -and (($setting -split [regex]::Escape($separator)) -contains 'compose.tailscale.yaml')) {
     Fail 'Windows guided setup supports standard Docker only; configure Tailscale manually after Docker Desktop acceptance.'
   }
-  foreach ($file in $files) {
-    if (-not $file) { Fail 'COMPOSE_FILE contains an empty entry.' }
-    Download-Compose $file
-    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { Fail "required Compose file does not exist: $file" }
+  $existingCompose = $setting -or @( 'compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml' | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }).Count -gt 0
+  if (-not $existingCompose) {
+    $orphanedOverrides = @('compose.override.yaml', 'compose.override.yml', 'docker-compose.override.yaml', 'docker-compose.override.yml' | Where-Object { Test-Path -LiteralPath $_ })
+    if ($orphanedOverrides.Count -gt 0) { Fail "Compose override exists without a base configuration: $($orphanedOverrides -join ', '); restore the base or explicitly select a configuration." }
+    $choice = Read-Host 'Deployment: [1] Standard Docker (default)'
+    if ($choice -and $choice -ne '1') { Fail 'The Windows guided setup supports standard Docker only.' }
+    Download-Compose 'compose.yaml'
   }
 
-  if (-not $setting) {
-    $line = "COMPOSE_FILE=$selection"
-    if (Test-Path -LiteralPath $envPath) {
-      [IO.File]::AppendAllText($envPath, [Environment]::NewLine + $line + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
-    } else {
-      [IO.File]::WriteAllText($envPath, $line + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
-    }
+  $modelText = & docker compose config --format json
+  if ($LASTEXITCODE -ne 0) { Fail 'could not resolve Compose configuration.' }
+  try { $model = ($modelText | Out-String) | ConvertFrom-Json } catch { Fail 'Compose returned invalid configuration JSON.' }
+  if (-not $model.services.herdsman) { Fail 'selected Compose configuration does not contain a herdsman service.' }
+  # Network namespace sharing requires sidecar lifecycle management, which the
+  # Windows guided flow does not implement. Inspect the merged model, not file names.
+  $sidecars = @($model.services.PSObject.Properties | Where-Object {
+    $_.Name -ieq 'tailscale' -or [string]$_.Value.image -match '(^|/)tailscale(?:/tailscale)?(?::|@|$)'
+  })
+  if ($sidecars.Count -gt 0 -or [string]$model.services.herdsman.network_mode -match '^service:') {
+    Fail 'Windows guided setup does not support Tailscale or service network namespace sharing; configure it manually.'
   }
-  $key = $env:SSH_AUTHORIZED_KEYS
-  if (-not $key) {
-    foreach ($candidate in @((Join-Path $HOME '.ssh/id_ed25519.pub'), (Join-Path $HOME '.ssh/id_rsa.pub'))) {
-      if (Test-Path -LiteralPath $candidate) { $key = (Get-Content -Raw -LiteralPath $candidate).Trim(); break }
-    }
+  $mounts = @($model.services.herdsman.volumes | Where-Object { $_.target -eq '/home/herdsman' })
+  if ($mounts.Count -ne 1) { Fail 'expected exactly one Herdsman home mount.' }
+  $mount = $mounts[0]
+  $uid = [string]$model.services.herdsman.environment.PUID
+  $gid = [string]$model.services.herdsman.environment.PGID
+  if (-not $uid) { $uid = '1000' }
+  if (-not $gid) { $gid = '1000' }
+  if ($uid -notmatch '^[1-9][0-9]*$' -or $gid -notmatch '^[1-9][0-9]*$') {
+    Fail 'PUID and PGID must be positive decimal integers; use nonzero IDs.'
   }
-  Invoke-Docker @('compose', 'config', '--quiet')
-  if (-not $key) {
-    & docker compose run --rm --no-deps --entrypoint sh herdsman -c 'test -s /home/herdsman/.ssh/authorized_keys' *> $null
-    $hasPersistentKeys = $LASTEXITCODE -eq 0
-    if (-not $hasPersistentKeys) {
-      $keyPath = Join-Path $HOME '.ssh/id_ed25519'
-      $publicPath = "$keyPath.pub"
-      if (-not (Get-Command ssh-keygen -ErrorAction SilentlyContinue)) { Fail 'ssh-keygen is required to generate or recover an SSH identity.' }
-      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $keyPath) | Out-Null
-      $privateItem = Get-Item -LiteralPath $keyPath -Force -ErrorAction SilentlyContinue
-      $publicItem = Get-Item -LiteralPath $publicPath -Force -ErrorAction SilentlyContinue
-      $PSNativeCommandUseErrorActionPreference = $false
-      # Legacy native argument serialization drops empty strings. Embedded
-      # quotes preserve an empty argument there; modern modes pass it directly.
-      $emptyPassphrase = if ((Get-Variable PSNativeCommandArgumentPassing -ErrorAction SilentlyContinue) -and $PSNativeCommandArgumentPassing -ne 'Legacy') { '' } else { '""' }
-      if ($privateItem) {
-        if ($publicItem -or -not (Test-Path -LiteralPath $keyPath -PathType Leaf)) { Fail 'SSH identity is incomplete; refusing to overwrite existing files.' }
-        $recovered = '' | & ssh-keygen -y -P $emptyPassphrase -f $keyPath 2>$null
-        if ($LASTEXITCODE -ne 0 -or -not ($recovered | Out-String).Trim()) { Fail 'cannot recover SSH public key; existing private key was preserved.' }
-        try {
-          $stream = [IO.File]::Open($publicPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
-          try {
-            $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($recovered | Out-String).Trim() + "`n")
-            $stream.Write($bytes, 0, $bytes.Length)
-          } finally { $stream.Dispose() }
-        } catch { Fail 'cannot publish recovered SSH public key without overwriting an existing file.' }
-        Write-Output "Recovered SSH public key: $publicPath"
-      } elseif ($publicItem) {
-        Fail 'SSH identity is incomplete; refusing to overwrite existing files.'
-      } else {
-        # Generate away from the destination: ssh-keygen can overwrite a public
-        # file that appears after its initial private-key overwrite check.
-        $tempDir = Join-Path (Split-Path -Parent $keyPath) ('.herdsman-key-' + [guid]::NewGuid().ToString('N'))
-        New-Item -ItemType Directory -Path $tempDir | Out-Null
-        $tempKey = Join-Path $tempDir 'id_ed25519'
-        try {
-          '' | & ssh-keygen -q -t ed25519 -N $emptyPassphrase -f $tempKey
-          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $tempKey -PathType Leaf) -or -not (Test-Path -LiteralPath "$tempKey.pub" -PathType Leaf)) { Fail 'cannot generate SSH identity.' }
-          try {
-            [IO.File]::Move($tempKey, $keyPath)
-            [IO.File]::Move("$tempKey.pub", $publicPath)
-          } catch { Fail 'cannot publish SSH identity without overwriting existing files.' }
-        } finally { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
-        Write-Output "Generated SSH login identity: $keyPath"
+  $projectName = [string]$model.name
+  if (-not $projectName) { Fail 'Compose did not report a project name.' }
+  $containers = @(& docker ps -aq --filter "label=com.docker.compose.project=$projectName")
+  if ($LASTEXITCODE -ne 0) { Fail 'could not inspect existing Compose containers.' }
+  foreach ($container in $containers) {
+    if (-not $container) { continue }
+    $inspectText = & docker inspect $container
+    if ($LASTEXITCODE -ne 0) { Fail 'could not inspect an existing Compose container.' }
+    try { $info = @(($inspectText | Out-String) | ConvertFrom-Json)[0] } catch { Fail 'Docker returned invalid container inspection JSON.' }
+    $workingDir = $info.Config.Labels.'com.docker.compose.project.working_dir'
+    if (-not $workingDir -or -not [string]::Equals([IO.Path]::GetFullPath($workingDir).TrimEnd('\', '/'), $script:ProjectDir.TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase)) {
+      Fail "Compose project '$projectName' belongs to '$workingDir', not '$script:ProjectDir'."
+    }
+    if ($info.Config.Labels.'com.docker.compose.service' -eq 'herdsman') {
+      $oldHome = @($info.Mounts | Where-Object { $_.Destination -eq '/home/herdsman' })
+      $expectedSource = if ($mount.type -eq 'volume') { $model.volumes.($mount.source).name } else { [IO.Path]::GetFullPath($mount.source) }
+      $oldSource = if ($mount.type -eq 'volume') { $oldHome[0].Name } else { $oldHome[0].Source }
+      $sourceComparison = if ($mount.type -eq 'volume') { [StringComparison]::Ordinal } else { [StringComparison]::OrdinalIgnoreCase }
+      if ($oldHome.Count -ne 1 -or $oldHome[0].Type -ne $mount.type -or -not [string]::Equals($oldSource, $expectedSource, $sourceComparison)) {
+        Fail 'existing Herdsman home mount differs from the selected configuration; refusing storage migration.'
       }
-      if (-not (Test-Path -LiteralPath $publicPath -PathType Leaf)) { Fail 'SSH public key is missing or empty.' }
-      $key = (Get-Content -Raw -LiteralPath $publicPath).Trim()
-      if (-not $key) { Fail 'SSH public key is missing or empty.' }
     }
   }
-  if ($key) {
-    if (-not (Test-OpenSshPublicKey $key)) { Fail 'SSH_AUTHORIZED_KEYS is not a structurally valid OpenSSH public key.' }
-    $env:SSH_AUTHORIZED_KEYS = $key
+  # Do not allow Compose to create a missing bind source as root. Existing
+  # sources are checked below from inside the Linux engine, where its actual
+  # ownership and access semantics apply.
+  if ($mount.type -eq 'bind' -and -not (Test-Path -LiteralPath $mount.source -PathType Container)) {
+    Fail 'bind-mounted home must already exist; create and configure it manually before setup.'
   }
+  if ($mount.type -notin @('volume', 'bind')) { Fail 'unsupported Herdsman home mount type.' }
+
+  # Check the image account database and StrictModes without changing either.
+  $preflightScript = @'
+set -eu
+uid=$1
+gid=$2
+current_uid=$(id -u herdsman)
+current_gid=$(id -g herdsman)
+if [ "$uid" != "$current_uid" ] && getent passwd "$uid" >/dev/null; then exit 1; fi
+if [ "$gid" != "$current_gid" ] && getent group "$gid" >/dev/null; then exit 1; fi
+owner=$(stat -c %u /home/herdsman)
+mode=$(stat -c %a /home/herdsman)
+{ [ "$owner" = 0 ] || [ "$owner" = "$uid" ]; } && [ $((0$mode & 022)) -eq 0 ]
+'@
+  & docker compose run --rm --no-deps -T --user '0:0' --entrypoint sh herdsman -c $preflightScript sh $uid $gid
+  if ($LASTEXITCODE -ne 0) { Fail 'home ownership, permissions, or configured PUID/PGID conflict with the image; refusing startup.' }
+
+  $keys = [Collections.Generic.List[string]]::new()
+  # Compose has already applied interpolation, env files and precedence.
+  $effectiveKeys = [string]$model.services.herdsman.environment.SSH_AUTHORIZED_KEYS
+  if ($effectiveKeys) {
+    foreach ($line in ($effectiveKeys -split "`r?`n")) { if ($line.Trim()) { $keys.Add($line.Trim()) } }
+  }
+  if (-not [Console]::IsInputRedirected) {
+    foreach ($candidate in @((Join-Path $HOME '.ssh/id_ed25519.pub'), (Join-Path $HOME '.ssh/id_rsa.pub'))) {
+      if ((Test-Path -LiteralPath $candidate -PathType Leaf) -and (Read-Host "Authorize public key $candidate to connect to Herdsman? [y/N]") -match '^(?i:y|yes)$') {
+        foreach ($line in (Get-Content -LiteralPath $candidate)) { if ($line.Trim()) { $keys.Add($line.Trim()) } }
+      }
+    }
+    while ($true) {
+      $inputKey = Read-Host 'Additional public key or path to .pub file (Enter to finish)'
+      if (-not $inputKey) { break }
+      if (Test-Path -LiteralPath $inputKey -PathType Leaf) {
+        foreach ($line in (Get-Content -LiteralPath $inputKey)) { if ($line.Trim()) { $keys.Add($line.Trim()) } }
+      } else { $keys.Add($inputKey.Trim()) }
+    }
+  }
+  foreach ($key in $keys) {
+    if (-not (Test-OpenSshPublicKey $key)) { Fail 'SSH_AUTHORIZED_KEYS or selected key is not a structurally valid OpenSSH public key.' }
+  }
+  $authorizationScript = @'
+set -eu
+umask 077
+home=/home/herdsman
+sshdir="$home/.ssh"
+auth="$sshdir/authorized_keys"
+# Complete effective validation before touching any persistent authorization.
+keys=$(mktemp)
+trap 'rm -f "$keys"' EXIT HUP INT TERM
+while IFS= read -r key; do
+  [ -n "$key" ] || continue
+  fingerprint=$(printf '%s\n' "$key" | ssh-keygen -lf - | awk 'NR == 1 {print $2}')
+  [ -n "$fingerprint" ] || exit 1
+  printf '%s\n' "$key" >> "$keys"
+done
+[ -w "$home" ] || exit 1
+[ ! -L "$sshdir" ] && { [ ! -e "$sshdir" ] || [ -d "$sshdir" ]; } || exit 1
+mkdir -p "$sshdir"
+[ ! -L "$auth" ] && { [ ! -e "$auth" ] || [ -f "$auth" ]; } || exit 1
+touch "$auth"
+chmod 700 "$sshdir"
+chmod 600 "$auth"
+while IFS= read -r key; do
+  fingerprint=$(printf '%s\n' "$key" | ssh-keygen -lf - | awk 'NR == 1 {print $2}')
+  if ! ssh-keygen -lf "$auth" 2>/dev/null | awk -v f="$fingerprint" '$2 == f {found=1} END {exit !found}'; then
+    [ ! -s "$auth" ] || [ "$(tail -c 1 "$auth" | wc -l)" -ne 0 ] || printf '\n' >> "$auth"
+    printf '%s\n' "$key" >> "$auth"
+  fi
+done < "$keys"
+ssh-keygen -lf "$auth" >/dev/null 2>&1
+'@
+  # Public keys are passed on stdin, never on the command line.
+  @($keys | ForEach-Object { ($_ -split '\s+', 3)[0..1] -join ' ' }) | & docker compose run --rm --no-deps -T --user "${uid}:${gid}" --entrypoint sh herdsman -c $authorizationScript
+  if ($LASTEXITCODE -ne 0) { Fail 'could not safely update authorized_keys, or no authorized keys exist.' }
   Invoke-Docker @('compose', 'up', '-d')
   $ready = $false
   for ($attempt = 0; $attempt -lt 30; $attempt++) {
@@ -227,6 +275,9 @@ try {
   }
   if (-not $ready) { Fail 'Herdsman did not become ready; inspect with: docker compose logs herdsman' }
   Write-Output "Herdsman is ready in $script:ProjectDir"
+  Write-Output "Compose project: $projectName; home storage: $($mount.type); UID/GID: ${uid}:${gid}"
+  Write-Output 'SSH authorization checked against the persistent home.'
+  Write-Output 'Container outgoing SSH public key: docker compose exec herdsman cat /home/herdsman/.ssh/id_ed25519.pub'
   $publishedPort = & docker compose port herdsman 22
   if ($LASTEXITCODE -ne 0 -or ($publishedPort | Out-String).Trim() -notmatch ':(\d+)$') { Fail 'could not determine the published Herdsman SSH port.' }
   $sshPort = $Matches[1]

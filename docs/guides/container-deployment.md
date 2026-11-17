@@ -8,7 +8,7 @@ Run Pi Herdsman as a portable SSH-accessible coding-agent environment with Pi, H
 
 The repository includes a ready-to-use [compose.yaml](../../compose.yaml)
 with a prebuilt image, SSH access, and persistent Docker-managed volumes.
-You need Docker Compose v2.
+You need Docker Compose v2. The Bash installer also requires `jq`.
 
 For guided setup on Linux or macOS, run the native Bash installer:
 
@@ -22,38 +22,39 @@ On Windows with Docker Desktop, run the native PowerShell installer:
 irm https://raw.githubusercontent.com/boadij/pi-herdsman/main/scripts/docker-setup.ps1 | iex
 ```
 
-The installer reuses the current checkout when run from its script file, or
-uses `$HOME/pi-herdsman` by default; set `PI_HERDSMAN_DIR` to choose another
-directory. It downloads only missing official Compose files, preserves local
-configuration and Docker volumes, validates the configuration, starts the
-container, and prints connection instructions. The guided installer reuses an
-existing SSH public key or generates a new Ed25519 identity when fresh
-deployment authorization is needed. OpenSSH's `ssh-keygen` is required only
-for generation or recovery. Generated keys are stored on the machine running
-setup at `$HOME/.ssh/id_ed25519` (private) and `$HOME/.ssh/id_ed25519.pub`
-(public); the private key has no passphrase, so protect it. The installer can
-also recover a missing public key from a usable unencrypted default private
-key. Existing container authorization is preserved.
+The installer uses the current directory, unless `PI_HERDSMAN_DIR` selects
+another directory. It uses Compose's native configuration resolution,
+including `compose.override.yaml` discovery or an explicit `COMPOSE_FILE`
+selection. Both installers recognize the standard Compose filenames when
+deciding whether to offer a new deployment. For a new deployment, setup
+downloads the required official files. It checks for conflicting Compose
+projects and changes to an existing container's home mount before recreation.
 
-If you run setup on a remote Docker host, the generated private key stays on
-that host; it does not automatically authorize your workstation. To connect
-from the workstation, supply its public key in `SSH_AUTHORIZED_KEYS` when
-setting up a fresh deployment. Setup checks the OpenSSH wire structure of the
-provided public key but does not perform cryptographic key or curve validation.
-A structurally valid but cryptographically invalid key (including an invalid
-ECDSA point) may therefore be accepted by setup and later fail during SSH
-authentication. The guided Windows flow currently offers standard Docker only;
-Windows Tailscale and host bind-mount setup are not advertised without platform
-acceptance evidence.
+Guided setup can offer to authorize an existing host public key with your
+explicit consent, and accepts additional public keys from trusted machines.
+It does not generate a private key on the Docker host. Existing authorization
+is preserved; a fresh deployment needs at least one authorized key. For
+noninteractive setup, supply public keys in `SSH_AUTHORIZED_KEYS`. If setup
+runs on a remote Docker host, authorize your workstation's public key to
+connect from the workstation. Setup checks the OpenSSH wire structure of each
+provided public key and uses the container's `ssh-keygen` to check and compare
+keys before updating authorization. The guided Windows flow currently offers
+standard Docker only; Windows Tailscale and host bind-mount setup are not
+advertised without platform acceptance evidence. The Bash installer requires a
+resolved image for its isolated preflight. For Tailscale, it reuses the existing
+sidecar, starting it if stopped, and reattaches Herdsman as needed. If
+reattachment fails, inspect the sidecar and Herdsman network namespace.
 
 When the Bash installer must use sudo, it preserves explicitly set
 `COMPOSE_FILE`, `COMPOSE_PATH_SEPARATOR`, `COMPOSE_PROJECT_NAME`,
-`PUID`, `PGID`, `HERDSMAN_SSH_PORT`, and `TAILSCALE_HOSTNAME`.
-It passes SSH authorization and a temporary Tailscale key only for startup
-or recreation as needed. Sudo policy must allow the requested names. Other
-environment overrides, including variables used by custom Compose files and
-Docker engine selection variables, are not preserved by the installer under
-sudo; configure them for the sudo environment or use direct Docker access.
+`PUID`, `PGID`, `HERDSMAN_SSH_PORT`, and `TAILSCALE_HOSTNAME`, as well as
+exported interpolation variables identified by Compose. This requires Compose
+support for `config --variables`; setup fails if it cannot preserve the resolved
+configuration. It sends public keys to the authorization operation on standard
+input and passes a temporary Tailscale key only when needed. Sudo policy must
+allow the requested names. Docker engine selection variables are not preserved
+by the installer under sudo; configure them for the sudo environment or use
+direct Docker access.
 All installer operations after sudo selection use that sudo Docker engine.
 
 For direct Compose control, use the Compose file included in a checkout or
@@ -358,8 +359,15 @@ If you downloaded only the base Compose file, get the overlay:
 curl -fsSLO https://raw.githubusercontent.com/boadij/pi-herdsman/main/compose.bind-mount.yaml
 ```
 
-For a Linux or NAS bind mount, prepare the directory for the UID/GID the
-container will use:
+The Bash installer defaults to `1000:1000` for a new home unless IDs are
+configured, regardless of the user running setup. It preserves existing
+bind-home ownership and stops if the home or effective IDs are incompatible
+with non-root access. It does not recursively change ownership of existing
+data. Guided Windows setup requires an existing bind-mounted home and checks
+its access from a container; it does not create the home or derive its IDs.
+
+For a manually configured Linux or NAS bind mount, prepare the directory for
+the positive UID/GID the container will use:
 
 ```sh
 PUID=1035
@@ -440,7 +448,10 @@ original process has exited.
 | Password login     | disabled      |
 | Root SSH login     | disabled      |
 
-`SSH_AUTHORIZED_KEYS` is required only on first start. Existing authorized keys are not overwritten.
+For direct Compose deployments, `SSH_AUTHORIZED_KEYS` initializes authorization
+on first start; it does not add keys to an existing nonempty `authorized_keys`.
+Guided setup can add explicitly supplied public keys while preserving existing
+authorization.
 
 Pi sessions automatically receive the container environment context from `/AGENTS.md`.
 

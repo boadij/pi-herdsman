@@ -32,26 +32,35 @@ $wire.AddRange([byte[]]@(1..32))
 $testKey = 'ssh-ed25519 ' + [Convert]::ToBase64String($wire.ToArray()) + ' synthetic-test-key'
 $env:SSH_AUTHORIZED_KEYS = $testKey
 $env:COMPOSE_FILE = ''
-$script:keygenCalls = 0
-$script:keygenFailure = $false
-$script:keygenRace = $false
-function ssh-keygen {
-  $script:keygenCalls++
-  if ($script:keygenFailure) { $global:LASTEXITCODE = 1; return }
-  $global:LASTEXITCODE = 0
-  if ($args -contains '-y') { return $testKey }
-  $path = $args[([array]::IndexOf($args, '-f') + 1)]
-  [IO.File]::WriteAllText($path, 'private fixture')
-  [IO.File]::WriteAllText("$path.pub", $testKey)
-  if ($script:keygenRace) { [IO.File]::WriteAllText((Join-Path $HOME '.ssh/id_ed25519.pub'), 'concurrent public key') }
-}
 $script:dockerCalls = [Collections.Generic.List[string]]::new()
 $script:hasPersistentAuthorizedKeys = $true
 $script:dockerOSType = 'linux'
 $script:sshPort = 2200
+$script:modelUid = ''
+$script:modelGid = ''
+$script:preflightOk = $true
+$script:composeKey = $null
+$script:networkMode = ''
+$script:sidecarImage = ''
+$script:containerInfo = $null
 function docker {
   $call = $args -join ' '
   $script:dockerCalls.Add($call)
+  if ($call -eq 'compose config --format json') {
+    $global:LASTEXITCODE = 0
+    $effectiveKey = if ($null -ne $script:composeKey) { $script:composeKey } else { $env:SSH_AUTHORIZED_KEYS }
+    $services = @{ herdsman = @{ network_mode = $script:networkMode; environment = @{ PUID = $script:modelUid; PGID = $script:modelGid; SSH_AUTHORIZED_KEYS = $effectiveKey }; volumes = @(@{ type = 'volume'; source = 'home'; target = '/home/herdsman' }) } }
+    if ($script:sidecarImage) { $services['vpn'] = @{ image = $script:sidecarImage } }
+    return (@{ name = 'test-project'; services = $services; volumes = @{ home = @{ name = 'test-project_home' } } } | ConvertTo-Json -Depth 8 -Compress)
+  }
+  if ($call -like 'ps -aq --filter *') { $global:LASTEXITCODE = 0; if ($script:containerInfo) { return 'container-id' }; return }
+  if ($call -eq 'inspect container-id') { $global:LASTEXITCODE = 0; return (ConvertTo-Json -InputObject @($script:containerInfo) -Depth 8 -Compress) }
+  if ($call -like 'compose run --rm --no-deps -T --user 0:0 *') { $global:LASTEXITCODE = if ($script:preflightOk) { 0 } else { 1 }; return }
+  if ($call -like 'compose run --rm --no-deps -T --user *') {
+    $script:capturedKeys = @($input)
+    $global:LASTEXITCODE = if ($script:hasPersistentAuthorizedKeys -or $script:capturedKeys.Count -gt 0) { 0 } else { 1 }
+    return
+  }
   if ($call -eq 'compose up -d') { $script:startedWithKey = $env:SSH_AUTHORIZED_KEYS }
   if ($call -eq 'compose port herdsman 22') {
     $global:LASTEXITCODE = 0
@@ -74,7 +83,7 @@ function Invoke-WebRequest {
   Assert $UseBasicParsing 'Compose download omitted -UseBasicParsing.'
   [IO.File]::WriteAllText($OutFile, 'services: {}')
 }
-function Read-Host { param([string] $Prompt); if ($Prompt -notlike 'Deployment:*') { throw "Unexpected prompt: $Prompt" }; return '' }
+function Read-Host { param([string] $Prompt); return '' }
 function Assert([bool] $Condition, [string] $Message) { if (-not $Condition) { throw $Message } }
 try {
   $script:dockerOSType = 'windows'
@@ -82,9 +91,20 @@ try {
   try { . (Join-Path $root 'scripts/docker-setup.ps1') } catch { $windowsEngineRejected = $_.Exception.Message -match 'must use a reachable Linux-container engine' }
   Assert $windowsEngineRejected 'Windows-container engine was not clearly rejected.'
   Assert (($script:dockerCalls -contains 'info --format {{.OSType}}')) 'Docker OSType was not queried natively.'
-  Assert (-not ($script:dockerCalls -contains 'compose config --quiet')) 'Compose setup continued on a Windows-container engine.'
+  Assert (-not ($script:dockerCalls -contains 'compose config --format json')) 'Compose setup continued on a Windows-container engine.'
   Assert (-not ($script:dockerCalls -contains 'compose up -d')) 'Deployment started on a Windows-container engine.'
   $script:dockerOSType = 'linux'
+  foreach ($override in @('compose.override.yaml', 'compose.override.yml', 'docker-compose.override.yaml', 'docker-compose.override.yml')) {
+    $path = Join-Path $project $override
+    [IO.File]::WriteAllText($path, 'services: {}')
+    $script:dockerCalls.Clear()
+    $failed = $false
+    try { . (Join-Path $root 'scripts/docker-setup.ps1') } catch { $failed = $_.Exception.Message -match 'override exists without a base' }
+    Assert $failed "Orphaned $override was not rejected."
+    Assert (-not (Test-Path (Join-Path $project 'compose.yaml'))) 'Orphaned override triggered a Compose download.'
+    Assert (-not @($script:dockerCalls | Where-Object { $_ -like 'compose config *' -or $_ -like 'ps *' -or $_ -like 'compose run *' -or $_ -eq 'compose up -d' }).Count) 'Orphaned override reached deployment operations.'
+    Remove-Item -LiteralPath $path
+  }
   $script:dockerCalls.Clear()
   [IO.File]::WriteAllText((Join-Path $project '.env'), "CUSTOM=value`nHERDSMAN_SSH_PORT=2200`n")
   $setupOutput = @(. (Join-Path $root 'scripts/docker-setup.ps1'))
@@ -92,53 +112,77 @@ try {
   $envFile = Get-Content -Raw (Join-Path $project '.env')
   Assert ($envFile.Contains('CUSTOM=value')) 'Existing .env setting was lost.'
   Assert ($envFile.Contains('HERDSMAN_SSH_PORT=2200')) 'Custom SSH port setting was lost.'
-  Assert ($envFile.Contains('COMPOSE_FILE=compose.yaml')) 'Default Compose selection was not saved.'
+  Assert (-not $envFile.Contains('COMPOSE_FILE=')) 'Default Compose selection was unnecessarily saved.'
   Assert ((Test-Path (Join-Path $project 'compose.yaml'))) 'Missing Compose file was not downloaded.'
-  Assert (($script:dockerCalls -contains 'compose config --quiet')) 'Compose validation was not called.'
+  Assert (($script:dockerCalls -contains 'compose config --format json')) 'Compose validation was not called.'
   Assert (($script:dockerCalls -contains 'compose up -d')) 'Compose startup was not called.'
   Assert (($script:dockerCalls -contains 'compose port herdsman 22')) 'Published SSH port was not queried from Compose.'
   Assert (-not (Get-ChildItem $project -Filter '*.tmp.*' -ErrorAction SilentlyContinue)) 'Temporary download remains.'
+  Remove-Item Env:PI_HERDSMAN_DIR
+  Push-Location $project
+  try {
+    $cwdOutput = @(. (Join-Path $root 'scripts/docker-setup.ps1'))
+    Assert (($cwdOutput -join "`n").Contains("Herdsman is ready in $project")) 'Setup did not use the current directory.'
+  } finally {
+    Pop-Location
+    $env:PI_HERDSMAN_DIR = $project
+  }
+  foreach ($scenario in @('sidecar', 'shared-network')) {
+    if ($scenario -eq 'sidecar') { $script:sidecarImage = 'tailscale/tailscale:stable' } else { $script:networkMode = 'service:vpn' }
+    $script:dockerCalls.Clear()
+    $failed = $false
+    try { . (Join-Path $root 'scripts/docker-setup.ps1') } catch { $failed = $_.Exception.Message -match 'does not support Tailscale' }
+    Assert $failed "Resolved $scenario was not rejected."
+    Assert (-not @($script:dockerCalls | Where-Object { $_ -like 'ps *' -or $_ -like 'compose run *' -or $_ -eq 'compose up -d' }).Count) 'Unsupported network reached container operations.'
+    $script:sidecarImage = ''
+    $script:networkMode = ''
+  }
+  $script:containerInfo = @{ Config = @{ Labels = @{ 'com.docker.compose.project.working_dir' = $project; 'com.docker.compose.service' = 'herdsman' } }; Mounts = @(@{ Destination = '/home/herdsman'; Type = 'volume'; Name = 'test-project_Home' }) }
+  $script:dockerCalls.Clear()
+  $failed = $false
+  try { . (Join-Path $root 'scripts/docker-setup.ps1') } catch { $failed = $_.Exception.Message -match 'refusing storage migration' }
+  Assert $failed 'Case-different volume was not rejected.'
+  Assert (-not @($script:dockerCalls | Where-Object { $_ -like 'compose run *' -or $_ -eq 'compose up -d' }).Count) 'Conflicting volume reached a container operation.'
+  $script:containerInfo = $null
+  foreach ($field in @('modelUid', 'modelGid')) {
+    Set-Variable -Scope Script -Name $field -Value '01000'
+    $script:dockerCalls.Clear()
+    $failed = $false
+    try { . (Join-Path $root 'scripts/docker-setup.ps1') } catch { $failed = $_.Exception.Message -match 'positive decimal' }
+    Assert $failed "Noncanonical $field was not rejected."
+    Assert (-not @($script:dockerCalls | Where-Object { $_ -like 'compose run *' }).Count) 'Invalid ID reached a one-off container.'
+    Assert (-not ($script:dockerCalls -contains 'compose up -d')) 'Invalid ID reached startup.'
+    Set-Variable -Scope Script -Name $field -Value ''
+  }
+  $script:preflightOk = $false
+  $script:dockerCalls.Clear()
+  $failed = $false
+  try { . (Join-Path $root 'scripts/docker-setup.ps1') } catch { $failed = $_.Exception.Message -match 'ownership, permissions, or configured' }
+  Assert $failed 'Incompatible home or ID was not rejected.'
+  Assert (-not ($script:dockerCalls -contains 'compose up -d')) 'Failed home preflight reached startup.'
+  $script:preflightOk = $true
+  # A key resolved from the Compose service environment is authoritative,
+  # even when it was supplied by .env rather than the PowerShell process.
+  Remove-Item Env:SSH_AUTHORIZED_KEYS
+  $script:composeKey = $testKey
+  $script:hasPersistentAuthorizedKeys = $false
+  . (Join-Path $root 'scripts/docker-setup.ps1')
+  Assert ($script:capturedKeys.Count -eq 1 -and $script:capturedKeys[0] -ceq (($testKey -split '\s+', 3)[0..1] -join ' ')) 'Effective Compose key did not reach authorization stdin.'
+  $script:composeKey = $null
+  $script:hasPersistentAuthorizedKeys = $true
+  $env:SSH_AUTHORIZED_KEYS = $testKey
   # Persistent authorized_keys allow a repeat without a host-side key.
   Remove-Item Env:SSH_AUTHORIZED_KEYS
   . (Join-Path $root 'scripts/docker-setup.ps1')
   Assert (($script:dockerCalls -contains 'compose up -d')) 'Repeat setup did not start deployment.'
-  $startupCount = @($script:dockerCalls | Where-Object { $_ -eq 'compose up -d' }).Count
   $script:hasPersistentAuthorizedKeys = $false
-  . (Join-Path $root 'scripts/docker-setup.ps1')
-  $privatePath = Join-Path $HOME '.ssh/id_ed25519'
-  $publicPath = "$privatePath.pub"
-  Assert ($script:keygenCalls -eq 1) 'Fresh setup did not generate an identity.'
-  Assert ($env:SSH_AUTHORIZED_KEYS -ceq (Get-Content -Raw -LiteralPath $publicPath).Trim()) 'Generated public key was not passed to Compose.'
-  Assert (@($script:dockerCalls | Where-Object { $_ -eq 'compose up -d' }).Count -eq ($startupCount + 1)) 'Fresh setup did not start.'
-  Remove-Item Env:SSH_AUTHORIZED_KEYS
-  . (Join-Path $root 'scripts/docker-setup.ps1')
-  Assert ($script:keygenCalls -eq 1) 'Repeat setup regenerated the identity.'
-  Remove-Item Env:SSH_AUTHORIZED_KEYS
-  Remove-Item -LiteralPath $publicPath
-  . (Join-Path $root 'scripts/docker-setup.ps1')
-  Assert ($script:keygenCalls -eq 2 -and $env:SSH_AUTHORIZED_KEYS -ceq (Get-Content -Raw -LiteralPath $publicPath).Trim()) 'Private-only identity was not recovered.'
-  Remove-Item Env:SSH_AUTHORIZED_KEYS
-  Remove-Item -LiteralPath $publicPath
-  $script:keygenFailure = $true
   $startupCount = @($script:dockerCalls | Where-Object { $_ -eq 'compose up -d' }).Count
   $failed = $false
-  try { . (Join-Path $root 'scripts/docker-setup.ps1') } catch { $failed = $_.Exception.Message -match 'cannot recover SSH public key' }
-  Assert ($failed -and (Get-Content -Raw -LiteralPath $privatePath) -ceq 'private fixture') 'Failed recovery did not preserve the private key.'
-  Assert (@($script:dockerCalls | Where-Object { $_ -eq 'compose up -d' }).Count -eq $startupCount) 'Failed recovery reached startup.'
-  Remove-Item -LiteralPath $privatePath
-  $failed = $false
-  try { . (Join-Path $root 'scripts/docker-setup.ps1') } catch { $failed = $_.Exception.Message -match 'cannot generate SSH identity' }
-  Assert $failed 'Native key generation failure was not caught.'
-  $script:keygenFailure = $false
-  $script:keygenRace = $true
-  $failed = $false
-  try { . (Join-Path $root 'scripts/docker-setup.ps1') } catch { $failed = $_.Exception.Message -match 'cannot publish SSH identity' }
-  Assert ($failed -and (Get-Content -Raw -LiteralPath $publicPath) -ceq 'concurrent public key') 'Concurrent public key was overwritten.'
-  Assert (@($script:dockerCalls | Where-Object { $_ -eq 'compose up -d' }).Count -eq $startupCount) 'Failed generation reached startup.'
-  Remove-Item -LiteralPath $privatePath, $publicPath
-  $script:keygenRace = $false
+  try { . (Join-Path $root 'scripts/docker-setup.ps1') } catch { $failed = $_.Exception.Message -match 'no authorized keys' }
+  Assert $failed 'Setup without authorized keys did not fail.'
+  Assert (@($script:dockerCalls | Where-Object { $_ -eq 'compose up -d' }).Count -eq $startupCount) 'Setup without authorized keys reached startup.'
+  Assert (-not (Test-Path (Join-Path $HOME '.ssh/id_ed25519'))) 'Installer generated a host private key.'
   $script:hasPersistentAuthorizedKeys = $true
-  $startupCount = @($script:dockerCalls | Where-Object { $_ -eq 'compose up -d' }).Count
   $env:SSH_AUTHORIZED_KEYS = 'ssh-ed25519 AQID malformed'
   $malformedRejected = $false
   try { . (Join-Path $root 'scripts/docker-setup.ps1') } catch { $malformedRejected = $_.Exception.Message -match 'structurally valid OpenSSH public key' }
@@ -212,56 +256,29 @@ try {
     [IO.File]::WriteAllText((Join-Path $project '.env'), $quotedComposeEnv)
     $script:dockerCalls.Clear()
     . (Join-Path $root 'scripts/docker-setup.ps1')
-    Assert (($script:dockerCalls -contains 'compose config --quiet')) 'Quoted COMPOSE_FILE with inline comment was not parsed for Compose validation.'
+    Assert (($script:dockerCalls -contains 'compose config --format json')) 'Quoted COMPOSE_FILE with inline comment was not parsed for Compose validation.'
     Assert ((Get-Content -Raw (Join-Path $project '.env')) -ceq $quotedComposeEnv) 'Quoted COMPOSE_FILE parsing modified .env bytes.'
+  }
+  # Exercise the exact embedded POSIX preflight when a shell is available.
+  $shell = Get-Command sh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($shell) {
+    $source = Get-Content -Raw (Join-Path $root 'scripts/docker-setup.ps1')
+    $match = [regex]::Match($source, '(?s)\$preflightScript = @''\r?\n(.*?)\r?\n''@')
+    Assert $match.Success 'Could not extract embedded preflight.'
+    $mocks = @'
+id() { case "$1" in -u) echo 1000;; -g) echo 1000;; esac; }
+getent() { [ "$2" = 2000 ]; }
+stat() { case "$2" in %u) echo 0;; %a) echo 755;; esac; }
+'@
+    foreach ($case in @(@('2000', '1000', 1), @('1000', '2000', 1), @('1000', '1000', 0), @('3000', '3000', 0))) {
+      ($mocks + "`n" + $match.Groups[1].Value) | & $shell.Source -s -- $case[0] $case[1]
+      Assert ($LASTEXITCODE -eq $case[2]) "Unexpected preflight status for UID $($case[0]), GID $($case[1])."
+    }
+  } else {
+    Write-Output 'Embedded POSIX preflight checks skipped: sh not found.'
   }
   Write-Output 'PowerShell Docker setup mocked checks passed.'
 
-  # Exercise native argument serialization as well as the filesystem, in the
-  # isolated home. PowerShell 7 supports testing all native argument modes.
-  Remove-Item Function:ssh-keygen
-  $nativeKeygen = Get-Command ssh-keygen -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-  if ($nativeKeygen) {
-    $resolvedKeygen = Get-Command ssh-keygen
-    Assert ($resolvedKeygen.CommandType -eq 'Application' -and $resolvedKeygen.Source -eq $nativeKeygen.Source) 'Installer ssh-keygen does not resolve to the native executable.'
-    $env:COMPOSE_FILE = 'compose.yaml'
-    $script:hasPersistentAuthorizedKeys = $false
-    $modes = if (Get-Variable PSNativeCommandArgumentPassing -ErrorAction SilentlyContinue) { @('Legacy', 'Standard', 'Windows') } else { @('Legacy') }
-    foreach ($mode in $modes) {
-      if (Get-Variable PSNativeCommandArgumentPassing -ErrorAction SilentlyContinue) { $PSNativeCommandArgumentPassing = $mode }
-      Remove-Item Env:SSH_AUTHORIZED_KEYS -ErrorAction SilentlyContinue
-      Remove-Item -LiteralPath $privatePath, $publicPath -Force -ErrorAction SilentlyContinue
-      . (Join-Path $root 'scripts/docker-setup.ps1')
-      Assert ((Test-Path -LiteralPath $privatePath -PathType Leaf) -and (Test-Path -LiteralPath $publicPath -PathType Leaf)) "Real key generation failed in $mode mode."
-      $originalPublicKey = (Get-Content -Raw -LiteralPath $publicPath).Trim()
-      Assert ($script:startedWithKey -ceq $originalPublicKey) "Generated key was not passed to Compose in $mode mode."
-      Remove-Item Env:SSH_AUTHORIZED_KEYS
-      Remove-Item -LiteralPath $publicPath
-      . (Join-Path $root 'scripts/docker-setup.ps1')
-      Assert ((Get-Content -Raw -LiteralPath $publicPath).Trim() -ceq $originalPublicKey) "Real recovery changed the public key in $mode mode."
-      Assert ($script:startedWithKey -ceq $originalPublicKey) "Recovered key was not passed to Compose in $mode mode."
-      Remove-Item Env:SSH_AUTHORIZED_KEYS
-      Remove-Item -LiteralPath $privatePath, $publicPath
-      & $nativeKeygen.Source -q -t ed25519 -N 'fixture-passphrase' -f $privatePath
-      Assert ($LASTEXITCODE -eq 0) 'Could not create encrypted test identity.'
-      $PSNativeCommandUseErrorActionPreference = $false
-      & $nativeKeygen.Source -y -P 'wrong-passphrase' -f $privatePath 2>$null | Out-Null
-      Assert ($LASTEXITCODE -ne 0) 'Test identity accepted an incorrect passphrase.'
-      & $nativeKeygen.Source -y -P 'fixture-passphrase' -f $privatePath 2>$null | Out-Null
-      Assert ($LASTEXITCODE -eq 0) 'Test identity did not accept its passphrase.'
-      Remove-Item -LiteralPath $publicPath
-      $beforePrivate = [IO.File]::ReadAllBytes($privatePath)
-      $startupCount = @($script:dockerCalls | Where-Object { $_ -eq 'compose up -d' }).Count
-      $failed = $false
-      try { . (Join-Path $root 'scripts/docker-setup.ps1') } catch { $failed = $_.Exception.Message -match 'cannot recover SSH public key' }
-      Assert ($failed -and -not (Test-Path -LiteralPath $publicPath)) "Encrypted key recovery did not fail safely in $mode mode."
-      Assert ([Convert]::ToBase64String([IO.File]::ReadAllBytes($privatePath)) -ceq [Convert]::ToBase64String($beforePrivate)) 'Encrypted private key was modified.'
-      Assert (@($script:dockerCalls | Where-Object { $_ -eq 'compose up -d' }).Count -eq $startupCount) 'Failed native recovery reached startup.'
-    }
-    Write-Output 'PowerShell Docker setup real ssh-keygen checks passed.'
-  } else {
-    Write-Output 'PowerShell Docker setup real ssh-keygen checks skipped: executable not found.'
-  }
 } finally {
   Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item Env:PI_HERDSMAN_DIR -ErrorAction SilentlyContinue
