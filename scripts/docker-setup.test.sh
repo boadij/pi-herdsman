@@ -54,6 +54,7 @@ if [[ "$1 $2" == "compose config" && "${3:-}" == --format ]]; then
   selection=${COMPOSE_FILE:-$(sed -n 's/^COMPOSE_FILE=//p' .env 2>/dev/null | tail -n1)}
   uid=${PUID-$(sed -n 's/^PUID=//p' .env 2>/dev/null | tail -n1)}
   gid=${PGID-$(sed -n 's/^PGID=//p' .env 2>/dev/null | tail -n1)}
+  if [[ "${MOCK_DERIVED_GID_DRIFT:-0}" == 1 && -n "$uid" ]]; then gid=4000; fi
   type=volume; source=home
   if [[ "$selection" == *compose.bind-mount.yaml* ]]; then type=bind; source="$PWD/data/herdsman-home"; fi
   if [[ "${MOCK_ARBITRARY:-0}" == 1 ]]; then type=bind; source=${HERDSMAN_HOME:-"$PWD/fallback-home"}; fi
@@ -61,7 +62,7 @@ if [[ "$1 $2" == "compose config" && "${3:-}" == --format ]]; then
   if [[ "${MOCK_BOOTSTRAP_CONFIG_DRIFT:-0}" == 1 && -n "${TS_AUTHKEY:-}" ]]; then source=credential-dependent-home; fi
   network=
   [[ "$selection" != *compose.tailscale.yaml* ]] || network=service:tailscale
-  jq -n --arg uid "$uid" --arg gid "$gid" --arg keys "${SSH_AUTHORIZED_KEYS:-}" --arg type "$type" --arg source "$source" --arg network "$network" '{name:"test-project",services:{herdsman:{image:"example/herdsman",network_mode:$network,environment:{PUID:$uid,PGID:$gid,SSH_AUTHORIZED_KEYS:$keys},volumes:[{type:$type,source:$source,target:"/home/herdsman"}]}},volumes:{home:{name:"test-project_home"}}}'
+  jq -n --arg uid "$uid" --arg gid "$gid" --arg keys "${SSH_AUTHORIZED_KEYS:-}" --arg type "$type" --arg source "$source" --arg network "$network" --arg helper "${MOCK_HELPER_UID:-}" '{name:"test-project",services:{herdsman:{image:"example/herdsman",network_mode:$network,environment:{PUID:$uid,PGID:$gid,SSH_AUTHORIZED_KEYS:$keys},volumes:[{type:$type,source:$source,target:"/home/herdsman"}]}},volumes:{home:{name:"test-project_home"}}} | if $helper == "1" then .services.helper = {image:"busybox",environment:{WORK_UID:(if $uid == "" then "1000" else $uid end)}} else . end'
   exit
 fi
 if [[ "$1" == ps ]]; then printf '%s' "${MOCK_CONTAINER_IDS:-}"; exit; fi
@@ -781,6 +782,34 @@ exec /usr/bin/stat "$@"
 MOCK
 chmod +x "$work/bin/stat"
 export PI_HERDSMAN_DIR="$bind_project" MOCK_STAT_HOME="$bind_project/data/herdsman-home"
+printf 'COMPOSE_FILE=compose.yaml:compose.tailscale.yaml:compose.bind-mount.yaml\n' >"$bind_project/.env"
+# A derived PUID that also changes another service must be rejected before
+# persistent configuration or any container is changed.
+cp "$bind_project/.env" "$work/derived-helper-before.env"
+export MOCK_HELPER_UID=1
+: >"$DOCKER_LOG"
+if bash "$root/scripts/docker-setup.sh" >"$work/derived-helper.out" 2>&1; then
+  echo 'Expected derived ID interpolation conflict.' >&2; exit 1
+fi
+grep -q 'derived IDs change unrelated Compose configuration' "$work/derived-helper.out"
+cmp "$work/derived-helper-before.env" "$bind_project/.env"
+! grep -q '^docker run ' "$DOCKER_LOG"
+! grep -q '^docker compose run ' "$DOCKER_LOG"
+! grep -q '^docker compose up ' "$DOCKER_LOG"
+unset MOCK_HELPER_UID
+# A configured PGID must not be ignored when only PUID was derived.
+printf 'COMPOSE_FILE=compose.yaml:compose.tailscale.yaml:compose.bind-mount.yaml\nPGID=3000\n' >"$bind_project/.env"
+cp "$bind_project/.env" "$work/derived-gid-before.env"
+export MOCK_DERIVED_GID_DRIFT=1
+: >"$DOCKER_LOG"
+if bash "$root/scripts/docker-setup.sh" >"$work/derived-gid-drift.out" 2>&1; then
+  echo 'Expected configured PGID drift rejection.' >&2; exit 1
+fi
+grep -q 'derived IDs change unrelated Compose configuration' "$work/derived-gid-drift.out"
+cmp "$work/derived-gid-before.env" "$bind_project/.env"
+! grep -q '^docker run ' "$DOCKER_LOG"
+! grep -q '^docker compose up ' "$DOCKER_LOG"
+unset MOCK_DERIVED_GID_DRIFT
 printf 'COMPOSE_FILE=compose.yaml:compose.tailscale.yaml:compose.bind-mount.yaml\n' >"$bind_project/.env"
 bash "$root/scripts/docker-setup.sh" >"$work/derived-ids.out"
 grep -Fx 'PUID=2000' "$bind_project/.env"

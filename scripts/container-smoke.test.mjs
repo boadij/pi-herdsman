@@ -3,6 +3,31 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+test("installer SSH verification disables other identities and agents", () => {
+  const script = readFileSync("scripts/container-smoke.sh", "utf8");
+  const check = script.match(/^  check_ssh\(\) \{[\s\S]*?^  \}/m)?.[0];
+  assert.ok(check);
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      `
+    ${check}
+    compose() { echo 127.0.0.1:2222; }
+    ssh() { command ssh -G "$@"; }
+    check_ssh scripts/container-smoke.sh
+  `,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^identitiesonly yes$/m);
+  assert.match(result.stdout, /^identityagent none$/m);
+  assert.deepEqual(result.stdout.match(/^identityfile .*$/gm), [
+    "identityfile scripts/container-smoke.sh",
+  ]);
+});
+
 test("runtime verification fails when npm list fails", () => {
   const script = readFileSync("scripts/container-smoke.sh", "utf8");
   const verify = script.match(/^verify_runtime\(\) \{[\s\S]*?^\}/m)?.[0];

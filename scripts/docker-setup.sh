@@ -270,7 +270,15 @@ if [[ "$mount_type" == bind ]]; then
   (( (8#$bind_mode & 022) == 0 && (8#$bind_mode & 0300) == 0300 )) || die "bind-mounted home $home_dir must be writable and searchable by its owner and not group/other writable."
   if [[ -n "$derived_uid$derived_gid" ]]; then
     derived_model=$(resolve_compose_model) || die "could not resolve derived home IDs."
-    [[ $(jq -c '{name, home: [.services.herdsman.volumes[]? | select(.target == "/home/herdsman")], volumes}' <<<"$compose_model") == "$(jq -c '{name, home: [.services.herdsman.volumes[]? | select(.target == "/home/herdsman")], volumes}' <<<"$derived_model")" ]] || die "derived IDs changed the Compose project or home mount; configure the IDs explicitly."
+    # Ignore only the Herdsman environment values we intentionally inferred.
+    # Any other model change, including interpolation in other services, is unsafe.
+    model_without_derived_ids() {
+      jq -cS --arg uid "$derived_uid" --arg gid "$derived_gid" '
+        (if $uid != "" then del(.services.herdsman.environment.PUID) else . end)
+        | (if $gid != "" then del(.services.herdsman.environment.PGID) else . end)
+      ' <<<"$1"
+    }
+    [[ $(model_without_derived_ids "$compose_model") == "$(model_without_derived_ids "$derived_model")" ]] || die "derived IDs change unrelated Compose configuration; configure the IDs explicitly."
     [[ -z "$derived_uid" || $(jq -r '.services.herdsman.environment.PUID // ""' <<<"$derived_model") == "$derived_uid" ]] || die "Compose does not apply the derived PUID; configure it explicitly."
     [[ -z "$derived_gid" || $(jq -r '.services.herdsman.environment.PGID // ""' <<<"$derived_model") == "$derived_gid" ]] || die "Compose does not apply the derived PGID; configure it explicitly."
     compose_model=$derived_model
