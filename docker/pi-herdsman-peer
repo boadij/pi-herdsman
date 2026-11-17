@@ -11,16 +11,51 @@ try {
   else if (dir === "~") dir = homedir();
   else if (dir.startsWith("~/")) dir = path.join(homedir(), dir.slice(2));
   else if (dir.startsWith("file://")) dir = fileURLToPath(dir);
-  const pkg = path.resolve(dir, "npm/node_modules/pi-herdsman");
-  for (const directory of [path.resolve(dir, "npm"), path.dirname(pkg), pkg, path.join(pkg, "dist")]) {
+  dir = path.resolve(dir);
+  const settings = JSON.parse(fs.readFileSync(path.join(dir, "settings.json"), "utf8"));
+  if (!settings || typeof settings !== "object" || Array.isArray(settings) ||
+      (settings.packages !== undefined && !Array.isArray(settings.packages)))
+    throw new Error("invalid Pi settings");
+  const selected = new Map();
+  for (const entry of settings.packages ?? []) {
+    const source = typeof entry === "string" ? entry : entry && !Array.isArray(entry) && entry.source;
+    if (typeof source !== "string" || !source) throw new Error("invalid package declaration");
+    const npm = source === "npm:pi-herdsman" || source.startsWith("npm:pi-herdsman@");
+    let root;
+    if (npm) root = path.resolve(dir, "npm/node_modules/pi-herdsman");
+    else {
+      // Only filesystem sources are supported; Pi also accepts npm, git and URLs.
+      if (/^(?:[a-z][a-z0-9+.-]*:|git@)/i.test(source)) continue;
+      root = path.resolve(dir, source === "~" ? homedir() : source.startsWith("~/") ? path.join(homedir(), source.slice(2)) : source);
+      let manifest;
+      try {
+        manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+      } catch {
+        continue;
+      }
+      if (manifest.name !== "pi-herdsman") continue;
+    }
+    // Resource filters have Pi-specific matching semantics; never guess whether
+    // a filtered declaration enables the runtime extension.
+    if (typeof entry === "object" && Object.hasOwn(entry, "extensions"))
+      throw new Error("unsupported Herdsman extension filter; select an unfiltered package");
+    selected.set(npm ? "npm" : `local:${root}`, { root, npm });
+  }
+  if (selected.size !== 1)
+    throw new Error(selected.size ? "multiple Herdsman package sources configured; remove conflicting selections" : "no supported Herdsman package source configured");
+  const { root: pkg, npm } = selected.values().next().value;
+  const directories = npm ? [path.resolve(dir, "npm"), path.dirname(pkg), pkg, path.join(pkg, "dist")] : [pkg, path.join(pkg, "dist")];
+  for (const directory of directories) {
     if (!fs.lstatSync(directory).isDirectory()) throw new Error(`not a real directory: ${directory}`);
   }
-  for (const file of [path.join(pkg, "package.json"), path.join(pkg, "dist/peer-bridge.js")]) {
+  for (const file of [path.join(pkg, "package.json"), path.join(pkg, "dist/index.js"), path.join(pkg, "dist/peer-bridge.js")]) {
     if (!fs.lstatSync(file).isFile()) throw new Error(`not a real file: ${file}`);
   }
   const manifest = JSON.parse(fs.readFileSync(path.join(pkg, "package.json"), "utf8"));
   const bridge = path.join(pkg, "dist/peer-bridge.js");
-  if (manifest.name !== "pi-herdsman") throw new Error("invalid package");
+  if (manifest.name !== "pi-herdsman" || typeof manifest.version !== "string" || !manifest.version ||
+      !Array.isArray(manifest.pi?.extensions) || !manifest.pi.extensions.includes("./dist/index.js"))
+    throw new Error("invalid package manifest");
   process.stdout.write(bridge);
 } catch (error) {
   console.error(`pi-herdsman-peer: invalid or missing installed package: ${error.message}`);

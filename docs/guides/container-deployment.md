@@ -286,6 +286,43 @@ Run `/reload` in each affected Pi session to adopt the update; running sessions
 do not adopt it automatically. No container restart is needed. If builds
 overlap, incompatible coordination fails closed rather than proceeding.
 
+### Use a local development package
+
+Keep the checkout in persistent storage accessible inside the container, such
+as under `/home/herdsman`. From the container, switch explicitly from the
+published package to the checkout:
+
+```sh
+pi remove npm:pi-herdsman
+cd ~/path/to/pi-herdsman
+npm run build
+pi install .
+pi list
+```
+
+Remove any other conflicting Herdsman package declarations: the SSH peer
+launcher requires one selected user-global npm or local package and rejects
+distinct selections. It does not resolve project-local, temporary, or Git
+package selections. A missing local directory cannot always be identified as
+a Herdsman selection at container startup; the peer launcher will not execute
+a missing or invalid package.
+
+After rebuilding, run `/reload` in each existing Pi session (or start new
+sessions) before resuming coordination. Exact runtime-build compatibility
+checks still apply. The local package author is responsible for the checkout
+and its installed dependencies.
+
+To switch back, remove the local selection using its path as shown by
+`pi list`, then install the published package:
+
+```sh
+pi remove ~/path/to/pi-herdsman
+pi install npm:pi-herdsman
+pi list
+```
+
+Reload affected Pi sessions after switching.
+
 To update the image-owned Pi and Herdr runtimes, finish active work first,
 then run from the same Compose project directory:
 

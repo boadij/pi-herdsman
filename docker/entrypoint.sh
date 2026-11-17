@@ -157,6 +157,38 @@ function isNpmHerdsman(source) {
   );
 }
 
+function configuredLocalHerdsman(agentDir, sources) {
+  const roots = new Set();
+  for (const source of sources) {
+    if (typeof source !== "string" || !source || source === legacySource ||
+        /^(?:[a-z][a-z0-9+.-]*:|git@)/i.test(source)) continue;
+    const root = path.resolve(agentDir, source === "~" ? home :
+      source.startsWith("~/") ? path.join(home, source.slice(2)) : source);
+    try {
+      if (JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).name === "pi-herdsman")
+        roots.add(root);
+    } catch {
+      // A missing or unrelated local package cannot be identified as Herdsman.
+    }
+  }
+  return [...roots];
+}
+
+function validateLocalHerdsman(root) {
+  for (const [relative, directory] of [["", true], ["package.json", false], ["dist", true], ["dist/index.js", false], ["dist/peer-bridge.js", false]]) {
+    try {
+      const stat = fs.lstatSync(path.join(root, relative));
+      if (directory ? !stat.isDirectory() : !stat.isFile()) throw new Error();
+    } catch {
+      fail(`local pi-herdsman installation is invalid: ${relative || "package root"} must be a real ${directory ? "directory" : "file"}`);
+    }
+  }
+  const manifest = readJson(path.join(root, "package.json"));
+  if (manifest.name !== "pi-herdsman" || typeof manifest.version !== "string" || !manifest.version ||
+      !Array.isArray(manifest.pi?.extensions) || !manifest.pi.extensions.includes("./dist/index.js"))
+    fail("local pi-herdsman installation has an invalid package manifest");
+}
+
 function validateManagedPackage(packageDirectory, npmDirectory) {
   for (const directory of [npmDirectory, path.dirname(packageDirectory), packageDirectory]) {
     try {
@@ -335,6 +367,12 @@ try {
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
+  const localSelections = configuredLocalHerdsman(agentDir, sources);
+  if (localSelections.length) {
+    if (localSelections.length !== 1 || hasNpmSelection || sources.includes(legacySource))
+      fail("conflicting Herdsman package selections; remove all but one source");
+    validateLocalHerdsman(localSelections[0]);
+  } else {
   let packageExists = false;
   try {
     fs.lstatSync(packageDirectory);
@@ -468,6 +506,7 @@ try {
   if (backupDirectory) {
     fs.unlinkSync(seedAttemptPath);
     fs.rmSync(backupDirectory, { recursive: true, force: true });
+  }
   }
 } catch (error) {
   console.error(`Pi Herdsman package initialization failed: ${error.message}`);
