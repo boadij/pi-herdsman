@@ -67,6 +67,19 @@ printf '# preserved override\n' >"$PROJECT/compose.override.yaml"
 printf '# preserved env\n' >"$PROJECT/.env"
 cd "$PROJECT"
 cp compose.yaml "$work/base"; cp compose.override.yaml "$work/override"; cp .env "$work/env"
+# A deleted current directory must not be recreated from the inherited PWD.
+stale="$work/deleted-cwd"
+mkdir "$stale"
+(
+  cd "$stale"
+  rmdir "$stale"
+  if bash "$root/scripts/docker-setup.sh" </dev/null >"$work/deleted-cwd.out" 2>&1; then
+    echo 'deleted current directory accepted' >&2
+    exit 1
+  fi
+)
+grep -Fq 'current directory is inaccessible' "$work/deleted-cwd.out"
+[[ ! -e "$stale" && ! -e "$LOG" ]]
 export IDS=container RUNNING=container
 bash "$root/scripts/docker-setup.sh" </dev/null >"$work/output"
 grep -q 'Herdsman is ready' "$work/output"
