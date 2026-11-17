@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.50.0](https://github.com/boadij/pi-herdsman/compare/v0.49.0...v0.50.0) (2026-11-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **ui:** simplify Herdsman navigation and Manager approvals ([#1011](https://github.com/boadij/pi-herdsman/issues/1011))
+
+### Features
+
+* **lead:** enable optional CodeMode for Flexible Lead ([#1012](https://github.com/boadij/pi-herdsman/issues/1012)) ([128655a](https://github.com/boadij/pi-herdsman/commit/128655a3e4cd9424201a8a6ac58de9e5070a5a28))
+* **ui:** simplify Herdsman navigation and Manager approvals ([#1011](https://github.com/boadij/pi-herdsman/issues/1011)) ([a971f8e](https://github.com/boadij/pi-herdsman/commit/a971f8e316a01eea13dc3e6e767fff8a19e55ca2))
+
+
+### Fixes
+
+* **container:** recognize absolute Windows package paths ([#1021](https://github.com/boadij/pi-herdsman/issues/1021)) ([5bc3ce9](https://github.com/boadij/pi-herdsman/commit/5bc3ce9d2bed00e49c5cf902c0cf7fcf00fe1570))
+* **container:** resolve peer bridge from selected Pi package ([#1020](https://github.com/boadij/pi-herdsman/issues/1020)) ([e56a610](https://github.com/boadij/pi-herdsman/commit/e56a6109c2b1cd09a80cf3e836a6cb12a5019551))
+* **docker:** automatically provision SSH login identity ([#1014](https://github.com/boadij/pi-herdsman/issues/1014)) ([8d56f4d](https://github.com/boadij/pi-herdsman/commit/8d56f4da2a14ed5675d8c123240249e238e85ef6))
+* **instructions:** respect verified authority and human decisions ([#1017](https://github.com/boadij/pi-herdsman/issues/1017)) ([a0d692f](https://github.com/boadij/pi-herdsman/commit/a0d692f84484988083bd76abb769687b4c54695d))
+* **ui:** show Lead mode only for ordinary Leads ([#1018](https://github.com/boadij/pi-herdsman/issues/1018)) ([9d037d5](https://github.com/boadij/pi-herdsman/commit/9d037d57665f9cb1bc622349fabf2d4d871c6c1b))
+
+
+### Documentation
+
+* recognize six community contributors ([#1016](https://github.com/boadij/pi-herdsman/issues/1016)) ([f7981b6](https://github.com/boadij/pi-herdsman/commit/f7981b6d2d2fbccb614bb6d7ae10173700de5a89))
+
 ## [0.49.0](https://github.com/boadij/pi-herdsman/compare/v0.48.0...v0.49.0) (2026-11-16)
 
 
