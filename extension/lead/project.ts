@@ -26,6 +26,8 @@ import {
 import { OperationError } from "../errors.ts";
 import {
   localRepositoryScope,
+  verifiedHerdrAgent,
+  matchesExpectedSession,
   sameDirectory,
   sameObservedSessionPath,
   resolveAssignmentCheckout,
@@ -36,6 +38,8 @@ import {
   isWorktreeRemovalPreapproved,
   effectiveMergePolicy,
   setWorktreeRemovalPreapproved,
+  setManagerMergeOverride,
+  type ManagerMergeSetting,
 } from "../config.ts";
 import { persistRequiredTextFiles } from "../core.ts";
 import {
@@ -176,6 +180,8 @@ export type LeadProjectHost = {
     right: ManagerDescriptor,
   ): boolean;
   worktreeGroupScope: typeof import("../herdr.ts").worktreeGroupScope;
+  localRepositoryScope?: typeof localRepositoryScope;
+  listAgents(ctx: ExtensionContext): Promise<{ agents: HerdrRecord[] }>;
   reconcileProjectAssignments(
     ctx: ExtensionContext,
     repoKey: string,
@@ -1933,56 +1939,186 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         ),
     );
   };
+  type RepositorySettingsIdentity = {
+    repoKey: string;
+    checkoutPath: string;
+    isPrimary: boolean;
+    workspaceId: string;
+    paneId: string;
+    tabId: string;
+    cwd: string;
+    sessionId: string;
+    sessionFile: string | undefined;
+  };
+  const sameRepositorySettingsIdentity = (
+    a: RepositorySettingsIdentity,
+    b: RepositorySettingsIdentity,
+  ) =>
+    a.repoKey === b.repoKey &&
+    a.checkoutPath === b.checkoutPath &&
+    a.isPrimary === b.isPrimary &&
+    a.workspaceId === b.workspaceId &&
+    a.paneId === b.paneId &&
+    a.tabId === b.tabId &&
+    a.cwd === b.cwd &&
+    a.sessionId === b.sessionId &&
+    a.sessionFile === b.sessionFile;
+  const repositorySettingsIdentity = async (
+    ctx: ExtensionContext,
+  ): Promise<RepositorySettingsIdentity> => {
+    const workspaceId = process.env.HERDR_WORKSPACE_ID;
+    const paneId = process.env.HERDR_PANE_ID;
+    const tabId = process.env.HERDR_TAB_ID;
+    const sessionId = ctx.sessionManager.getSessionId();
+    const sessionFile = ctx.sessionManager.getSessionFile();
+    const cwd = ctx.cwd;
+    if (!workspaceId || !paneId || !tabId || !sessionId)
+      throw new Error(
+        "Verified workspace, pane, tab and session identity are required",
+      );
+    const agent = await verifiedHerdrAgent(
+      {
+        piSessionId: sessionId,
+        piSessionFile: sessionFile,
+        workspaceId,
+        paneId,
+        tabId,
+      },
+      {
+        listAgents: async () => (await host.listAgents(ctx)).agents,
+        getAgent: async (id) =>
+          (
+            await host.runHerdr(host.pi, ctx, ["agent", "get", id], {
+              signal: ctx.signal,
+            })
+          )?.agent,
+        expectedSession: host.expectedSession,
+        isPiAgent: host.isPiAgent,
+        matchesExpectedSession,
+      },
+    );
+    if (!agent)
+      throw new Error(
+        "Herdr session-to-workspace identity is unavailable or conflicting",
+      );
+    const scope = await (host.localRepositoryScope ?? localRepositoryScope)(
+      host.pi,
+      ctx,
+      workspaceId,
+      ctx.signal,
+    );
+    if (
+      workspaceId !== process.env.HERDR_WORKSPACE_ID ||
+      paneId !== process.env.HERDR_PANE_ID ||
+      tabId !== process.env.HERDR_TAB_ID ||
+      sessionId !== ctx.sessionManager.getSessionId() ||
+      sessionFile !== ctx.sessionManager.getSessionFile() ||
+      cwd !== ctx.cwd
+    )
+      throw new Error("Session context changed while verifying repository");
+    return {
+      ...scope,
+      workspaceId,
+      paneId,
+      tabId,
+      sessionId,
+      sessionFile,
+      cwd,
+    };
+  };
+  const revalidateRepositorySettings = async (
+    ctx: ExtensionContext,
+    expected: RepositorySettingsIdentity,
+  ) => {
+    const current = await repositorySettingsIdentity(ctx);
+    ctx.signal?.throwIfAborted();
+    if (!ctx.hasUI)
+      throw new Error("Interactive session is no longer available");
+    if (!sameRepositorySettingsIdentity(current, expected))
+      throw new Error("Repository or session changed; reopen the selector");
+  };
+  const getRemovalPreauthorization = async (ctx: ExtensionContext) => {
+    const identity = await repositorySettingsIdentity(ctx);
+    return {
+      identity,
+      repoKey: identity.repoKey,
+      enabled: isWorktreeRemovalPreapproved(identity.repoKey),
+    };
+  };
   const setRemovalPreauthorization = async (
     enabled: boolean,
     ctx: ExtensionContext,
+    expectedIdentity?: RepositorySettingsIdentity,
   ) => {
-    const manager = await host.currentManager(ctx);
-    if (host.activeRole() !== "manager" || !manager || !ctx.hasUI)
+    if (!ctx.hasUI)
       throw new Error(
-        "Only an interactive active Manager can change this setting",
+        "An interactive user is required to change repository settings",
       );
-    const group = await host.worktreeGroupScope(
-      host.pi,
-      ctx,
-      manager.workspaceId,
-      ctx.signal,
-    );
-    if (group.repoKey !== manager.repoKey)
-      throw new Error("Manager worktree group is not authoritative");
-    if (enabled) {
-      const answer = await ctx.ui.input(
-        `Skip worktree removal confirmation for this verified repository?\n\n${manager.repoKey}\n\nSubsequent explicitly requested removals here can proceed without a per-removal prompt. All safety checks remain active. Type enable to confirm.`,
-        undefined,
+    const identity = await repositorySettingsIdentity(ctx);
+    if (
+      expectedIdentity &&
+      !sameRepositorySettingsIdentity(identity, expectedIdentity)
+    )
+      throw new Error("Repository or session changed; reopen the selector");
+    const previous = isWorktreeRemovalPreapproved(identity.repoKey);
+    if (enabled && !previous) {
+      const confirmed = await ctx.ui.confirm(
+        "Allow worktree removal without individual approval?",
+        [
+          `Repository: ${identity.repoKey}`,
+          "",
+          "The Manager may execute explicitly requested, eligible",
+          "worktree removals without asking again.",
+          "Existing safety checks remain active.",
+        ].join("\n"),
         { signal: ctx.signal },
       );
-      if (answer !== "enable") return false;
+      if (!confirmed) return false;
     }
-    const current = await host.currentManager(ctx);
-    if (!current || !host.sameManagerDescriptor(current, manager))
-      throw new Error("Manager authority changed before saving the setting");
-    setWorktreeRemovalPreapproved(manager.repoKey, enabled);
-    return isWorktreeRemovalPreapproved(manager.repoKey) === enabled;
+    await revalidateRepositorySettings(ctx, identity);
+    if (isWorktreeRemovalPreapproved(identity.repoKey) !== previous)
+      throw new Error("Removal policy changed before saving the setting");
+    if (previous !== enabled)
+      setWorktreeRemovalPreapproved(identity.repoKey, enabled, previous);
+    return true;
   };
-  const getRemovalPreauthorization = async (ctx: ExtensionContext) => {
-    const manager = await host.currentManager(ctx);
-    if (host.activeRole() !== "manager" || !manager)
-      throw new Error("Only the active Manager can inspect this setting");
-    const group = await host.worktreeGroupScope(
-      host.pi,
-      ctx,
-      manager.workspaceId,
-      ctx.signal,
-    );
-    if (group.repoKey !== manager.repoKey)
-      throw new Error("Manager worktree group is not authoritative");
-    const current = await host.currentManager(ctx);
-    if (!current || !host.sameManagerDescriptor(current, manager))
-      throw new Error("Manager authority changed while reading this setting");
-    return {
-      repoKey: manager.repoKey,
-      enabled: isWorktreeRemovalPreapproved(manager.repoKey),
-    };
+  const setRepositoryMergeOverride = async (
+    enabled: ManagerMergeSetting | undefined,
+    ctx: ExtensionContext,
+    expectedIdentity: RepositorySettingsIdentity,
+    expected: {
+      global: ManagerMergeSetting;
+      override: ManagerMergeSetting | undefined;
+    },
+  ) => {
+    if (!ctx.hasUI)
+      throw new Error(
+        "An interactive user is required to change repository settings",
+      );
+    const identity = await repositorySettingsIdentity(ctx);
+    if (!sameRepositorySettingsIdentity(identity, expectedIdentity))
+      throw new Error("Repository or session changed; reopen the selector");
+    const level = (value: ManagerMergeSetting) =>
+      value === false ? 0 : value === true ? 1 : 2;
+    const previous = expected.override ?? expected.global;
+    const next = enabled ?? expected.global;
+    if (
+      next !== false &&
+      (level(next) > level(previous) ||
+        (enabled !== undefined && expected.override === undefined))
+    ) {
+      const confirmed = await ctx.ui.confirm(
+        `Allow Manager integration for ${identity.repoKey}?`,
+        next === "divergent"
+          ? "Allow conflict-free divergent merges? Git may create a merge commit and verified integration may automatically remove the exact source worktree."
+          : "Allow fast-forward integration and automatic cleanup of successfully integrated source worktrees?",
+        { signal: ctx.signal },
+      );
+      if (!confirmed) return false;
+    }
+    await revalidateRepositorySettings(ctx, identity);
+    setManagerMergeOverride(identity.repoKey, enabled, expected);
+    return true;
   };
   const {
     pi,
@@ -5828,6 +5964,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     cancelPendingRemoval,
     setRemovalPreauthorization,
     getRemovalPreauthorization,
+    setRepositoryMergeOverride,
     forgetLegacyProjectAssignment,
     executeStaff,
     updateAssignmentEvidence,

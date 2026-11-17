@@ -8096,7 +8096,7 @@ test("project agent discovery is gated by Pi project trust", async () => {
       selections.push(options);
       if (title === "Agents & Coordinators")
         return ++categorySelection % 2 === 1
-          ? options.find((option) => option === "Agents")
+          ? options.find((option) => option === "Agent definitions")
           : undefined;
       return undefined;
     };
@@ -8570,7 +8570,7 @@ test("project-only Definitions edits update the project source", async () => {
     if (title === "Agents & Coordinators") {
       if (categorySelected) return undefined;
       categorySelected = true;
-      return options.find((option) => option === "Agents");
+      return options.find((option) => option === "Agent definitions");
     }
     switch (selection++) {
       case 0:

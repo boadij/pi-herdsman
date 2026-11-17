@@ -13,7 +13,6 @@ import {
   DEFAULT_MAX_AGENT_DEPTH,
   DEFAULT_STATUS_WIDGET_MAX_ROWS,
   effectiveMergePolicy,
-  setManagerMergeOverride,
 } from "../config.ts";
 import {
   discoverGlobalAgentDefinition,
@@ -68,19 +67,25 @@ type LeadCommandHost = {
     items: readonly (SelectItem & { help?: string })[],
     selectedValue?: string,
   ): Promise<string | undefined>;
-  updateConfig(key: string, value: unknown): void;
+  updateConfig(
+    key: string,
+    value: unknown,
+    expectedManagerMergeEnabled?: import("../config.ts").ManagerMergeSetting,
+  ): void;
   readConfig: typeof import("../config.ts").readConfig;
   readEffectiveConfig: typeof import("../config.ts").readEffectiveConfig;
   readProjectOverrides: typeof import("../config.ts").readProjectOverrides;
   updateProjectOverride: typeof import("../config.ts").updateProjectOverride;
-  getRemovalPreauthorization(ctx: ExtensionContext): Promise<{
-    repoKey: string;
-    enabled: boolean;
-  }>;
-  setRemovalPreauthorization(
-    enabled: boolean,
-    ctx: ExtensionContext,
-  ): Promise<boolean>;
+  reviewPendingRemoval(ctx: ExtensionCommandContext): Promise<void>;
+  getRemovalPreauthorization: ReturnType<
+    typeof import("./project.ts").createLeadProjectRuntime
+  >["getRemovalPreauthorization"];
+  setRemovalPreauthorization: ReturnType<
+    typeof import("./project.ts").createLeadProjectRuntime
+  >["setRemovalPreauthorization"];
+  setRepositoryMergeOverride: ReturnType<
+    typeof import("./project.ts").createLeadProjectRuntime
+  >["setRepositoryMergeOverride"];
   contextAgentDefinitions(
     ctx: ExtensionContext,
     onWarning?: (message: string) => void,
@@ -207,6 +212,32 @@ export type LeadCommandBaseHost = Omit<
 >;
 
 export function createLeadCommandRuntime(host: LeadCommandHost) {
+  const confirmMergeGrant = (
+    ctx: ExtensionCommandContext,
+    setting: true | "divergent",
+    scope: string,
+  ) =>
+    ctx.ui.confirm(
+      `Allow Manager integration for ${scope}?`,
+      setting === "divergent"
+        ? "Allow conflict-free divergent merges? Git may create a merge commit and verified integration may automatically remove the exact source worktree."
+        : "Allow fast-forward integration and automatic cleanup of successfully integrated source worktrees?",
+      { signal: ctx.signal },
+    );
+  const markCurrent = <T extends SelectItem>(
+    items: T[],
+    current: string,
+  ): T[] =>
+    items.map((item) =>
+      item.value === current
+        ? {
+            ...item,
+            description: item.description
+              ? `${item.description} · current`
+              : "current",
+          }
+        : item,
+    );
   const modelToken = (model: { provider: string; id: string }): string =>
     `${model.provider}/${model.id}`;
   return {
@@ -238,7 +269,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         ],
         current.effective,
       );
-      if (!selected) return;
+      if (!selected || selected === current.effective) return;
       host.updateSpawnPlacement(selected);
       const verified = await host.placementSettings(ctx);
       if (verified.effective !== selected)
@@ -276,22 +307,43 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         );
         if (!setting) return;
         selectedLimit = setting;
-        const choice = await host.selectMenu(ctx, "Limit", [
-          ...presets.map(({ label, bytes }: any) => ({
-            value: String(bytes),
-            label,
-          })),
-          {
-            value: "custom",
-            label: "Custom…",
-            help: "Enter a custom limit in KiB, from 1 through 1024.",
-          },
-          {
-            value: "reset",
-            label: "Reset",
-            help: "Remove the configured override and use the default.",
-          },
-        ]);
+        const currentBytes =
+          setting === "inlineAttachmentLimitBytes"
+            ? limits.inline.bytes
+            : limits.mailbox.bytes;
+        const currentChoice = presets.some(
+          ({ bytes }) => bytes === currentBytes,
+        )
+          ? String(currentBytes)
+          : "custom";
+        const choice = await host.selectMenu(
+          ctx,
+          "Limit",
+          markCurrent(
+            [
+              ...presets.map(({ label, bytes }: any) => ({
+                value: String(bytes),
+                label,
+              })),
+              {
+                value: "custom",
+                label: "Custom…",
+                description:
+                  currentChoice === "custom"
+                    ? host.formatMessageLimit(currentBytes)
+                    : undefined,
+                help: "Enter a custom limit in KiB, from 1 through 1024.",
+              },
+              {
+                value: "reset",
+                label: "Reset",
+                help: "Remove the configured override and use the default.",
+              },
+            ],
+            currentChoice,
+          ),
+          currentChoice,
+        );
         if (!choice) continue;
         let value: number | undefined;
         if (choice === "reset") value = undefined;
@@ -308,6 +360,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           }
           value = kib * 1024;
         } else value = Number(choice);
+        if (value !== undefined && value === currentBytes) continue;
         host.updateMessageLimit(selectedLimit, value);
         ctx.ui.notify(
           `${selectedLimit}: ${value === undefined ? "reset" : host.formatMessageLimit(value)}`,
@@ -348,7 +401,10 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       );
       return compactMatches.length === 1 ? compactMatches[0] : undefined;
     },
-    async openDefinitionsMenu(ctx: ExtensionCommandContext): Promise<void> {
+    async openDefinitionsMenu(
+      ctx: ExtensionCommandContext,
+      initialSection?: "agents" | "roles",
+    ): Promise<void> {
       let selectedSection = "agents";
       const selectedDefinitions: Record<string, string | undefined> = {};
       const loadDefinitions = async (
@@ -374,26 +430,29 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         return loaded.find((candidate) => candidate.name === name);
       };
       while (true) {
-        const section = await host.selectMenu(
-          ctx,
-          "Agents & Coordinators",
-          [
-            {
-              value: "agents",
-              label: "Agents",
-              help: "Definitions available for Agent delegation.",
-            },
-            {
-              value: "roles",
-              label: "Coordinators",
-              help:
-                "Profiles for existing Lead, Manager, and Chief roles; " +
-                "these do not grant authority.",
-            },
-          ],
-          selectedSection,
-        );
+        const section =
+          initialSection ??
+          (await host.selectMenu(
+            ctx,
+            "Agents & Coordinators",
+            [
+              {
+                value: "agents",
+                label: "Agent definitions",
+                help: "Definitions available for Agent delegation.",
+              },
+              {
+                value: "roles",
+                label: "Coordinator profiles",
+                help:
+                  "Profiles for existing Lead, Manager, and Chief roles; " +
+                  "these do not grant authority.",
+              },
+            ],
+            selectedSection,
+          ));
         if (section !== "agents" && section !== "roles") return;
+
         selectedSection = section;
         definitionList: while (true) {
           const warnings: string[] = [];
@@ -1141,6 +1200,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             definition = verified;
           }
         }
+        if (initialSection) return;
       }
     },
     async openRunningAgentsMenu(ctx: ExtensionCommandContext): Promise<void> {
@@ -1329,7 +1389,33 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       }
     },
     async openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
-      let selectedSetting = "auto-activate-manager";
+      let selectedCategory = "sessions";
+      while (true) {
+        const category = await host.selectMenu(
+          ctx,
+          "Settings",
+          [
+            { value: "sessions", label: "Sessions & agents" },
+            { value: "manager", label: "Manager & repositories" },
+            { value: "interface", label: "Interface" },
+          ],
+          selectedCategory,
+        );
+        if (!category) return;
+        selectedCategory = category;
+        await this.openSettingsCategory(ctx, category);
+      }
+    },
+    async openSettingsCategory(
+      ctx: ExtensionCommandContext,
+      category: string,
+    ): Promise<void> {
+      let selectedSetting =
+        category === "sessions"
+          ? "default-lead-execution"
+          : category === "manager"
+            ? "auto-activate-manager"
+            : "agent-layout";
       const loadProjectState = () => {
         if (!ctx.isProjectTrusted())
           return { trusted: false as const, overrides: {} };
@@ -1349,6 +1435,28 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       while (true) {
         const config = host.readConfig();
         const project = loadProjectState();
+        let repository:
+          | Awaited<ReturnType<typeof host.getRemovalPreauthorization>>
+          | undefined;
+        if (category === "manager") {
+          try {
+            repository = await host.getRemovalPreauthorization(ctx);
+          } catch {
+            /* Repository settings remain unavailable. */
+          }
+        }
+        const merge = repository
+          ? effectiveMergePolicy(config, repository.repoKey)
+          : undefined;
+        let messageSummary: string | undefined;
+        if (category === "sessions") {
+          try {
+            const limits = await host.messageLimits(ctx);
+            messageSummary = `Inline ${host.formatMessageLimit(limits.inline.bytes)} · mailbox ${host.formatMessageLimit(limits.mailbox.bytes)}`;
+          } catch {
+            messageSummary = "Unavailable";
+          }
+        }
         const projectDescription = (
           key: "autoActivateManager" | "contextRetirement",
         ) =>
@@ -1359,11 +1467,23 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               : `Effective ${(Object.hasOwn(project.overrides, key) ? project.overrides[key] : config[key]) ? "on" : "off"}${Object.hasOwn(project.overrides, key) ? " (project)" : " (global)"}`;
         const selected = await host.selectMenu(
           ctx,
-          "Settings",
+          category === "sessions"
+            ? "Sessions & agents"
+            : category === "manager"
+              ? "Manager & repositories"
+              : "Interface",
           [
             {
+              value: "agent-layout",
+              label: "Agent pane layout",
+              description:
+                category === "interface"
+                  ? (await host.placementSettings(ctx)).effective
+                  : undefined,
+            },
+            {
               value: "default-lead-execution",
-              label: "Default Lead execution",
+              label: "Default Lead mode",
               description: config.defaultLeadExecution,
               help: "Used when a future ordinary Lead session has no persisted execution choice.",
             },
@@ -1375,8 +1495,10 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             },
             {
               value: "manager-git-bootstrap-confirmation",
-              label: "Skip Manager Git setup confirmation",
-              description: `Global ${config.managerGitBootstrapWithoutConfirmation ? "on" : "off"}`,
+              label: "Git initialization prompt",
+              description: config.managerGitBootstrapWithoutConfirmation
+                ? "Skipped"
+                : "Required",
               help: "Automatically initialize a non-Git workspace when Manager is started explicitly. Off by default.",
             },
             {
@@ -1387,8 +1509,10 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             },
             {
               value: "manager-merge",
-              label: "Manager local merge",
-              description: `Global ${config.managerMergeEnabled === "divergent" ? "conflict-free merges" : config.managerMergeEnabled ? "fast-forward only" : "off"}`,
+              label: "Local branch integration",
+              description: merge
+                ? `${!merge.enabled ? "Off" : merge.allowDivergence ? "Conflict-free merges" : "Fast-forward"} (${merge.source})`
+                : "Repository unavailable",
               help: "Choose whether Managers may integrate accepted local branches only by fast-forward or also by clean divergent merge, with guarded cleanup.",
             },
             {
@@ -1399,41 +1523,120 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             },
             {
               value: "max-agent-depth",
-              label: "Max Agent depth",
+              label: "Maximum delegation depth",
               description: String(config.maxAgentDepth),
               help: "Longest chain of nested Agents below the Lead, Manager or Chief (1 = Agents never delegate). Global only; checked at each launch. Existing Agents stay manageable when it is lowered.",
             },
             {
               value: "message-limits",
-              label: "Message limits",
+              label: "Message size limits",
+              description: messageSummary,
               help: "Configure inline attachment and managed mailbox payload byte limits.",
             },
             {
-              value: "project-overrides",
-              label: "Project overrides…",
-              help: "Choose project-specific values for Manager auto-start and context retirement.",
+              value: "removal-confirmation",
+              label: "Worktree removal approval",
+              description: repository
+                ? `${repository.enabled ? "Skipped" : "Required"} (repository)`
+                : "Repository unavailable",
             },
-          ],
+          ].filter((item) =>
+            (category === "sessions"
+              ? [
+                  "default-lead-execution",
+                  "context-retirement",
+                  "max-agent-depth",
+                  "message-limits",
+                ]
+              : category === "manager"
+                ? [
+                    "auto-activate-manager",
+                    "manager-git-bootstrap-confirmation",
+                    "manager-merge",
+                    "removal-confirmation",
+                  ]
+                : ["agent-layout", "status-widget-rows"]
+            ).includes(item.value),
+          ),
           selectedSetting,
         );
         if (!selected) return;
         selectedSetting = selected;
-        if (selected === "project-overrides") {
-          await this.openProjectOverridesMenu(ctx);
+        if (selected === "agent-layout") {
+          await this.openPlacementMenu(ctx);
+        } else if (selected === "manager-git-bootstrap-confirmation") {
+          const choice = await host.selectMenu(
+            ctx,
+            "Manager Git setup prompt",
+            markCurrent(
+              [
+                { value: "required", label: "Require confirmation" },
+                {
+                  value: "skip",
+                  label: "Skip confirmation on explicit Manager start",
+                },
+              ],
+              config.managerGitBootstrapWithoutConfirmation
+                ? "skip"
+                : "required",
+            ),
+            config.managerGitBootstrapWithoutConfirmation ? "skip" : "required",
+          );
+          if (
+            choice &&
+            (choice === "skip") !==
+              config.managerGitBootstrapWithoutConfirmation
+          ) {
+            if (
+              choice === "skip" &&
+              !(await ctx.ui.confirm(
+                "Skip Manager Git setup confirmation?",
+                "Explicit Manager activation may initialize a non-Git workspace without asking again.",
+                { signal: ctx.signal },
+              ))
+            )
+              continue;
+            if (ctx.signal?.aborted) continue;
+            host.updateConfig(
+              "managerGitBootstrapWithoutConfirmation",
+              choice === "skip",
+            );
+          }
         } else if (selected === "status-widget-rows") {
           while (true) {
-            const choice = await host.selectMenu(ctx, "Status widget rows", [
-              {
-                value: "default",
-                label: `Default (${DEFAULT_STATUS_WIDGET_MAX_ROWS})`,
-              },
-              ...[3, 5, 8, 12, 20].map((rows) => ({
-                value: String(rows),
-                label: String(rows),
-              })),
-              { value: "custom", label: "Custom…" },
-              { value: "reset", label: "Reset" },
-            ]);
+            const currentChoice =
+              config.statusWidgetMaxRows === DEFAULT_STATUS_WIDGET_MAX_ROWS
+                ? "default"
+                : [3, 5, 8, 12, 20].includes(config.statusWidgetMaxRows)
+                  ? String(config.statusWidgetMaxRows)
+                  : "custom";
+            const choice = await host.selectMenu(
+              ctx,
+              "Status widget rows",
+              markCurrent(
+                [
+                  {
+                    value: "default",
+                    label: `Default (${DEFAULT_STATUS_WIDGET_MAX_ROWS})`,
+                  },
+                  ...[3, 5, 8, 12, 20].map((rows) => ({
+                    value: String(rows),
+                    label: String(rows),
+                  })),
+                  {
+                    value: "custom",
+                    label: "Custom…",
+                    description:
+                      currentChoice === "custom"
+                        ? String(config.statusWidgetMaxRows)
+                        : undefined,
+                  },
+                  { value: "reset", label: "Reset" },
+                ],
+                currentChoice,
+              ),
+              currentChoice,
+            );
             if (!choice) break;
             let value: number | undefined;
             if (choice === "reset") value = undefined;
@@ -1456,6 +1659,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 choice === "default"
                   ? DEFAULT_STATUS_WIDGET_MAX_ROWS
                   : Number(choice);
+            if (value !== undefined && value === config.statusWidgetMaxRows)
+              break;
             try {
               host.updateConfig("statusWidgetMaxRows", value);
               ctx.ui.notify(
@@ -1471,18 +1676,39 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           }
         } else if (selected === "max-agent-depth") {
           while (true) {
-            const choice = await host.selectMenu(ctx, "Max Agent depth", [
-              {
-                value: "default",
-                label: `Default (${DEFAULT_MAX_AGENT_DEPTH})`,
-              },
-              ...[1, 2, 3, 4, 5].map((depth) => ({
-                value: String(depth),
-                label: String(depth),
-              })),
-              { value: "custom", label: "Custom…" },
-              { value: "reset", label: "Reset" },
-            ]);
+            const currentChoice =
+              config.maxAgentDepth === DEFAULT_MAX_AGENT_DEPTH
+                ? "default"
+                : [1, 2, 3, 4, 5].includes(config.maxAgentDepth)
+                  ? String(config.maxAgentDepth)
+                  : "custom";
+            const choice = await host.selectMenu(
+              ctx,
+              "Max Agent depth",
+              markCurrent(
+                [
+                  {
+                    value: "default",
+                    label: `Default (${DEFAULT_MAX_AGENT_DEPTH})`,
+                  },
+                  ...[1, 2, 3, 4, 5].map((depth) => ({
+                    value: String(depth),
+                    label: String(depth),
+                  })),
+                  {
+                    value: "custom",
+                    label: "Custom…",
+                    description:
+                      currentChoice === "custom"
+                        ? String(config.maxAgentDepth)
+                        : undefined,
+                  },
+                  { value: "reset", label: "Reset" },
+                ],
+                currentChoice,
+              ),
+              currentChoice,
+            );
             if (!choice) break;
             let value: number | undefined;
             if (choice === "reset") value = undefined;
@@ -1503,6 +1729,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             } else
               value =
                 choice === "default" ? DEFAULT_MAX_AGENT_DEPTH : Number(choice);
+            if (value !== undefined && value === config.maxAgentDepth) break;
             try {
               host.updateConfig("maxAgentDepth", value);
               ctx.ui.notify(
@@ -1522,216 +1749,214 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           const mode = await host.selectMenu(
             ctx,
             "Default Lead execution",
-            [
-              { value: "flexible", label: "flexible" },
-              { value: "orchestrate", label: "orchestrate" },
-            ],
+            markCurrent(
+              [
+                { value: "flexible", label: "flexible" },
+                { value: "orchestrate", label: "orchestrate" },
+              ],
+              config.defaultLeadExecution,
+            ),
             config.defaultLeadExecution,
           );
-          if (mode) host.updateConfig("defaultLeadExecution", mode);
+          if (mode && mode !== config.defaultLeadExecution) {
+            host.updateConfig("defaultLeadExecution", mode);
+            ctx.ui.notify(`Default Lead mode: ${mode}`);
+          }
         } else if (
           selected === "context-retirement" ||
-          selected === "auto-activate-manager" ||
-          selected === "manager-git-bootstrap-confirmation"
+          selected === "auto-activate-manager"
         ) {
-          const key =
+          await this.openProjectSetting(
+            ctx,
             selected === "context-retirement"
               ? "contextRetirement"
-              : selected === "auto-activate-manager"
-                ? "autoActivateManager"
-                : "managerGitBootstrapWithoutConfirmation";
-          const enabled = !host.readConfig()[key];
-          host.updateConfig(key, enabled);
-          ctx.ui.notify(
-            `Global ${key === "contextRetirement" ? "context retirement" : key === "autoActivateManager" ? "Manager auto-start" : "Manager Git setup confirmation skip"}: ${enabled ? "on" : "off"}`,
+              : "autoActivateManager",
           );
         } else if (selected === "manager-merge") {
-          const current = host.readConfig().managerMergeEnabled;
-          const choice = await host.selectMenu(
-            ctx,
-            "Global Manager local merge",
-            [
-              { value: "off", label: "Off" },
-              { value: "fast-forward", label: "Fast-forward only" },
-              { value: "divergent", label: "Conflict-free merges" },
-            ],
-            current === false
-              ? "off"
-              : current === true
-                ? "fast-forward"
-                : "divergent",
-          );
-          if (!choice) continue;
-          const setting =
-            choice === "off"
-              ? false
-              : choice === "fast-forward"
-                ? true
-                : "divergent";
-          if (
-            setting !== false &&
-            (current === false ||
-              (setting === "divergent" && current !== "divergent"))
-          ) {
-            const confirm = await ctx.ui.input(
-              setting === "divergent"
-                ? "Enable conflict-free divergent Manager merges? Git may create a new merge commit, and successful integration can automatically remove the exact source worktree. Type enable to confirm."
-                : "Enable fast-forward Manager integration and automatic cleanup of successfully integrated source worktrees. Type enable to confirm.",
-              undefined,
-            );
-            if (confirm !== "enable") continue;
-          }
-          host.updateConfig("managerMergeEnabled", setting);
-          ctx.ui.notify(
-            `Global Manager local merge: ${setting === "divergent" ? "conflict-free merges" : setting ? "fast-forward only" : "off"}`,
-          );
+          await this.openMergeSetting(ctx);
+        } else if (selected === "removal-confirmation") {
+          await this.openRemovalSetting(ctx);
         }
       }
     },
-    async openProjectOverridesMenu(
+    async openProjectSetting(
       ctx: ExtensionCommandContext,
+      key: "autoActivateManager" | "contextRetirement",
     ): Promise<void> {
+      const title =
+        key === "autoActivateManager"
+          ? "Manager auto-start"
+          : "Context retirement";
+      let selectedScope = "global";
       while (true) {
-        let overrides;
-        let overrideError: unknown;
-        if (ctx.isProjectTrusted()) {
+        const global = host.readConfig()[key];
+        let overrides: ReturnType<typeof host.readProjectOverrides> | undefined;
+        let unavailable: string | undefined;
+        if (!ctx.isProjectTrusted()) unavailable = "Project is not trusted";
+        else
           try {
             overrides = host.readProjectOverrides(ctx);
           } catch (error) {
-            overrideError = error;
+            unavailable = `Project settings unavailable: ${String(error).replace(/^Error: /, "")}`;
           }
-        }
-        let removalPolicy:
-          | Awaited<ReturnType<typeof host.getRemovalPreauthorization>>
-          | undefined;
-        try {
-          removalPolicy = await host.getRemovalPreauthorization(ctx);
-        } catch {
-          // Removal policy is available only with verified active Manager authority.
-        }
-        let mergePolicy:
-          | {
-              repoKey: string;
-              enabled: boolean;
-              allowDivergence: boolean;
-              source: "global" | "repository";
-            }
-          | undefined;
-        try {
-          const manager = await host.getRemovalPreauthorization(ctx);
-          const policy = effectiveMergePolicy(
-            host.readConfig(),
-            manager.repoKey,
-          );
-          mergePolicy = { repoKey: manager.repoKey, ...policy };
-        } catch {
-          // Merge permission is exposed only with verified active Manager authority.
-        }
-        if (!ctx.isProjectTrusted() && !removalPolicy) {
-          ctx.ui.notify(
-            "Project overrides are unavailable because this project is not trusted.",
-            "warning",
-          );
-          return;
-        }
-        if (overrideError && !removalPolicy) {
-          ctx.ui.notify(String(overrideError).replace(/^Error: /, ""), "error");
-          return;
-        }
-        const fields = [
-          ...(ctx.isProjectTrusted()
-            ? [
-                {
-                  value: "autoActivateManager",
-                  label: "Manager auto-start",
-                  help: "Attempt Manager mode automatically on eligible future session starts.",
-                },
-                {
-                  value: "contextRetirement",
-                  label: "Context retirement",
-                  help: "Retire managed-Agent sessions at automatic context pressure.",
-                },
-              ]
-            : []),
-          ...(removalPolicy
-            ? [
-                {
-                  value: "removal-confirmation",
-                  label: `Worktree removal confirmation · ${removalPolicy.enabled ? "skip" : "required"}`,
-                  help: `Controls confirmation for verified repository ${removalPolicy.repoKey}. Stored in user-level Herdsman authorization, not .pi/settings.json.`,
-                },
-              ]
-            : []),
-          ...(mergePolicy
-            ? [
-                {
-                  value: "merge-permission",
-                  label: `Manager local merge · ${!mergePolicy.enabled ? "off" : mergePolicy.allowDivergence ? "conflict-free merges" : "fast-forward only"} (${mergePolicy.source})`,
-                  help: `Controls local integration and guarded cleanup for verified repository ${mergePolicy.repoKey}.`,
-                },
-              ]
-            : []),
-        ];
-        const field = await host.selectMenu(ctx, "Project overrides", [
-          ...fields,
-        ]);
-        if (!field) return;
-        if (field === "removal-confirmation") {
-          const policy = await host.getRemovalPreauthorization(ctx);
-          const choice = await host.selectMenu(
-            ctx,
-            `Worktree removal · ${policy.repoKey}`,
-            [
-              { value: "required", label: "Require confirmation" },
-              {
-                value: "skip",
-                label: "Skip confirmation for this repository",
-              },
-            ],
-            policy.enabled ? "skip" : "required",
-          );
-          if (choice && (choice === "skip") !== policy.enabled) {
-            const stored = await host.setRemovalPreauthorization(
-              choice === "skip",
-              ctx,
-            );
-            ctx.ui.notify(
-              stored
-                ? `Worktree removal confirmation ${choice === "skip" ? "skipped" : "required"} for ${policy.repoKey}.`
-                : "Worktree removal policy unchanged.",
-              stored ? "info" : "warning",
-            );
-          }
+        const projectValue =
+          overrides && Object.hasOwn(overrides, key)
+            ? overrides[key]
+            : undefined;
+        const scope = await host.selectMenu(
+          ctx,
+          title,
+          [
+            {
+              value: "global",
+              label: "Global default",
+              description: global ? "On" : "Off",
+            },
+            {
+              value: "project",
+              label: "Current project",
+              description:
+                unavailable ??
+                (projectValue === undefined
+                  ? `Inherit global (${global ? "on" : "off"})`
+                  : projectValue
+                    ? "On"
+                    : "Off"),
+            },
+          ],
+          selectedScope,
+        );
+        if (!scope) return;
+        selectedScope = scope;
+        if (scope === "project" && unavailable) {
+          ctx.ui.notify(unavailable, "warning");
           continue;
         }
-        if (field === "merge-permission" && mergePolicy) {
-          const global = host.readConfig().managerMergeEnabled;
-          const current = effectiveMergePolicy(
-            host.readConfig(),
-            mergePolicy.repoKey,
+        const currentChoice =
+          scope === "global"
+            ? global
+              ? "on"
+              : "off"
+            : projectValue === undefined
+              ? "inherit"
+              : projectValue
+                ? "on"
+                : "off";
+        const choice = await host.selectMenu(
+          ctx,
+          scope === "global" ? `Global ${title}` : `Project ${title}`,
+          markCurrent(
+            [
+              ...(scope === "project"
+                ? [
+                    {
+                      value: "inherit",
+                      label: `Inherit global (${global ? "on" : "off"})`,
+                    },
+                  ]
+                : []),
+              { value: "on", label: "On" },
+              { value: "off", label: "Off" },
+            ],
+            currentChoice,
+          ),
+          currentChoice,
+        );
+        if (!choice) continue;
+        const value = choice === "inherit" ? undefined : choice === "on";
+        try {
+          if (scope === "global") {
+            if (value === global || value === undefined) continue;
+            host.updateConfig(key, value);
+          } else {
+            if (value === projectValue) continue;
+            host.updateProjectOverride(ctx, key, value);
+          }
+          ctx.ui.notify(
+            `${title}: ${value === undefined ? "inherited" : value ? "on" : "off"} (${scope}).`,
           );
+        } catch (error) {
+          ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
+        }
+      }
+    },
+    async openMergeSetting(ctx: ExtensionCommandContext): Promise<void> {
+      let selectedScope = "global";
+      while (true) {
+        const config = host.readConfig();
+        const global = config.managerMergeEnabled;
+        let policy:
+          | Awaited<ReturnType<typeof host.getRemovalPreauthorization>>
+          | undefined;
+        let unavailable = "";
+        try {
+          policy = await host.getRemovalPreauthorization(ctx);
+        } catch (error) {
+          unavailable = String(error).replace(/^Error: /, "");
+        }
+        const repositoryPolicy = policy
+          ? effectiveMergePolicy(config, policy.repoKey)
+          : undefined;
+        const label = (value: false | true | "divergent") =>
+          value === false
+            ? "Off"
+            : value === true
+              ? "Fast-forward"
+              : "Conflict-free merges";
+        const scope = await host.selectMenu(
+          ctx,
+          "Local branch integration",
+          [
+            {
+              value: "global",
+              label: "Global default",
+              description: label(global),
+            },
+            {
+              value: "repository",
+              label: "Current repository",
+              description: repositoryPolicy
+                ? `${!repositoryPolicy.enabled ? "Off" : repositoryPolicy.allowDivergence ? "Conflict-free merges" : "Fast-forward"} (${repositoryPolicy.source})`
+                : "Unavailable",
+            },
+          ],
+          selectedScope,
+        );
+        if (!scope) return;
+        selectedScope = scope;
+        if (scope === "repository") {
+          if (!policy || !repositoryPolicy) {
+            ctx.ui.notify(`Repository unavailable: ${unavailable}`, "warning");
+            continue;
+          }
+          const override = config.managerMergeOverrides[policy.repoKey];
+          const currentChoice =
+            override === undefined
+              ? "inherit"
+              : override === false
+                ? "off"
+                : override === true
+                  ? "fast-forward"
+                  : "divergent";
           const choice = await host.selectMenu(
             ctx,
-            `Manager local merge · ${mergePolicy.repoKey}`,
-            [
-              {
-                value: "inherit",
-                label: `Inherit global (${global === "divergent" ? "conflict-free merges" : global ? "fast-forward only" : "off"})`,
-              },
-              { value: "off", label: "Off" },
-              { value: "fast-forward", label: "Fast-forward only" },
-              { value: "divergent", label: "Conflict-free merges" },
-            ],
-            current.source === "global"
-              ? "inherit"
-              : !current.enabled
-                ? "off"
-                : current.allowDivergence
-                  ? "divergent"
-                  : "fast-forward",
+            `Local branch integration · ${policy.repoKey}`,
+            markCurrent(
+              [
+                {
+                  value: "inherit",
+                  label: `Inherit global (${label(global)})`,
+                },
+                { value: "off", label: "Off" },
+                { value: "fast-forward", label: "Fast-forward only" },
+                { value: "divergent", label: "Conflict-free merges" },
+              ],
+              currentChoice,
+            ),
+            currentChoice,
           );
           if (!choice) continue;
-          const enabled =
+          const value =
             choice === "inherit"
               ? undefined
               : choice === "off"
@@ -1739,106 +1964,141 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 : choice === "fast-forward"
                   ? true
                   : "divergent";
-          if (
-            enabled !== undefined &&
-            enabled !== false &&
-            (current.source !== "repository" ||
-              !current.enabled ||
-              (enabled === "divergent" && !current.allowDivergence))
-          ) {
-            const confirm = await ctx.ui.input(
-              enabled === "divergent"
-                ? "Enable conflict-free divergent Manager merges? Git may create a new merge commit, and successful integration can automatically remove the exact source worktree. Type enable to confirm."
-                : "Enable fast-forward Manager integration and automatic cleanup of successfully integrated source worktrees. Type enable to confirm.",
-              undefined,
+          if (value === override) continue;
+          try {
+            const stored = await host.setRepositoryMergeOverride(
+              value,
+              ctx,
+              policy.identity,
+              { global, override },
             );
-            if (confirm !== "enable") continue;
+            if (stored)
+              ctx.ui.notify(
+                `Local branch integration updated for ${policy.repoKey}.`,
+              );
+          } catch (error) {
+            ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
           }
-          const exactManager = await host.getRemovalPreauthorization(ctx);
-          if (exactManager.repoKey !== mergePolicy.repoKey)
-            throw new Error(
-              "Manager repository changed; policy was not updated",
-            );
-          setManagerMergeOverride(mergePolicy.repoKey, enabled);
+          continue;
+        }
+        const current = host.readConfig().managerMergeEnabled;
+        const currentChoice =
+          current === false
+            ? "off"
+            : current === true
+              ? "fast-forward"
+              : "divergent";
+        const choice = await host.selectMenu(
+          ctx,
+          "Global Manager local merge",
+          markCurrent(
+            [
+              { value: "off", label: "Off" },
+              { value: "fast-forward", label: "Fast-forward only" },
+              { value: "divergent", label: "Conflict-free merges" },
+            ],
+            currentChoice,
+          ),
+          currentChoice,
+        );
+        if (!choice) continue;
+        const setting =
+          choice === "off"
+            ? false
+            : choice === "fast-forward"
+              ? true
+              : "divergent";
+        if (setting === current) continue;
+        if (
+          setting !== false &&
+          (current === false ||
+            (setting === "divergent" && current !== "divergent"))
+        ) {
+          if (
+            !(await confirmMergeGrant(ctx, setting, "global settings")) ||
+            ctx.signal?.aborted
+          )
+            continue;
+        }
+        if (ctx.signal?.aborted) continue;
+        if (host.readConfig().managerMergeEnabled !== current) {
           ctx.ui.notify(
-            `Manager local merge ${enabled === undefined ? "inherits global" : enabled === "divergent" ? "allows conflict-free merges" : enabled ? "allows fast-forward only" : "disabled"} for ${mergePolicy.repoKey}.`,
+            "Global Manager integration policy changed; reopen the selector.",
+            "warning",
           );
           continue;
         }
-        if (!ctx.isProjectTrusted() || overrideError || !overrides) continue;
-        const key = field as "autoActivateManager" | "contextRetirement";
-        const global = host.readConfig()[key];
-        const choice = await host.selectMenu(
-          ctx,
-          key === "autoActivateManager"
-            ? "Manager auto-start"
-            : "Context retirement",
-          [
-            {
-              value: "inherit",
-              label: `Inherit global (${global ? "on" : "off"})`,
-              help: "Remove this project's explicit value and use the current global default.",
-            },
-            {
-              value: "on",
-              label: "On for this project",
-              help: "Enable this preference in this trusted project.",
-            },
-            {
-              value: "off",
-              label: "Off for this project",
-              help: "Disable this preference in this trusted project.",
-            },
-          ],
-          Object.hasOwn(overrides, key)
-            ? overrides[key]
-              ? "on"
-              : "off"
-            : "inherit",
-        );
-        if (!choice) continue;
         try {
-          host.updateProjectOverride(
-            ctx,
-            key,
-            choice === "inherit" ? undefined : choice === "on",
-          );
-          ctx.ui.notify(
-            `${key === "autoActivateManager" ? "Manager auto-start" : "Context retirement"} ${choice === "inherit" ? "inherited" : `set ${choice} for this project`}.`,
-          );
+          host.updateConfig("managerMergeEnabled", setting, current);
         } catch (error) {
           ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
+          continue;
         }
+        ctx.ui.notify(
+          `Global Manager local merge: ${setting === "divergent" ? "conflict-free merges" : setting ? "fast-forward only" : "off"}`,
+        );
+      }
+    },
+    async openRemovalSetting(ctx: ExtensionCommandContext): Promise<void> {
+      try {
+        const policy = await host.getRemovalPreauthorization(ctx);
+        const choice = await host.selectMenu(
+          ctx,
+          `Worktree removal approval · ${policy.repoKey}`,
+          markCurrent(
+            [
+              { value: "required", label: "Require approval for each removal" },
+              {
+                value: "skip",
+                label: "Allow explicit removals without individual approval",
+              },
+            ],
+            policy.enabled ? "skip" : "required",
+          ),
+          policy.enabled ? "skip" : "required",
+        );
+        if (!choice || (choice === "skip") === policy.enabled) return;
+        const stored = await host.setRemovalPreauthorization(
+          choice === "skip",
+          ctx,
+          policy.identity,
+        );
+        if (stored)
+          ctx.ui.notify(
+            `Worktree removal approval ${choice === "skip" ? "skipped" : "required"} for ${policy.repoKey}.`,
+          );
+      } catch (error) {
+        ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
       }
     },
     async openAgentsMenu(ctx: ExtensionCommandContext): Promise<void> {
       let selectedSection = "running";
       while (true) {
-        const snapshot = await host.loadStatusSnapshot(
-          ctx,
-          host.controller.sessionSignal(),
-        );
-        const running = host.formatStatusCounts(snapshot.agents) || "0";
-        const placement = await host.placementSettings(ctx);
+        let running = "Unavailable";
+        try {
+          const snapshot = await host.loadStatusSnapshot(
+            ctx,
+            host.controller.sessionSignal(),
+          );
+          running = host.formatStatusCounts(snapshot.agents) || "0";
+        } catch {
+          if (ctx.signal?.aborted) return;
+        }
         const selected = await host.selectMenu(
           ctx,
-          "Agents",
+          "Agents & definitions",
           [
             {
               value: "running",
-              label: "Running",
+              label: "Running agents",
               description: running,
               help: "Focus a live managed Agent.",
             },
-            {
-              value: "layout",
-              label: "Layout",
-              description: placement.effective,
-              help: "Choose where newly delegated Lead-direct Agents are placed in Herdr.",
-            },
+            { value: "agent-definitions", label: "Agent definitions" },
+            { value: "coordinator-profiles", label: "Coordinator profiles" },
             {
               value: "stop-all",
-              label: "Stop all…",
+              label: "Stop all agents…",
               help: "Emergency stop for the owned Agent tree. Active work or pending results may be discarded.",
             },
           ],
@@ -1847,7 +2107,10 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         if (!selected) return;
         selectedSection = selected;
         if (selected === "running") await this.openRunningAgentsMenu(ctx);
-        else if (selected === "layout") await this.openPlacementMenu(ctx);
+        else if (selected === "agent-definitions")
+          await this.openDefinitionsMenu(ctx, "agents");
+        else if (selected === "coordinator-profiles")
+          await this.openDefinitionsMenu(ctx, "roles");
         else if (selected === "stop-all") await this.confirmAndStopAll(ctx);
       }
     },
@@ -1861,7 +2124,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           [
             {
               value: "execution",
-              label: "Execution",
+              label: "Session mode",
               description: execution.managed
                 ? managedExecutionLabel(execution.lifecycle)
                 : execution.mode,
@@ -1871,24 +2134,20 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             },
             {
               value: "agents",
-              label: "Agents",
-              help: "View and manage background Agents.",
+              label: "Agents & definitions",
+              help: "Manage running Agents and inspect definitions.",
             },
             {
               value: "manager",
-              label: "Project manager",
-              description: host.roleActive("manager") ? "active" : undefined,
+              label: "Project management",
+              description: host.roleActive("manager") ? "Active" : "Inactive",
               help: "Coordinate independent project work across Git branches.",
             },
             {
-              value: "stats",
-              label: "Session stats",
-              help: "View token usage and model costs for this session and its managed work.",
-            },
-            {
-              value: "definitions",
-              label: "Definitions",
-              help: "Inspect available Agents and their configuration.",
+              value: "chief",
+              label: "Chief coordination",
+              description: host.roleActive("chief") ? "Active" : "Inactive",
+              help: "Supervise Managers and unassigned Leads across Herdsman.",
             },
             {
               value: "settings",
@@ -1896,12 +2155,9 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               help: "Change Herdsman preferences.",
             },
             {
-              value: "advanced",
-              label: "Advanced…",
-              description: host.roleActive("chief")
-                ? "Chief active"
-                : undefined,
-              help: "Open advanced Herdsman coordination controls.",
+              value: "stats",
+              label: "Usage & costs",
+              help: "View token usage and model costs for this session and its managed work.",
             },
           ],
           selectedSection,
@@ -1913,51 +2169,60 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         else if (selected === "manager")
           await this.openRoleMenu("manager", ctx);
         else if (selected === "stats") await this.showSessionStats(ctx);
-        else if (selected === "definitions")
-          await this.openDefinitionsMenu(ctx);
         else if (selected === "settings") await this.openSettingsMenu(ctx);
-        else if (selected === "advanced") await this.openAdvancedMenu(ctx);
+        else if (selected === "chief") await this.openRoleMenu("chief", ctx);
       }
-    },
-    async openAdvancedMenu(ctx: ExtensionCommandContext): Promise<void> {
-      const selected = await host.selectMenu(ctx, "Advanced", [
-        {
-          value: "chief",
-          label: "Chief mode",
-          description: host.roleActive("chief") ? "active" : undefined,
-          help: "Supervise Managers and unassigned Leads across Herdsman.",
-        },
-      ]);
-      if (selected === "chief") await this.openRoleMenu("chief", ctx);
     },
     async openRoleMenu(
       role: "manager" | "chief",
       ctx: ExtensionCommandContext,
     ): Promise<void> {
-      const active = host.roleActive(role);
       const name = role === "manager" ? "Manager" : "Chief";
-      const title = role === "manager" ? "Project manager" : "Chief mode";
-      const selected = await host.selectMenu(
-        ctx,
-        title,
-        active
-          ? [
-              { value: "overview", label: "Overview" },
-              {
-                value: "refresh",
-                label: "Refresh profile",
-                help: "Apply definition changes after the current turn becomes idle.",
-              },
-              { value: "leave", label: `Leave ${name} mode` },
-            ]
-          : [{ value: "start", label: `Start ${name} mode` }],
-      );
-      if (selected === "overview" || selected === "start")
-        await this.runRoleCommand(role, "", ctx);
-      else if (selected === "refresh")
-        await this.runRoleCommand(role, "refresh", ctx);
-      else if (selected === "leave")
-        await this.runRoleCommand(role, "leave", ctx);
+      const title = role === "manager" ? "Project management" : "Chief mode";
+      let selectedAction: string | undefined;
+      while (true) {
+        const active = host.roleActive(role);
+        const selected = await host.selectMenu(
+          ctx,
+          title,
+          active
+            ? [
+                {
+                  value: "overview",
+                  label: role === "manager" ? "Project overview" : "Overview",
+                },
+                ...(role === "manager"
+                  ? [
+                      {
+                        value: "pending-removals",
+                        label: "Pending removal requests",
+                      },
+                    ]
+                  : []),
+                {
+                  value: "refresh",
+                  label:
+                    role === "manager"
+                      ? "Refresh Manager profile"
+                      : "Refresh profile",
+                  help: "Apply definition changes after the current turn becomes idle.",
+                },
+                { value: "leave", label: `Leave ${name} mode` },
+              ]
+            : [{ value: "start", label: `Start ${name} mode` }],
+          selectedAction,
+        );
+        if (!selected) return;
+        selectedAction = selected;
+        if (selected === "overview" || selected === "start")
+          await this.runRoleCommand(role, "", ctx);
+        else if (selected === "pending-removals")
+          await host.reviewPendingRemoval(ctx);
+        else if (selected === "refresh")
+          await this.runRoleCommand(role, "refresh", ctx);
+        else if (selected === "leave")
+          await this.runRoleCommand(role, "leave", ctx);
+      }
     },
     async runRoleCommand(
       role: "manager" | "chief",
