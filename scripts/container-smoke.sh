@@ -711,6 +711,16 @@ docker volume rm "$home" "$ssh_state" >/dev/null
 home="$saved_home"
 ssh_state="$saved_ssh_state"
 
+# Probe the migrated object-form selection through the same SSH boundary.
+echo 'stage: migrated package selection over SSH'
+home="$migration_home"
+ssh_state="$migration_ssh"
+start
+verify_probe
+docker rm -f "$name" >/dev/null
+home="$saved_home"
+ssh_state="$saved_ssh_state"
+
 echo 'stage: SSH and runtime checks'
 docker run -d \
   --name "$name" \

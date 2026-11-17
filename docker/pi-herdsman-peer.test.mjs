@@ -90,6 +90,17 @@ test("launcher resolves selected local packages and rejects ambiguous selections
       [[local], "local"],
       [[rel], "local"],
       [[{ source: rel }], "local"],
+      [
+        [
+          {
+            source: "npm:pi-herdsman",
+            extensions: ["./dist/index.js"],
+            skills: [],
+          },
+        ],
+        "npm",
+      ],
+      [[{ source: rel, extensions: ["./dist/index.js"] }], "local"],
       [[rel, local], "local"],
       [[other, "npm:pi-herdsman"], "npm"],
       [["npm:pi-herdsman", "npm:pi-herdsman@1"], "npm"],
@@ -107,8 +118,16 @@ test("launcher resolves selected local packages and rejects ambiguous selections
       assert.match(run().stderr, /multiple Herdsman package sources/);
       assert.equal(run().status, 1);
     }
-    settings([{ source: local, extensions: [] }]);
-    assert.match(run().stderr, /unsupported Herdsman extension filter/);
+    for (const extensions of [
+      [],
+      ["./dist/index.js", "!./dist/index.js"],
+      ["./dist/index.js", "-./dist/index.js"],
+      "./dist/index.js",
+    ]) {
+      settings([{ source: local, extensions }]);
+      assert.match(run().stderr, /unsupported Herdsman extension filter/);
+      assert.equal(run().status, 1);
+    }
     settings([
       "git:https://example.invalid/repo",
       "https://example.invalid/repo",
