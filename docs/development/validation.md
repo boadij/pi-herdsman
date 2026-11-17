@@ -2,8 +2,12 @@
 
 [Documentation index](../README.md)
 
-Repository handoff is not complete until the current validation gates have been
-run or a concrete environment blocker is recorded.
+The documented validation order is the default. Explicit human authorization
+may permit proceeding with an identified local verification limitation within
+applicable authority and security boundaries. Preserve the actual results,
+complete unaffected checks, and disclose any incomplete or failed verification.
+Required CI and merge conditions remain unchanged. Formatting remains the final
+pre-commit source mutation.
 
 ## Validation order
 
@@ -28,11 +32,12 @@ git diff --check
 Do not format during implementation, review, or corrective validation. After
 formatting, do not rerun typechecking, linting, or tests as part of the normal
 pre-commit sequence. If final verification fails or another change is needed,
-fix it, repeat the relevant pre-format checks, and format again only after
-those checks pass.
+fix it, repeat the relevant pre-format checks, and format again after those
+checks pass or an applicable human-authorized exception permits proceeding.
 
 TypeScript typechecking (`npm run typecheck`) and warning-free Oxlint
-(`npm run lint -- --deny-warnings`) are mandatory local and CI checks.
+(`npm run lint -- --deny-warnings`) are normally required local checks and
+remain required CI checks.
 `npm run validate` runs formatting verification, typechecking, warning-free
 linting, tests, build, and package audit. `npm run format` applies formatting;
 `npm run format:check` verifies it without changing files. Both use the locally

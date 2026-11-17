@@ -179,6 +179,12 @@ the exact outgoing content under the public disclosure policy above.
 
 ## Development loop
 
+Follow the documented development workflow by default. An explicit human
+decision may authorize a scoped exception to local workflow requirements
+within applicable authority and security boundaries. Complete unaffected
+checks and report incomplete or failed verification accurately. Such an
+exception does not waive required CI or merge safeguards.
+
 During implementation, run the smallest relevant test file first:
 
 ```sh
@@ -197,8 +203,9 @@ before formatting. Resolve `npm run typecheck`,
 `npm run lint -- --deny-warnings`, and `npm run check` failures while code
 retains its working layout. Follow the order in
 [Development validation](docs/development/validation.md): run `npm run format`
-only after those checks pass, as the final pre-commit mutation. Then run only
-`npm run format:check` and `git diff --check` before staging or committing.
+as the final pre-commit source mutation, after those checks pass or an applicable
+human-authorized exception permits proceeding. Then run only `npm run format:check`
+and `git diff --check` before staging or committing.
 If a subsequent failure requires edits, repeat the relevant pre-format checks
 before formatting again.
 
