@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 die() { printf 'docker-setup: %s\n' "$*" >&2; exit 1; }
 tmp_files=()
+tmp_key_dir=
 cleanup() {
   if [[ "${ts_bootstrap_active:-0}" == 1 ]]; then
     unset TS_AUTHKEY ts_authkey bootstrap_ts_authkey
@@ -14,6 +15,7 @@ cleanup() {
     fi
   fi
   (("${#tmp_files[@]}" == 0)) || rm -f -- "${tmp_files[@]}"
+  if [[ -n "$tmp_key_dir" ]]; then rm -f -- "$tmp_key_dir/id_ed25519" "$tmp_key_dir/id_ed25519.pub"; rmdir -- "$tmp_key_dir"; fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -190,14 +192,32 @@ if [[ -z "$ssh_key" ]]; then
 fi
 docker_cmd compose config --quiet || die "Docker Compose configuration is invalid."
 if [[ -z "$ssh_key" ]] && ! docker_cmd compose run --rm --no-deps --entrypoint sh herdsman -c 'test -s /home/herdsman/.ssh/authorized_keys' >/dev/null 2>&1; then
-  if ! ( : </dev/tty ) 2>/dev/null; then
-    die "an SSH public key is required for a fresh deployment; set SSH_AUTHORIZED_KEYS or run interactively."
+  key_path="$HOME/.ssh/id_ed25519"
+  public_path="$key_path.pub"
+  command -v ssh-keygen >/dev/null || die "ssh-keygen is required to generate or recover an SSH identity."
+  mkdir -p -m 0700 -- "$HOME/.ssh" || die "cannot create SSH directory."
+  if [[ -e "$key_path" || -L "$key_path" ]]; then
+    [[ ! -e "$public_path" && ! -L "$public_path" ]] || die "SSH identity is incomplete; refusing to overwrite existing files."
+    tmp_key_dir=$(mktemp -d "$HOME/.ssh/.identity.XXXXXX") || die "cannot prepare SSH public-key recovery."
+    tmp_pub="$tmp_key_dir/id_ed25519.pub"
+    ssh-keygen -y -P '' -f "$key_path" </dev/null >"$tmp_pub" && [[ -s "$tmp_pub" ]] || die "cannot recover SSH public key; existing private key was preserved."
+    ln -- "$tmp_pub" "$HOME/.ssh" || die "cannot publish recovered SSH public key without overwriting an existing file."
+    rm -f -- "$tmp_pub"
+    printf 'Recovered SSH public key: %s\n' "$public_path"
+  elif [[ -e "$public_path" || -L "$public_path" ]]; then
+    die "SSH identity is incomplete; refusing to overwrite existing files."
+  else
+    # Source basenames match the intended destination names. Linking into the
+    # SSH directory fails if that exact name exists, including a directory.
+    tmp_key_dir=$(mktemp -d "$HOME/.ssh/.identity.XXXXXX") || die "cannot prepare SSH identity generation."
+    (umask 077; ssh-keygen -q -t ed25519 -N '' -f "$tmp_key_dir/id_ed25519" </dev/null) || die "cannot generate SSH identity."
+    [[ -s "$tmp_key_dir/id_ed25519" && -s "$tmp_key_dir/id_ed25519.pub" ]] || die "cannot generate SSH identity."
+    ln -- "$tmp_key_dir/id_ed25519" "$HOME/.ssh" || die "cannot publish SSH private key without overwriting an existing file."
+    ln -- "$tmp_key_dir/id_ed25519.pub" "$HOME/.ssh" || die "cannot publish SSH public key without overwriting an existing file; generated private key was preserved."
+    printf 'Generated SSH login identity: %s\n' "$key_path"
   fi
-  printf 'SSH public-key file [~/.ssh/id_ed25519.pub]: ' >/dev/tty
-  IFS= read -r key_path </dev/tty || die "could not read SSH key path."
-  key_path="${key_path:-$HOME/.ssh/id_ed25519.pub}"
-  [[ -r "$key_path" ]] || die "SSH public-key file not found: $key_path"
-  ssh_key="$(<"$key_path")"
+  [[ -s "$public_path" ]] || die "SSH public key is missing or empty."
+  ssh_key="$(<"$public_path")"
 fi
 validate_ssh_public_key() {
   local key=$1 type encoded tmp byte_count offset index component component_length component_start
