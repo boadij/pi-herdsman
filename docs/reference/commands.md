@@ -36,10 +36,11 @@ For the Herdsman commands above, replacing `/herdsman` with `/agents` is
 equivalent. The role commands are separate from these aliases.
 
 `/herdsman` opens the native Pi menu titled with the running Pi Herdsman package
-version. Its six destinations are `Session mode`, `Agents & definitions`,
+version. Ordinary Leads see six destinations: `Lead mode`, `Agents & definitions`,
 `Project management`, `Chief coordination`, `Settings`, and `Usage & costs`.
-Active role state is secondary row metadata; the TUI updates contextual help for
-the selected row.
+Managed Leads, Managers, and Chiefs see the same menu without `Lead mode` (five
+destinations). Active role state is secondary row metadata; the TUI updates
+contextual help for the selected row.
 
 In the TUI, every Herdsman selection menu supports fuzzy filtering. Type to
 narrow the current menu by label, visible setting value, or additional search
@@ -48,12 +49,12 @@ and Escape to return. Clearing the query restores the full list. Filtering is
 local to the open menu, not a search across nested settings. Outside the TUI,
 Herdsman retains Pi's native selection prompt.
 
-`Session mode` shows the current ordinary Lead mode (`flexible` or `orchestrate`).
-Selecting it opens the same selector as `/lead`. A dedicated Managed Lead
-shows `managed`, `managed · unavailable`, or `managed · retired` according to
-verified assignment evidence, and offers no ordinary mode choices.
+`Lead mode` shows the current ordinary Lead mode (`flexible` or `orchestrate`).
+Selecting it opens the same selector as `/lead`. For a dedicated Managed Lead,
+`/lead` instead shows `managed`, `managed · unavailable`, or `managed · retired`
+according to verified assignment evidence, and offers no ordinary mode choices.
 
-`/lead` opens the Session mode selector. `/lead flexible` and `/lead orchestrate`
+`/lead` directly opens the Lead mode selector. `/lead flexible` and `/lead orchestrate`
 select that mode directly; repeating the current mode explicitly refreshes its
 effective definition. Ordinary mode changes are persisted for the current
 session. Managed Leads reject `/lead flexible` and `/lead orchestrate`, and

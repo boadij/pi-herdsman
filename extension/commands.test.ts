@@ -1180,11 +1180,13 @@ test("known managed identity remains unavailable and recovery-only when startup 
     return undefined;
   };
   await pi.commandOptions.get("herdsman")!.handler("", context);
-  assert.ok(
-    presentation.some((item) =>
-      /^Session mode\s+managed · unavailable$/u.test(item),
-    ),
+  assert.equal(presentation[0], "Agents & definitions");
+  assert.equal(
+    presentation.some((item) => item.startsWith("Lead mode")),
+    false,
   );
+  await pi.commandOptions.get("lead")!.handler("", context);
+  assert.deepEqual(presentation, ["managed · unavailable"]);
   assert.ok(
     pi.entries.some((entry: any) =>
       String(entry.data?.error).includes("Herdr disconnected"),
@@ -11411,16 +11413,21 @@ async function managerDelegateAssignmentTest(
       leadCtx.mode = "rpc";
       let lifecyclePresentation: string[] = [];
       leadCtx.ui.select = async (title: string, items: string[]) => {
-        if (title.startsWith("Pi Herdsman")) lifecyclePresentation = items;
+        if (
+          title.startsWith("Pi Herdsman") ||
+          title === "Managed orchestration"
+        )
+          lifecyclePresentation = items;
         return undefined;
       };
       await lead.commandOptions.get("herdsman").handler("", leadCtx);
-      assert.ok(
-        lifecyclePresentation.some((item) =>
-          /^Session mode\s+managed · unavailable$/u.test(item),
-        ),
-        "ambiguous worktree evidence keeps the permanent Managed identity unavailable",
+      assert.equal(lifecyclePresentation[0], "Agents & definitions");
+      assert.equal(
+        lifecyclePresentation.some((item) => item.startsWith("Lead mode")),
+        false,
       );
+      await lead.commandOptions.get("lead").handler("", leadCtx);
+      assert.deepEqual(lifecyclePresentation, ["managed · unavailable"]);
       const childTabCommands = tabCommands.filter(
         (args) =>
           (args[0] === "pane" &&
@@ -11538,15 +11545,21 @@ async function managerDelegateAssignmentTest(
       leadCtx.mode = "rpc";
       let managedPresentation: string[] = [];
       leadCtx.ui.select = async (title: string, items: string[]) => {
-        if (title.startsWith("Pi Herdsman")) managedPresentation = items;
+        if (
+          title.startsWith("Pi Herdsman") ||
+          title === "Managed orchestration"
+        )
+          managedPresentation = items;
         return undefined;
       };
       await lead.commandOptions.get("herdsman").handler("", leadCtx);
-      assert.ok(
-        managedPresentation.some((item) =>
-          /^Session mode\s+managed$/u.test(item),
-        ),
+      assert.equal(managedPresentation[0], "Agents & definitions");
+      assert.equal(
+        managedPresentation.some((item) => item.startsWith("Lead mode")),
+        false,
       );
+      await lead.commandOptions.get("lead").handler("", leadCtx);
+      assert.deepEqual(managedPresentation, ["managed"]);
 
       failScopeLookup = false;
       const requestsBeforeRemoval = topologyRequests;
@@ -11575,11 +11588,13 @@ async function managerDelegateAssignmentTest(
       assert.deepEqual(lead.pi.getActiveTools(), []);
       managedPresentation = [];
       await lead.commandOptions.get("herdsman").handler("", leadCtx);
-      assert.ok(
-        managedPresentation.some((item) =>
-          /^Session mode\s+managed$/u.test(item),
-        ),
+      assert.equal(managedPresentation[0], "Agents & definitions");
+      assert.equal(
+        managedPresentation.some((item) => item.startsWith("Lead mode")),
+        false,
       );
+      await lead.commandOptions.get("lead").handler("", leadCtx);
+      assert.deepEqual(managedPresentation, ["managed"]);
 
       reportCheckoutAbsent = true;
       rmSync(childCwd, { recursive: true, force: true });
@@ -11596,16 +11611,21 @@ async function managerDelegateAssignmentTest(
       await lead.events.get("session_tree")![0](undefined, leadCtx);
       lifecyclePresentation = [];
       leadCtx.ui.select = async (title: string, items: string[]) => {
-        if (title.startsWith("Pi Herdsman")) lifecyclePresentation = items;
+        if (
+          title.startsWith("Pi Herdsman") ||
+          title === "Managed orchestration"
+        )
+          lifecyclePresentation = items;
         return undefined;
       };
       await lead.commandOptions.get("herdsman").handler("", leadCtx);
-      assert.ok(
-        lifecyclePresentation.some((item) =>
-          /^Session mode\s+managed · retired$/u.test(item),
-        ),
-        `committed retirement, Herdr branch absence, and Git worktree absence establish Retired: ${JSON.stringify(lifecyclePresentation)}; records=${JSON.stringify(listPendingRetirements(supervisionRuntime(), repoKey))}`,
+      assert.equal(lifecyclePresentation[0], "Agents & definitions");
+      assert.equal(
+        lifecyclePresentation.some((item) => item.startsWith("Lead mode")),
+        false,
       );
+      await lead.commandOptions.get("lead").handler("", leadCtx);
+      assert.deepEqual(lifecyclePresentation, ["managed · retired"]);
       assert.equal(tabLabels.get("child-tab"), "Managed Lead");
       assert.equal(lead.pi.getActiveTools().includes("delegate_agent"), false);
       assert.equal(lead.pi.getActiveTools().includes("continue_agent"), false);
@@ -19312,7 +19332,7 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
   await pi.commandOptions.get("agents").handler("", context);
   assert.equal(prompts[0]?.label, `Pi Herdsman · v${packageMetadata.version}`);
   assert.deepEqual(prompts[0]?.options, [
-    "Session mode  flexible",
+    "Lead mode  flexible",
     "Agents & definitions",
     "Project management  Inactive",
     "Chief coordination  Inactive",
@@ -19396,7 +19416,7 @@ test("Herdsman menu filters Settings and handles empty results", async () => {
         assert.equal(lines[selection - 1].trim(), "");
         assert.match(lines[selection - 2], /settings/u);
         assert.match(render(), /→ Settings/u);
-        assert.doesNotMatch(render(), /→ Execution/u);
+        assert.doesNotMatch(render(), /→ Lead mode/u);
         component.handleInput("\r");
         return;
       }
@@ -19477,7 +19497,7 @@ test("Herdsman TUI selectors use stable values and current preselection", async 
       const footer = lines.findIndex((line) => line.includes("↑↓ navigate"));
       assert.equal(lines[footer - 1].trim(), "");
     }
-    // Execution has no help region: exactly one blank row after its last option.
+    // Lead mode has no help region: exactly one blank row after its last option.
     const executionFooter = renders[1].findIndex((line) =>
       line.includes("↑↓ navigate"),
     );
@@ -19485,7 +19505,7 @@ test("Herdsman TUI selectors use stable values and current preselection", async 
     assert.ok(renders[1]?.some((line) => /^→ flexible\s+current/u.test(line)));
     assert.ok(renders[2]?.some((line) => line.startsWith("→ orchestrate")));
     assert.ok(
-      renders[3]?.some((line) => /^→ Session mode\s+flexible/u.test(line)),
+      renders[3]?.some((line) => /^→ Lead mode\s+flexible/u.test(line)),
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
@@ -19533,13 +19553,13 @@ test("Herdsman root contextual help follows the selected row", async () => {
     }
     const help = (index: number) =>
       observed[index]?.find((line) =>
-        /Choose whether this session works directly|Manage running Agents|Coordinate independent project work|Supervise Managers|Change Herdsman preferences|View token usage and model costs/u.test(
+        /Choose whether this Lead works directly|Manage running Agents|Coordinate independent project work|Supervise Managers|Change Herdsman preferences|View token usage and model costs/u.test(
           line,
         ),
       ) ?? "";
     assert.match(
       help(0),
-      /Choose whether this session works directly or primarily delegates tasks\./u,
+      /Choose whether this Lead works directly or primarily delegates tasks\./u,
     );
     assert.match(help(1), /Manage running Agents and inspect definitions\./u);
     assert.match(

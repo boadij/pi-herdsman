@@ -460,18 +460,21 @@ In a lead session with UI:
 
 ### `/herdsman` and `/agents`
 
-Verify both `/herdsman` and `/agents` open the same six destinations:
-`Session mode`, `Agents & definitions`, `Project management`, `Chief coordination`,
-`Settings`, and `Usage & costs`. Verify active role state is secondary metadata
-and selected-row contextual help updates in the TUI. `Agents & definitions`
-groups running agents, definitions, Coordinator profiles, and stop-all. Verify
-`Settings` has `Sessions & agents`, `Manager & repositories`, and `Interface`,
-and that `Interface → Agent pane layout` opens the placement selector. Session
-mode shows the current ordinary mode and opens the flexible / orchestrate
-selector; an assigned Lead shows managed with `managed-lead` help and no ordinary
-mode choices. `/lead` opens the same selector, while `/lead flexible` and `/lead
-orchestrate` select directly through that control. Verify Managed Leads cannot
-select ordinary modes or activate Manager/Chief.
+Open `/herdsman` in ordinary Lead, Managed Lead, Manager, and Chief sessions.
+Verify ordinary Leads see six destinations: `Lead mode`, `Agents & definitions`,
+`Project management`, `Chief coordination`, `Settings`, and `Usage & costs`.
+The other roles see five destinations without `Lead mode`; verify `Agents &
+definitions` remains available in each. Verify `/agents` opens the same menu,
+active role state is secondary metadata, and selected-row contextual help updates
+in the TUI. `Agents & definitions` groups running agents, definitions, Coordinator
+profiles, and stop-all. Verify `Settings` has `Sessions & agents`, `Manager &
+repositories`, and `Interface`, and that `Interface → Agent pane layout` opens
+the placement selector. `Lead mode` shows the current ordinary mode and opens the
+`flexible` / `orchestrate` selector. `/lead` opens that selector directly, while
+`/lead flexible` and `/lead orchestrate` select directly through that control.
+For a Managed Lead, `/lead` shows managed with `managed-lead` help and no ordinary
+mode choices. Verify Managed Leads cannot select ordinary modes or activate
+Manager/Chief.
 Using disposable project data only, fork and clone an assigned Lead and verify
 new exact ordinary session IDs, no inherited assignment/Agent ownership or
 role/profile policy, and unchanged source identity through tree navigation and
