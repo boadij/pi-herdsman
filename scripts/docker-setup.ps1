@@ -187,11 +187,12 @@ try {
       }
     }
   }
-  # Do not allow Compose to create a missing bind source as root. Existing
-  # sources are checked below from inside the Linux engine, where its actual
-  # ownership and access semantics apply.
+  # A path created on the Windows host cannot be safely chowned through a
+  # separately resolved Docker Desktop bind path: it may be replaced between
+  # creation and the engine's mount. Never let Compose create it implicitly.
+  # Check existing sources inside the Linux engine for actual access semantics.
   if ($mount.type -eq 'bind' -and -not (Test-Path -LiteralPath $mount.source -PathType Container)) {
-    Fail 'bind-mounted home must already exist; create and configure it manually before setup.'
+    Fail 'bind-mounted home must already exist as a directory; create it manually and configure ownership and access for the effective PUID/PGID before setup. Setup will not create or chown it.'
   }
   if ($mount.type -notin @('volume', 'bind')) { Fail 'unsupported Herdsman home mount type.' }
 

@@ -100,7 +100,7 @@ function docker {
   }
   if ($call -like 'ps -aq --filter *') { $global:LASTEXITCODE = 0; if ($script:containerInfo) { return 'container-id' }; return }
   if ($call -eq 'inspect container-id') { $global:LASTEXITCODE = 0; return (ConvertTo-Json -InputObject @($script:containerInfo) -Depth 8 -Compress) }
-  if ($call -like 'compose run --rm --no-deps -T --user 0:0 *stat -c*') { $global:LASTEXITCODE = 0; return $script:bindOwner }
+  if ($call -like 'compose run --rm --no-deps -T --user 0:0 *' -and $args[-1] -ceq 'stat -c %u:%g /home/herdsman') { $global:LASTEXITCODE = 0; return $script:bindOwner }
   if ($call -like 'compose run --rm --no-deps -T --user *test -w /home/herdsman') { $global:LASTEXITCODE = if ($script:writable) { 0 } else { 1 }; return }
   if ($call -like 'compose run --rm --no-deps -T --user 0:0 *') { $global:LASTEXITCODE = if ($script:preflightOk) { 0 } else { 1 }; return }
   if ($call -like 'compose run --rm --no-deps -T --user *') {
@@ -201,8 +201,25 @@ try {
     Assert (-not ($script:dockerCalls -contains 'compose up -d')) 'Invalid ID reached startup.'
     Set-Variable -Scope Script -Name $field -Value ''
   }
-  # Explicit nonstandard IDs must pass through unchanged for an existing home.
+  # Missing or non-directory bind sources must not be created or modified by
+  # Compose, and must not reach any container operation.
   $script:homeType = 'bind'
+  $script:homeSource = Join-Path $project 'missing-home'
+  foreach ($sourceState in @('missing', 'file')) {
+    if ($sourceState -eq 'file') { [IO.File]::WriteAllText($script:homeSource, 'preserve') }
+    $script:dockerCalls.Clear()
+    $failed = $false
+    try { . (Join-Path $root 'scripts/docker-setup.ps1') } catch { $failed = $_.Exception.Message -match 'bind-mounted home must already exist as a directory' }
+    Assert $failed "A $sourceState bind source was not rejected."
+    if ($sourceState -eq 'missing') {
+      Assert (-not (Test-Path -LiteralPath $script:homeSource)) 'Missing bind source was created.'
+    } else {
+      Assert ([IO.File]::ReadAllText($script:homeSource) -ceq 'preserve') 'Existing bind source file was modified.'
+    }
+    Assert (-not @($script:dockerCalls | Where-Object { $_ -like 'compose run *' -or $_ -eq 'compose up -d' -or $_ -match '\bchown\b' }).Count) "A $sourceState bind source reached a container operation."
+  }
+  Remove-Item -LiteralPath $script:homeSource
+  # Explicit nonstandard IDs must pass through unchanged for an existing home.
   $script:homeSource = Join-Path $project 'existing-home'
   New-Item -ItemType Directory -Path $script:homeSource | Out-Null
   $script:modelUid = '2000'
@@ -277,7 +294,8 @@ try {
   $failed = $false
   try { . (Join-Path $root 'scripts/docker-setup.ps1') } catch { $failed = $_.Exception.Message -match 'ownership, permissions, or configured' }
   Assert $failed 'Incompatible home or ID was not rejected.'
-  Assert (-not ($script:dockerCalls -contains 'compose up -d')) 'Failed home preflight reached startup.'
+  Assert (@($script:dockerCalls | Where-Object { $_ -like 'compose run --rm --no-deps -T --user 0:0 *current_uid=*' }).Count -eq 1) 'Image account preflight was not called.'
+  Assert (-not @($script:dockerCalls | Where-Object { $_ -like '*authorized_keys*' -or $_ -eq 'compose up -d' }).Count) 'Failed home preflight reached authorization or startup.'
   $script:preflightOk = $true
   # A key resolved from the Compose service environment is authoritative,
   # even when it was supplied by .env rather than the PowerShell process.
