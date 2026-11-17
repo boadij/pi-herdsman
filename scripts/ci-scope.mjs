@@ -175,6 +175,11 @@ function classify(paths) {
       path === ".dockerignore" ||
       path.startsWith("docker/")
     ) {
+      if (
+        path === "docker/pi-herdsman-peer" ||
+        path === "docker/pi-herdsman-peer.test.mjs"
+      )
+        tests = true;
       smoke();
       peer = true;
       continue;
@@ -451,6 +456,17 @@ if (process.argv[2] === "--self-test") {
   });
   expectOnly("docker/AGENTS.md", {
     format: true,
+    container: "smoke",
+    peer: true,
+  });
+  expectOnly("docker/pi-herdsman-peer", {
+    tests: true,
+    container: "smoke",
+    peer: true,
+  });
+  expectOnly("docker/pi-herdsman-peer.test.mjs", {
+    format: true,
+    tests: true,
     container: "smoke",
     peer: true,
   });
