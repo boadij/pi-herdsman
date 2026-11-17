@@ -26,7 +26,7 @@ case "$*" in
     fi ;;
   'compose stop tailscale'|'stop sidecar') [[ ${STOP_FAIL:-0} != 1 ]] ;;
   'compose up -d --force-recreate herdsman') : ;;
-  'compose exec -T tailscale tailscale status --json')
+  'compose exec --interactive=false -T tailscale tailscale status --json')
     if [[ -e ${TS_STATE:-/nonexistent} || ${TS_READY:-0} == 1 ]]; then echo '{"BackendState":"Running"}'; else exit 1; fi ;;
   compose\ run*)
     auth_script=${@: -1}
@@ -223,7 +223,17 @@ export HERDSMAN_IDS=herdsman IDS=$'sidecar\nherdsman' RUNNING=herdsman MOCK_AUTH
 rm -f "$TS_STATE"; : >"$LOG"
 if bash "$root/scripts/docker-setup.sh" </dev/null >"$work/unregistered" 2>&1; then echo 'unregistered Tailscale deployment accepted' >&2; exit 1; fi
 grep -q 'existing Tailscale deployment is not registered or its status is unavailable' "$work/unregistered"
-grep -q '^compose exec -T tailscale tailscale status --json$' "$LOG"
+grep -q '^compose exec --interactive=false -T tailscale tailscale status --json "$LOG"
+! grep -Eq '^compose (up|start|run)' "$LOG"
+! grep -q 'Herdsman is ready' "$work/unregistered"
+# A registered repeat retains its sidecar and succeeds without recreation.
+export TS_READY=1
+: >"$LOG"
+bash "$root/scripts/docker-setup.sh" </dev/null >"$work/repeat"
+grep -q 'Herdsman is ready' "$work/repeat"
+! grep -Eq '^compose (up|start|run)' "$LOG"
+printf 'docker setup focused tests passed\n'
+ "$LOG"
 ! grep -Eq '^compose (up|start|run)' "$LOG"
 ! grep -q 'Herdsman is ready' "$work/unregistered"
 # A registered repeat retains its sidecar and succeeds without recreation.
