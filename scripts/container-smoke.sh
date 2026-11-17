@@ -28,7 +28,7 @@ cleanup() {
   docker volume rm \
     "$home" "$ssh_state" "$offline_home" "$offline_ssh" "$web_home" "$web_ssh" \
     "$migration_home" "$migration_ssh" "$damaged_home" "$damaged_ssh" "$update_home" \
-    "$interrupted_home" "$interrupted_ssh" \
+    "$interrupted_home" "$interrupted_ssh" "${name}-local-home" "${name}-local-ssh" \
     >/dev/null 2>&1 || true
   if [ -n "${custom_volume:-}" ]; then
     docker volume rm "$custom_volume" >/dev/null 2>&1 || true
@@ -613,9 +613,13 @@ start() {
     -v "$ssh_state:/var/lib/herdsman/ssh" \
     "$image" >/dev/null
 
-  port="$(docker port "$name" 22/tcp | sed 's/.*://')"
+  wait_for_ssh
+}
+
+wait_for_ssh() {
   for _ in $(seq 1 60); do
-    if ssh -F /dev/null -i "$tmp/id" -p "$port" \
+    port="$(docker port "$name" 22/tcp | sed 's/.*://')"
+    if [ -n "$port" ] && ssh -F /dev/null -i "$tmp/id" -p "$port" \
       -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no \
       -o UserKnownHostsFile=/dev/null herdsman@127.0.0.1 true 2>/dev/null; then
       return
@@ -656,6 +660,66 @@ verify_runtime() {
     echo 'stage: runtime extension load check'; \
     if grep -q 'Failed to load extension' /tmp/pi-help; then exit 1; fi"
 }
+
+# Exercise a local selection over SSH in its own persistent home.
+echo 'stage: local package selection over SSH'
+saved_home="$home"
+saved_ssh_state="$ssh_state"
+home="${name}-local-home"
+ssh_state="${name}-local-ssh"
+start
+remote 'set -e
+  cp -R ~/.pi/agent/npm ~/npm-smoke-backup
+  mkdir -p ~/local-herdsman
+  cp -R /opt/pi-herdsman/. ~/local-herdsman/
+  cp -R /opt/pi-herdsman-npm-seed/node_modules ~/local-herdsman/
+  pi remove npm:pi-herdsman
+  cd ~/local-herdsman
+  pi install .
+  pi list | grep -F local-herdsman'
+verify_local_selection() {
+  remote 'node -e '\''const fs=require("fs"),path=require("path"); const a=path.join(process.env.HOME,".pi/agent"); const s=JSON.parse(fs.readFileSync(path.join(a,"settings.json"))); const p=s.packages.map(x=>typeof x==="string"?x:x?.source); if(p.some(x=>/^npm:pi-herdsman(@|$)/.test(x)) || p.filter(x=>typeof x==="string" && path.resolve(a,x)===path.join(process.env.HOME,"local-herdsman")).length!==1) process.exit(1)'\'''
+  remote 'pi list' | grep -F local-herdsman
+}
+verify_probe() {
+  remote 'pi-herdsman-peer probe' | node -e '
+    let input = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", chunk => input += chunk);
+    process.stdin.on("end", () => {
+      if (!Array.isArray(JSON.parse(input).peers)) process.exit(1);
+    });
+  '
+}
+verify_local_selection
+verify_probe
+docker restart "$name" >/dev/null
+wait_after_restart
+wait_for_ssh
+verify_local_selection
+verify_probe
+# Restore the original seeded npm tree and declaration without a network install.
+remote 'set -e
+  pi remove ~/local-herdsman
+  rm -rf ~/.pi/agent/npm
+  mv ~/npm-smoke-backup ~/.pi/agent/npm
+  node -e '\''const fs=require("fs"); const p=process.env.HOME+"/.pi/agent/settings.json"; const s=JSON.parse(fs.readFileSync(p)); s.packages.push("npm:pi-herdsman"); fs.writeFileSync(p,JSON.stringify(s,null,2)+"\n")'\'''
+verify_seeded_package
+verify_probe
+docker rm -f "$name" >/dev/null
+docker volume rm "$home" "$ssh_state" >/dev/null
+home="$saved_home"
+ssh_state="$saved_ssh_state"
+
+# Probe the migrated object-form selection through the same SSH boundary.
+echo 'stage: migrated package selection over SSH'
+home="$migration_home"
+ssh_state="$migration_ssh"
+start
+verify_probe
+docker rm -f "$name" >/dev/null
+home="$saved_home"
+ssh_state="$saved_ssh_state"
 
 echo 'stage: SSH and runtime checks'
 docker run -d \
