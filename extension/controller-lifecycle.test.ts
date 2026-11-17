@@ -1365,19 +1365,20 @@ async function assertManagedLeadRole(
   context: ReturnType<typeof fakeContext>,
 ): Promise<void> {
   const menus: { title: string; options: string[] }[] = [];
-  let selectedExecution = false;
   context.mode = "rpc";
   context.ui.select = async (title, options) => {
     menus.push({ title, options: [...options] });
-    if (title.startsWith("Pi Herdsman ·") && !selectedExecution) {
-      selectedExecution = true;
-      return options[0];
-    }
     return undefined;
   };
   await pi.commandOptions.get("herdsman")!.handler("", context);
-  assert.equal(menus[0]?.options[2], "Project management  Inactive");
-  assert.equal(menus[0]?.options[3], "Chief coordination  Inactive");
+  assert.equal(
+    menus[0]?.options.some((option) => option.startsWith("Lead mode")),
+    false,
+  );
+  assert.equal(menus[0]?.options[0], "Agents & definitions");
+  assert.equal(menus[0]?.options[1], "Project management  Inactive");
+  assert.equal(menus[0]?.options[2], "Chief coordination  Inactive");
+  await pi.commandOptions.get("lead")!.handler("", context);
   assert.equal(menus[1]?.title, "Managed orchestration");
   context.mode = "tui";
 }

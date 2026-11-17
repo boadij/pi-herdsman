@@ -1364,7 +1364,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       }
       const mode = await host.selectMenu(
         ctx,
-        "Execution",
+        "Lead mode",
         [
           {
             value: "flexible",
@@ -2118,20 +2118,23 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       let selectedSection = "execution";
       while (true) {
         const execution = host.leadExecutionPresentation();
+        const showLeadMode = host.isLead() && !execution.managed;
+        if (!showLeadMode && selectedSection === "execution")
+          selectedSection = "agents";
         const selected = await host.selectMenu(
           ctx,
           `Pi Herdsman · v${host.version}`,
           [
-            {
-              value: "execution",
-              label: "Session mode",
-              description: execution.managed
-                ? managedExecutionLabel(execution.lifecycle)
-                : execution.mode,
-              help: execution.managed
-                ? "This assigned session uses managed-lead. Use Pi /fork or /clone to continue independently (same Git checkout)."
-                : "Choose whether this session works directly or primarily delegates tasks.",
-            },
+            ...(showLeadMode
+              ? [
+                  {
+                    value: "execution",
+                    label: "Lead mode",
+                    description: execution.mode,
+                    help: "Choose whether this Lead works directly or primarily delegates tasks.",
+                  },
+                ]
+              : []),
             {
               value: "agents",
               label: "Agents & definitions",
