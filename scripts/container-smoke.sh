@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Keep Docker's configuration and TLS paths stable when the installer changes HOME and cwd.
+docker_config="${DOCKER_CONFIG:-$HOME/.docker}"
+[[ "$docker_config" = /* ]] || docker_config="$PWD/$docker_config"
+export DOCKER_CONFIG="$docker_config"
+if [[ -n "${DOCKER_CERT_PATH:-}" && "$DOCKER_CERT_PATH" != /* ]]; then
+  export DOCKER_CERT_PATH="$PWD/$DOCKER_CERT_PATH"
+fi
+
 image=pi-herdsman:smoke
 replacement_image="${image}-replacement"
 name="pi-herdsman-smoke-$$"
@@ -64,6 +72,96 @@ bash scripts/docker-setup.test.sh
 
 echo 'stage: build'
 docker build --platform linux/amd64 -t "$image" .
+
+# Exercise the actual installer against an isolated Compose project and named volumes.
+echo 'stage: real guided Docker setup authorization'
+(
+  setup_dir="$tmp/installer"
+  mkdir "$setup_dir"
+  setup_home="$tmp/installer-host"
+  mkdir "$setup_home"
+  setup_script="$PWD/scripts/docker-setup.sh"
+  sed -e "s|ghcr.io/boadij/pi-herdsman:latest|$image|" \
+    -e 's|"${HERDSMAN_SSH_PORT:-2222}:22"|"127.0.0.1::22"|' compose.yaml > "$setup_dir/compose.yaml"
+  ssh-keygen -q -t ed25519 -N '' -f "$tmp/installer-key1"
+  ssh-keygen -q -t ed25519 -N '' -f "$tmp/installer-key2"
+  cd "$setup_dir"
+  # Only this randomly named project and its volumes are removed by cleanup.
+  project="installer-smoke-$(basename "$tmp" | tr '[:upper:].' '[:lower:]-')-$$"
+  setup_environment() {
+    # Preserve Docker context, endpoint, TLS, proxy and credential-helper environment.
+    # Remove deployment selection and interpolation inputs inherited from the caller.
+    clean_env=(env)
+    local name
+    while IFS= read -r name; do
+      case "$name" in
+        COMPOSE_*|PI_HERDSMAN_DIR|SSH_AUTHORIZED_KEYS|PUID|PGID|HERDSMAN_SSH_PORT|TS_AUTHKEY)
+          clean_env+=(-u "$name") ;;
+      esac
+    done < <(compgen -e)
+    clean_env+=("HOME=$setup_home" "COMPOSE_PROJECT_NAME=$project")
+  }
+  setup_environment
+  compose() { "${clean_env[@]}" docker compose "$@"; }
+  cleanup_setup() { compose down --volumes --remove-orphans; }
+  trap cleanup_setup EXIT
+  run_setup() {
+    # The installer reads approval from /dev/tty, not redirected stdin.
+    printf '%s' "$2" | "${clean_env[@]}" \
+      "SSH_AUTHORIZED_KEYS=$1" "SETUP_SCRIPT=$setup_script" \
+      python3 -c 'import os, pty, sys; sys.exit(os.waitstatus_to_exitcode(pty.spawn(["bash", os.environ["SETUP_SCRIPT"]])))'
+  }
+  check_ssh() {
+    local key=$1 port
+    port="$(compose port herdsman 22 | awk -F: 'END {print $NF}')"
+    ssh -F /dev/null -i "$key" -p "$port" \
+      -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none \
+      -o ConnectTimeout=5 -o StrictHostKeyChecking=no \
+      -o UserKnownHostsFile=/dev/null herdsman@127.0.0.1 true
+  }
+  wait_for_setup_ssh() {
+    local key=$1
+    for _ in $(seq 1 60); do
+      if check_ssh "$key" 2>/dev/null; then return; fi
+      sleep 1
+    done
+    echo 'installer deployment SSH did not become ready' >&2
+    return 1
+  }
+  check_keys() {
+    local contents key1 key2
+    contents="$(compose exec -T herdsman cat /home/herdsman/.ssh/authorized_keys)"
+    key1="$(awk '{print $2}' "$tmp/installer-key1.pub")"
+    key2="$(awk '{print $2}' "$tmp/installer-key2.pub")"
+    [ "$(awk -v k="$key1" '$2 == k {n++} END {print n+0}' <<<"$contents")" = 1 ]
+    [ "$(awk -v k="$key2" '$2 == k {n++} END {print n+0}' <<<"$contents")" = 1 ]
+    [ "$(printf '%s\n' "$contents" | wc -l)" -eq 2 ]
+  }
+
+  # Finish key selection, then explicitly approve the first deployment.
+  run_setup "$(cat "$tmp/installer-key1.pub")" $'\ny\n'
+  wait_for_setup_ssh "$tmp/installer-key1"
+  before="$(compose ps -q herdsman)"
+  test -n "$before"
+  outgoing="$(compose exec -T herdsman sha256sum /home/herdsman/.ssh/id_ed25519 | awk '{print $1}')"
+  test -n "$outgoing"
+  run_setup "$(cat "$tmp/installer-key2.pub")" $'\n'
+  # Repeat with the second key to verify idempotency as well as preservation.
+  run_setup "$(cat "$tmp/installer-key2.pub")" $'\n'
+  test "$(compose ps -q herdsman)" = "$before"
+  check_keys
+  check_ssh "$tmp/installer-key1"
+  check_ssh "$tmp/installer-key2"
+  before="$(compose ps -q herdsman)"
+  compose up -d --force-recreate herdsman
+  after="$(compose ps -q herdsman)"
+  test -n "$before" && test -n "$after" && test "$before" != "$after"
+  wait_for_setup_ssh "$tmp/installer-key2"
+  check_ssh "$tmp/installer-key1"
+  check_ssh "$tmp/installer-key2"
+  check_keys
+  test "$(compose exec -T herdsman sha256sum /home/herdsman/.ssh/id_ed25519 | awk '{print $1}')" = "$outgoing"
+)
 
 default_ids="$(
   docker run --rm --entrypoint /bin/sh "$image" \

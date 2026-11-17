@@ -93,7 +93,7 @@ function classify(paths) {
 
     if (path === "scripts/docker-setup.sh") {
       tests = true;
-      config();
+      smoke();
       continue;
     }
 
@@ -190,8 +190,12 @@ function classify(paths) {
       continue;
     }
 
+    if (path === "compose.yaml") {
+      smoke();
+      continue;
+    }
+
     if (
-      path === "compose.yaml" ||
       path === "compose.tailscale.yaml" ||
       path === "compose.bind-mount.yaml"
     ) {
@@ -263,11 +267,17 @@ if (process.argv[2] === "--self-test") {
     peer: true,
   });
 
-  for (const path of [
-    "compose.yaml",
-    "compose.tailscale.yaml",
-    "compose.bind-mount.yaml",
-  ]) {
+  assert.deepEqual(classify(["compose.yaml"]), {
+    format: true,
+    tests: false,
+    package: false,
+    container: "smoke",
+    smoke: false,
+    bootstrap: false,
+    peer: false,
+  });
+
+  for (const path of ["compose.tailscale.yaml", "compose.bind-mount.yaml"]) {
     assert.deepEqual(classify([path]), {
       format: true,
       tests: false,
@@ -373,7 +383,7 @@ if (process.argv[2] === "--self-test") {
     format: false,
     tests: true,
     package: false,
-    container: "config",
+    container: "smoke",
     smoke: false,
     bootstrap: false,
     peer: false,

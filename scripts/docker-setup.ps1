@@ -102,15 +102,11 @@ function Download-Compose([string] $Name) {
   }
 }
 
-$scriptPath = $PSCommandPath
-if ($env:PI_HERDSMAN_DIR) {
-  $script:ProjectDir = $env:PI_HERDSMAN_DIR
-} elseif ($scriptPath -and (Test-Path -LiteralPath $scriptPath) -and
-  (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $scriptPath) '..\compose.yaml'))) {
-  $script:ProjectDir = [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $scriptPath) '..'))
+$script:ProjectDir = [IO.Path]::GetFullPath($(if ($env:PI_HERDSMAN_DIR) {
+  $env:PI_HERDSMAN_DIR
 } else {
-  $script:ProjectDir = Join-Path $HOME 'pi-herdsman'
-}
+  (Get-Location).ProviderPath
+}))
 New-Item -ItemType Directory -Force -Path $script:ProjectDir | Out-Null
 Push-Location $script:ProjectDir
 try {
@@ -131,106 +127,141 @@ try {
   }
 
   $setting = Read-ComposeSetting $envPath
-  if ($setting) {
-    $selection = $setting
-  } else {
+  $existingCompose = $setting -or @( 'compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml' | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }).Count -gt 0
+  if (-not $existingCompose) {
+    $orphanedOverrides = @('compose.override.yaml', 'compose.override.yml', 'docker-compose.override.yaml', 'docker-compose.override.yml' | Where-Object { Test-Path -LiteralPath $_ })
+    if ($orphanedOverrides.Count -gt 0) { Fail "Compose override exists without a base configuration: $($orphanedOverrides -join ', '); restore the base or explicitly select a configuration." }
     $choice = Read-Host 'Deployment: [1] Standard Docker (default)'
     if ($choice -and $choice -ne '1') { Fail 'The Windows guided setup supports standard Docker only.' }
-    $selection = 'compose.yaml'
+    Download-Compose 'compose.yaml'
   }
 
-  $separator = if ($env:COMPOSE_PATH_SEPARATOR) { $env:COMPOSE_PATH_SEPARATOR } else { ';' }
-  $files = $selection -split [regex]::Escape($separator)
-  if ($files -contains 'compose.tailscale.yaml') {
-    Fail 'Windows guided setup supports standard Docker only; configure Tailscale manually after Docker Desktop acceptance.'
-  }
-  foreach ($file in $files) {
-    if (-not $file) { Fail 'COMPOSE_FILE contains an empty entry.' }
-    Download-Compose $file
-    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { Fail "required Compose file does not exist: $file" }
-  }
-
-  if (-not $setting) {
-    $line = "COMPOSE_FILE=$selection"
-    if (Test-Path -LiteralPath $envPath) {
-      [IO.File]::AppendAllText($envPath, [Environment]::NewLine + $line + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
-    } else {
-      [IO.File]::WriteAllText($envPath, $line + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+  & docker compose config --quiet
+  if ($LASTEXITCODE -ne 0) { Fail 'could not resolve Compose configuration.' }
+  $services = @(& docker compose config --services)
+  if ($LASTEXITCODE -ne 0 -or 'herdsman' -notin $services) { Fail 'selected Compose configuration does not contain a herdsman service.' }
+  $containers = @(& docker compose ps --all --quiet | Where-Object { $_ })
+  if ($LASTEXITCODE -ne 0) { Fail 'could not list existing Compose containers.' }
+  foreach ($container in $containers) {
+    $workingDir = (& docker inspect --format '{{index .Config.Labels `com.docker.compose.project.working_dir`}}' $container | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $workingDir -or -not [string]::Equals([IO.Path]::GetFullPath($workingDir).TrimEnd('\', '/'), $script:ProjectDir.TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase)) {
+      Fail "Compose containers belong to '$workingDir', not '$script:ProjectDir'."
     }
   }
-  $key = $env:SSH_AUTHORIZED_KEYS
-  if (-not $key) {
+  $running = @(& docker compose ps --quiet herdsman | Where-Object { $_ })
+  if ($LASTEXITCODE -ne 0) { Fail 'could not list running Compose containers.' }
+  if ($containers.Count -gt 0 -and $running.Count -eq 0) {
+    if ((Read-Host 'Start the existing containers without recreating them? [y/N]') -notmatch '^(?i:y|yes)$') { return }
+    Invoke-Docker @('compose', 'start')
+    $running = @(& docker compose ps --quiet herdsman | Where-Object { $_ })
+    if ($LASTEXITCODE -ne 0 -or $running.Count -eq 0) { Fail 'Herdsman did not start; inspect existing containers and networking without recreating them.' }
+  }
+  if ($containers.Count -eq 0 -and $env:TS_AUTHKEY) { Fail 'remove TS_AUTHKEY from the environment; Windows setup does not bootstrap Tailscale.' }
+  if ($containers.Count -eq 0 -and $existingCompose) {
+    Write-Output 'Existing configuration found. Inspect custom bind mounts and create their homes safely before startup; Windows setup does not initialize them.'
+    if ((Read-Host 'Start a new deployment with this configuration? [y/N]') -notmatch '^(?i:y|yes)$') { return }
+  }
+
+  $keys = [Collections.Generic.List[string]]::new()
+  if (-not [Console]::IsInputRedirected) {
     foreach ($candidate in @((Join-Path $HOME '.ssh/id_ed25519.pub'), (Join-Path $HOME '.ssh/id_rsa.pub'))) {
-      if (Test-Path -LiteralPath $candidate) { $key = (Get-Content -Raw -LiteralPath $candidate).Trim(); break }
-    }
-  }
-  Invoke-Docker @('compose', 'config', '--quiet')
-  if (-not $key) {
-    & docker compose run --rm --no-deps --entrypoint sh herdsman -c 'test -s /home/herdsman/.ssh/authorized_keys' *> $null
-    $hasPersistentKeys = $LASTEXITCODE -eq 0
-    if (-not $hasPersistentKeys) {
-      $keyPath = Join-Path $HOME '.ssh/id_ed25519'
-      $publicPath = "$keyPath.pub"
-      if (-not (Get-Command ssh-keygen -ErrorAction SilentlyContinue)) { Fail 'ssh-keygen is required to generate or recover an SSH identity.' }
-      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $keyPath) | Out-Null
-      $privateItem = Get-Item -LiteralPath $keyPath -Force -ErrorAction SilentlyContinue
-      $publicItem = Get-Item -LiteralPath $publicPath -Force -ErrorAction SilentlyContinue
-      $PSNativeCommandUseErrorActionPreference = $false
-      # Legacy native argument serialization drops empty strings. Embedded
-      # quotes preserve an empty argument there; modern modes pass it directly.
-      $emptyPassphrase = if ((Get-Variable PSNativeCommandArgumentPassing -ErrorAction SilentlyContinue) -and $PSNativeCommandArgumentPassing -ne 'Legacy') { '' } else { '""' }
-      if ($privateItem) {
-        if ($publicItem -or -not (Test-Path -LiteralPath $keyPath -PathType Leaf)) { Fail 'SSH identity is incomplete; refusing to overwrite existing files.' }
-        $recovered = '' | & ssh-keygen -y -P $emptyPassphrase -f $keyPath 2>$null
-        if ($LASTEXITCODE -ne 0 -or -not ($recovered | Out-String).Trim()) { Fail 'cannot recover SSH public key; existing private key was preserved.' }
-        try {
-          $stream = [IO.File]::Open($publicPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
-          try {
-            $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($recovered | Out-String).Trim() + "`n")
-            $stream.Write($bytes, 0, $bytes.Length)
-          } finally { $stream.Dispose() }
-        } catch { Fail 'cannot publish recovered SSH public key without overwriting an existing file.' }
-        Write-Output "Recovered SSH public key: $publicPath"
-      } elseif ($publicItem) {
-        Fail 'SSH identity is incomplete; refusing to overwrite existing files.'
-      } else {
-        # Generate away from the destination: ssh-keygen can overwrite a public
-        # file that appears after its initial private-key overwrite check.
-        $tempDir = Join-Path (Split-Path -Parent $keyPath) ('.herdsman-key-' + [guid]::NewGuid().ToString('N'))
-        New-Item -ItemType Directory -Path $tempDir | Out-Null
-        $tempKey = Join-Path $tempDir 'id_ed25519'
-        try {
-          '' | & ssh-keygen -q -t ed25519 -N $emptyPassphrase -f $tempKey
-          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $tempKey -PathType Leaf) -or -not (Test-Path -LiteralPath "$tempKey.pub" -PathType Leaf)) { Fail 'cannot generate SSH identity.' }
-          try {
-            [IO.File]::Move($tempKey, $keyPath)
-            [IO.File]::Move("$tempKey.pub", $publicPath)
-          } catch { Fail 'cannot publish SSH identity without overwriting existing files.' }
-        } finally { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
-        Write-Output "Generated SSH login identity: $keyPath"
+      if ((Test-Path -LiteralPath $candidate -PathType Leaf) -and (Read-Host "Authorize public key $candidate to connect to Herdsman? [y/N]") -match '^(?i:y|yes)$') {
+        foreach ($line in (Get-Content -LiteralPath $candidate)) { if ($line.Trim()) { $keys.Add($line.Trim()) } }
       }
-      if (-not (Test-Path -LiteralPath $publicPath -PathType Leaf)) { Fail 'SSH public key is missing or empty.' }
-      $key = (Get-Content -Raw -LiteralPath $publicPath).Trim()
-      if (-not $key) { Fail 'SSH public key is missing or empty.' }
+    }
+    while ($true) {
+      $inputKey = Read-Host 'Additional public key or path to .pub file (Enter to finish)'
+      if (-not $inputKey) { break }
+      if (Test-Path -LiteralPath $inputKey -PathType Leaf) {
+        foreach ($line in (Get-Content -LiteralPath $inputKey)) { if ($line.Trim()) { $keys.Add($line.Trim()) } }
+      } else { $keys.Add($inputKey.Trim()) }
     }
   }
-  if ($key) {
-    if (-not (Test-OpenSshPublicKey $key)) { Fail 'SSH_AUTHORIZED_KEYS is not a structurally valid OpenSSH public key.' }
-    $env:SSH_AUTHORIZED_KEYS = $key
+  foreach ($key in $keys) {
+    if (-not (Test-OpenSshPublicKey $key)) { Fail 'SSH_AUTHORIZED_KEYS or selected key is not a structurally valid OpenSSH public key.' }
   }
-  Invoke-Docker @('compose', 'up', '-d')
+  $authorizationScript = @'
+set -eu
+umask 077
+home=/home/herdsman
+sshdir="$home/.ssh"
+auth="$sshdir/authorized_keys"
+# Complete effective validation before touching any persistent authorization.
+keys=$(mktemp)
+trap 'rm -f "$keys"' EXIT HUP INT TERM
+[ -w "$home" ] || exit 1
+[ ! -L "$sshdir" ] && { [ ! -e "$sshdir" ] || [ -d "$sshdir" ]; } || exit 1
+[ ! -L "$auth" ] && { [ ! -e "$auth" ] || [ -f "$auth" ]; } || exit 1
+while IFS= read -r key || [ -n "$key" ]; do
+  case "$key" in *[![:space:]]*) ;; *) continue ;; esac
+  printf '%s\n' "$key"
+done > "$keys"
+# A removed container does not imply an unused home. Never restore stale
+# environment keys alongside a selection or into an initialized home.
+if [ ! -s "$keys" ]; then
+  entries=$(find "$home" -mindepth 1 -maxdepth 1 -print -quit) || exit 1
+  if [ -z "$entries" ]; then printf '%s\n' "${SSH_AUTHORIZED_KEYS:-}" > "$keys"; fi
+fi
+while IFS= read -r key; do
+  case "$key" in *[![:space:]]*) ;; *) continue ;; esac
+  fingerprint=$(printf '%s\n' "$key" | ssh-keygen -lf - | awk 'NR == 1 {print $2}')
+  [ -n "$fingerprint" ] || exit 1
+done < "$keys"
+mkdir -p "$sshdir"
+[ ! -L "$auth" ] && { [ ! -e "$auth" ] || [ -f "$auth" ]; } || exit 1
+touch "$auth"
+chmod 700 "$sshdir"
+chmod 600 "$auth"
+while IFS= read -r key; do
+  case "$key" in *[![:space:]]*) ;; *) continue ;; esac
+  fingerprint=$(printf '%s\n' "$key" | ssh-keygen -lf - | awk 'NR == 1 {print $2}')
+  if ! ssh-keygen -lf "$auth" 2>/dev/null | awk -v f="$fingerprint" '$2 == f {found=1} END {exit !found}'; then
+    [ ! -s "$auth" ] || [ "$(tail -c 1 "$auth" | wc -l)" -ne 0 ] || printf '\n' >> "$auth"
+    printf '%s\n' "$key" >> "$auth"
+  fi
+done < "$keys"
+ssh-keygen -lf "$auth" >/dev/null 2>&1
+'@
+  # Base64 keeps shell programs free of native Windows argument quoting hazards.
+  # Public keys remain on stdin, never on the command line.
+  $encodedAuthorization = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($authorizationScript))
+  $decodeScript = 'set -f; IFS=; s=$(echo $1|base64 -d); shift; eval $s'
+  if ($containers.Count -gt 0 -and $keys.Count -eq 0) {
+    # Leave a running deployment and its authorization untouched unless asked.
+  } elseif ($containers.Count -gt 0) {
+    @($keys | ForEach-Object { ($_ -split '\s+', 3)[0..1] -join ' ' }) | & docker compose exec -T --user herdsman herdsman env -u SSH_AUTHORIZED_KEYS sh -c $decodeScript sh $encodedAuthorization
+    if ($LASTEXITCODE -ne 0) { Fail 'could not safely update authorized_keys.' }
+  } else {
+    # Resolve IDs inside the container from Compose's effective environment, never on the host.
+    $switchUser = @'
+set -eu
+uid=${PUID:-1000}; gid=${PGID:-1000}
+case "$uid:$gid" in *[!0-9:]*|0*:*|*:0*|:*|*:) exit 1;; esac
+set -f; IFS=
+s=$(echo $1 | base64 -d)
+exec setpriv --reuid $uid --regid $gid --clear-groups sh -c $s
+'@
+    $encodedSwitch = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($switchUser))
+    @($keys | ForEach-Object { ($_ -split '\s+', 3)[0..1] -join ' ' }) | & docker compose run --rm --no-deps -T --user '0:0' --entrypoint sh herdsman -c $decodeScript sh $encodedSwitch $encodedAuthorization
+    if ($LASTEXITCODE -ne 0) { Fail 'could not safely update authorized_keys, or no authorized keys exist.' }
+    Invoke-Docker @('compose', 'up', '-d')
+  }
   $ready = $false
   for ($attempt = 0; $attempt -lt 30; $attempt++) {
-    & docker compose exec -T herdsman sh -c 'test -d /run/sshd && grep -q ":0016 " /proc/net/tcp /proc/net/tcp6' *> $null
+    & docker compose exec -T herdsman sh -c 'test -d /run/sshd && grep -q :0016 /proc/net/tcp /proc/net/tcp6' *> $null
     if ($LASTEXITCODE -eq 0) { $ready = $true; break }
     Start-Sleep -Seconds 2
   }
   if (-not $ready) { Fail 'Herdsman did not become ready; inspect with: docker compose logs herdsman' }
   Write-Output "Herdsman is ready in $script:ProjectDir"
+  Write-Output 'SSH authorization checked against the persistent home.'
+  Write-Output 'Container outgoing SSH public key: docker compose exec herdsman cat /home/herdsman/.ssh/id_ed25519.pub'
   $publishedPort = & docker compose port herdsman 22
-  if ($LASTEXITCODE -ne 0 -or ($publishedPort | Out-String).Trim() -notmatch ':(\d+)$') { Fail 'could not determine the published Herdsman SSH port.' }
-  $sshPort = $Matches[1]
-  Write-Output "Connect with: ssh -p $sshPort herdsman@localhost"
+  if ($LASTEXITCODE -eq 0 -and ($publishedPort | Out-String).Trim() -match ':(\d+)$') {
+    Write-Output "Connect with: ssh -p $($Matches[1]) herdsman@localhost"
+  } else {
+    Write-Output 'No published SSH port found. For Tailscale or custom networking, use the configured network address and SSH port.'
+  }
   Write-Output 'Container SSH host key: docker compose exec herdsman cat /var/lib/herdsman/ssh/ssh_host_ed25519_key.pub'
 } finally {
   Pop-Location
