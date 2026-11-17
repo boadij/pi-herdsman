@@ -25,7 +25,7 @@ try {
     if (npm) root = path.resolve(dir, "npm/node_modules/pi-herdsman");
     else {
       // Only filesystem sources are supported; Pi also accepts npm, git and URLs.
-      if (/^(?:[a-z][a-z0-9+.-]*:|git@)/i.test(source)) continue;
+      if (!path.isAbsolute(source) && /^(?:[a-z][a-z0-9+.-]*:|git@)/i.test(source)) continue;
       root = path.resolve(dir, source === "~" ? homedir() : source.startsWith("~/") ? path.join(homedir(), source.slice(2)) : source);
       let manifest;
       try {
