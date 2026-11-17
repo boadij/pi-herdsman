@@ -388,6 +388,23 @@ MOCK
 chmod +x "$work/bin/curl"
 bind_project="$work/bind-project"
 mkdir -p "$bind_project"
+# Model the new home's ownership rather than requiring the test runner to
+# have permission to chown to the image's 1000:1000 account.
+export BIND_FIXTURE_HOME="$bind_project/data/herdsman-home" BIND_CHOWN_LOG="$work/bind-chown.log"
+cat >"$work/bin/chown" <<'MOCK'
+#!/usr/bin/env bash
+[[ "$1" == 1000:1000 && "$2" == -- && "$3" == "$BIND_FIXTURE_HOME" && $# -eq 3 ]] || exit 2
+printf '%s\n' "$1" >>"$BIND_CHOWN_LOG"
+[[ "${MOCK_CHOWN_FAIL:-0}" != 1 ]]
+MOCK
+cat >"$work/bin/stat" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${*: -1}" == "${BIND_FIXTURE_HOME:-}" ]]; then
+  case "$2" in '%u'|'%g') echo 1000; exit ;; '%u:%g') echo 1000:1000; exit ;; esac
+fi
+exec /usr/bin/stat "$@"
+MOCK
+chmod +x "$work/bin/chown" "$work/bin/stat"
 export PI_HERDSMAN_DIR="$bind_project"
 unset COMPOSE_FILE PUID PGID
 printf 'bind-data-preserved\n' >"$work/marker"
@@ -402,6 +419,19 @@ owner_before=$(stat -c '%u:%g' "$bind_project/data/herdsman-home")
 bash "$root/scripts/docker-setup.sh" >"$work/bind-repeat.out"
 test -f "$bind_project/data/herdsman-home/keep"
 test "$owner_before" = "$(stat -c '%u:%g' "$bind_project/data/herdsman-home")"
+test "$(wc -l <"$BIND_CHOWN_LOG")" -eq 1
+# An unprivileged caller that cannot prepare a new home must fail before startup.
+denied_bind="$work/bind-chown-denied"
+mkdir "$denied_bind"
+export PI_HERDSMAN_DIR="$denied_bind" BIND_FIXTURE_HOME="$denied_bind/data/herdsman-home" MOCK_CHOWN_FAIL=1
+: >"$DOCKER_LOG"
+if printf '3\n' | script -qec "bash \"$root/scripts/docker-setup.sh\"" /dev/null >"$work/bind-denied.out" 2>&1; then
+  echo 'Expected failed bind-home ownership preparation.' >&2; exit 1
+fi
+grep -q 'cannot set ownership of newly created' "$work/bind-denied.out"
+! grep -q 'compose up -d' "$DOCKER_LOG"
+unset BIND_FIXTURE_HOME BIND_CHOWN_LOG MOCK_CHOWN_FAIL
+rm "$work/bin/chown" "$work/bin/stat"
 # Fresh overlays use the configured separator from either environment source.
 for separator_source in environment dotenv; do
   separator_dir="$work/separator-$separator_source"
