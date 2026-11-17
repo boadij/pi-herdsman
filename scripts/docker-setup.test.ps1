@@ -9,28 +9,32 @@ $env:SSH_AUTHORIZED_KEYS = ''
 $env:PI_HERDSMAN_DIR = $work
 $env:COMPOSE_FILE = ''
 $env:TS_AUTHKEY = ''
-$script:calls = [Collections.Generic.List[string]]::new()
-$script:containers = @('container-1')
-$script:running = @('container-1')
-$script:workingDir = $work
-$script:port = '0.0.0.0:2200'
-$script:startRunsHerdsman = $true
+# The installer runs in a child script scope; both scripts share this mock state.
+$global:dockerSetupTestState = @{
+  calls = [Collections.Generic.List[string]]::new()
+  containers = @('container-1')
+  running = @('container-1')
+  workingDir = $work
+  port = '0.0.0.0:2200'
+  startRunsHerdsman = $true
+  authorization = $null
+}
 function docker {
   $call = $args -join ' '
-  $script:calls.Add($call)
+  $global:dockerSetupTestState.calls.Add($call)
   if ($args[0] -eq 'compose' -and $args[1] -eq 'run') {
-    $script:authorization = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($args[-1]))
+    $global:dockerSetupTestState.authorization = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($args[-1]))
   }
   $global:LASTEXITCODE = 0
   switch ($call) {
     'info --format {{.OSType}}' { return 'linux' }
     'compose config --services' { return 'herdsman' }
-    'compose ps --all --quiet' { return $script:containers }
-    'compose ps --quiet herdsman' { return $script:running }
-    'compose start' { if ($script:startRunsHerdsman) { $script:running = @('container-1') }; return }
-    'compose port herdsman 22' { return $script:port }
+    'compose ps --all --quiet' { return $global:dockerSetupTestState.containers }
+    'compose ps --quiet herdsman' { return $global:dockerSetupTestState.running }
+    'compose start' { if ($global:dockerSetupTestState.startRunsHerdsman) { $global:dockerSetupTestState.running = @('container-1') }; return }
+    'compose port herdsman 22' { return $global:dockerSetupTestState.port }
   }
-  if ($args[0] -eq 'inspect') { return $script:workingDir }
+  if ($args[0] -eq 'inspect') { return $global:dockerSetupTestState.workingDir }
 }
 function Read-Host { param([string] $Prompt); if ($Prompt -like 'Additional public key*') { return '' }; return 'yes' }
 function Assert([bool] $Condition, [string] $Message) { if (-not $Condition) { throw $Message } }
@@ -42,32 +46,32 @@ try {
   [IO.File]::WriteAllText($override, 'original override')
   [IO.File]::WriteAllText($dotenv, 'CUSTOM=value')
   & (Join-Path $PSScriptRoot 'docker-setup.ps1') | Out-Null
-  Assert ($script:calls.Contains('compose config --quiet')) 'Compose was not validated.'
-  Assert (-not $script:calls.Contains('compose up -d')) 'Running deployment was recreated.'
+  Assert ($global:dockerSetupTestState.calls.Contains('compose config --quiet')) 'Compose was not validated.'
+  Assert (-not $global:dockerSetupTestState.calls.Contains('compose up -d')) 'Running deployment was recreated.'
   Assert ([IO.File]::ReadAllText($compose) -ceq 'original compose') 'Compose was modified.'
   Assert ([IO.File]::ReadAllText($override) -ceq 'original override') 'Override was modified.'
   Assert ([IO.File]::ReadAllText($dotenv) -ceq 'CUSTOM=value') '.env was modified.'
-  $script:calls.Clear()
-  $script:workingDir = Join-Path $work 'another'
+  $global:dockerSetupTestState.calls.Clear()
+  $global:dockerSetupTestState.workingDir = Join-Path $work 'another'
   $failed = $false
   try { & (Join-Path $PSScriptRoot 'docker-setup.ps1') | Out-Null } catch { $failed = $_.Exception.Message -match 'belong to' }
   Assert $failed 'Cross-directory collision was not rejected.'
-  Assert (-not $script:calls.Contains('compose up -d')) 'Collision reached startup.'
-  $script:workingDir = $work
-  $script:running = @()
-  $script:calls.Clear()
+  Assert (-not $global:dockerSetupTestState.calls.Contains('compose up -d')) 'Collision reached startup.'
+  $global:dockerSetupTestState.workingDir = $work
+  $global:dockerSetupTestState.running = @()
+  $global:dockerSetupTestState.calls.Clear()
   & (Join-Path $PSScriptRoot 'docker-setup.ps1') | Out-Null
-  Assert ($script:calls.Contains('compose start')) 'Stopped Herdsman was not started when a sidecar exists.'
-  Assert (-not $script:calls.Contains('compose up -d')) 'Existing deployment was recreated.'
-  $script:port = ''
+  Assert ($global:dockerSetupTestState.calls.Contains('compose start')) 'Stopped Herdsman was not started when a sidecar exists.'
+  Assert (-not $global:dockerSetupTestState.calls.Contains('compose up -d')) 'Existing deployment was recreated.'
+  $global:dockerSetupTestState.port = ''
   $output = & (Join-Path $PSScriptRoot 'docker-setup.ps1')
   Assert (($output -join "`n") -match 'Tailscale or custom networking') 'No-port networking was not reported.'
-  $script:port = '0.0.0.0:2200'
-  $script:containers = @()
-  $script:running = @()
-  $script:calls.Clear()
+  $global:dockerSetupTestState.port = '0.0.0.0:2200'
+  $global:dockerSetupTestState.containers = @()
+  $global:dockerSetupTestState.running = @()
+  $global:dockerSetupTestState.calls.Clear()
   & (Join-Path $PSScriptRoot 'docker-setup.ps1') | Out-Null
-  Assert ($script:calls.Contains('compose up -d')) 'Confirmed existing configuration was not started.'
+  Assert ($global:dockerSetupTestState.calls.Contains('compose up -d')) 'Confirmed existing configuration was not started.'
   $setupSource = Get-Content -Raw (Join-Path $PSScriptRoot 'docker-setup.ps1')
   Assert ($setupSource.Contains('compose exec -T --user herdsman herdsman env -u SSH_AUTHORIZED_KEYS sh -c')) 'Existing authorization does not clear the stale environment key.'
   # Exercise native argument serialization when a POSIX shell is available.
@@ -86,7 +90,7 @@ try {
       New-Item -ItemType Directory -Path $homePath | Out-Null
       # Shell paths are only portable here when sh sees this host path directly.
       if ($homePath -notmatch '[\\ ]') {
-        $program = $script:authorization.Replace('home=/home/herdsman', "home=$homePath")
+        $program = $global:dockerSetupTestState.authorization.Replace('home=/home/herdsman', "home=$homePath")
         $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($program))
         $decoder = 'set -f; IFS=; s=$(echo $1|base64 -d); shift; eval $s'
         '' | & $shell.Source -c $decoder sh $encoded
@@ -120,28 +124,28 @@ try {
         Assert ($LASTEXITCODE -eq 0 -and -not $authorized.Contains($stale.Trim())) 'Initialized home consumed the environment fallback.'
         $freshHome = Join-Path $work 'fresh-home'
         New-Item -ItemType Directory -Path $freshHome | Out-Null
-        $freshProgram = $script:authorization.Replace('home=/home/herdsman', "home=$freshHome")
+        $freshProgram = $global:dockerSetupTestState.authorization.Replace('home=/home/herdsman', "home=$freshHome")
         $freshEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($freshProgram))
         $newKey | & $shell.Source -c $decoder sh $freshEncoded
         $authorized = Get-Content -Raw (Join-Path $freshHome '.ssh/authorized_keys')
         Assert ($LASTEXITCODE -eq 0 -and $authorized.Contains($newKey.Trim()) -and -not $authorized.Contains($stale.Trim())) 'Explicit key did not suppress fallback in empty home.'
         $fallbackHome = Join-Path $work 'fallback-home'
         New-Item -ItemType Directory -Path $fallbackHome | Out-Null
-        $fallbackProgram = $script:authorization.Replace('home=/home/herdsman', "home=$fallbackHome")
+        $fallbackProgram = $global:dockerSetupTestState.authorization.Replace('home=/home/herdsman', "home=$fallbackHome")
         $fallbackEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($fallbackProgram))
         @() | & $shell.Source -c $decoder sh $fallbackEncoded
         $authorized = Get-Content -Raw (Join-Path $fallbackHome '.ssh/authorized_keys')
         Assert ($LASTEXITCODE -eq 0 -and $authorized.Contains($stale.Trim())) 'Empty home ignored the environment fallback.'
         $blankHome = Join-Path $work 'blank-home'
         New-Item -ItemType Directory -Path $blankHome | Out-Null
-        $blankProgram = $script:authorization.Replace('home=/home/herdsman', "home=$blankHome")
+        $blankProgram = $global:dockerSetupTestState.authorization.Replace('home=/home/herdsman', "home=$blankHome")
         $blankEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($blankProgram))
         @('', '  ', '') | & $shell.Source -c $decoder sh $blankEncoded
         $authorized = Get-Content -Raw (Join-Path $blankHome '.ssh/authorized_keys')
         Assert ($LASTEXITCODE -eq 0 -and $authorized.Contains($stale.Trim())) 'Blank-line input suppressed the environment fallback.'
         $mixedHome = Join-Path $work 'mixed-home'
         New-Item -ItemType Directory -Path $mixedHome | Out-Null
-        $mixedProgram = $script:authorization.Replace('home=/home/herdsman', "home=$mixedHome")
+        $mixedProgram = $global:dockerSetupTestState.authorization.Replace('home=/home/herdsman', "home=$mixedHome")
         $mixedEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($mixedProgram))
         @('', $newKey, '') | & $shell.Source -c $decoder sh $mixedEncoded
         $authorized = Get-Content -Raw (Join-Path $mixedHome '.ssh/authorized_keys')
@@ -157,5 +161,6 @@ try {
   $env:COMPOSE_FILE = $oldCompose
   $env:TS_AUTHKEY = $oldAuth
   $env:SSH_AUTHORIZED_KEYS = $oldKeys
+  Remove-Variable -Name dockerSetupTestState -Scope Global -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
