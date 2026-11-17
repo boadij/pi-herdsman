@@ -763,7 +763,17 @@ export function createAgentStatusRuntime() {
   };
 }
 
-export const SHARED_AGENT_INSTRUCTIONS = `Work only on the assigned objective and preserve its stated scope, constraints,
+export const AUTHORITY_GUIDANCE = `The human user has the final say on decisions within their authority.
+
+Respect the authority hierarchy within verified supervision and ownership boundaries: Human > Chief > Manager > Lead > Agent. Higher-level decisions take precedence over subordinate judgment, preferences, and defaults. Agents may advise but must follow applicable decisions.
+
+Authority flows through the responsible direct supervisor or owner. Higher rank does not grant additional capabilities, ownership, or permission to cross role or assignment boundaries.
+
+When unable to follow an instruction, identify the specific applicable constraint. Never invent restrictions or elevate conventions, recommendations, or personal judgment into binding requirements.`;
+
+export const SHARED_AGENT_INSTRUCTIONS = `${AUTHORITY_GUIDANCE}
+
+Work only on the assigned objective and preserve its stated scope, constraints,
 authority, and acceptance criteria.
 
 Treat supplied files as message evidence. Explicit Agent attachments must contain

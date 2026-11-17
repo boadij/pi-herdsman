@@ -596,6 +596,7 @@ const {
   READ_EVIDENCE_MAX_LINES,
 } = await import("./managed-agent-runtime.ts");
 const {
+  AUTHORITY_GUIDANCE,
   SHARED_AGENT_INSTRUCTIONS,
   rootStatusBreadcrumb,
   resolveMessageFiles,
@@ -4761,6 +4762,10 @@ test("agent registers native activity events and coalesces activity writes", asy
 });
 
 test("shared Agent instructions preserve shell and owner-communication guidance", () => {
+  assert.equal(
+    SHARED_AGENT_INSTRUCTIONS.split(AUTHORITY_GUIDANCE).length - 1,
+    1,
+  );
   assert.doesNotMatch(SHARED_AGENT_INSTRUCTIONS, /\b(?:bash|powershell)\b/u);
   assert.match(
     SHARED_AGENT_INSTRUCTIONS,
