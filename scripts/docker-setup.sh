@@ -35,7 +35,11 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-project_dir="${PI_HERDSMAN_DIR:-$PWD}"
+if [[ -n "${PI_HERDSMAN_DIR:-}" ]]; then
+  project_dir=$PI_HERDSMAN_DIR
+else
+  project_dir=$(pwd -P) || die "current directory is inaccessible; cd into an existing directory and rerun setup."
+fi
 mkdir -p -- "$project_dir" || die "cannot create deployment directory: $project_dir"
 cd -- "$project_dir" || die "cannot enter deployment directory: $project_dir"
 project_dir="$(pwd -P)"
