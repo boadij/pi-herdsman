@@ -156,36 +156,72 @@ test("max Agent depth Settings validates choices and reports persistence errors"
 });
 
 test("Herdsman root renders when status and definition metadata fail", async () => {
-  let rootLabels: string[] = [];
-  const notices: string[] = [];
-  const runtime = createLeadCommandRuntime({
-    version: packageMetadata.version,
-    loadStatusSnapshot: async () => {
-      throw new Error("status unavailable");
-    },
-    contextAgentDefinitions: async () => {
-      throw new Error("definitions unavailable");
-    },
-    leadExecutionPresentation: () => ({ managed: false, mode: "flexible" }),
-    roleActive: () => false,
-    selectMenu: async (_ctx: unknown, _title: string, items: any[]) => {
-      rootLabels = items.map(({ label }) => label);
-      return undefined;
-    },
-  } as any);
-  await runtime.runHerdsmanCommand("", {
-    hasUI: true,
-    ui: { notify: (message: string) => notices.push(message) },
-  } as any);
-  assert.deepEqual(rootLabels, [
-    "Session mode",
-    "Agents & definitions",
-    "Project management",
-    "Chief coordination",
-    "Settings",
-    "Usage & costs",
-  ]);
-  assert.deepEqual(notices, []);
+  for (const scenario of [
+    { role: "lead", managed: false, mode: "flexible" },
+    { role: "lead", managed: false, mode: "orchestrate" },
+    { role: "lead", managed: true, mode: "flexible" },
+    { role: "manager", managed: false, mode: "flexible" },
+    { role: "chief", managed: false, mode: "flexible" },
+  ]) {
+    const showLeadMode = scenario.role === "lead" && !scenario.managed;
+    const notices: string[] = [];
+    let calls = 0;
+    let discoveryCalls = 0;
+    const runtime = createLeadCommandRuntime({
+      version: packageMetadata.version,
+      loadStatusSnapshot: async () => {
+        discoveryCalls++;
+        throw new Error("status unavailable");
+      },
+      contextAgentDefinitions: async () => {
+        discoveryCalls++;
+        throw new Error("definitions unavailable");
+      },
+      isLead: () => scenario.role === "lead",
+      leadExecutionPresentation: () => ({
+        managed: scenario.managed,
+        mode: scenario.mode,
+      }),
+      roleActive: (role: string) => role === scenario.role,
+      selectMenu: async (
+        _ctx: unknown,
+        _title: string,
+        items: any[],
+        selected: string,
+      ) => {
+        calls++;
+        assert.deepEqual(
+          items.map(({ label }) => label),
+          [
+            ...(showLeadMode ? ["Lead mode"] : []),
+            "Agents & definitions",
+            "Project management",
+            "Chief coordination",
+            "Settings",
+            "Usage & costs",
+          ],
+        );
+        assert.equal(selected, showLeadMode ? "execution" : "agents");
+        if (showLeadMode) assert.equal(items[0].description, scenario.mode);
+        assert.equal(
+          items.find((item) => item.value === "manager").description,
+          scenario.role === "manager" ? "Active" : "Inactive",
+        );
+        assert.equal(
+          items.find((item) => item.value === "chief").description,
+          scenario.role === "chief" ? "Active" : "Inactive",
+        );
+        return undefined;
+      },
+    } as any);
+    await runtime.runHerdsmanCommand("", {
+      hasUI: true,
+      ui: { notify: (message: string) => notices.push(message) },
+    } as any);
+    assert.equal(calls, 1);
+    assert.equal(discoveryCalls, 0);
+    assert.deepEqual(notices, []);
+  }
 });
 
 test("Settings categories and Agents & definitions retain their selections", async () => {
@@ -478,6 +514,7 @@ test("Herdsman role menus dispatch shared role commands", async () => {
       let roleSelection = true;
       const host = {
         version: packageMetadata.version,
+        isLead: () => !scenario.active,
         leadExecutionPresentation: () => ({
           managed: false,
           mode: "flexible",
