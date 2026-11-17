@@ -613,9 +613,13 @@ start() {
     -v "$ssh_state:/var/lib/herdsman/ssh" \
     "$image" >/dev/null
 
-  port="$(docker port "$name" 22/tcp | sed 's/.*://')"
+  wait_for_ssh
+}
+
+wait_for_ssh() {
   for _ in $(seq 1 60); do
-    if ssh -F /dev/null -i "$tmp/id" -p "$port" \
+    port="$(docker port "$name" 22/tcp | sed 's/.*://')"
+    if [ -n "$port" ] && ssh -F /dev/null -i "$tmp/id" -p "$port" \
       -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no \
       -o UserKnownHostsFile=/dev/null herdsman@127.0.0.1 true 2>/dev/null; then
       return
@@ -691,6 +695,7 @@ verify_local_selection
 verify_probe
 docker restart "$name" >/dev/null
 wait_after_restart
+wait_for_ssh
 verify_local_selection
 verify_probe
 # Restore the original seeded npm tree and declaration without a network install.
