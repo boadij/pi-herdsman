@@ -169,11 +169,49 @@ try {
     & docker compose run --rm --no-deps --entrypoint sh herdsman -c 'test -s /home/herdsman/.ssh/authorized_keys' *> $null
     $hasPersistentKeys = $LASTEXITCODE -eq 0
     if (-not $hasPersistentKeys) {
-      $candidate = Read-Host 'SSH public-key file [~/.ssh/id_ed25519.pub]'
-      if (-not $candidate) { $candidate = Join-Path $HOME '.ssh/id_ed25519.pub' }
-      $candidate = [Environment]::ExpandEnvironmentVariables($candidate.Replace('~', $HOME))
-      if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { Fail "SSH public-key file not found: $candidate" }
-      $key = (Get-Content -Raw -LiteralPath $candidate).Trim()
+      $keyPath = Join-Path $HOME '.ssh/id_ed25519'
+      $publicPath = "$keyPath.pub"
+      if (-not (Get-Command ssh-keygen -ErrorAction SilentlyContinue)) { Fail 'ssh-keygen is required to generate or recover an SSH identity.' }
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $keyPath) | Out-Null
+      $privateItem = Get-Item -LiteralPath $keyPath -Force -ErrorAction SilentlyContinue
+      $publicItem = Get-Item -LiteralPath $publicPath -Force -ErrorAction SilentlyContinue
+      $PSNativeCommandUseErrorActionPreference = $false
+      # Legacy native argument serialization drops empty strings. Embedded
+      # quotes preserve an empty argument there; modern modes pass it directly.
+      $emptyPassphrase = if ((Get-Variable PSNativeCommandArgumentPassing -ErrorAction SilentlyContinue) -and $PSNativeCommandArgumentPassing -ne 'Legacy') { '' } else { '""' }
+      if ($privateItem) {
+        if ($publicItem -or -not (Test-Path -LiteralPath $keyPath -PathType Leaf)) { Fail 'SSH identity is incomplete; refusing to overwrite existing files.' }
+        $recovered = '' | & ssh-keygen -y -P $emptyPassphrase -f $keyPath 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not ($recovered | Out-String).Trim()) { Fail 'cannot recover SSH public key; existing private key was preserved.' }
+        try {
+          $stream = [IO.File]::Open($publicPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+          try {
+            $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($recovered | Out-String).Trim() + "`n")
+            $stream.Write($bytes, 0, $bytes.Length)
+          } finally { $stream.Dispose() }
+        } catch { Fail 'cannot publish recovered SSH public key without overwriting an existing file.' }
+        Write-Output "Recovered SSH public key: $publicPath"
+      } elseif ($publicItem) {
+        Fail 'SSH identity is incomplete; refusing to overwrite existing files.'
+      } else {
+        # Generate away from the destination: ssh-keygen can overwrite a public
+        # file that appears after its initial private-key overwrite check.
+        $tempDir = Join-Path (Split-Path -Parent $keyPath) ('.herdsman-key-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $tempDir | Out-Null
+        $tempKey = Join-Path $tempDir 'id_ed25519'
+        try {
+          '' | & ssh-keygen -q -t ed25519 -N $emptyPassphrase -f $tempKey
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $tempKey -PathType Leaf) -or -not (Test-Path -LiteralPath "$tempKey.pub" -PathType Leaf)) { Fail 'cannot generate SSH identity.' }
+          try {
+            [IO.File]::Move($tempKey, $keyPath)
+            [IO.File]::Move("$tempKey.pub", $publicPath)
+          } catch { Fail 'cannot publish SSH identity without overwriting existing files.' }
+        } finally { Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+        Write-Output "Generated SSH login identity: $keyPath"
+      }
+      if (-not (Test-Path -LiteralPath $publicPath -PathType Leaf)) { Fail 'SSH public key is missing or empty.' }
+      $key = (Get-Content -Raw -LiteralPath $publicPath).Trim()
+      if (-not $key) { Fail 'SSH public key is missing or empty.' }
     }
   }
   if ($key) {

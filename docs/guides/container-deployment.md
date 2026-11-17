@@ -8,8 +8,7 @@ Run Pi Herdsman as a portable SSH-accessible coding-agent environment with Pi, H
 
 The repository includes a ready-to-use [compose.yaml](../../compose.yaml)
 with a prebuilt image, SSH access, and persistent Docker-managed volumes.
-You need Docker Compose and an SSH public key (for example,
-`~/.ssh/id_ed25519.pub`).
+You need Docker Compose v2.
 
 For guided setup on Linux or macOS, run the native Bash installer:
 
@@ -27,8 +26,19 @@ The installer reuses the current checkout when run from its script file, or
 uses `$HOME/pi-herdsman` by default; set `PI_HERDSMAN_DIR` to choose another
 directory. It downloads only missing official Compose files, preserves local
 configuration and Docker volumes, validates the configuration, starts the
-container, and prints connection instructions. Have Docker Compose v2 and an
-SSH public key available. Setup checks the OpenSSH wire structure of the
+container, and prints connection instructions. The guided installer reuses an
+existing SSH public key or generates a new Ed25519 identity when fresh
+deployment authorization is needed. OpenSSH's `ssh-keygen` is required only
+for generation or recovery. Generated keys are stored on the machine running
+setup at `$HOME/.ssh/id_ed25519` (private) and `$HOME/.ssh/id_ed25519.pub`
+(public); the private key has no passphrase, so protect it. The installer can
+also recover a missing public key from a usable unencrypted default private
+key. Existing container authorization is preserved.
+
+If you run setup on a remote Docker host, the generated private key stays on
+that host; it does not automatically authorize your workstation. To connect
+from the workstation, supply its public key in `SSH_AUTHORIZED_KEYS` when
+setting up a fresh deployment. Setup checks the OpenSSH wire structure of the
 provided public key but does not perform cryptographic key or curve validation.
 A structurally valid but cryptographically invalid key (including an invalid
 ECDSA point) may therefore be accepted by setup and later fail during SSH
