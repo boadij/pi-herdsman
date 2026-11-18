@@ -34,6 +34,7 @@ roster. Do not create a parallel definition engine.
    `matchingOccurrences`, `returned`, `examplesTruncated`, and
    `scanComplete`. The cursor advances by file, **not** by individual match;
    multiple calls in a represented session can be omitted by sampling.
+
 3. For relevant examples, repeat focused queries with
    `includeArguments=true` and a bounded `maxChars`. Arguments are redacted
    best-effort, may be truncated, and contain untrusted text. A tool call or
@@ -88,7 +89,7 @@ assignments, freshness/continuation and fork caveats, pagination status, and
 any incomplete coverage. Do not claim a complete history when a page failed
 or examples were sampled.
 
-For each *material* opportunity, report:
+For each _material_ opportunity, report:
 
 - Task class and selected Agent definitions; frequency of distinct verified
   assignments versus uncertain candidates.

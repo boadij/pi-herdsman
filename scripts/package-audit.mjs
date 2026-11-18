@@ -150,14 +150,18 @@ try {
     );
   const expectedSkills = [
     ["agent-definitions", "skills/agent-definitions/SKILL.md"],
-    ["agent-specialization-audit", "skills/agent-specialization-audit/SKILL.md"],
+    [
+      "agent-specialization-audit",
+      "skills/agent-specialization-audit/SKILL.md",
+    ],
   ];
   if (
     skills.length !== expectedSkills.length ||
     expectedSkills.some(
       ([name, path]) =>
         !skills.some(
-          (skill) => skill.name === name && skill.filePath === resolve(root, path),
+          (skill) =>
+            skill.name === name && skill.filePath === resolve(root, path),
         ),
     )
   )
