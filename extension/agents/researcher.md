@@ -4,6 +4,8 @@ inheritGlobalContext: false
 inheritAncestorContext: false
 inheritProjectContext: true
 name: researcher
+extensions: [builtin:codemode, npm:pi-web-access]
+noExtensions: true
 noSkills: true
 skills: []
 systemPromptMode: append
