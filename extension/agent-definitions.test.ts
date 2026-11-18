@@ -1036,7 +1036,7 @@ test("managed launches retain the generic active-agent interoperability marker",
   assert.ok(args.includes('<active_agent name="reviewer"/>'));
 });
 
-test("discovers the six portable bundled definitions without a user agents directory", () => {
+test("discovers the seven portable bundled definitions without a user agents directory", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-agents-"));
   assert.deepEqual(
     withPiAgentDir(root, () =>
@@ -1048,6 +1048,7 @@ test("discovers the six portable bundled definitions without a user agents direc
       "researcher",
       "reviewer",
       "scout",
+      "ship",
       "validator",
     ],
   );
@@ -1552,6 +1553,7 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     ["reviewer", ["read", "ls", "find", "grep", "codemode"]],
     ["scout", ["read", "ls", "find", "grep", "codemode"]],
     ["generalist", ["read", "bash", "powershell", "edit", "write", "codemode"]],
+    ["ship", ["read", "bash", "powershell"]],
     ["validator", ["read", "bash", "powershell", "codemode"]],
   ]);
   const expectedDescriptions = new Map([
@@ -1576,6 +1578,10 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
       "General-purpose execution for bounded investigation, editing, and validation; use when work spans capabilities; prefer focused specialists for narrow tasks",
     ],
     [
+      "ship",
+      "Git and GitHub specialist for authorized commits, pushes, pull requests, merges, and releases; defaults to Conventional Commits",
+    ],
+    [
       "validator",
       "Focused verification agent for running tests, checks, and smoke scenarios against existing changes; use to report observed evidence, not implement fixes or review design",
     ],
@@ -1590,6 +1596,7 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
           "researcher",
           "reviewer",
           "scout",
+          "ship",
           "validator",
         ].map(
           (name) =>
@@ -1597,7 +1604,7 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
         ),
       ),
   );
-  assert.equal(required.size, 6);
+  assert.equal(required.size, 7);
   for (const definition of definitions) {
     assert.equal(definition.frontmatter.systemPromptMode, "append");
     assert.equal(definition.frontmatter.inheritGlobalContext, false);
@@ -1628,6 +1635,10 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
         "builtin:codemode",
         "npm:pi-web-access",
       ]);
+    } else if (definition.name === "ship") {
+      assert.equal(definition.frontmatter.noExtensions, true);
+      assert.equal(definition.frontmatter.extensions, undefined);
+      assert.deepEqual(definition.frontmatter.agents ?? [], []);
     } else
       assert.deepEqual(definition.frontmatter.extensions, ["builtin:codemode"]);
     assert.doesNotMatch(
@@ -1660,7 +1671,7 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     assert.doesNotMatch(required.get(name)!, /delegate|orchestrat/i);
   assert.equal(
     definitions.filter((definition) => required.has(definition.name)).length,
-    6,
+    7,
   );
 });
 
@@ -2329,6 +2340,7 @@ test("overlays a bundled definition and extends the roster", () => {
         "researcher",
         "reviewer",
         "scout",
+        "ship",
         "validator",
       ],
     );
@@ -2596,6 +2608,7 @@ test("bundled definitions leave execution settings to the controller", () => {
       "researcher",
       "reviewer",
       "scout",
+      "ship",
       "validator",
     ]) {
       const definition = discoverAgent(name);

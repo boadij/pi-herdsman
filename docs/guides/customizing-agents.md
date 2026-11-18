@@ -230,7 +230,7 @@ policy again; a live definition edit alone does not hot-apply it.
 
 ### Automatically inherited Pi context
 
-The six bundled Agents and bundled `managed-lead` automatically inherit
+The bundled Agents and bundled `managed-lead` automatically inherit
 project context only: global Pi agent-directory context and filesystem ancestor
 context are disabled by default. The project boundary is the Git worktree root
 containing the Agent or Lead execution directory, including for linked
