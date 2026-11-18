@@ -326,7 +326,10 @@ launcher requires one selected user-global npm or local package and rejects
 distinct selections. It does not resolve project-local, temporary, or Git
 package selections. A missing local directory cannot always be identified as
 a Herdsman selection at container startup; the peer launcher will not execute
-a missing or invalid package.
+a missing or invalid package. If both local and npm Herdsman sources are selected,
+the container keeps SSH available for recovery without changing Pi settings.
+Pi and the peer launcher may remain unusable until you remove the conflicting
+selection. Other installation validation failures still block container startup.
 
 After rebuilding, run `/reload` in each existing Pi session (or start new
 sessions) before resuming coordination. Exact runtime-build compatibility

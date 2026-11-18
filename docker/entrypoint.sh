@@ -509,8 +509,12 @@ try {
   }
   }
 } catch (error) {
-  console.error(`Pi Herdsman package initialization failed: ${error.message}`);
-  process.exitCode = 1;
+  if (error.message === "conflicting Herdsman package selections; remove all but one source") {
+    console.error(`Pi Herdsman package selection is ambiguous; SSH recovery remains available: ${error.message}`);
+  } else {
+    console.error(`Pi Herdsman package initialization failed: ${error.message}`);
+    process.exitCode = 1;
+  }
 }
 NODE
 
