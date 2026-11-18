@@ -778,6 +778,27 @@ remote 'set -e
   pi remove npm:pi-herdsman
   cd ~/local-herdsman
   pi install .
+  node -e '\''
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const agent = path.join(process.env.HOME, ".pi/agent");
+    const file = path.join(agent, "settings.json");
+    const settings = JSON.parse(fs.readFileSync(file, "utf8"));
+    let matches = 0;
+    settings.packages = settings.packages.map(entry => {
+      const source = typeof entry === "string" ? entry : entry?.source;
+      if (typeof source !== "string" || path.resolve(agent, source) !== process.cwd()) return entry;
+      matches++;
+      return {
+        ...(typeof entry === "object" ? entry : {}),
+        source,
+        extensions: ["+dist/index.js"],
+        skills: ["+SKILL.md", "+skills/agent-definitions/SKILL.md"],
+      };
+    });
+    if (matches !== 1) throw Error("expected exactly one installed local package entry");
+    fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
+  '\''
   pi list | grep -F local-herdsman'
 verify_local_selection() {
   remote 'node -e '\''const fs=require("fs"),path=require("path"); const a=path.join(process.env.HOME,".pi/agent"); const s=JSON.parse(fs.readFileSync(path.join(a,"settings.json"))); const p=s.packages.map(x=>typeof x==="string"?x:x?.source); if(p.some(x=>/^npm:pi-herdsman(@|$)/.test(x)) || p.filter(x=>typeof x==="string" && path.resolve(a,x)===path.join(process.env.HOME,"local-herdsman")).length!==1) process.exit(1)'\'''
