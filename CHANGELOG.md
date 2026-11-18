@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.51.0](https://github.com/boadij/pi-herdsman/compare/v0.50.1...v0.51.0) (2026-11-18)
+
+
+### Features
+
+* **agent:** enable native Code Mode for shipping agents ([#1035](https://github.com/boadij/pi-herdsman/issues/1035)) ([6709716](https://github.com/boadij/pi-herdsman/commit/6709716bff10b7dbffeda3b5761f9bf7bbaac941))
+* **agents:** add ship and maintainer release tooling ([#1030](https://github.com/boadij/pi-herdsman/issues/1030)) ([9058d0f](https://github.com/boadij/pi-herdsman/commit/9058d0f189a5ee9fb34a0ffdc15caa71bee9a607))
+
+
+### Fixes
+
+* **container:** honor Pi package filters in SSH peer launcher ([#1029](https://github.com/boadij/pi-herdsman/issues/1029)) ([4f5f79a](https://github.com/boadij/pi-herdsman/commit/4f5f79a47cf3ae4fec816e83ff5d602759b99256))
+
+
+### Other Changes
+
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.11.10 ([#1032](https://github.com/boadij/pi-herdsman/issues/1032)) ([e21bff7](https://github.com/boadij/pi-herdsman/commit/e21bff7dbec9b280bf50ebfef1ecafb6848c30cf))
+
 ## [0.50.1](https://github.com/boadij/pi-herdsman/compare/v0.50.0...v0.50.1) (2026-11-18)
 
 
