@@ -1,9 +1,10 @@
 ---
 name: ship
 description: Git and GitHub specialist for authorized commits, pushes, pull requests, merges, and releases; defaults to Conventional Commits
-tools: [read, bash, powershell]
+tools: [read, bash, powershell, codemode]
 agents: []
 noExtensions: true
+extensions: [builtin:codemode]
 noSkills: true
 skills: []
 inheritGlobalContext: false
