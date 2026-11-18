@@ -110,13 +110,20 @@ Fresh Pi environments in the Docker distribution include the optional
 existing Docker volumes keep their package state, and restarts do not restore a
 package you remove.
 
-Pi remains the package manager. Remove web access persistently with:
+Pi remains the package manager. Remove the ordinary Pi installation with:
 
 ```sh
 pi remove npm:pi-web-access
 ```
 
-Install or restore it explicitly, or update it when desired:
+The bundled researcher explicitly requests `npm:pi-web-access` even after
+`pi remove`. To opt out of that request, use a
+[researcher definition overlay](agent-definitions.md#researcher) that removes
+`npm:pi-web-access` from `extensions`. If the selected model requires ordinary
+extension discovery, also remove the ordinary installation as shown above so
+Pi does not discover it through that path.
+
+Install or restore the ordinary Pi package, or update it when desired:
 
 ```sh
 pi install npm:pi-web-access

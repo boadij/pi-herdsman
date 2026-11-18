@@ -200,19 +200,19 @@ allowlist includes `web_enable` and the default web tools exposed by
 dynamic tool activation; Pi and the extension determine when the other tools
 become available.
 
-Web access is optional. The Docker distribution includes it for fresh Pi
-environments; native installation offers it as an explicit optional choice.
-You can also install it through Pi:
+The bundled researcher explicitly requests Pi's native Code Mode
+(`builtin:codemode`) and `npm:pi-web-access`. Its `noExtensions: true` disables
+ordinary extension discovery unless the selected model requires discovery for
+its provider. Pi may resolve and install the explicitly requested npm extension
+when it is not cached and online startup is permitted. In an operator-enforced
+offline environment, web tools may be unavailable. Without them, the researcher
+retains local inspection capabilities and reports unavailable external evidence.
 
-```sh
-pi install npm:pi-web-access
-```
-
-Without the extension, the researcher retains local inspection capabilities
-and reports unavailable external evidence. Normal Pi extension discovery is
-intentionally enabled for this role so an installed compatible extension can
-provide the tools. If `pi-web-access` is configured with different public tool
-names, replace the researcher's `tools` array through a matching project or
+Higher-precedence overlays can replace the bundled `extensions` list. Use the
+[existing array modifiers](../reference/agent-definition-schema.md#file-format)
+to extend the inherited list deliberately. If `pi-web-access` is configured
+with different public tool names, replace the researcher's `tools` array
+through a matching project or
 global overlay. Search providers may receive external requests, and extension
 code runs in the Pi process with that process's permissions; the callable-tool
 allowlist is not an operating-system sandbox.

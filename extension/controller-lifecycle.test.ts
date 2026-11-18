@@ -1573,6 +1573,73 @@ test("lead direct placement modes use real controller delegation", async () => {
   }
 });
 
+test("delegation only forces offline mode without an explicit npm extension", async () => {
+  for (const [definition, extensions, offline] of [
+    ["researcher", ["builtin:codemode", "npm:pi-web-access"], undefined],
+    ["scout", ["builtin:codemode"], "1"],
+  ] as const) {
+    setLeadEnvironment();
+    const parent = {
+      ...managedState(`extension-launch-parent-${definition}`),
+      paneId: `extension-launch-parent-${definition}-pane`,
+    };
+    const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+    resetAgentMailbox(parentMailbox);
+    writeAgentState(parentMailbox, parent);
+    registerNativeAgentSession(parent);
+    process.env.HERDR_PANE_ID = parent.paneId;
+    const lifecycle = delegatedLifecycleExecutor(parent, [], "/tmp", {
+      paneId: parent.paneId,
+      tabId: "delegated-tab",
+    });
+    const pi = fakePi({ exec: lifecycle.exec });
+    registerExtension!(pi.pi as never);
+    const context = fakeContext();
+    const label = `extension-launch-${definition}`;
+    const childMailbox = agentMailboxPath(WORKSPACE, label);
+    resetAgentMailbox(childMailbox);
+    try {
+      await pi.events.get("session_start")![0](undefined, context);
+      const result = await registeredAgentTool(pi, "delegate").execute(
+        `start-${label}`,
+        { definition, label, task: "verify launch environment" },
+        undefined,
+        undefined,
+        context,
+      );
+      assert.equal(result.details.ok, true, JSON.stringify(result.details));
+      const start = pi.calls.find(
+        (args) => args[0] === "agent" && args[1] === "start",
+      );
+      assert.ok(start);
+      assert.deepEqual(
+        start
+          .slice(start.indexOf("--") + 1)
+          .flatMap((arg, index, args) =>
+            arg === "--extension" ? [args[index + 1]] : [],
+          )
+          .slice(-extensions.length),
+        extensions,
+      );
+      assert.equal(lifecycle.paneEnvironment.PI_OFFLINE, offline);
+      assert.equal(lifecycle.paneEnvironment.PI_HERDSMAN_MAILBOX, childMailbox);
+      assert.equal(
+        lifecycle.paneEnvironment.PI_HERDSMAN_OWNER_SESSION_ID,
+        LEAD_SESSION_ID,
+      );
+      assert.equal(
+        readAgentState(childMailbox)?.ownerSessionId,
+        LEAD_SESSION_ID,
+      );
+    } finally {
+      pi.events.get("session_shutdown")?.[0]();
+      resetAgentMailbox(parentMailbox);
+      resetAgentMailbox(childMailbox);
+      nativeSessions.delete(parent.piSessionId);
+    }
+  }
+});
+
 test("lead split-to-tab placement creates a dedicated agents tab", async () => {
   setLeadEnvironment();
   const parent = {

@@ -9362,7 +9362,11 @@ export function createAgentController(
             ...(process.env.PI_CODING_AGENT_DIR
               ? [`PI_CODING_AGENT_DIR=${process.env.PI_CODING_AGENT_DIR}`]
               : []),
-            "PI_OFFLINE=1",
+            ...(effectiveDefinition.frontmatter.extensions?.some((source) =>
+              source.startsWith("npm:"),
+            )
+              ? []
+              : ["PI_OFFLINE=1"]),
           ];
           // Pi reports the providers that extensions registered; a model from one
           // of them cannot resolve in a child denied extension discovery.

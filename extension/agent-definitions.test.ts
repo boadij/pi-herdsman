@@ -1622,9 +1622,13 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
       expectedTools.get(definition.name),
     );
     assert.deepEqual(definition.frontmatter.skills, []);
-    if (definition.name === "researcher")
-      assert.equal(definition.frontmatter.extensions, undefined);
-    else
+    if (definition.name === "researcher") {
+      assert.equal(definition.frontmatter.noExtensions, true);
+      assert.deepEqual(definition.frontmatter.extensions, [
+        "builtin:codemode",
+        "npm:pi-web-access",
+      ]);
+    } else
       assert.deepEqual(definition.frontmatter.extensions, ["builtin:codemode"]);
     assert.doesNotMatch(
       readFileSync(definition.path, "utf8"),
@@ -1731,14 +1735,15 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
       const launchedTools = args.flatMap((arg) => arg.split(","));
       for (const tool of forbidden)
         assert.equal(launchedTools.includes(tool), false);
-      assert.equal(args.includes("npm:pi-web-access"), false);
-      if (name !== "researcher") {
-        assert.equal(args[args.indexOf("--extension") + 1], "builtin:codemode");
-      }
-      if (name === "researcher") {
-        assert.equal(definition.frontmatter.noExtensions, undefined);
-        assert.equal(args.includes("--no-extensions"), false);
-      } else assert.equal(args.includes("--no-extensions"), true);
+      assert.equal(args.includes("--no-extensions"), true);
+      assert.deepEqual(
+        args.flatMap((arg, index) =>
+          arg === "--extension" ? [args[index + 1]] : [],
+        ),
+        name === "researcher"
+          ? ["builtin:codemode", "npm:pi-web-access"]
+          : ["builtin:codemode"],
+      );
     }
 
     const reviewer = projectAgentDefinition(discoverAgent("reviewer"), "leaf");

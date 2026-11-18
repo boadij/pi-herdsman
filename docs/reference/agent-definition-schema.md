@@ -67,9 +67,10 @@ explicit inherited allowlist; Manager, Chief, and ordinary Agents default to no
 direct Agent delegation and can add names from that empty default.
 
 Bundled Agents and the managed Lead enable Pi's native `codemode` by default.
-Definitions that specify `noExtensions: true` also load only
-`extensions: [builtin:codemode]` explicitly. A user's higher-precedence overlay
-can remove `codemode` or its extension. Runtime role profiles cannot configure
+Bundled definitions that specify `noExtensions: true` explicitly load
+`builtin:codemode`. The bundled researcher also explicitly loads
+`npm:pi-web-access`. A higher-precedence overlay can remove `codemode` or its
+extension. Runtime role profiles cannot configure
 extensions, so the `codemode` tool is available there only when Pi has loaded
 its built-in extension. The Flexible Lead adds `codemode` when registered while
 preserving the user's ordinary Pi tool selection.
