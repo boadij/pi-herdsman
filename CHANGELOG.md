@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.50.1](https://github.com/boadij/pi-herdsman/compare/v0.50.0...v0.50.1) (2026-11-18)
+
+
+### Fixes
+
+* **agent:** reliably load bundled researcher extensions ([#1027](https://github.com/boadij/pi-herdsman/issues/1027)) ([8b4144a](https://github.com/boadij/pi-herdsman/commit/8b4144ac0a1a23e2f8a174c9cda8e0fbaed25498))
+* **container:** keep SSH available on ambiguous Herdsman selections ([#1028](https://github.com/boadij/pi-herdsman/issues/1028)) ([98c43b1](https://github.com/boadij/pi-herdsman/commit/98c43b11743e905b482646ce67f436c5913133cf))
+* **docker:** make setup predictable and preserve existing deployments ([#1022](https://github.com/boadij/pi-herdsman/issues/1022)) ([642ec14](https://github.com/boadij/pi-herdsman/commit/642ec1474e4e327b3e7c41567957f7174285a0fc))
+* **docker:** protect piped setup and deleted directories ([#1024](https://github.com/boadij/pi-herdsman/issues/1024)) ([9665f2f](https://github.com/boadij/pi-herdsman/commit/9665f2f60766f4152d81878fec538c10c93a49c2))
+* **docker:** support legacy Compose across sudo ([#1026](https://github.com/boadij/pi-herdsman/issues/1026)) ([aa3f92f](https://github.com/boadij/pi-herdsman/commit/aa3f92f9e00a338e43ee018b851693196455d978))
+
 ## [0.50.0](https://github.com/boadij/pi-herdsman/compare/v0.49.0...v0.50.0) (2026-11-17)
 
 
