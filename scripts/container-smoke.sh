@@ -801,12 +801,12 @@ wait_for_ssh
 verify_local_selection
 verify_probe
 # Conflicting selections must leave SSH available and preserve settings for manual recovery.
-remote 'node -e '\''const fs=require("fs");const p=process.env.HOME+"/.pi/agent/settings.json";const s=JSON.parse(fs.readFileSync(p));s.packages.push("npm:pi-herdsman");fs.writeFileSync(p,JSON.stringify(s,null,2)+"\\n")'\'''
+remote 'node -e '\''const fs=require("fs");const p=process.env.HOME+"/.pi/agent/settings.json";const s=JSON.parse(fs.readFileSync(p));s.packages.push("npm:pi-herdsman");fs.writeFileSync(p,JSON.stringify(s,null,2)+"\n")'\'''
 docker restart "$name" >/dev/null
 wait_after_restart
 wait_for_ssh
 docker logs "$name" 2>&1 | grep -q 'Pi Herdsman package selection is ambiguous; SSH recovery remains available'
-remote 'node -e '\''const fs=require("fs");const p=process.env.HOME+"/.pi/agent/settings.json";const s=JSON.parse(fs.readFileSync(p));if(!s.packages.includes("npm:pi-herdsman"))throw Error("conflict was modified");s.packages=s.packages.filter(e=>(typeof e==="string"?e:e?.source)!=="npm:pi-herdsman");fs.writeFileSync(p,JSON.stringify(s,null,2)+"\\n")'\'''
+remote 'node -e '\''const fs=require("fs");const p=process.env.HOME+"/.pi/agent/settings.json";const s=JSON.parse(fs.readFileSync(p));if(!s.packages.includes("npm:pi-herdsman"))throw Error("conflict was modified");s.packages=s.packages.filter(e=>(typeof e==="string"?e:e?.source)!=="npm:pi-herdsman");fs.writeFileSync(p,JSON.stringify(s,null,2)+"\n")'\'''
 docker restart "$name" >/dev/null
 wait_after_restart
 wait_for_ssh
