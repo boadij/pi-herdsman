@@ -1553,7 +1553,7 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     ["reviewer", ["read", "ls", "find", "grep", "codemode"]],
     ["scout", ["read", "ls", "find", "grep", "codemode"]],
     ["generalist", ["read", "bash", "powershell", "edit", "write", "codemode"]],
-    ["ship", ["read", "bash"]],
+    ["ship", ["read", "bash", "powershell"]],
     ["validator", ["read", "bash", "powershell", "codemode"]],
   ]);
   const expectedDescriptions = new Map([
@@ -1579,7 +1579,7 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     ],
     [
       "ship",
-      "Execute explicitly authorized Git commits and pushes or GitHub pull request and release operations; use for shipping reviewed material, not authoring it",
+      "Git and GitHub specialist for authorized commits, pushes, pull requests, merges, and releases; defaults to Conventional Commits",
     ],
     [
       "validator",

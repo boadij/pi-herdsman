@@ -227,8 +227,8 @@ decisions, not user or supervisor approval.
 Executes reviewed Git commits and pushes and GitHub pull request and release
 operations. Hosting operations require an already authenticated GitHub CLI
 (`gh`); other hosting interfaces are not supported. Commit, push, PR creation,
-merge, release publication, and an exact release-body update each require
-separate explicit authorization. The Agent uses native protections and verifies
+merge, release publication, and updates to specified release fields each
+require separate explicit authorization. The Agent uses native protections and verifies
 resulting state. These are Agent instructions, not a shell sandbox or a grant of
 credentials. Repository-specific shipping and release policy remains local.
 
