@@ -250,6 +250,17 @@ concrete tasks over generic role labels. Descriptions guide selection; they do
 not grant tools or dictate workflows. Keep them accurate when overrides change
 capabilities, and qualify optional integrations.
 
+### Recognize recurring generalist work
+
+If the generalist is repeatedly selected for the same recognizable class of
+tasks, review whether the available Agent definitions cover that responsibility.
+First check whether an existing specialist is being overlooked because of an
+unclear description, selection boundary, or missing capability. Add a focused
+Agent definition only when the work has a distinct, recurring responsibility
+and specialization would meaningfully improve selection or execution.
+Generalist selection frequency alone does not establish that another Agent
+is needed.
+
 ## Create a standalone definition
 
 Create a Markdown file in the global agents directory:
