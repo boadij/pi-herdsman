@@ -8,9 +8,43 @@ export HOME="$work/home" LOG="$work/log" PROJECT="$work/project"
 export PATH="$work/bin:$PATH"
 cat >"$work/bin/docker" <<'MOCK'
 #!/usr/bin/env bash
+if [[ -n ${ts_authkey:-} || -n ${bootstrap_ts_authkey:-} ||
+      ( -n ${TS_AUTHKEY:-} && "$*" != 'compose up -d --force-recreate tailscale' ) ]]; then
+  echo 'leaked bootstrap environment' >>"$LOG"
+fi
 printf '%s\n' "$*" >>"$LOG"
 case "$*" in
-  'compose version'|info|'compose config --quiet') [[ ${INVALID:-0} != 1 || "$*" != 'compose config --quiet' ]] ;;
+  'compose version') printf 'Docker Compose version v%s\n' "${COMPOSE_MOCK_VERSION:-2.40.0}" ;;
+  info) [[ ${REQUIRE_SUDO:-0} != 1 || ${VIA_SUDO:-0} == 1 ]] ;;
+  'compose config --help')
+    printf 'Flags:\n'
+    printf '  --format string    Format the output. Values: [yaml | json]\n'
+    if [[ ${COMPOSE_MOCK_VERSION:-} != 2.20.1 ]]; then
+      printf '  --variables       Print model variables and default values\n'
+    fi ;;
+  'compose config --variables')
+    if [[ ${COMPOSE_MOCK_VERSION:-} == 2.20.1 ]]; then
+      echo 'unknown flag: --variables' >&2
+      exit 1
+    fi
+    if [[ ${RESOLVE_FAIL:-} == variables ]]; then
+      echo 'variables-stdout-secret'
+      echo 'variables-stderr-secret' >&2
+      exit 1
+    fi
+    printf '%s\n' 'CUSTOM_OVERRIDE=variables-stdout-secret' NOT_EXPORTED LD_PRELOAD NODE_OPTIONS BASH_ENV PATH ;;
+  'compose config --format json'|'compose config --format=json')
+    boundary=${VIA_SUDO:-user}
+    printf 'resolve=%s credential=%s\n' "$boundary" "${TS_AUTHKEY:+present}" >>"$LOG"
+    printf '{"services":{"herdsman":{"environment":{"CUSTOM":"%s","PUID":"%s","SSH_AUTHORIZED_KEYS":"%s","PASSWORD":"json-stdout-secret"}}}}\n' \
+      "${CUSTOM_OVERRIDE:-default}" "${PUID:-1000}" "${SSH_AUTHORIZED_KEYS:-}"
+    echo "json-stderr-secret ($boundary)" >&2
+    [[ ${RESOLVE_FAIL:-} != "$boundary" ]] ;;
+  'compose config --quiet')
+    [[ ${INVALID:-0} != 1 ]] || exit 1
+    if [[ ${EXPECT_CUSTOM:-0} == 1 ]]; then
+      [[ ${CUSTOM_OVERRIDE:-} == custom-secret ]] || exit 1
+    fi ;;
   'compose config --services') printf 'herdsman\n'; [[ ${TAILSCALE:-0} != 1 ]] || printf 'tailscale\n' ;;
   'compose ps --all --quiet herdsman') printf '%s\n' "${HERDSMAN_IDS-${IDS:-}}" ;;
   'compose ps --all --quiet tailscale') printf '%s\n' "${SIDECAR_IDS:-}" ;;
@@ -41,7 +75,11 @@ case "$*" in
       if [[ ${CREDENTIAL_PRESENT:-0} == 1 || ( ${RESTORE_RETAINS:-0} == 1 && -e ${TS_STATE:-/nonexistent} ) ]]; then printf present; fi
     else printf '%s\n' "${LABEL:-$PROJECT}"; fi ;;
   'compose port herdsman 22') echo '0.0.0.0:2222' ;;
-  'compose config --environment') : ;;
+  'compose config --environment')
+    if [[ ${COMPOSE_MOCK_VERSION:-} == 2.20.1 ]]; then
+      echo 'unknown flag: --environment' >&2
+      exit 1
+    fi ;;
   compose\ exec*)
     if [[ ${MOCK_AUTH:-0} == 1 && "$*" == *authorized_keys* ]]; then
       auth_script=${@: -1}
@@ -52,6 +90,38 @@ case "$*" in
   *) echo "unexpected docker call: $*" >&2; exit 1 ;;
 esac
 MOCK
+cat >"$work/bin/sudo" <<'MOCK'
+#!/usr/bin/env bash
+set -eu
+names=,
+if [[ "${1:-}" == --preserve-env=* ]]; then
+  names=",${1#*=},"
+  shift
+fi
+printf 'sudo preserve=%s\n' "$names" >>"$LOG"
+reject() { echo 'unsafe sudo invocation' >>"$LOG"; exit 1; }
+[[ "$1" == docker ]] || reject
+shift
+if [[ -n ${ts_authkey:-} || -n ${bootstrap_ts_authkey:-} ||
+      ( -n ${TS_AUTHKEY:-} && "$*" != 'compose up -d --force-recreate tailscale' ) ]]; then
+  echo 'leaked bootstrap environment' >>"$LOG"
+fi
+IFS=, read -ra preserved <<<"$names"
+for name in "${preserved[@]}"; do
+  case "$name" in
+    ''|COMPOSE_FILE|COMPOSE_PATH_SEPARATOR|COMPOSE_PROJECT_NAME|PUID|PGID|HERDSMAN_SSH_PORT|TAILSCALE_HOSTNAME|SSH_AUTHORIZED_KEYS|TS_AUTHKEY) ;;
+    CUSTOM_OVERRIDE) [[ ${COMPOSE_MOCK_VERSION:-} != 2.20.1 ]] || reject ;;
+    *) reject ;;
+  esac
+done
+# Simulate filtering the experimental environment inputs. Keep fixture state and
+# PATH so only the local Docker mock is reachable.
+for name in CUSTOM_OVERRIDE PUID SSH_AUTHORIZED_KEYS TS_AUTHKEY TAILSCALE_HOSTNAME; do
+  [[ "$names" == *",$name,"* ]] || unset "$name"
+done
+unset UNUSED_OVERRIDE LD_PRELOAD NODE_OPTIONS BASH_ENV
+VIA_SUDO=1 exec docker "$@"
+MOCK
 cat >"$work/bin/curl" <<'MOCK'
 #!/usr/bin/env bash
 while [[ $# -gt 0 ]]; do if [[ $1 == -o ]]; then shift; printf 'services: {}\n' >"$1"; exit; fi; shift; done
@@ -61,7 +131,7 @@ cat >"$work/bin/sleep" <<'MOCK'
 #!/usr/bin/env bash
 exit 0
 MOCK
-chmod +x "$work/bin/docker" "$work/bin/curl" "$work/bin/sleep"
+chmod +x "$work/bin/docker" "$work/bin/sudo" "$work/bin/curl" "$work/bin/sleep"
 printf 'services: {}\n' >"$PROJECT/compose.yaml"
 printf '# preserved override\n' >"$PROJECT/compose.override.yaml"
 printf '# preserved env\n' >"$PROJECT/.env"
@@ -114,18 +184,21 @@ if bash "$root/scripts/docker-setup.sh" </dev/null >"$work/output" 2>&1; then ec
 [[ ! -e "$work/target" ]]
 # A pseudo-terminal supplies real interactive answers; never generate a host key.
 run_tty() {
-  local answers=$1 output=$2
-  printf '%b' "$answers" | script -q -e -c "bash '$root/scripts/docker-setup.sh'" /dev/null >"$output" 2>&1
+  local answers=$1 output=$2 bash_options=${3:-}
+  printf '%b' "$answers" | script -q -e -c "bash $bash_options '$root/scripts/docker-setup.sh'" /dev/null >"$output" 2>&1
 }
 mkdir -p "$HOME/.ssh"
 cp "$work/test-key.pub" "$HOME/.ssh/id_ed25519.pub"
 unset SSH_AUTHORIZED_KEYS MOCK_AUTH
 export IDS= RUNNING= AUTH_HOME="$work/fresh-home"
-mkdir "$AUTH_HOME" "$work/fresh"
-cd "$work/fresh"
+mkdir "$AUTH_HOME"
 : >"$LOG"
-# Declining the only offered host key leaves a fresh home unauthorized.
-if run_tty '1\nn\n\n' "$work/decline"; then echo 'fresh setup without authorization succeeded' >&2; exit 1; fi
+# A supported fresh install still creates a missing target. Declining the
+# only offered host key leaves the fresh home unauthorized.
+if PI_HERDSMAN_DIR="$work/fresh" run_tty '1\nn\n\n' "$work/decline"; then
+  echo 'fresh setup without authorization succeeded' >&2; exit 1
+fi
+cd "$work/fresh"
 grep -q 'no authorized keys exist' "$work/decline"
 ! grep -q '^compose up -d$' "$LOG"
 [[ ! -e "$HOME/.ssh/id_ed25519" ]]
@@ -232,4 +305,136 @@ export TS_READY=1
 bash "$root/scripts/docker-setup.sh" </dev/null >"$work/repeat"
 grep -q 'Herdsman is ready' "$work/repeat"
 ! grep -Eq '^compose (up|start|run)' "$LOG"
+# Automatic sudo fallback: use the advertised config flags, not a version
+# cutoff or a failed interpolation query. v2.20.1 supports JSON, but neither
+# --variables nor --environment (docker/compose v2.20.1 cmd/compose/config.go).
+(
+  reject_match() {
+    local reason=$1 pattern=$2
+    shift 2
+    if grep -Eq -- "$pattern" "$@"; then
+      printf '%s\n' "$reason" >&2
+      exit 1
+    fi
+  }
+  check_no_secrets() {
+    reject_match 'sudo fallback leaked fixture credentials or used unsafe sudo' \
+      'json-(stdout|stderr)-secret|variables-(stdout|stderr)-secret|custom-secret|bootstrap-test-secret|leaked bootstrap environment|unsafe sudo invocation' \
+      "$LOG" "$work/sudo-output" "$work/sudo-error" "$@"
+  }
+  run_sudo_setup() {
+    : >"$LOG"
+    bash "$root/scripts/docker-setup.sh" </dev/null >"$work/sudo-output" 2>"$work/sudo-error"
+  }
+  assert_no_deployment_mutations() {
+    reject_match 'failed validation reached a deployment mutation' \
+      '^(compose (up|start|run|exec|stop|down|rm|create|pull)|stop |chown )' "$LOG"
+    cmp compose.yaml "$work/base"
+    cmp compose.override.yaml "$work/override"
+    cmp .env "$work/env"
+    [[ ! -e "$AUTH_HOME/.ssh" && ! -e "$TS_STATE" ]]
+  }
+  cd "$PROJECT"
+  export REQUIRE_SUDO=1 PUID=1234 CUSTOM_OVERRIDE=custom-secret UNUSED_OVERRIDE=unused
+  export LD_PRELOAD= NODE_OPTIONS= BASH_ENV=
+  unset NOT_EXPORTED
+  export AUTH_HOME="$work/sudo-home" TS_STATE="$work/sudo-ts-state" TS_AUTHKEY=bootstrap-test-secret
+  export SSH_AUTHORIZED_KEYS="$(<"$work/test-key.pub")" LABEL="$PROJECT" TAILSCALE_HOSTNAME=sudo-test
+  mkdir "$AUTH_HOME"
+
+  # A current plugin preserves the custom export but never unsafe or unused inputs.
+  EXPECT_CUSTOM=1 run_sudo_setup
+  grep -qx 'compose config --variables' "$LOG"
+  reject_match 'modern Compose unexpectedly resolved JSON' '^resolve=' "$LOG"
+  grep -q 'Herdsman is ready' "$work/sudo-output"
+  check_no_secrets
+
+  # A supported flag failing does not count as a legacy plugin.
+  rm -r "$AUTH_HOME/.ssh"
+  if RESOLVE_FAIL=variables run_sudo_setup; then echo 'failed variables query accepted' >&2; exit 1; fi
+  grep -qx 'compose config --variables' "$LOG"
+  reject_match 'failed variables query triggered legacy fallback' '^resolve=' "$LOG"
+  assert_no_deployment_mutations
+  check_no_secrets
+
+  export COMPOSE_MOCK_VERSION=2.20.1
+  if run_sudo_setup; then echo 'lost legacy custom override accepted' >&2; exit 1; fi
+  grep -Eiq 'differ.*sudo|sudo.*differ' "$work/sudo-error"
+  grep -Fq 'curl -fsSL https://raw.githubusercontent.com/boadij/pi-herdsman/main/scripts/docker-setup.sh | sudo bash' "$work/sudo-error"
+  [[ $(grep '^resolve=' "$LOG") == $'resolve=user credential=\nresolve=1 credential=' ]]
+  reject_match 'legacy Compose queried the unsupported flag' '^compose config --variables$' "$LOG"
+  assert_no_deployment_mutations
+  check_no_secrets
+
+  unset CUSTOM_OVERRIDE
+  for boundary in user 1; do
+    if RESOLVE_FAIL=$boundary run_sudo_setup; then echo "failed resolution accepted ($boundary)" >&2; exit 1; fi
+    grep -qx "resolve=$boundary credential=" "$LOG"
+    grep -q '^docker-setup:' "$work/sudo-error"
+    assert_no_deployment_mutations
+    check_no_secrets
+  done
+
+  # Existing registered Tailscale deployment: authorize SSH without restarting
+  # either container or using the supplied bootstrap token.
+  run_sudo_setup
+  [[ $(grep '^resolve=' "$LOG") == $'resolve=user credential=\nresolve=1 credential=' ]]
+  grep -q 'Herdsman is ready' "$work/sudo-output"
+  grep -q 'Connect with: ssh herdsman@sudo-test' "$work/sudo-output"
+  [[ $(wc -l <"$AUTH_HOME/.ssh/authorized_keys") == 1 ]]
+  reject_match 'existing deployment was restarted or recreated' '^(compose (up|start|run|stop|down|rm|create)|stop |credential=)' "$LOG"
+  check_no_secrets
+
+  # A fresh project cannot be compared before its inputs exist. Fail without
+  # publishing Compose files, .env, or a bind home.
+  mkdir "$work/sudo-fresh-mismatch"
+  cd "$work/sudo-fresh-mismatch"
+  : >"$LOG"
+  if IDS= RUNNING= run_tty '3\n' "$work/sudo-fresh-error"; then
+    echo 'fresh legacy installation unexpectedly succeeded' >&2; exit 1
+  fi
+  grep -Fq '| sudo bash' "$work/sudo-fresh-error"
+  [[ -z $(ls -A) ]]
+  reject_match 'fresh legacy installation reached deployment setup' '^(resolve=|compose (up|start|run|exec|stop)|chown )' "$LOG"
+  check_no_secrets "$work/sudo-fresh-error"
+
+  # Early refusal must not create even a missing parent or expose the supplied
+  # token through xtrace or allexport.
+  : >"$LOG"
+  if PI_HERDSMAN_DIR="$work/missing-parent/project" \
+    bash -ax "$root/scripts/docker-setup.sh" </dev/null >"$work/sudo-output" 2>"$work/sudo-error"; then
+    echo 'fresh legacy installation created a missing deployment' >&2; exit 1
+  fi
+  grep -Fq 'before publishing its inputs' "$work/sudo-error"
+  [[ ! -e "$work/missing-parent" ]]
+  reject_match 'absent legacy project reached deployment setup' '^(resolve=|compose (up|start|run|exec|stop)|chown )' "$LOG"
+  check_no_secrets
+
+  # A consented sidecar-only retry still authorizes SSH and restores the
+  # key-free sidecar and Herdsman namespace after temporary registration.
+  mkdir "$work/sudo-partial" "$work/sudo-partial-home"
+  cd "$work/sudo-partial"
+  cp "$work/base" compose.yaml
+  printf 'COMPOSE_FILE=compose.yaml:compose.tailscale.yaml\n' >.env
+  cp "$work/base" compose.tailscale.yaml
+  export AUTH_HOME="$work/sudo-partial-home" IDS=sidecar RUNNING= SIDECAR_IDS=sidecar HERDSMAN_IDS= LABEL="$PWD"
+  unset TS_READY
+  : >"$LOG"
+  run_tty 'n\n\ny\n' "$work/sudo-bootstrap-output" -ax
+  diff -u - <(grep -E '^resolve=|^compose (up|start|run)' "$LOG" | cut -d' ' -f1-5) <<'EXPECTED'
+resolve=user credential=
+resolve=1 credential=
+compose start tailscale
+compose up -d --no-recreate tailscale
+compose run --rm --no-deps -T
+compose up -d --no-recreate
+compose up -d --force-recreate tailscale
+compose up -d --force-recreate tailscale
+compose up -d --force-recreate herdsman
+EXPECTED
+  [[ $(grep '^credential=' "$LOG") == $'credential=present\ncredential=' ]]
+  cmp <(cut -d' ' -f1-2 "$work/test-key.pub") "$AUTH_HOME/.ssh/authorized_keys"
+  grep -q 'Herdsman is ready' "$work/sudo-bootstrap-output"
+  check_no_secrets "$work/sudo-bootstrap-output" .env
+)
 printf 'docker setup focused tests passed\n'
