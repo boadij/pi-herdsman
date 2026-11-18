@@ -331,10 +331,17 @@ the container keeps SSH available for recovery without changing Pi settings.
 Pi and the peer launcher may remain unusable until you remove the conflicting
 selection. Other installation validation failures still block container startup.
 
-After rebuilding, run `/reload` in each existing Pi session (or start new
-sessions) before resuming coordination. Exact runtime-build compatibility
+`pi install .` selects the checkout in place rather than copying it into Pi's
+npm package directory. The image-owned `pi-herdsman-peer` command resolves the
+bridge from the selected user-global Herdsman package on every invocation. In a
+local checkout, `npm run build` refreshes both the extension and the bridge
+without replacing the image. Run `/reload` in each existing Pi session (or
+restart it) before resuming coordination. Exact runtime-build compatibility
 checks still apply. The local package author is responsible for the checkout
 and its installed dependencies.
+
+When the launcher itself changes, recreate the container with an updated image,
+preserving the deployment's existing Compose files and persistent volumes.
 
 To switch back, remove the local selection using its path as shown by
 `pi list`, then install the published package:
