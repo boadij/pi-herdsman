@@ -96,100 +96,29 @@ Individual commits should follow the same convention, although the pull request 
 
 **In short:** Describe changes through Conventional Commits, not manual changelog entries.
 
-## Release operations
+## Maintainer releases
 
-The maintainer-only `/release` workflow runs from a source checkout. Start a
-Herdsman Lead in Herdr at the root of a clean `boadij/pi-herdsman` checkout
-with compatible Pi and Herdr versions and the GitHub CLI (`gh`). Review the
-checkout before approving it in Pi: project trust enables the
-`.pi/prompts/release.md` prompt and the project `release-drafter` Agent.
-The Git and GitHub executor `ship` is bundled with Herdsman; this workflow's
-release policy comes from the project prompt and the task it assigns to
-`ship`. In `/herdsman definitions`, confirm both Agents are enabled with
-their respective project and bundled provenance, not overridden. If the
-Lead has an explicit `agents` allowlist, include both names. Check its
-effective delegation roster separately; discovery alone does not grant
-delegation.
+Release Please and the repository's [release workflow](.github/workflows/release.yml)
+manage releases. Merging an eligible release PR into `main` can create a GitHub
+Release and publish to npm and the GitHub Container Registry (GHCR), even if
+the release notes are not updated.
 
-Use GitHub credentials with the least access needed: read access for
-`release-drafter` research; access for `ship` to inspect live repository rules,
-checks and reviews, squash-merge the upstream PR, and edit its GitHub Release
-body. Only an authorized human operator with the corresponding GitHub
-permission may approve workflows, outside `ship`. Pi trust, tool and Agent allowlists,
-and Herdsman's `permission` field do not sandbox shell credentials. Keep secrets
-out of project files and agent handoffs, and do not use credentials that bypass
-repository protections.
+Run the project-local `/release` prompt from a trusted Pi Herdsman checkout
+root in a Herdsman Lead. It coordinates verification, drafting, a guarded
+squash merge, a release-body update, and a final Discord announcement draft
+without posting it.
 
-### Verify without publishing
+Use an authenticated GitHub CLI (`gh`) and confirm the project
+`release-drafter` Agent and bundled `ship` Agent are enabled and available
+for delegation in the Lead's effective configuration.
 
-Use a fresh clone, an empty `PI_CODING_AGENT_DIR`, no GitHub credentials, and no
-resource overrides. Send only `{"type":"get_commands"}` to
-`pi --mode rpc --no-session --no-extensions --approve` and check for exactly one
-project-scope `release` prompt sourced from `.pi/prompts/release.md`. Repeat with
-`--no-approve` and confirm it is absent. In a Lead, inspect
-`/herdsman definitions` without editing: `release-drafter` should be enabled
-with project provenance only in the trusted checkout; `ship` should be enabled
-with bundled provenance in both. Check the Lead's effective delegation roster
-in each case. After building and running `npm run package:audit`, verify that
-`npm pack --dry-run --json --ignore-scripts` includes the bundled `ship`
-definition but neither `.pi/` files nor `CONTRIBUTING.md`. Do not submit
-`/release`, delegate `ship`, or make GitHub writes during verification.
+Running `/release` does not authorize mutations. The squash merge and the
+body-only update require separate explicit maintainer authorization. Only an
+authorized human operator may approve a workflow. Project trust and Agent
+tool allowlists do not isolate shell credentials.
 
-### Run a release
-
-1. Run `/release` only for an intended upstream release, with no concurrent
-   `ship` attempt or release-body editor. Before requesting grants, verify
-   from upstream workflow or repository audit evidence that the open PR was
-   created by this repository's Release Please automation. The workflow uses
-   `GITHUB_TOKEN` and does not pin a login; do not guess the actor or rely on
-   a title, label, branch name, or bot status alone. Require both sides to be
-   in upstream `boadij/pi-herdsman`, with base `main` and the expected
-   Release Please-generated head ref. At the reviewed head, confirm that
-   the manifest, package and lockfile versions, and changelog entry agree
-   with the proposed stable `v<version>` tag and release configuration.
-   Stop if the evidence is insufficient or no candidate qualifies; if
-   several qualify, resolve which one to use. Pin the verified identity,
-   refs and SHAs. Review the draft against the previous published tag through
-   the pinned base and inspect the release PR diff separately.
-2. Review the exact outgoing squash material and complete Markdown for facts,
-   breaking changes, attribution, and public disclosure. Include a deduplicated
-   **Authors** line of verified human authors and co-authors, including
-   maintainers but excluding bots and release-only metadata. Use plain
-   `@handle` text, with optional **Acknowledgments** only for distinct verified
-   contributions. Keep research and handoff notes out of the release body.
-3. Give separate explicit grants for the guarded squash of the pinned PR
-   with the reviewed title and message, and for the body-only update with
-   the exact reviewed Markdown for the resulting release. The squash grant
-   must explicitly cover the resulting push to `main`, which triggers the
-   release workflow. It can create a tag and GitHub Release through Release
-   Please and publish to npm and GHCR. Withholding or failing the body update does not stop
-   that automation. This is not a grant for direct publication by `ship`.
-   Invoking the prompt authorizes neither operation. Workflow approval
-   always requires its own direct explicit human grant. Before approving
-   outside `ship`, the
-   operator verifies true pending approval (not merely `action_required`),
-   the exact run, event, repository, PR association, and reviewed head.
-   Verify live branch protections and rulesets, required checks and reviews,
-   and mergeability; recheck all gates after workflow approval. Do not bypass
-   policy, use auto-merge, or proceed if a merge queue is required. Recheck
-   candidate provenance, version metadata, and the base and head immediately
-   before the matching-head squash. Stop if identity cannot be verified.
-   If a ref changed, stop for fresh review, a refreshed draft, and renewed
-   authorization before merging. The head guard
-   does not lock the base. Verify the resulting squash commit's parent is the
-   reviewed base; on mismatch, report the merge and withhold the notes.
-4. Poll with a bounded wait for Release Please to create the expected GitHub
-   Release. Verify that its tag resolves to the squash commit;
-   stop if the release is missing or the commit differs. Never create a
-   separate release. As soon as the tag is verified, submit one complete
-   body-only update unless the body already matches, then verify the exact
-   readback on the same release and tag. Do not wait for npm or container
-   publishing or make a follow-up edit for availability. If the write response
-   is ambiguous, read back instead of retrying; report uncertainty if the
-   intended body cannot be verified.
-5. Only after verified readback, obtain the final copy-ready Discord draft.
-   Do not post it from the workflow. Check the reported PR, required checks,
-   merge SHA, release URL, and body verification before using the draft.
+See [the release prompt](.pi/prompts/release.md) for the authoritative
+procedure and operation-specific safeguards.
 
 ## AI-assisted contributions
 
