@@ -271,6 +271,13 @@ and specialization would meaningfully improve selection or execution.
 Generalist selection frequency alone does not establish that another Agent
 is needed.
 
+For a read-only historical assessment, invoke
+`/skill:agent-specialization-audit` with the optional
+[`pi-session-inspector`](https://www.npmjs.com/package/pi-session-inspector)
+extension available in Pi. The audit compares recorded assignments with the
+current effective roster, reports incomplete coverage, and does not modify
+Agent definitions.
+
 ## Create a standalone definition
 
 Create a Markdown file in the global agents directory:

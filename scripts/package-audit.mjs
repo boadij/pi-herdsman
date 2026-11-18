@@ -34,6 +34,7 @@ const expectedRoot = new Set([
   "SKILL.md",
   "LICENSE",
   "skills/agent-definitions/SKILL.md",
+  "skills/agent-specialization-audit/SKILL.md",
 ]);
 const coordinators = new Set([
   "chief.md",
@@ -147,14 +148,25 @@ try {
     throw new Error(
       `Pi failed to load packaged skills: ${diagnostics.map(({ message, path }) => `${path}: ${message}`).join(", ")}`,
     );
-  const expectedSkill = resolve(root, "skills/agent-definitions/SKILL.md");
+  const expectedSkills = [
+    ["agent-definitions", "skills/agent-definitions/SKILL.md"],
+    [
+      "agent-specialization-audit",
+      "skills/agent-specialization-audit/SKILL.md",
+    ],
+  ];
   if (
-    skills.length !== 1 ||
-    skills[0]?.name !== "agent-definitions" ||
-    skills[0]?.filePath !== expectedSkill
+    skills.length !== expectedSkills.length ||
+    expectedSkills.some(
+      ([name, path]) =>
+        !skills.some(
+          (skill) =>
+            skill.name === name && skill.filePath === resolve(root, path),
+        ),
+    )
   )
     throw new Error(
-      `Pi package load expected skill ${expectedSkill}, loaded ${JSON.stringify(skills.map(({ name, filePath }) => ({ name, filePath })))}`,
+      `Pi package load expected skills ${JSON.stringify(expectedSkills)}, loaded ${JSON.stringify(skills.map(({ name, filePath }) => ({ name, filePath })))}`,
     );
 } finally {
   rmSync(isolated, { recursive: true, force: true });
