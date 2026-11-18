@@ -101,6 +101,18 @@ test("launcher resolves selected local packages and rejects ambiguous selections
         "npm",
       ],
       [[{ source: rel, extensions: ["./dist/index.js"] }], "local"],
+      [
+        [
+          {
+            source: rel,
+            extensions: ["+dist/index.js"],
+            skills: ["+SKILL.md", "+skills/agent-definitions/SKILL.md"],
+          },
+        ],
+        "local",
+      ],
+      [[{ source: rel, extensions: [] }], "local"],
+      [[{ source: rel, extensions: ["-dist/index.js"] }], "local"],
       [[rel, local], "local"],
       [[other, "npm:pi-herdsman"], "npm"],
       [["npm:pi-herdsman", "npm:pi-herdsman@1"], "npm"],
@@ -118,16 +130,18 @@ test("launcher resolves selected local packages and rejects ambiguous selections
       assert.match(run().stderr, /multiple Herdsman package sources/);
       assert.equal(run().status, 1);
     }
-    for (const extensions of [
-      [],
-      ["./dist/index.js", "!./dist/index.js"],
-      ["./dist/index.js", "-./dist/index.js"],
-      "./dist/index.js",
-    ]) {
+    for (const extensions of ["./dist/index.js", ["+dist/index.js", 1]]) {
       settings([{ source: local, extensions }]);
-      assert.match(run().stderr, /unsupported Herdsman extension filter/);
-      assert.equal(run().status, 1);
+      const result = run();
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /invalid Herdsman extension filter/);
     }
+
+    settings([{ source: rel, extensions: ["+dist/index.js"] }]);
+    packageAt(local, "rebuilt");
+    const rebuilt = run();
+    assert.equal(rebuilt.status, 17);
+    assert.equal(rebuilt.stdout, 'rebuilt["one","two words"]');
     settings([
       "git:https://example.invalid/repo",
       "https://example.invalid/repo",

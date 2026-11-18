@@ -35,11 +35,10 @@ try {
       }
       if (manifest.name !== "pi-herdsman") continue;
     }
-    // Accept only the known exact runtime selection; other Pi filter patterns
-    // may exclude or override it and cannot be safely inferred here.
+    // Pi interprets resource filters; the launcher only resolves the package.
     if (typeof entry === "object" && Object.hasOwn(entry, "extensions") &&
-        !(Array.isArray(entry.extensions) && entry.extensions.length === 1 && entry.extensions[0] === "./dist/index.js"))
-      throw new Error("unsupported Herdsman extension filter; select an unfiltered package");
+        (!Array.isArray(entry.extensions) || !entry.extensions.every((pattern) => typeof pattern === "string")))
+      throw new Error("invalid Herdsman extension filter");
     selected.set(npm ? "npm" : `local:${root}`, { root, npm });
   }
   if (selected.size !== 1)
