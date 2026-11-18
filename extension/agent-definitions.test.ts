@@ -1553,7 +1553,7 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     ["reviewer", ["read", "ls", "find", "grep", "codemode"]],
     ["scout", ["read", "ls", "find", "grep", "codemode"]],
     ["generalist", ["read", "bash", "powershell", "edit", "write", "codemode"]],
-    ["ship", ["read", "bash", "powershell"]],
+    ["ship", ["read", "bash", "powershell", "codemode"]],
     ["validator", ["read", "bash", "powershell", "codemode"]],
   ]);
   const expectedDescriptions = new Map([
@@ -1635,12 +1635,13 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
         "builtin:codemode",
         "npm:pi-web-access",
       ]);
-    } else if (definition.name === "ship") {
-      assert.equal(definition.frontmatter.noExtensions, true);
-      assert.equal(definition.frontmatter.extensions, undefined);
-      assert.deepEqual(definition.frontmatter.agents ?? [], []);
-    } else
+    } else {
       assert.deepEqual(definition.frontmatter.extensions, ["builtin:codemode"]);
+      if (definition.name === "ship") {
+        assert.equal(definition.frontmatter.noExtensions, true);
+        assert.deepEqual(definition.frontmatter.agents ?? [], []);
+      }
+    }
     assert.doesNotMatch(
       readFileSync(definition.path, "utf8"),
       /(?:\/(?:Users|home)\/|[A-Za-z]:\\Users\\)[^/\\\s]+/,
@@ -1673,6 +1674,22 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     definitions.filter((definition) => required.has(definition.name)).length,
     7,
   );
+});
+
+test("project release-drafter opts into native Code Mode without discovery", () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-release-drafter-"));
+  const projectRoot = resolve(import.meta.dirname, "..");
+  const definition = withPiAgentDir(root, () =>
+    discoverAgent("release-drafter", { projectRoot }),
+  );
+  assert.equal(
+    definition.projectSource,
+    join(projectRoot, ".pi", "agents", "release-drafter.md"),
+  );
+  assert.deepEqual(definition.frontmatter.tools, ["read", "bash", "codemode"]);
+  assert.deepEqual(definition.frontmatter.extensions, ["builtin:codemode"]);
+  assert.equal(definition.frontmatter.noExtensions, true);
+  assert.deepEqual(definition.frontmatter.agents, []);
 });
 
 test("enforces read-only managed launch policies and reviewer leaf projection", () => {
@@ -2697,17 +2714,15 @@ test("bundled generalist definition retains its declared tool policy", () => {
   );
 });
 
-test("bundled noExtensions Agent loads and executes native Code Mode", () => {
+test("ship loads native Code Mode without exposing unselected ordinary tools", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-codemode-launch-"));
   try {
     const agentDir = join(root, "agents");
     mkdirSync(agentDir);
-    const generalist = withPiAgentDir(agentDir, () =>
-      discoverAgent("generalist"),
-    );
+    const ship = withPiAgentDir(agentDir, () => discoverAgent("ship"));
     const prompt = join(root, "prompt.md");
     const provider = join(root, "provider.mjs");
-    writeFileSync(prompt, "Probe isolated native Code Mode.\n");
+    writeFileSync(prompt, "NATIVE_CODEMODE_EXECUTED\n");
     const piAi = import.meta.resolve("@earendil-works/pi-ai");
     writeFileSync(
       provider,
@@ -2718,8 +2733,11 @@ test("bundled noExtensions Agent loads and executes native Code Mode", () => {
         `  faux.appendResponses([response]);\n` +
         `  if (!called) {\n` +
         `    called = true;\n` +
-        `    if (!getCurrentTools(context.messages).some((tool) => tool.name === "codemode")) throw new Error("codemode was not exposed");\n` +
-        `    return fauxAssistantMessage(fauxToolCall("codemode", { code: 'text("NATIVE_CODEMODE_EXECUTED")' }), { stopReason: "toolUse" });\n` +
+        `    const names = getCurrentTools(context.messages).map((tool) => tool.name);\n` +
+        `    if (!names.includes("codemode") || names.includes("write")) throw new Error("unexpected declared tools");\n` +
+        `    return fauxAssistantMessage(fauxToolCall("codemode", { code: ${JSON.stringify(
+          `if (ALL_TOOLS.some(({ name }) => name === "write")) throw new Error("write was callable");\ntext(await tools.read({ path: ${JSON.stringify(prompt)} }));`,
+        )} }), { stopReason: "toolUse" });\n` +
         `  }\n` +
         `  const result = context.messages.find((message) => message.role === "toolResult" && message.toolName === "codemode");\n` +
         `  if (!result || result.isError || !JSON.stringify(result.content).includes("NATIVE_CODEMODE_EXECUTED")) throw new Error("native codemode result missing or failed");\n` +
@@ -2728,7 +2746,7 @@ test("bundled noExtensions Agent loads and executes native Code Mode", () => {
         `faux.setResponses([response]);\n` +
         `export default (pi) => pi.registerProvider(faux.provider);\n`,
     );
-    const args = agentLaunchArgs(generalist, {
+    const args = agentLaunchArgs(ship, {
       bodyPromptPath: prompt,
       cwd: root,
       modelDecision: {

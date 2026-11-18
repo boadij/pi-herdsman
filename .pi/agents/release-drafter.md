@@ -2,8 +2,9 @@
 name: release-drafter
 description: Research and draft verified Pi Herdsman release notes and Discord copy without publishing
 agents: []
-tools: [read, bash]
+tools: [read, bash, codemode]
 noExtensions: true
+extensions: [builtin:codemode]
 noSkills: true
 inheritProjectContext: true
 inheritAncestorContext: false
