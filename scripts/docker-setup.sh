@@ -4,6 +4,7 @@ set -Eeuo pipefail
 die() { printf 'docker-setup: %s\n' "$*" >&2; exit 1; }
 tmp_files=()
 compose_extra_names=()
+ts_bootstrap_active=0
 sidecar_credential() {
   # Expose only a marker, never the environment or the credential itself.
   docker_cmd inspect --format '{{range .Config.Env}}{{if eq (index (split . "=") 0) "TS_AUTHKEY"}}{{if ne . "TS_AUTHKEY="}}present{{end}}{{end}}{{end}}' "$1"
@@ -17,7 +18,7 @@ sidecar_key_free() {
 }
 cleanup() {
   if [[ "${ts_bootstrap_active:-0}" == 1 ]]; then
-    unset TS_AUTHKEY ts_authkey bootstrap_ts_authkey
+    unset TS_AUTHKEY ts_authkey
     if ! docker_cmd compose up -d --force-recreate tailscale || ! sidecar_key_free; then
       printf 'docker-setup: ERROR: failed to restore key-free Tailscale configuration; stopping the sidecar.\n' >&2
       if docker_cmd compose stop tailscale; then
@@ -35,14 +36,31 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
+# Keep the bootstrap token out of traces and child environments until needed.
+shell_flags=$-
+set +x
+ts_authkey="${TS_AUTHKEY:-}"
+export -n ts_authkey
+unset TS_AUTHKEY
+if [[ "$shell_flags" == *x* ]]; then set -x; fi
+
 if [[ -n "${PI_HERDSMAN_DIR:-}" ]]; then
   project_dir=$PI_HERDSMAN_DIR
 else
   project_dir=$(pwd -P) || die "current directory is inaccessible; cd into an existing directory and rerun setup."
 fi
-mkdir -p -- "$project_dir" || die "cannot create deployment directory: $project_dir"
-cd -- "$project_dir" || die "cannot enter deployment directory: $project_dir"
-project_dir="$(pwd -P)"
+enter_project() {
+  cd -- "$project_dir" || die "cannot enter deployment directory: $project_dir"
+  project_dir="$(pwd -P)"
+}
+project_missing=0
+if [[ -d "$project_dir" ]]; then
+  enter_project
+elif [[ -e "$project_dir" || -L "$project_dir" ]]; then
+  die "cannot enter deployment directory: $project_dir"
+else
+  project_missing=1
+fi
 
 command -v docker >/dev/null || die "Docker CLI is required; install Docker Desktop or Docker Engine first."
 use_sudo=0
@@ -71,13 +89,37 @@ if ! docker info >/dev/null 2>&1; then
   docker_cmd compose version >/dev/null && docker_cmd info >/dev/null || die "Docker engine is unavailable or sudo denied preserving required environment names; grant direct Docker access or allow the requested sudo --preserve-env names."
 fi
 
+legacy_compose=0
+sudo_invocation='From the deployment directory, rerun with: curl -fsSL https://raw.githubusercontent.com/boadij/pi-herdsman/main/scripts/docker-setup.sh | sudo bash'
+if (( use_sudo )); then
+  # Help probes the CLI, not the project. Do not treat a resolution error as
+  # evidence that the option is unsupported.
+  compose_help=$(docker compose config --help 2>/dev/null) &&
+    grep -Eq '^[[:space:]]*(Flags|Options):[[:space:]]*$' <<<"$compose_help" ||
+    die "cannot determine whether Docker Compose supports config --variables."
+  if ! grep -Eq '^[[:space:]]+--variables([[:space:]]|$)' <<<"$compose_help"; then
+    legacy_compose=1
+  fi
+  unset compose_help
+fi
+
+require_fresh_support() {
+  (( ! legacy_compose )) ||
+    die "cannot compare a fresh Compose configuration across the sudo boundary before publishing its inputs. $sudo_invocation"
+}
+if (( project_missing )); then
+  # The checks above probe Docker, not the project, so an unsupported fresh
+  # install can be refused without creating the target or its parents.
+  require_fresh_support
+  mkdir -p -- "$project_dir" || die "cannot create deployment directory: $project_dir"
+  enter_project
+fi
+
 env_file=.env
 # Do not execute .env. Reject persistent Tailscale bootstrap secrets before setup changes.
 if [[ -f "$env_file" ]] && grep -Eq '^[[:space:]]*(export[[:space:]]+)?TS_AUTHKEY[[:space:]]*=[[:space:]]*[^[:space:]#]' "$env_file"; then
   die "remove TS_AUTHKEY from .env; supply it temporarily when prompted."
 fi
-bootstrap_ts_authkey="${TS_AUTHKEY:-}"
-unset TS_AUTHKEY
 parse_compose_value() {
   local value=$1 quote= char previous= i
   value="$(printf '%s' "$value" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
@@ -120,6 +162,7 @@ else
   for candidate in compose.override.yaml compose.override.yml docker-compose.override.yaml docker-compose.override.yml; do
     [[ ! -e "$candidate" ]] || die "incomplete Compose configuration: $candidate exists without a base file."
   done
+  require_fresh_support
   fresh_install=1
   [[ -t 0 ]] && tty=/dev/stdin || tty=/dev/tty
   [[ -r "$tty" ]] || die "interactive terminal required to choose deployment mode."
@@ -179,9 +222,28 @@ if (( fresh_install )) && [[ "$selection" != compose.yaml ]]; then
   fi
 fi
 
-# Ask Compose which shell variables its model interpolates. Preserve names,
-# never values, through sudo; do not expose privileged command-loader controls.
-if (( use_sudo )); then
+compare_compose_across_sudo() (
+  # Keep resolved values out of trace output and off disk. The final marker
+  # preserves trailing newlines that command substitution would otherwise strip.
+  set +ax
+  shopt -u nocasematch
+  local +x invoking_json elevated_json
+  invoking_json=$(docker compose config --format json 2>/dev/null && printf .) &&
+    [[ "$invoking_json" != . ]] ||
+    die "could not resolve Docker Compose configuration as the invoking user. $sudo_invocation"
+  elevated_json=$(docker_cmd compose config --format json 2>/dev/null && printf .) &&
+    [[ "$elevated_json" != . ]] ||
+    die "could not resolve Docker Compose configuration through sudo. $sudo_invocation"
+  [[ "$invoking_json" == "$elevated_json" ]] ||
+    die "resolved Docker Compose configurations differ across the sudo boundary. $sudo_invocation"
+)
+
+if (( legacy_compose )); then
+  # No additional names are preserved on this path.
+  compare_compose_across_sudo
+elif (( use_sudo )); then
+  # Preserve only exported names Compose interpolates, excluding privileged
+  # command-loader controls.
   compose_variables=$(docker compose config --variables 2>/dev/null) || die "cannot determine Compose interpolation variables; grant direct Docker access or use a Compose version supporting config --variables."
   declare -A exported_names=()
   while IFS= read -r name; do exported_names["$name"]=1; done < <(compgen -e)
@@ -195,8 +257,8 @@ if (( use_sudo )); then
   done <<<"$compose_variables"
   unset compose_variables exported_names
 fi
-docker_cmd compose config --quiet || die "invalid or missing Docker Compose configuration."
-services=$(docker_cmd compose config --services) || die "cannot list Compose services."
+docker_cmd compose config --quiet 2>/dev/null || die "invalid or missing Docker Compose configuration."
+services=$(docker_cmd compose config --services 2>/dev/null) || die "cannot list Compose services."
 grep -Fxq herdsman <<<"$services" || die "Compose configuration does not contain the herdsman service."
 container_ids=$(docker_cmd compose ps --all --quiet) || die "could not inspect existing Compose project containers."
 while IFS= read -r container_id; do
@@ -481,7 +543,7 @@ if (( tailscale_enabled )); then
     sleep 2
   done
   if (( ! authenticated )); then
-    ts_authkey=$bootstrap_ts_authkey
+    set +x
     if [[ -z "$ts_authkey" ]]; then
       [[ -r /dev/tty ]] || die "Tailscale registration is required; rerun interactively to provide an auth key."
       printf 'Tailscale auth key (input hidden): ' >/dev/tty
@@ -490,14 +552,14 @@ if (( tailscale_enabled )); then
     fi
     [[ -n "$ts_authkey" ]] || die "Tailscale auth key is required."
     export TS_AUTHKEY="$ts_authkey"
+    unset ts_authkey
+    if [[ "$shell_flags" == *x* ]]; then set -x; fi
     ts_bootstrap_active=1
     docker_cmd compose up -d --force-recreate tailscale || bootstrap_status=$?
     unset TS_AUTHKEY
     if [[ "${bootstrap_status:-0}" != 0 ]]; then
-      unset ts_authkey bootstrap_ts_authkey
       die "Tailscale bootstrap failed; restoring the key-free sidecar and Herdsman namespace."
     fi
-    unset ts_authkey bootstrap_ts_authkey
     authenticated=0
     for _ in {1..30}; do
       if docker_cmd compose exec --interactive=false -T tailscale tailscale status --json 2>/dev/null | grep -Eq '"BackendState"[[:space:]]*:[[:space:]]*"Running"'; then authenticated=1; break; fi
