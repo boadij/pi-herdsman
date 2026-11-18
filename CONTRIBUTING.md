@@ -96,6 +96,30 @@ Individual commits should follow the same convention, although the pull request 
 
 **In short:** Describe changes through Conventional Commits, not manual changelog entries.
 
+## Maintainer releases
+
+Release Please and the repository's [release workflow](.github/workflows/release.yml)
+manage releases. Merging an eligible release PR into `main` can create a GitHub
+Release and publish to npm and the GitHub Container Registry (GHCR), even if
+the release notes are not updated.
+
+Run the project-local `/release` prompt from a trusted Pi Herdsman checkout
+root in a Herdsman Lead. It coordinates verification, drafting, a guarded
+squash merge, a release-body update, and a final Discord announcement draft
+without posting it.
+
+Use an authenticated GitHub CLI (`gh`) and confirm the project
+`release-drafter` Agent and bundled `ship` Agent are enabled and available
+for delegation in the Lead's effective configuration.
+
+Running `/release` does not authorize mutations. The squash merge and the
+body-only update require separate explicit maintainer authorization. Only an
+authorized human operator may approve a workflow. Project trust and Agent
+tool allowlists do not isolate shell credentials.
+
+See [the release prompt](.pi/prompts/release.md) for the authoritative
+procedure and operation-specific safeguards.
+
 ## AI-assisted contributions
 
 AI-assisted contributions are welcome, but contributors remain responsible for understanding, reviewing, and testing the code they submit.

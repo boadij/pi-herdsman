@@ -325,7 +325,7 @@ discovered above it, and global context comes from Pi's agent directory.
 When all three scopes are enabled Pi's native discovery remains active;
 otherwise Herdsman selectively appends only enabled scopes.
 
-All six bundled Agents and the bundled `managed-lead` select project-only
+The bundled Agents and the bundled `managed-lead` select project-only
 inheritance: global and ancestor scopes are disabled, project scope is enabled.
 These are defaults, not restrictions. Matching higher-precedence definition
 overrides can enable or disable any scope; omitted values inherit the effective
