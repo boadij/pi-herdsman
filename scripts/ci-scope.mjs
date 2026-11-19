@@ -66,7 +66,6 @@ function classify(paths) {
 
     if (
       path === "README.md" ||
-      path === "SKILL.md" ||
       path === "LICENSE" ||
       path.startsWith("docs/") ||
       path.startsWith("skills/")
