@@ -18,8 +18,8 @@ roster. Do not create a parallel definition engine.
    merely the active Pi cwd. Also inspect the applicable Herdr configuration
    for `worktrees.directory` (default `~/.herdr/worktrees`; honor
    `HERDR_CONFIG_PATH` when set). Include its
-   `<worktrees.directory>/<repository-name>/` prefix as a **path-based
-   candidate** for former worktrees, even if the checkouts no longer exist.
+   `<worktrees.directory>/<repository-name>/` prefix as a historical path
+   candidate for former worktrees, even if the checkouts no longer exist.
    Accept other known historical locations when supplied. Directory names
    alone cannot prove former Git repository membership; distinguish these
    candidates from currently registered worktrees. If no Git repository can
@@ -42,7 +42,7 @@ roster. Do not create a parallel definition engine.
    session_inspect(action="tools", history="all-projects", cwdPrefixes=[...absoluteRoots], tool="continue_agent", sessionLimit=25, limit=20)
    ```
 
-   For an explicit audit of *all* accessible projects, omit `cwdPrefixes`.
+   For an explicit audit of _all_ accessible projects, omit `cwdPrefixes`.
    For a non-Git cwd-only audit, use `history="project"` instead. Follow
    `nextCursor` as `cursor` with the same scope, tool, and prefixes until
    exhausted or the stated work budget is reached. Avoid repeated cursors.
@@ -104,8 +104,8 @@ Lead with the selected roots and their provenance (current Git membership or
 historical path inference), inspected and excluded session/file counts, calls
 versus verified assignments, fork/continuation caveats, pagination status,
 and incomplete coverage. Local Pi history cannot establish coverage of other
-machines, agent directories, or deleted session files. Do not claim a complete history when a page failed
-or examples were sampled.
+machines, agent directories, or deleted session files. Do not claim a
+complete history when a page failed or examples were sampled.
 
 For each _material_ opportunity, report:
 
