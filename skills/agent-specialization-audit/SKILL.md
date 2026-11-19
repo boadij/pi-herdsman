@@ -26,8 +26,9 @@ roster. Do not create a parallel definition engine.
    be established, use the current Pi project scope and report the limitation.
 2. Check whether the optional `session_inspect` tool is available. If absent,
    explain that [pi-session-inspector](https://www.npmjs.com/package/pi-session-inspector)
-   is optional; do not install it silently or invent results. For repository
-   scope use `history="all-projects"` with `cwdPrefixes` containing the
+   is optional and can be installed with `pi install npm:pi-session-inspector`
+   followed by a Pi reload. Do not install it silently or invent results.
+   For repository scope use `history="all-projects"` with `cwdPrefixes` containing the
    normalized, absolute selected roots. This is a **filtered local search**,
    not permission to audit unrelated projects. Collapse redundant child
    prefixes; split into batches if the tool's prefix limit requires it, and
