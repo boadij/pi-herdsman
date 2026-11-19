@@ -36,6 +36,7 @@ const expectedRoot = new Set([
   "skills/agent-definitions/SKILL.md",
   "skills/agent-specialization-audit/SKILL.md",
   "skills/machine-pairing/SKILL.md",
+  "skills/herdsman-guide/SKILL.md",
 ]);
 const coordinators = new Set([
   "chief.md",
@@ -155,6 +156,7 @@ try {
       "agent-specialization-audit",
       "skills/agent-specialization-audit/SKILL.md",
     ],
+    ["herdsman-guide", "skills/herdsman-guide/SKILL.md"],
     ["machine-pairing", "skills/machine-pairing/SKILL.md"],
   ];
   if (
