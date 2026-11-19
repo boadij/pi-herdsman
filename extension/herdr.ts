@@ -1239,6 +1239,8 @@ export type StartHerdrOptions = {
   placementRevalidator?: (
     placement: HerdrStartPlacement,
   ) => Promise<HerdrStartPlacement>;
+  // Synchronous final authorization of the launch cwd after placement awaits.
+  assertLaunchAuthorized?: (cwd: string) => void;
   agentArgs?: string[];
   env?: string[];
   timeoutMs?: number;
@@ -1248,7 +1250,11 @@ export type StartHerdrOptions = {
 
 export type StartHerdrInPaneOptions = Omit<
   StartHerdrOptions,
-  "placement" | "placementRevalidator" | "direction" | "env"
+  | "placement"
+  | "placementRevalidator"
+  | "assertLaunchAuthorized"
+  | "direction"
+  | "env"
 > & {
   primaryWorkspaceId: string;
   workspaceId: string;
@@ -1612,6 +1618,7 @@ export async function startHerdrAgent(
     if (!tab) {
       if (placement.kind !== "tab")
         error("start", "cannot create a tab for split placement");
+      options.assertLaunchAuthorized?.(cwd);
       const made = await runHerdr(
         pi,
         ctx,
@@ -1669,6 +1676,7 @@ export async function startHerdrAgent(
                 startupDeadline,
                 options.signal,
               );
+        options.assertLaunchAuthorized?.(cwd);
         const split = await runHerdr(
           pi,
           ctx,
@@ -1775,6 +1783,7 @@ export async function startHerdrAgent(
       const remaining = startupCallTimeout(startupDeadline, childTimeout);
       if (remaining < HERDR_START_TIMEOUT_MIN)
         error("start", "startup deadline exhausted before agent start");
+      options.assertLaunchAuthorized?.(cwd);
       try {
         started = await runHerdr(
           pi,

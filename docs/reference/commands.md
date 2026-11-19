@@ -68,13 +68,16 @@ Selecting `Agents & definitions` opens `Running agents`, `Agent definitions`,
 Agent status or definitions to render.
 
 `Settings` groups controls under `Sessions & agents`, `Manager & repositories`,
-and `Interface`. These contain, respectively:
+`Interface`, and `Delegation options`. These contain, respectively:
 
 - `Default Lead mode`, `Context retirement`, `Maximum delegation depth`, and
   `Message size limits`;
 - `Manager auto-start`, `Git initialization prompt`, `Local branch integration`,
   and `Worktree removal approval`;
-- `Agent pane layout` and `Status widget rows`.
+- `Agent pane layout` and `Status widget rows`;
+- [`Working directory override`](configuration.md#schema-and-defaults),
+  a global Off/On setting. Run `/reload` after changing it to refresh the
+  delegation tool schema.
 
 The default Lead mode applies only when a future ordinary Lead session has no
 persisted execution choice; changing it does not change the current session.

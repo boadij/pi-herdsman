@@ -245,6 +245,7 @@ test("Settings categories and Agents & definitions retain their selections", asy
     "Sessions & agents",
     "Manager & repositories",
     "Interface",
+    "Delegation options",
   ]);
   assert.equal(calls[2]?.selected, "manager");
   assert.equal(calls[4]?.selected, "interface");
@@ -683,6 +684,63 @@ test("Settings categories expose only canonical entries and unavailable reposito
     ).description,
     "Repository unavailable",
   );
+});
+
+test("Working directory override shows the current choice and persists globally", async () => {
+  const config = { ...readConfig(), allowAgentCwdOverride: false };
+  const writes: unknown[][] = [];
+  const notices: string[] = [];
+  const attempts = ["off", "on", "off", undefined];
+  const runtime = createLeadCommandRuntime({
+    readConfig: () => ({ ...config }),
+    updateConfig: (key: string, value: boolean) => {
+      writes.push([key, value]);
+      config.allowAgentCwdOverride = value;
+    },
+    selectMenu: async (
+      _ctx: unknown,
+      title: string,
+      items: { value: string; label: string; description?: string }[],
+      selected: string,
+    ) => {
+      if (title === "Delegation options") {
+        assert.deepEqual(
+          items.map((item) => item.value),
+          ["cwd-override"],
+        );
+        assert.equal(selected, "cwd-override");
+        assert.equal(
+          items[0]?.description,
+          config.allowAgentCwdOverride ? "On (global)" : "Off (global)",
+        );
+        return attempts.length ? "cwd-override" : undefined;
+      }
+      assert.equal(title, "Working directory override");
+      assert.deepEqual(
+        items.map((item) => item.label),
+        ["Off", "On"],
+      );
+      assert.equal(selected, config.allowAgentCwdOverride ? "on" : "off");
+      assert.equal(
+        items.find((item) => item.value === selected)?.description,
+        "current",
+      );
+      return attempts.shift();
+    },
+  } as any);
+  await runtime.openSettingsCategory(
+    {
+      isProjectTrusted: () => false,
+      ui: { notify: (message: string) => notices.push(message) },
+    } as any,
+    "delegation",
+  );
+  assert.deepEqual(writes, [
+    ["allowAgentCwdOverride", true],
+    ["allowAgentCwdOverride", false],
+  ]);
+  assert.equal(notices.length, writes.length);
+  for (const notice of notices) assert.match(notice, /\/reload/);
 });
 
 test("Project setting combines scopes and skips unchanged values", async () => {

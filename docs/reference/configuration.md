@@ -47,6 +47,7 @@ schema is:
 {
   "statusWidgetMaxRows": 8,
   "maxAgentDepth": 2,
+  "allowAgentCwdOverride": false,
   "defaultLeadExecution": "flexible",
   "spawnPlacement": "subtree",
   "contextRetirement": true,
@@ -66,6 +67,7 @@ An absent file means these defaults:
 | ---------------------------------------- | -----------------: | ----------------------------------------------------------------------------- |
 | `statusWidgetMaxRows`                    |                `8` | integer from 1 through 100; global-only                                       |
 | `maxAgentDepth`                          |                `2` | positive integer; global-only; maximum agent nesting depth                    |
+| `allowAgentCwdOverride`                  |              false | boolean; global-only                                                          |
 | `defaultLeadExecution`                   |         `flexible` | `flexible`, `orchestrate`                                                     |
 | `spawnPlacement`                         |          `subtree` | `tab`, `subtree`, `split`                                                     |
 | `contextRetirement`                      |               true | boolean                                                                       |
@@ -111,6 +113,13 @@ and stay listable, inspectable, stoppable, and recoverable; an agent already at
 or beyond the lowered limit is refused further delegation with an error naming
 `maxAgentDepth`. Each agent still needs `agents` in its definition to
 delegate.
+
+`allowAgentCwdOverride` is a user-wide opt-in for the optional
+[`delegate_agent` working-directory override](agent.md#delegate_agent).
+Change it under `/herdsman` → `Settings` → `Delegation options` →
+`Working directory override`, then run `/reload` to refresh the tool schema.
+Disabling it takes effect for launches using an explicit `cwd` without
+waiting for a reload. Project settings cannot enable it.
 
 `defaultLeadExecution` selects the initial profile only for a future ordinary
 Lead session that has no persisted execution choice. Its values select
