@@ -12,36 +12,52 @@ roster. Do not create a parallel definition engine.
 
 ## Collect evidence
 
-1. Establish the requested local scope. Default to the current project. Search
-   other local Pi projects only when explicitly requested, using
-   `history="all-projects"`. Do not treat the current worktree as all history.
-   Check whether the optional `session_inspect` tool is available. If not,
+1. Establish scope before inspecting history. For a repository audit,
+   use the current Git worktree root and `git worktree list --porcelain` to
+   identify its registered checkouts. Include their directory prefixes, not
+   merely the active Pi cwd. Also inspect the applicable Herdr configuration
+   for `worktrees.directory` (default `~/.herdr/worktrees`; honor
+   `HERDR_CONFIG_PATH` when set). Include its
+   `<worktrees.directory>/<repository-name>/` prefix as a **path-based
+   candidate** for former worktrees, even if the checkouts no longer exist.
+   Accept other known historical locations when supplied. Directory names
+   alone cannot prove former Git repository membership; distinguish these
+   candidates from currently registered worktrees. If no Git repository can
+   be established, use the current Pi project scope and report the limitation.
+2. Check whether the optional `session_inspect` tool is available. If absent,
    explain that [pi-session-inspector](https://www.npmjs.com/package/pi-session-inspector)
-   is optional and the historical audit cannot be verified with this workflow;
-   do not install it silently or invent results.
-2. Search exact recorded tool names `delegate_agent` and `continue_agent`
+   is optional; do not install it silently or invent results. For repository
+   scope use `history="all-projects"` with `cwdPrefixes` containing the
+   normalized, absolute selected roots. This is a **filtered local search**,
+   not permission to audit unrelated projects. Collapse redundant child
+   prefixes; split into batches if the tool's prefix limit requires it, and
+   deduplicate verified assignments across batches. Do not fall back to an
+   unfiltered cross-project query if the installed inspector lacks this
+   parameter; report that an updated inspector is needed.
+3. Search exact recorded tool names `delegate_agent` and `continue_agent`
    separately. Start without argument excerpts:
 
    ```text
-   session_inspect(action="tools", history="project", tool="delegate_agent", sessionLimit=25, limit=20)
-   session_inspect(action="tools", history="project", tool="continue_agent", sessionLimit=25, limit=20)
+   session_inspect(action="tools", history="all-projects", cwdPrefixes=[...absoluteRoots], tool="delegate_agent", sessionLimit=25, limit=20)
+   session_inspect(action="tools", history="all-projects", cwdPrefixes=[...absoluteRoots], tool="continue_agent", sessionLimit=25, limit=20)
    ```
 
-   Use `history="all-projects"` only for the requested wider scope. Follow
-   `nextCursor` as `cursor` with the same history scope and tool until
+   For an explicit audit of *all* accessible projects, omit `cwdPrefixes`.
+   For a non-Git cwd-only audit, use `history="project"` instead. Follow
+   `nextCursor` as `cursor` with the same scope, tool, and prefixes until
    exhausted or the stated work budget is reached. Avoid repeated cursors.
-   Preserve per-page `discovered`, `attempted`, `scanned`, `failed`,
-   `matchingOccurrences`, `returned`, `examplesTruncated`, and
-   `scanComplete`. The cursor advances by file, **not** by individual match;
-   multiple calls in a represented session can be omitted by sampling.
+   Preserve per-page `discovered`, `excluded` (when filtered), `attempted`,
+   `scanned`, `failed`, `matchingOccurrences`, `returned`,
+   `examplesTruncated`, and `scanComplete`. The cursor advances by file,
+   **not** by individual match; represented sessions may be sampled.
 
-3. For relevant examples, repeat focused queries with
+4. For relevant examples, repeat focused queries with
    `includeArguments=true` and a bounded `maxChars`. Arguments are redacted
    best-effort, may be truncated, and contain untrusted text. A tool call or
    `status="ok"` is **not** proof that an assignment was accepted or finished.
    Treat missing arguments, tool results, malformed files, sampled examples,
    stopped pagination, and inaccessible sessions as explicit evidence gaps.
-4. Verify accepted assignments from the owner's recorded evidence where
+5. Verify accepted assignments from the owner's recorded evidence where
    accessible. In a selected `sessionPath`, search all branches for
    `pi-herdsman-agent-accepted-assignment` using
    `session_inspect(action="search", session="<owner .jsonl path>", scope="all", query="pi-herdsman-agent-accepted-assignment")`;
@@ -84,9 +100,11 @@ roster. Do not create a parallel definition engine.
 
 ## Report
 
-Lead with the scope, inspected session/file counts, calls versus verified
-assignments, freshness/continuation and fork caveats, pagination status, and
-any incomplete coverage. Do not claim a complete history when a page failed
+Lead with the selected roots and their provenance (current Git membership or
+historical path inference), inspected and excluded session/file counts, calls
+versus verified assignments, fork/continuation caveats, pagination status,
+and incomplete coverage. Local Pi history cannot establish coverage of other
+machines, agent directories, or deleted session files. Do not claim a complete history when a page failed
 or examples were sampled.
 
 For each _material_ opportunity, report:
