@@ -59,7 +59,7 @@ authored the fix. Corrections and additions are welcome.
 
 - **[@teddyhwang](https://github.com/teddyhwang)** - Identified shell-tool guidance given to Agents without shell access ([issue #395](https://github.com/boadij/pi-herdsman/issues/395); follow-up [PR #396](https://github.com/boadij/pi-herdsman/pull/396)).
 
-- **[@teicheld](https://github.com/teicheld)** - Traced Chief's inability to discover ordinary Leads outside Git repositories ([issue #918](https://github.com/boadij/pi-herdsman/issues/918); follow-up [PR #937](https://github.com/boadij/pi-herdsman/pull/937)).
+- **[@teicheld](https://github.com/teicheld)** - Traced Chief's inability to discover ordinary Leads outside Git repositories and reproduced Manager-to-Chief reply delivery failures on a fresh default installation ([issue #918](https://github.com/boadij/pi-herdsman/issues/918), [issue #1045](https://github.com/boadij/pi-herdsman/issues/1045); follow-up [PR #937](https://github.com/boadij/pi-herdsman/pull/937), [PR #1050](https://github.com/boadij/pi-herdsman/pull/1050)).
 
 - **[@tsubus](https://github.com/tsubus)** - Reported repeated invalid delegation attempts that exposed a tool-input regression ([issue #146](https://github.com/boadij/pi-herdsman/issues/146); follow-up [PR #148](https://github.com/boadij/pi-herdsman/pull/148)).
 
