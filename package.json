@@ -42,7 +42,6 @@
       "./dist/index.js"
     ],
     "skills": [
-      "./SKILL.md",
       "./skills"
     ],
     "image": "https://raw.githubusercontent.com/boadij/pi-herdsman/main/docs/assets/thumbnail.webp"
@@ -102,7 +101,6 @@
   "files": [
     "README.md",
     "CHANGELOG.md",
-    "SKILL.md",
     "LICENSE",
     "docs",
     "dist",
