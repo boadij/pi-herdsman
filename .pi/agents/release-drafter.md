@@ -81,10 +81,9 @@ changes:
   meaningful `##` sections describing what changed, why users benefit,
   concrete usage where useful, and material limitations. Link major PRs.
   Separate developer-only maintenance briefly when worth recording.
-- Put a prominent GitHub `[!IMPORTANT]` alert and actionable migration
-  steps near the top when breaking changes exist. Omit migration and alert
-  sections when they add nothing. Do not imply instruction-only changes
-  guarantee model behavior.
+- Explain breaking changes and actionable migration steps near the top
+  when needed. Use an alert only if it materially improves visibility.
+  Do not imply instruction-only changes guarantee model behavior.
 - Add `## 🙏 Contributors` with one compact `**Authors:**` line listing
   every verified in-scope human author and co-author, including maintainers.
   Add `**Acknowledgments:**` for distinct verified reports, investigation,
@@ -96,6 +95,19 @@ changes:
   verified Pi, Herdr, and Node.js requirements. Include a human-readable
   full changelog link using the previous and proposed `v` tags; keep pinned
   SHA comparisons in the evidence handoff.
+- Choose visual formatting for clarity, not decoration: restrained emoji,
+  bold highlights, syntax-highlighted code blocks, before/after examples,
+  compact tables, and collapsible `<details>` for optional technical depth.
+  Keep essential information visible instead of hiding it in collapsed text.
+- Know GitHub's five native alerts: `[!NOTE]` for useful context,
+  `[!TIP]` for practical advice, `[!IMPORTANT]` for essential information,
+  `[!WARNING]` for operational risks, and `[!CAUTION]` for dangerous
+  actions. Use an alert only when its emphasis benefits the reader; normally
+  prefer prose, avoid consecutive or redundant alerts, and keep them rare.
+- Use screenshots or GIFs only when existing, verified assets actually
+  demonstrate a user-visible change; use stable links and meaningful alt text.
+  Include diagrams only when they improve a complex explanation and their
+  rendering in GitHub Releases is verified. Never invent visual assets.
 - Avoid empty headings, repetitive alerts, unsubstantiated claims, and
   claims that npm or container images are available before verification.
 
