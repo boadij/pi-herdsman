@@ -278,3 +278,143 @@ test("Managed supervisor messages never fall through when the active role is not
   assert.equal(assignmentLookups, 0);
   assert.equal(projectPublications, 0);
 });
+
+test("supervisor message authority and transitions", async (t) => {
+  for (const scenario of [
+    "manager",
+    "lead",
+    "manager-preparation",
+    "chief-preparation",
+    "role-preparation",
+    "manager-queue",
+    "failure-report",
+  ] as const) {
+    await t.test(scenario, async () => {
+      const managerLeaseId = randomUUID();
+      const chiefLeaseId = randomUUID();
+      const sessionId = randomUUID();
+      const chiefSessionId = randomUUID();
+      let role = scenario === "lead" ? "lead" : "manager";
+      let manager = { leaseId: managerLeaseId };
+      let chief = { leaseId: chiefLeaseId, piSessionId: chiefSessionId };
+      const prepared: any[] = [];
+      const written: any[] = [];
+      const context = fakeContext([
+        {
+          type: "custom",
+          id: randomUUID(),
+          parentId: null,
+          timestamp: new Date().toISOString(),
+          customType: "pi-herdsman-session-kind",
+          data: { version: 1, sessionId, kind: "ordinary" },
+        },
+      ] as SessionEntry[]) as any;
+      context.sessionManager.getSessionId = () => sessionId;
+      const leadRuntime = {
+        chiefMode: "inactive",
+        controllerRole: role,
+        managerLease: { descriptor: manager },
+      };
+      let supervisorCalls = 0;
+      const host = new Proxy(
+        {
+          pi: {},
+          leadRuntime,
+          controllerScope: { kind: "root" },
+          activeRole: () => role,
+          currentSupervisor: async () => {
+            supervisorCalls++;
+            if (scenario === "manager-queue" && supervisorCalls === 3) {
+              manager = { leaseId: randomUUID() };
+              leadRuntime.managerLease.descriptor = manager;
+            }
+            return chief;
+          },
+          currentManager: async () => manager,
+          supervisionRuntime: () => ({}),
+          leadInstanceId: () => "instance",
+          readLeadCoordinationState: () => ({
+            instanceId: "instance",
+            piSessionId: sessionId,
+            build: HERDSMAN_BUILD,
+            role,
+          }),
+          sameRuntimeBuild: () => true,
+          HERDSMAN_BUILD,
+          resolveMessageFiles: () => [],
+          messageLimits: async () => {
+            if (scenario === "manager-preparation") {
+              manager = { leaseId: randomUUID() };
+              leadRuntime.managerLease.descriptor = manager;
+            }
+            if (scenario === "chief-preparation")
+              chief = { leaseId: randomUUID(), piSessionId: randomUUID() };
+            if (scenario === "role-preparation") role = "lead";
+            return { inline: { bytes: 100000 }, mailbox: { bytes: 100000 } };
+          },
+          chiefMessageBytes: (record: unknown) => {
+            prepared.push(record);
+            return 1;
+          },
+          writeChiefMessage: (record: unknown) => written.push(record),
+        },
+        {
+          get(target, key: string) {
+            return key in target
+              ? target[key as keyof typeof target]
+              : () => undefined;
+          },
+        },
+      ) as any;
+      const runtime = createLeadCoordinationRuntime(host);
+      const reportId = randomUUID();
+      const operation =
+        scenario === "failure-report"
+          ? runtime.queueChiefRecord(
+              "manager_message",
+              "failure",
+              context,
+              reportId,
+              undefined,
+              undefined,
+              undefined,
+              [],
+              undefined,
+              null,
+            )
+          : runtime.supervisorMessage(
+              "message",
+              { message: "hello" },
+              undefined,
+              undefined,
+              context,
+            );
+      if (scenario.includes("preparation") || scenario === "manager-queue") {
+        await assert.rejects(
+          operation,
+          /lease is no longer active|Supervisor authority is no longer active|Coordinator role changed/,
+        );
+        assert.equal(written.length, 0);
+        return;
+      }
+      const result = await operation;
+      assert.equal(written.length, 1);
+      assert.equal(
+        written[0].kind,
+        scenario === "lead" ? "lead_message" : "manager_message",
+      );
+      assert.equal(
+        written[0].leaseId,
+        scenario === "lead" ? chiefLeaseId : managerLeaseId,
+      );
+      assert.equal(written[0].toSessionId, chiefSessionId);
+      if (scenario === "failure-report") assert.equal(written[0].id, reportId);
+      else {
+        assert.equal(prepared[0].kind, written[0].kind);
+        assert.equal(prepared[0].leaseId, written[0].leaseId);
+        assert.ok("content" in result);
+        assert.match(result.content[0].text, /Message queued for supervisor/);
+      }
+    });
+  }
+});

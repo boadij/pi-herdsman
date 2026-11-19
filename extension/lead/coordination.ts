@@ -1043,14 +1043,25 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     verifyEvidence?: () => void,
     capturedEnvironment?: SenderEnvironment | null,
   ): Promise<ChiefMessageRecord> => {
-    assertCurrentLeadCoordination(ctx);
-    if (
-      leadRuntime.controllerRole === "manager" &&
-      (!leadRuntime.managerLease ||
-        (await currentManager(ctx))?.leaseId !==
-          leadRuntime.managerLease.descriptor.leaseId)
-    )
+    const managerLeaseId = leadRuntime.managerLease?.descriptor.leaseId;
+    const requiresManagerLease =
+      leadRuntime.controllerRole === "manager" || kind === "manager_message";
+    if (kind === "manager_message" && activeRole() !== "manager")
+      throw new Error("Manager role is no longer active");
+    if (kind === "manager_message" && !managerLeaseId)
       throw new Error("Manager lease is no longer active");
+    const assertManagerLease = async () => {
+      if (
+        requiresManagerLease &&
+        (!managerLeaseId ||
+          leadRuntime.managerLease?.descriptor.leaseId !== managerLeaseId ||
+          (await currentManager(ctx))?.leaseId !== managerLeaseId ||
+          leadRuntime.managerLease?.descriptor.leaseId !== managerLeaseId)
+      )
+        throw new Error("Manager lease is no longer active");
+    };
+    assertCurrentLeadCoordination(ctx);
+    await assertManagerLease();
     const chief = await currentSupervisor(ctx);
     if (!chief) throw new Error("No active supervisor is available");
     if (
@@ -1070,7 +1081,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       version: 2,
       build: HERDSMAN_BUILD,
       id: recordId ?? randomUUID(),
-      leaseId: chief.leaseId,
+      leaseId: kind === "manager_message" ? managerLeaseId! : chief.leaseId,
       kind,
       fromSessionId: leadSessionId,
       toSessionId: chief.piSessionId,
@@ -1084,13 +1095,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     // filesystem write. The earlier check only discovered a target.
     const freshChief = await currentSupervisor(ctx);
     assertCurrentLeadCoordination(ctx);
-    if (
-      leadRuntime.controllerRole === "manager" &&
-      (!leadRuntime.managerLease ||
-        (await currentManager(ctx))?.leaseId !==
-          leadRuntime.managerLease.descriptor.leaseId)
-    )
-      throw new Error("Manager lease is no longer active");
+    await assertManagerLease();
     if (
       !freshChief ||
       freshChief.leaseId !== chief.leaseId ||
@@ -1342,6 +1347,17 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           "target_not_found",
           "No active supervisor is available",
         );
+      const kind =
+        activeRole() === "manager" ? "manager_message" : "lead_message";
+      const expectedManagerLeaseId =
+        kind === "manager_message"
+          ? leadRuntime.managerLease?.descriptor.leaseId
+          : undefined;
+      if (kind === "manager_message" && !expectedManagerLeaseId)
+        throw structuredError(
+          "internal_failure",
+          "Manager lease is no longer active",
+        );
       const recordId = randomUUID();
       const createdAt = Date.now();
       const evidenceScope = hasManagerEvidenceSelectors(params.files ?? [])
@@ -1364,8 +1380,11 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           version: 2,
           build: HERDSMAN_BUILD,
           id: recordId,
-          leaseId: chief.leaseId,
-          kind: activeRole() === "manager" ? "manager_message" : "lead_message",
+          leaseId:
+            kind === "manager_message"
+              ? expectedManagerLeaseId!
+              : chief.leaseId,
+          kind,
           fromSessionId: ctx.sessionManager.getSessionId(),
           toSessionId: chief.piSessionId,
           leadSessionId: ctx.sessionManager.getSessionId(),
@@ -1378,14 +1397,26 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         }),
       );
       const queue = async () => {
+        const currentKind =
+          activeRole() === "manager" ? "manager_message" : "lead_message";
+        if (currentKind !== kind)
+          throw new Error(
+            "Coordinator role changed before the message was queued",
+          );
+        if (
+          kind === "manager_message" &&
+          leadRuntime.managerLease?.descriptor.leaseId !==
+            expectedManagerLeaseId
+        )
+          throw new Error("Manager lease is no longer active");
         record = await queueChiefRecord(
-          activeRole() === "manager" ? "manager_message" : "lead_message",
+          kind,
           prepared.text,
           ctx,
           recordId,
           createdAt,
           undefined,
-          undefined,
+          { piSessionId: chief.piSessionId, leaseId: chief.leaseId },
           prepared.resultBindings,
           evidenceScope?.verify,
           senderEnvironment ?? null,
@@ -1438,7 +1469,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       content: [
         {
           type: "text",
-          text: `Message sent to supervisor (${record.id}).`,
+          text: `Message queued for supervisor (${record.id}).`,
         },
       ],
       details: { id: record.id },
