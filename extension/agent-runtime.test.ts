@@ -1044,6 +1044,11 @@ test("fresh delegation verifies explicit cwd before launching in the owner works
     "project-overlay",
     "revoked",
     "replaced",
+    "assigned-root",
+    "assigned-descendant",
+    "assigned-neighbor",
+    "legacy-assigned",
+    "legacy-wrong-session",
   ] as const) {
     await t.test(scenario, async () => {
       setLeadEnvironment();
@@ -1070,9 +1075,51 @@ test("fresh delegation verifies explicit cwd before launching in the owner works
         link,
         "junction",
       );
+      const descendant = join(target, "child");
+      const neighbor = join(root, "target-neighbor");
+      realFs.mkdirSync(descendant);
+      realFs.mkdirSync(neighbor);
       const expected = realFs.realpathSync.native(
-        scenario === "inherit" || scenario === "alias" ? source : target,
+        scenario === "assigned-neighbor"
+          ? neighbor
+          : scenario === "inherit" || scenario === "alias"
+            ? source
+            : target,
       );
+      const assignments = await import("./supervision.ts");
+      const manager = assignments.supervisionRuntime(
+        join(root, "different-herdr.sock"),
+      );
+      const legacy =
+        scenario === "legacy-assigned" || scenario === "legacy-wrong-session";
+      const sessionId = randomUUID();
+      const sessionFile = join(root, "assigned.jsonl");
+      if (legacy)
+        realFs.writeFileSync(
+          sessionFile,
+          `${JSON.stringify({
+            type: "session",
+            version: 3,
+            id: sessionId,
+            timestamp: new Date().toISOString(),
+            cwd: target,
+          })}\n`,
+        );
+      const assignment = {
+        version: 2 as const,
+        id: scenario === "legacy-assigned" ? sessionId : randomUUID(),
+        repoKey: root,
+        branch: "assigned",
+        text: "Owned by the Manager",
+        ...(legacy
+          ? { piSessionFile: sessionFile }
+          : { checkoutPath: realFs.realpathSync.native(target) }),
+      };
+      let published = false;
+      const publishAssignment = () => {
+        assignments.writeProjectAssignment(manager, assignment);
+        published = true;
+      };
       const label = "cwd-child";
       const launchCalls: string[][] = [];
       let submitted: RequestRecord | undefined;
@@ -1088,9 +1135,28 @@ test("fresh delegation verifies explicit cwd before launching in the owner works
         expected,
       );
       let preparing = false;
+      const topologyProbes: string[][] = [];
       const controller = fakePi({
         exec: (command, args, options) => {
           if (command === "herdr") {
+            if (
+              args[0] === "worktree" &&
+              args[1] === "list" &&
+              args[2] === "--cwd"
+            ) {
+              topologyProbes.push(args);
+              return {
+                stdout: JSON.stringify({
+                  id: AGENT_ID,
+                  result: {
+                    source: { repo_key: root },
+                    worktrees: [{ path: target, is_linked_worktree: true }],
+                  },
+                }),
+                stderr: "",
+                code: 0,
+              };
+            }
             if (isTabList(args) && preparing) {
               preparing = false;
               if (scenario === "revoked")
@@ -1099,6 +1165,12 @@ test("fresh delegation verifies explicit cwd before launching in the owner works
                 realFs.renameSync(target, join(root, "original-target"));
                 realFs.mkdirSync(target);
               }
+              if (
+                scenario === "assigned-root" ||
+                scenario === "assigned-descendant" ||
+                scenario === "legacy-assigned"
+              )
+                publishAssignment();
             }
             if (
               (args[0] === "tab" && args[1] === "create") ||
@@ -1114,13 +1186,23 @@ test("fresh delegation verifies explicit cwd before launching in the owner works
       context.cwd = source;
       seedLeadRole(context);
       const previous = readConfig();
-      const lateMutation = scenario === "revoked" || scenario === "replaced";
+      const lateMutation =
+        scenario === "revoked" ||
+        scenario === "replaced" ||
+        scenario === "assigned-root" ||
+        scenario === "assigned-descendant" ||
+        scenario === "legacy-assigned";
       try {
         updateConfig("allowAgentCwdOverride", true);
         if (lateMutation) {
           updateConfig("spawnPlacement", "split");
           process.env.HERDR_PANE_ID = "startup-pane";
         }
+        if (
+          scenario === "assigned-neighbor" ||
+          scenario === "legacy-wrong-session"
+        )
+          publishAssignment();
         registerExtension!(controller.pi as never);
         await controller.events.get("session_start")![0](undefined, context);
         // The split's tab lookup runs inside Herdr startup, after the lifecycle lock.
@@ -1136,6 +1218,11 @@ test("fresh delegation verifies explicit cwd before launching in the owner works
           "project-overlay": target,
           revoked: link,
           replaced: link,
+          "assigned-root": link,
+          "assigned-descendant": join(link, "child"),
+          "assigned-neighbor": neighbor,
+          "legacy-assigned": join(link, "child"),
+          "legacy-wrong-session": target,
         }[scenario];
         const result = await agentTool(controller, "delegate").execute(
           "cwd-delegation",
@@ -1157,7 +1244,24 @@ test("fresh delegation verifies explicit cwd before launching in the owner works
           "project-overlay": /Project agent agent belongs to/,
           revoked: /disabled during preflight/,
           replaced: /changed during preflight/,
+          "assigned-root": /inside a Manager-assigned checkout/,
+          "assigned-descendant": /inside a Manager-assigned checkout/,
+          "legacy-assigned": /inside a Manager-assigned checkout/,
         };
+        if (legacy)
+          assert.deepEqual(
+            topologyProbes,
+            scenario === "legacy-assigned"
+              ? [
+                  [
+                    "worktree",
+                    "list",
+                    "--cwd",
+                    realFs.realpathSync.native(target),
+                  ],
+                ]
+              : [],
+          );
         if (Object.hasOwn(rejection, scenario)) {
           assert.equal(
             result.details.error?.category,
@@ -1178,7 +1282,12 @@ test("fresh delegation verifies explicit cwd before launching in the owner works
           assert.equal(placement[placement.indexOf("--cwd") + 1], expected);
           const start = launchCalls.find((args) => args[0] === "agent")!;
           assert.ok(start);
-          if (scenario === "relative" || scenario === "absolute") {
+          if (
+            scenario === "relative" ||
+            scenario === "absolute" ||
+            scenario === "assigned-neighbor" ||
+            scenario === "legacy-wrong-session"
+          ) {
             assert.ok(start.includes("--no-approve"), JSON.stringify(start));
             assert.ok(!start.includes("--approve"));
           } else {
@@ -1192,6 +1301,12 @@ test("fresh delegation verifies explicit cwd before launching in the owner works
         controller.events.get("session_shutdown")?.[0]();
         startup.stopMailboxConsumer();
         resetAgentMailbox(startup.mailbox);
+        if (published)
+          assignments.removeProjectAssignment(
+            manager,
+            assignment.repoKey,
+            assignment.branch,
+          );
         updateConfig("allowAgentCwdOverride", previous.allowAgentCwdOverride);
         if (lateMutation) {
           updateConfig("spawnPlacement", previous.spawnPlacement);

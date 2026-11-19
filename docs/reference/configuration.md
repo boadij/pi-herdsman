@@ -117,7 +117,8 @@ delegate.
 `allowAgentCwdOverride` is a user-wide opt-in for the optional
 [`delegate_agent` working-directory override](agent.md#delegate_agent).
 Change it under `/herdsman` → `Settings` → `Delegation options` →
-`Working directory override`, then run `/reload` to refresh the tool schema.
+`Delegate Agents to other directories (cwd)`, then run `/reload` to refresh the
+tool schema.
 Disabling it takes effect for launches using an explicit `cwd` without
 waiting for a reload. Project settings cannot enable it.
 

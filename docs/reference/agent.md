@@ -82,7 +82,16 @@ the calling controller's working directory; aliases of that directory count
 as the same directory. Only an ordinary Lead can select a different directory,
 including a subdirectory. For a different directory, the definition still
 comes from the caller's roster and cannot have a project or private-repository
-source. Herdsman rechecks the setting and target before launch.
+source. Before creating a pane and again before starting Pi, Herdsman rechecks
+the setting and target. It rejects a cross-directory target at or below a
+checkout path recorded in local Manager assignment authority, even when the
+assigned Lead is not running. If the assignment lacks a recorded checkout
+path, Herdsman can also match its exact saved Pi session's directory when
+Herdr confirms it is a linked checkout of the assigned repository. Herdsman
+does not infer a checkout from a branch name or match assignments without
+usable path or session evidence. It rejects the override if assignment
+authority or a relevant checkout topology cannot be verified. This check
+does not discover other writers or reserve the directory.
 
 For a different directory, Pi starts with `--no-approve`: trust-gated project
 resources are not loaded, but ordinary context files such as `AGENTS.md` can

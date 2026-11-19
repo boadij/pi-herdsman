@@ -1239,8 +1239,8 @@ export type StartHerdrOptions = {
   placementRevalidator?: (
     placement: HerdrStartPlacement,
   ) => Promise<HerdrStartPlacement>;
-  // Synchronous final authorization of the launch cwd after placement awaits.
-  assertLaunchAuthorized?: (cwd: string) => void;
+  // Final authorization of the launch cwd after placement awaits.
+  assertLaunchAuthorized?: (cwd: string) => void | Promise<void>;
   agentArgs?: string[];
   env?: string[];
   timeoutMs?: number;
@@ -1618,7 +1618,8 @@ export async function startHerdrAgent(
     if (!tab) {
       if (placement.kind !== "tab")
         error("start", "cannot create a tab for split placement");
-      options.assertLaunchAuthorized?.(cwd);
+      const authorization = options.assertLaunchAuthorized?.(cwd);
+      if (authorization) await authorization;
       const made = await runHerdr(
         pi,
         ctx,
@@ -1676,7 +1677,8 @@ export async function startHerdrAgent(
                 startupDeadline,
                 options.signal,
               );
-        options.assertLaunchAuthorized?.(cwd);
+        const authorization = options.assertLaunchAuthorized?.(cwd);
+        if (authorization) await authorization;
         const split = await runHerdr(
           pi,
           ctx,
@@ -1780,10 +1782,11 @@ export async function startHerdrAgent(
       startupDeadline - START_DIAGNOSTIC_TIMEOUT,
     );
     for (;;) {
+      const authorization = options.assertLaunchAuthorized?.(cwd);
+      if (authorization) await authorization;
       const remaining = startupCallTimeout(startupDeadline, childTimeout);
       if (remaining < HERDR_START_TIMEOUT_MIN)
         error("start", "startup deadline exhausted before agent start");
-      options.assertLaunchAuthorized?.(cwd);
       try {
         started = await runHerdr(
           pi,
@@ -2488,6 +2491,12 @@ export function sameObservedSessionPath(left: string, right: string): boolean {
 const PI_SESSION_HEADER_BYTE_LIMIT = 1024 * 1024;
 const PI_SESSION_HEADER_READ_CHUNK_SIZE = 4 * 1024;
 export function readPiSessionHeaderId(path: string): string | undefined {
+  return readPiSessionHeaderIdentity(path)?.id;
+}
+
+export function readPiSessionHeaderIdentity(
+  path: string,
+): { id: string; cwd?: string } | undefined {
   let fd: number;
   try {
     fd = openSync(path, "r");
@@ -2536,7 +2545,10 @@ export function readPiSessionHeaderId(path: string): string | undefined {
     header.id.length === 0
   )
     throw new Error("Invalid Pi session header");
-  return header.id;
+  return {
+    id: header.id,
+    ...(typeof header.cwd === "string" ? { cwd: header.cwd } : {}),
+  };
 }
 export function matchesExpectedSession(
   observed: unknown,

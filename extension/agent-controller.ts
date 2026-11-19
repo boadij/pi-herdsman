@@ -25,7 +25,7 @@ import { unlinkSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
@@ -129,7 +129,10 @@ import {
   snapshotTextFiles,
   validateMessageFiles,
 } from "./core.ts";
-import { normalizeHerdrLifecycleState } from "./supervision.ts";
+import {
+  globalProjectAssignmentSnapshot,
+  normalizeHerdrLifecycleState,
+} from "./supervision.ts";
 import {
   herdrAgentAlias,
   herdrSessionSnapshot,
@@ -144,6 +147,8 @@ import {
   watchHerdrLifecycle,
   parseHerdrVersion,
   runHerdr,
+  readPiSessionHeaderIdentity,
+  resolveAssignmentCheckout,
   stopHerdrAgentPreservingPane,
   verifyRetainedHerdrPane,
   closeRetainedHerdrPane,
@@ -3892,6 +3897,40 @@ export type PendingStart = {
   parentLabel?: string;
   requestId?: string;
 };
+
+function readDelegationProjectAssignments() {
+  try {
+    return globalProjectAssignmentSnapshot();
+  } catch {
+    fail(
+      "invalid_request",
+      "Unable to verify local Manager checkout assignments; retry delegation",
+      "delegate",
+    );
+  }
+}
+
+function cwdIsWithin(checkout: string, cwd: string): boolean {
+  const rel = relative(checkout, cwd);
+  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+function legacyAssignmentCheckout(assignment: {
+  id: string;
+  piSessionFile?: string;
+}) {
+  if (!assignment.piSessionFile || !isAbsolute(assignment.piSessionFile))
+    return undefined;
+  try {
+    if (!statSync(assignment.piSessionFile).isFile()) return undefined;
+    const saved = readPiSessionHeaderIdentity(assignment.piSessionFile);
+    if (saved?.id === assignment.id && saved.cwd && isAbsolute(saved.cwd))
+      return realpathSync.native(saved.cwd);
+  } catch {
+    // Missing exact-session provenance is not evidence of an assigned path.
+  }
+  return undefined;
+}
 
 function resolveDelegationCwd(value: unknown, controllerCwd: string) {
   if (
@@ -9510,8 +9549,9 @@ export function createAgentController(
               `maxAgentDepth changed from ${maxAgentDepth} to ${launchConfig.maxAgentDepth} while this Agent was being prepared, so it was not started; retry the delegation under the new limit`,
               p.action,
             );
-          const assertLaunchAuthorized = (launchCwd: string): void => {
-            if (!verifiedCwd) return;
+          const checkLaunchAuthority = (launchCwd: string) => {
+            const legacy = new Map<string, Set<string>>();
+            if (!verifiedCwd) return legacy;
             assertRootDelegationAllowed();
             if (!readConfig().allowAgentCwdOverride)
               fail(
@@ -9519,6 +9559,9 @@ export function createAgentController(
                 "Working directory override was disabled during preflight; retry delegation",
                 "delegate",
               );
+            const assignments = crossDirectory
+              ? readDelegationProjectAssignments()
+              : undefined;
             const current = resolveDelegationCwd(requestedCwd, ctx.cwd);
             const stillCrossDirectory = !sameCwd(current.cwd, ctx.cwd);
             if (
@@ -9533,6 +9576,88 @@ export function createAgentController(
                 "Working directory changed during preflight; retry delegation",
                 "delegate",
               );
+            for (const matches of assignments?.values() ?? []) {
+              for (const { assignment } of matches) {
+                // Manager publication records the verified canonical checkout
+                // path. Compare against the physical target, without following
+                // a redirect at a stale recorded path.
+                if (assignment.checkoutPath) {
+                  if (cwdIsWithin(assignment.checkoutPath, current.cwd))
+                    rejectAssignedCheckout();
+                  continue;
+                }
+                const checkout = legacyAssignmentCheckout(assignment);
+                if (!checkout || !cwdIsWithin(checkout, current.cwd)) continue;
+                const repositories = legacy.get(checkout) ?? new Set<string>();
+                repositories.add(assignment.repoKey);
+                legacy.set(checkout, repositories);
+              }
+            }
+            return legacy;
+          };
+          const rejectAssignedCheckout = (): never =>
+            fail(
+              "invalid_request",
+              "Working directory is inside a Manager-assigned checkout",
+              "delegate",
+            );
+          const assertLaunchAuthorized = (launchCwd: string) => {
+            const legacy = checkLaunchAuthority(launchCwd);
+            if (!legacy.size) return;
+            return (async () => {
+              // Probe only exact legacy session cwd candidates containing the target,
+              // once per checkout, not every repository or branch in authority.
+              const observed = new Map<string, string | undefined>();
+              for (const checkout of legacy.keys()) {
+                const topology = await runHerdr(
+                  pi,
+                  ctx,
+                  ["worktree", "list", "--cwd", checkout],
+                  { signal, timeout: 10_000 },
+                ).catch(() => undefined);
+                if (
+                  typeof topology?.source?.repo_key !== "string" ||
+                  !Array.isArray(topology.worktrees)
+                )
+                  fail(
+                    "invalid_request",
+                    "Unable to verify the legacy Manager checkout; retry delegation",
+                    "delegate",
+                  );
+                const placement = resolveAssignmentCheckout(
+                  {},
+                  topology.worktrees,
+                  checkout,
+                );
+                if (placement.status === "conflict")
+                  fail(
+                    "invalid_request",
+                    "Legacy Manager checkout placement is ambiguous; retry delegation",
+                    "delegate",
+                  );
+                observed.set(
+                  checkout,
+                  placement.status === "matched"
+                    ? topology.source.repo_key
+                    : undefined,
+                );
+              }
+              // No assignment-authority lock spans a Herdr call. Recheck all
+              // authority and cwd after the probes and reject unseen candidates.
+              for (const [checkout, repositories] of checkLaunchAuthority(
+                launchCwd,
+              )) {
+                if (!observed.has(checkout))
+                  fail(
+                    "invalid_request",
+                    "Manager checkout assignments changed during preflight; retry delegation",
+                    "delegate",
+                  );
+                const repo = observed.get(checkout);
+                if (repo !== undefined && repositories.has(repo))
+                  rejectAssignedCheckout();
+              }
+            })();
           };
           started = await startHerdrAgent(pi, ctx, {
             label,

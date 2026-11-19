@@ -1540,11 +1540,9 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             },
             {
               value: "cwd-override",
-              label: "Working directory override",
-              description: config.allowAgentCwdOverride
-                ? "On (global)"
-                : "Off (global)",
-              help: "Allow ordinary Leads to select a working directory for fresh Agents. Reload to update the tool schema.",
+              label: "Delegate Agents to other directories (cwd)",
+              description: config.allowAgentCwdOverride ? "On" : "Off",
+              help: "Allow Leads to specify a different working directory using the optional cwd parameter in delegate_agent. Without it, Agents start in the Lead's current directory. Global setting. Run /reload after changing it. Cross-directory delegation is limited to ordinary Leads.",
             },
             {
               value: "removal-confirmation",
@@ -1583,7 +1581,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           const current = config.allowAgentCwdOverride ? "on" : "off";
           const choice = await host.selectMenu(
             ctx,
-            "Working directory override",
+            "Delegate Agents to other directories (cwd)",
             markCurrent(
               [
                 { value: "off", label: "Off" },
@@ -1601,10 +1599,10 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             continue;
           try {
             host.updateConfig("allowAgentCwdOverride", choice === "on");
-            ctx.ui.notify("Run /reload to update the delegation tool schema.");
+            ctx.ui.notify("Run /reload after changing it.");
           } catch (error) {
             ctx.ui.notify(
-              `Could not update working directory override: ${String(error)}`,
+              `Could not update “Delegate Agents to other directories (cwd)”: ${String(error)}`,
               "error",
             );
           }

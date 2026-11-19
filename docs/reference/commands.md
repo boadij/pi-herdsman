@@ -75,9 +75,11 @@ Agent status or definitions to render.
 - `Manager auto-start`, `Git initialization prompt`, `Local branch integration`,
   and `Worktree removal approval`;
 - `Agent pane layout` and `Status widget rows`;
-- [`Working directory override`](configuration.md#schema-and-defaults),
-  a global Off/On setting. Run `/reload` after changing it to refresh the
-  delegation tool schema.
+- [`Delegate Agents to other directories (cwd)`](configuration.md#schema-and-defaults),
+  a global Off/On setting. It allows Leads to specify a different working
+  directory using the optional `cwd` parameter in `delegate_agent`. Without it,
+  Agents start in the Lead's current directory. Run `/reload` after changing it.
+  Cross-directory delegation is limited to ordinary Leads.
 
 The default Lead mode applies only when a future ordinary Lead session has no
 persisted execution choice; changing it does not change the current session.

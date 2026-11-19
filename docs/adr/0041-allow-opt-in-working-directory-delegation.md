@@ -24,10 +24,15 @@ launches. Launch Pi with `--no-approve` so target trust cannot substitute
 project resources for the caller's selected configuration.
 
 Use existing ownership, placement and lifecycle contracts. Revalidate the
-opt-in and directory before starting the Agent. Historical continuation
-still restores the saved identity and directory under
-[ADR 0004](0004-separate-delegation-from-continuation.md). The new input
-belongs only to fresh delegation under
+opt-in and directory before starting the Agent. For cross-directory launches,
+veto physical targets at or below canonical checkout paths recorded in the
+local Manager assignment authority. If the recorded path is absent, use the
+exact saved session directory only when a targeted Herdr query verifies the
+linked checkout and repository. Use a fresh authority snapshot at launch
+boundaries and recheck it after any topology query; do not hold the authority
+lock across Herdr calls or reserve the directory. Historical continuation still restores the saved identity and
+directory under [ADR 0004](0004-separate-delegation-from-continuation.md).
+The new input belongs only to fresh delegation under
 [ADR 0006](0006-use-operation-specific-semantic-tools.md).
 
 ## Consequences

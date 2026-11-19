@@ -1554,8 +1554,9 @@ function registerExtensionImpl(
         ) => {
           const input = new Input();
           const listContainer = new Container();
+          const maxHelpCharacters = 280;
           const helpArea = items.some((item) =>
-            collapseDisplayText(item.help, 160),
+            collapseDisplayText(item.help, maxHelpCharacters),
           )
             ? new Container()
             : undefined;
@@ -1565,7 +1566,7 @@ function registerExtensionImpl(
             if (!helpArea) return;
             const help = collapseDisplayText(
               (item as MenuItem | null)?.help,
-              160,
+              maxHelpCharacters,
             );
             helpArea.clear();
             if (help) {

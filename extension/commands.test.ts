@@ -19691,6 +19691,57 @@ const selectTuiItem = (component: any, target: string): void => {
   throw new Error(`TUI item was not selected: ${target}`);
 };
 
+test("Delegation options renders the full working directory help", async () => {
+  setLeadEnvironment();
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.mode = "tui";
+  let settings = "";
+  let customCalls = 0;
+  context.ui.custom = async (factory: any) =>
+    new Promise((resolve) => {
+      const component = factory(
+        { requestRender: () => undefined },
+        {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        },
+        tuiMenuKeybindings,
+        resolve,
+      );
+      switch (customCalls++) {
+        case 0:
+          selectTuiItem(component, "Settings");
+          break;
+        case 1:
+          selectTuiItem(component, "Delegation options");
+          break;
+        case 2:
+          settings = component.render(80).join(" ").replace(/\s+/gu, " ");
+          component.handleInput("\u001b");
+          break;
+        default:
+          component.handleInput("\u001b");
+      }
+    });
+  try {
+    await pi.commandOptions.get("herdsman").handler("", context);
+    assert.match(
+      settings,
+      /Delegate Agents to other directories \(cwd\).*Off/u,
+    );
+    assert.ok(
+      settings.includes(
+        "Allow Leads to specify a different working directory using the optional cwd parameter in delegate_agent. Without it, Agents start in the Lead's current directory. Global setting. Run /reload after changing it. Cross-directory delegation is limited to ordinary Leads.",
+      ),
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
 test("definition pickers preselect configured values and honor cancellation", async () => {
   for (const scenario of [
     {

@@ -686,7 +686,7 @@ test("Settings categories expose only canonical entries and unavailable reposito
   );
 });
 
-test("Working directory override shows the current choice and persists globally", async () => {
+test("Delegate Agents to other directories (cwd) shows the current choice and persists globally", async () => {
   const config = { ...readConfig(), allowAgentCwdOverride: false };
   const writes: unknown[][] = [];
   const notices: string[] = [];
@@ -700,7 +700,12 @@ test("Working directory override shows the current choice and persists globally"
     selectMenu: async (
       _ctx: unknown,
       title: string,
-      items: { value: string; label: string; description?: string }[],
+      items: {
+        value: string;
+        label: string;
+        description?: string;
+        help?: string;
+      }[],
       selected: string,
     ) => {
       if (title === "Delegation options") {
@@ -710,12 +715,20 @@ test("Working directory override shows the current choice and persists globally"
         );
         assert.equal(selected, "cwd-override");
         assert.equal(
+          items[0]?.label,
+          "Delegate Agents to other directories (cwd)",
+        );
+        assert.equal(
           items[0]?.description,
-          config.allowAgentCwdOverride ? "On (global)" : "Off (global)",
+          config.allowAgentCwdOverride ? "On" : "Off",
+        );
+        assert.equal(
+          items[0]?.help,
+          "Allow Leads to specify a different working directory using the optional cwd parameter in delegate_agent. Without it, Agents start in the Lead's current directory. Global setting. Run /reload after changing it. Cross-directory delegation is limited to ordinary Leads.",
         );
         return attempts.length ? "cwd-override" : undefined;
       }
-      assert.equal(title, "Working directory override");
+      assert.equal(title, "Delegate Agents to other directories (cwd)");
       assert.deepEqual(
         items.map((item) => item.label),
         ["Off", "On"],
@@ -740,7 +753,8 @@ test("Working directory override shows the current choice and persists globally"
     ["allowAgentCwdOverride", false],
   ]);
   assert.equal(notices.length, writes.length);
-  for (const notice of notices) assert.match(notice, /\/reload/);
+  for (const notice of notices)
+    assert.equal(notice, "Run /reload after changing it.");
 });
 
 test("Project setting combines scopes and skips unchanged values", async () => {
