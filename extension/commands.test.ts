@@ -13750,7 +13750,7 @@ test("a Lead without a Manager routes upward to Chief and keeps peer presence", 
       undefined,
       context,
     );
-    assert.match(result.content[0].text, /Message sent to supervisor/);
+    assert.match(result.content[0].text, /Message queued for supervisor/);
     assert.equal(
       listCoordinationMessagePaths(supervisionRuntime(), chiefId).length,
       1,
@@ -13961,7 +13961,7 @@ test("Chief message persistence failure can recover without withdrawing peer pre
       undefined,
       context,
     );
-    assert.match(result.content[0].text, /Message sent to supervisor/);
+    assert.match(result.content[0].text, /Message queued for supervisor/);
     assert.equal(listCoordinationMessagePaths(runtime, chiefId).length, 1);
     assert.equal(
       readPeerLeadRecord(peerRuntime(), sessionId)?.claim.id,
