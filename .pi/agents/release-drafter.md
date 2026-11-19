@@ -117,17 +117,24 @@ Write one self-contained message with a maximum of 1,600 characters,
 including Markdown, whitespace, emoji, and the final release URL.
 
 - Start with `# 🐑 Pi Herdsman v<version>` and a short bold
-  benefit-oriented headline. Include one to three REAL user-facing
-  highlights, proportional to the release. Do not split one fix into
-  repetitive bullets or invent other user benefits.
-- State any required migration precisely. Exclude CI, refactoring,
-  dependency-only changes, and development machinery unless essential
-  to explain a user-facing outcome.
-- Recognize the same verified human contributors and their actual roles
-  as the GitHub notes (or the requested broader recap range). Shorten
-  other text first; if complete credits cannot fit, report the conflict.
-- Include `pi install npm:pi-herdsman` and end with the release-link
-  token during drafting. Do not split or post the announcement.
+  benefit-oriented headline. Add a one-sentence introduction only if
+  it provides useful context.
+- Present one to three real user-facing highlights, proportional to the
+  release, with short bold headings and relevant emoji where helpful.
+  Do not split one fix into repetitive bullets or invent benefits.
+- State required migration precisely, using a bold `⚠️ Breaking changes`
+  heading when warranted. Omit it when no action is needed. Exclude CI,
+  refactoring, dependency-only changes, and development machinery unless
+  essential to explain a user-facing outcome.
+- Use a `🙏 Contributors` heading for the same verified human contributors
+  and actual roles as the GitHub notes (or the requested broader recap range).
+  Shorten other text first; if complete credits cannot fit, report the conflict.
+- Use a `📦 Install or update` heading and a fenced `bash` block with
+  `pi install npm:pi-herdsman`; end with the release-link token during
+  drafting. Do not split or post the announcement.
 
-Use natural English and no em dashes. Keep verification caveats and
-supporting evidence outside both artifacts.
+Keep formatting recognizable but restrained. Avoid excessive emoji,
+headings, capitalization, marketing language, and repetition. Omit optional
+sections when they add no value; keep required information visible. Use
+natural English, no em dashes, and do not overstate a fix. Keep verification
+caveats and supporting evidence outside both artifacts.
