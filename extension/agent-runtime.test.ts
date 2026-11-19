@@ -43,6 +43,7 @@ import support, {
   fakePi,
   fakeAgentContext,
   invokeEventHandlers,
+  isTabList,
   managedState,
   agentControllerExecutor,
   assignmentLockPathForTest,
@@ -1029,6 +1030,326 @@ test("managed requests pump through Pi semantic input", async (t) => {
     assert.equal(watchedMailboxDirectories.has(mailbox), false);
     resetAgentMailbox(mailbox);
   }
+});
+
+test("fresh delegation verifies explicit cwd before launching in the owner workspace", async (t) => {
+  for (const scenario of [
+    "inherit",
+    "relative",
+    "absolute",
+    "alias",
+    "file",
+    "missing",
+    "invalid",
+    "project-overlay",
+    "revoked",
+    "replaced",
+    "assigned-root",
+    "assigned-descendant",
+    "assigned-neighbor",
+    "legacy-assigned",
+    "legacy-wrong-session",
+  ] as const) {
+    await t.test(scenario, async () => {
+      setLeadEnvironment();
+      const root = realFs.mkdtempSync(join(testTmpRoot, "delegate-cwd-"));
+      const source = join(root, "source");
+      const target = join(root, "target");
+      const link = join(root, "link");
+      realFs.mkdirSync(source);
+      realFs.mkdirSync(target);
+      realFs.writeFileSync(
+        join(source, "owner.txt"),
+        "attachment from the owner",
+      );
+      if (scenario === "project-overlay") {
+        const definitions = join(source, ".pi", "agents");
+        realFs.mkdirSync(definitions, { recursive: true });
+        realFs.writeFileSync(
+          join(definitions, "agent.md"),
+          "---\nname: agent\n---\nproject instructions",
+        );
+      }
+      realFs.symlinkSync(
+        scenario === "alias" ? source : target,
+        link,
+        "junction",
+      );
+      const descendant = join(target, "child");
+      const neighbor = join(root, "target-neighbor");
+      realFs.mkdirSync(descendant);
+      realFs.mkdirSync(neighbor);
+      const expected = realFs.realpathSync.native(
+        scenario === "assigned-neighbor"
+          ? neighbor
+          : scenario === "inherit" || scenario === "alias"
+            ? source
+            : target,
+      );
+      const assignments = await import("./supervision.ts");
+      const manager = assignments.supervisionRuntime(
+        join(root, "different-herdr.sock"),
+      );
+      const legacy =
+        scenario === "legacy-assigned" || scenario === "legacy-wrong-session";
+      const sessionId = randomUUID();
+      const sessionFile = join(root, "assigned.jsonl");
+      if (legacy)
+        realFs.writeFileSync(
+          sessionFile,
+          `${JSON.stringify({
+            type: "session",
+            version: 3,
+            id: sessionId,
+            timestamp: new Date().toISOString(),
+            cwd: target,
+          })}\n`,
+        );
+      const assignment = {
+        version: 2 as const,
+        id: scenario === "legacy-assigned" ? sessionId : randomUUID(),
+        repoKey: root,
+        branch: "assigned",
+        text: "Owned by the Manager",
+        ...(legacy
+          ? { piSessionFile: sessionFile }
+          : { checkoutPath: realFs.realpathSync.native(target) }),
+      };
+      let published = false;
+      const publishAssignment = () => {
+        assignments.writeProjectAssignment(manager, assignment);
+        published = true;
+      };
+      const label = "cwd-child";
+      const launchCalls: string[][] = [];
+      let submitted: RequestRecord | undefined;
+      const startup = startupExecutor(
+        label,
+        () => DEFAULT_PI_SESSION_ID,
+        undefined,
+        (_text, request) => {
+          submitted = request;
+        },
+        false,
+        undefined,
+        expected,
+      );
+      let preparing = false;
+      const topologyProbes: string[][] = [];
+      const controller = fakePi({
+        exec: (command, args, options) => {
+          if (command === "herdr") {
+            if (
+              args[0] === "worktree" &&
+              args[1] === "list" &&
+              args[2] === "--cwd"
+            ) {
+              topologyProbes.push(args);
+              return {
+                stdout: JSON.stringify({
+                  id: AGENT_ID,
+                  result: {
+                    source: { repo_key: root },
+                    worktrees: [{ path: target, is_linked_worktree: true }],
+                  },
+                }),
+                stderr: "",
+                code: 0,
+              };
+            }
+            if (isTabList(args) && preparing) {
+              preparing = false;
+              if (scenario === "revoked")
+                updateConfig("allowAgentCwdOverride", false);
+              if (scenario === "replaced") {
+                realFs.renameSync(target, join(root, "original-target"));
+                realFs.mkdirSync(target);
+              }
+              if (
+                scenario === "assigned-root" ||
+                scenario === "assigned-descendant" ||
+                scenario === "legacy-assigned"
+              )
+                publishAssignment();
+            }
+            if (
+              (args[0] === "tab" && args[1] === "create") ||
+              (args[0] === "pane" && args[1] === "split") ||
+              (args[0] === "agent" && args[1] === "start")
+            )
+              launchCalls.push(args);
+          }
+          return startup.exec(command, args, options);
+        },
+      });
+      const context = fakeContext(controller.entries);
+      context.cwd = source;
+      seedLeadRole(context);
+      const previous = readConfig();
+      const lateMutation =
+        scenario === "revoked" ||
+        scenario === "replaced" ||
+        scenario === "assigned-root" ||
+        scenario === "assigned-descendant" ||
+        scenario === "legacy-assigned";
+      try {
+        updateConfig("allowAgentCwdOverride", true);
+        if (lateMutation) {
+          updateConfig("spawnPlacement", "split");
+          process.env.HERDR_PANE_ID = "startup-pane";
+        }
+        if (
+          scenario === "assigned-neighbor" ||
+          scenario === "legacy-wrong-session"
+        )
+          publishAssignment();
+        registerExtension!(controller.pi as never);
+        await controller.events.get("session_start")![0](undefined, context);
+        // The split's tab lookup runs inside Herdr startup, after the lifecycle lock.
+        preparing = lateMutation;
+        const requested = {
+          inherit: undefined,
+          relative: "../target",
+          absolute: target,
+          alias: link,
+          file: "owner.txt",
+          missing: "missing",
+          invalid: "target\n",
+          "project-overlay": target,
+          revoked: link,
+          replaced: link,
+          "assigned-root": link,
+          "assigned-descendant": join(link, "child"),
+          "assigned-neighbor": neighbor,
+          "legacy-assigned": join(link, "child"),
+          "legacy-wrong-session": target,
+        }[scenario];
+        const result = await agentTool(controller, "delegate").execute(
+          "cwd-delegation",
+          {
+            definition: "agent",
+            label,
+            task: "Read the evidence",
+            files: ["owner.txt"],
+            ...(requested === undefined ? {} : { cwd: requested }),
+          },
+          undefined,
+          undefined,
+          context,
+        );
+        const rejection = {
+          file: /readable directory/,
+          missing: /readable directory/,
+          invalid: /without control characters/,
+          "project-overlay": /Project agent agent belongs to/,
+          revoked: /disabled during preflight/,
+          replaced: /changed during preflight/,
+          "assigned-root": /inside a Manager-assigned checkout/,
+          "assigned-descendant": /inside a Manager-assigned checkout/,
+          "legacy-assigned": /inside a Manager-assigned checkout/,
+        };
+        if (legacy)
+          assert.deepEqual(
+            topologyProbes,
+            scenario === "legacy-assigned"
+              ? [
+                  [
+                    "worktree",
+                    "list",
+                    "--cwd",
+                    realFs.realpathSync.native(target),
+                  ],
+                ]
+              : [],
+          );
+        if (Object.hasOwn(rejection, scenario)) {
+          assert.equal(
+            result.details.error?.category,
+            "invalid_request",
+            JSON.stringify(result.details),
+          );
+          assert.match(
+            result.details.error.message,
+            rejection[scenario as keyof typeof rejection],
+          );
+          assert.equal(preparing, false, "late mutation reached placement");
+          assert.deepEqual(launchCalls, []);
+        } else {
+          assert.equal(result.details.ok, true, JSON.stringify(result.details));
+          assert.equal(result.details.cwd, expected);
+          const placement = launchCalls.find((args) => args.includes("--cwd"))!;
+          assert.ok(placement);
+          assert.equal(placement[placement.indexOf("--cwd") + 1], expected);
+          const start = launchCalls.find((args) => args[0] === "agent")!;
+          assert.ok(start);
+          if (
+            scenario === "relative" ||
+            scenario === "absolute" ||
+            scenario === "assigned-neighbor" ||
+            scenario === "legacy-wrong-session"
+          ) {
+            assert.ok(start.includes("--no-approve"), JSON.stringify(start));
+            assert.ok(!start.includes("--approve"));
+          } else {
+            assert.ok(start.includes("--approve"), JSON.stringify(start));
+          }
+          assert.equal(submitted?.ownerSessionId, LEAD_SESSION_ID);
+          assert.equal(submitted?.workspaceId, WORKSPACE);
+          assert.match(submitted?.text ?? "", /attachment from the owner/);
+        }
+      } finally {
+        controller.events.get("session_shutdown")?.[0]();
+        startup.stopMailboxConsumer();
+        resetAgentMailbox(startup.mailbox);
+        if (published)
+          assignments.removeProjectAssignment(
+            manager,
+            assignment.repoKey,
+            assignment.branch,
+          );
+        updateConfig("allowAgentCwdOverride", previous.allowAgentCwdOverride);
+        if (lateMutation) {
+          updateConfig("spawnPlacement", previous.spawnPlacement);
+          delete process.env.HERDR_PANE_ID;
+        }
+        realFs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("private-repository definitions cannot cross cwd on fresh delegation", async () => {
+  const { validateAssignmentCwd } = await import("./agent-controller.ts");
+  const definition = { name: "agent", privateRepositorySource: "private.md" };
+  const scope = { kind: "root" } as const;
+  const controllerCwd = testTmpRoot;
+  const foreignCwd = join(controllerCwd, "foreign");
+
+  assert.throws(
+    () =>
+      validateAssignmentCwd(
+        definition,
+        foreignCwd,
+        controllerCwd,
+        scope,
+        "delegate",
+      ),
+    /private-repository definition configuration/,
+  );
+  validateAssignmentCwd(
+    definition,
+    controllerCwd,
+    controllerCwd,
+    scope,
+    "delegate",
+  );
+  validateAssignmentCwd(
+    definition,
+    foreignCwd,
+    controllerCwd,
+    scope,
+    "continue",
+  );
 });
 
 test("imported semantic result refs remain usable in the next handoff", async () => {

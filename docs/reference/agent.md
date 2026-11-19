@@ -64,11 +64,45 @@ needed or no focused definition suffices. Prefer a concise, task-specific `label
 without sensitive details; when omitted, Herdsman chooses a definition-based label.
 The optional `label` must match `^[a-z][a-z0-9_-]{0,31}$` and sets the requested
 logical agent label; an existing live-label collision fails.
-Fresh delegation runs in the calling controller's cwd.
 The definition is resolved from the effective roster and delegating agent
 controllers may use only their allowlisted definitions. Project definitions
 still require trusted project approval. A fresh delegation starts a new Pi
 session.
+
+Fresh delegation runs in the calling controller's working directory unless
+you supply `cwd`. The global
+[`allowAgentCwdOverride` setting](configuration.md#schema-and-defaults) adds
+this optional field to root controllers' schemas after `/reload`. Nested
+Agent controllers do not accept it. Disabling the setting rejects explicit
+`cwd` even before the schema is refreshed.
+
+An explicit `cwd` must be a non-empty path without control characters and
+resolve to an existing, accessible directory. Relative paths resolve against
+the calling controller's working directory; aliases of that directory count
+as the same directory. Only an ordinary Lead can select a different directory,
+including a subdirectory. For a different directory, the definition still
+comes from the caller's roster and cannot have a project or private-repository
+source. Before creating a pane and again before starting Pi, Herdsman rechecks
+the setting and target. It rejects a cross-directory target at or below a
+checkout path recorded in local Manager assignment authority, even when the
+assigned Lead is not running. If the assignment lacks a recorded checkout
+path, Herdsman can also match its exact saved Pi session's directory when
+Herdr confirms it is a linked checkout of the assigned repository. Herdsman
+does not infer a checkout from a branch name or match assignments without
+usable path or session evidence. It rejects the override if assignment
+authority or a relevant checkout topology cannot be verified. This check
+does not discover other writers or reserve the directory.
+
+For a different directory, Pi starts with `--no-approve`: trust-gated project
+resources are not loaded, but ordinary context files such as `AGENTS.md` can
+still apply. This is not a sandbox or a guarantee of exclusive access. The
+override changes the execution directory, not the owner or Herdr workspace.
+Relative `files` paths still resolve against the calling controller's directory.
+Successful fresh delegation reports the effective directory.
+[`continue_agent`](#continue_agent) restores the saved directory and has no
+`cwd` override. The fresh cross-directory launch's `--no-approve` flag is not
+carried forward; Pi's normal project trust behavior applies on continuation.
+
 Each accepted definition delegation creates one agent generation for one
 assignment. The terminal result is delivered once and the agent is cleaned up.
 The tool returns after the assignment is accepted, not when its work completes;
