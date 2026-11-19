@@ -149,6 +149,9 @@ herdr machine add my-herd --label my-herd
 
 The remote machine then appears alongside Local in Herdr.
 
+For authorized SSH onboarding or reciprocal Herdsman peer setup, use the
+bundled [machine-pairing skill](../../skills/machine-pairing/SKILL.md).
+
 ## Use Tailscale
 
 If you downloaded only the base Compose file, also download the
