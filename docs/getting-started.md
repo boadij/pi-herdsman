@@ -68,6 +68,15 @@ Delegation starts after Herdsman accepts the task. The Agent works
 asynchronously, and its result returns to the exact Pi session that delegated
 it. You can continue working while it runs.
 
+## Explore Herdsman with the guide
+
+Ask the optional Pi skill to explain a feature, help choose a workflow, or
+show how to use it, without executing the suggested actions:
+
+```text
+/skill:herdsman-guide How should I organize implementation and reviews?
+```
+
 ## Manage work with `/herdsman`
 
 Use `/herdsman` to discover controls for your work. For command details, see
