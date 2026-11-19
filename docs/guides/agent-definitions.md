@@ -274,9 +274,12 @@ is needed.
 For a read-only historical assessment, invoke
 `/skill:agent-specialization-audit` with the optional
 [`pi-session-inspector`](https://www.npmjs.com/package/pi-session-inspector)
-extension available in Pi. The audit compares recorded assignments with the
-current effective roster, reports incomplete coverage, and does not modify
-Agent definitions.
+extension available in Pi. When auditing a Git repository with an inspector
+that supports `cwdPrefixes`, the skill includes its registered worktrees and
+historical Herdr worktree paths from saved Pi session headers. Former worktree
+membership may be inferred from paths rather than verified. The audit compares
+recorded assignments with the current effective roster, reports incomplete
+coverage, and does not modify Agent definitions.
 
 ## Create a standalone definition
 
