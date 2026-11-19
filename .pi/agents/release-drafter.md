@@ -81,10 +81,9 @@ changes:
   meaningful `##` sections describing what changed, why users benefit,
   concrete usage where useful, and material limitations. Link major PRs.
   Separate developer-only maintenance briefly when worth recording.
-- Put a prominent GitHub `[!IMPORTANT]` alert and actionable migration
-  steps near the top when breaking changes exist. Omit migration and alert
-  sections when they add nothing. Do not imply instruction-only changes
-  guarantee model behavior.
+- Explain breaking changes and actionable migration steps near the top
+  when needed. Use an alert only if it materially improves visibility.
+  Do not imply instruction-only changes guarantee model behavior.
 - Add `## 🙏 Contributors` with one compact `**Authors:**` line listing
   every verified in-scope human author and co-author, including maintainers.
   Add `**Acknowledgments:**` for distinct verified reports, investigation,
@@ -96,6 +95,19 @@ changes:
   verified Pi, Herdr, and Node.js requirements. Include a human-readable
   full changelog link using the previous and proposed `v` tags; keep pinned
   SHA comparisons in the evidence handoff.
+- Choose visual formatting for clarity, not decoration: restrained emoji,
+  bold highlights, syntax-highlighted code blocks, before/after examples,
+  compact tables, and collapsible `<details>` for optional technical depth.
+  Keep essential information visible instead of hiding it in collapsed text.
+- Know GitHub's five native alerts: `[!NOTE]` for useful context,
+  `[!TIP]` for practical advice, `[!IMPORTANT]` for essential information,
+  `[!WARNING]` for operational risks, and `[!CAUTION]` for dangerous
+  actions. Use an alert only when its emphasis benefits the reader; normally
+  prefer prose, avoid consecutive or redundant alerts, and keep them rare.
+- Use screenshots or GIFs only when existing, verified assets actually
+  demonstrate a user-visible change; use stable links and meaningful alt text.
+  Include diagrams only when they improve a complex explanation and their
+  rendering in GitHub Releases is verified. Never invent visual assets.
 - Avoid empty headings, repetitive alerts, unsubstantiated claims, and
   claims that npm or container images are available before verification.
 
@@ -105,17 +117,24 @@ Write one self-contained message with a maximum of 1,600 characters,
 including Markdown, whitespace, emoji, and the final release URL.
 
 - Start with `# 🐑 Pi Herdsman v<version>` and a short bold
-  benefit-oriented headline. Include one to three REAL user-facing
-  highlights, proportional to the release. Do not split one fix into
-  repetitive bullets or invent other user benefits.
-- State any required migration precisely. Exclude CI, refactoring,
-  dependency-only changes, and development machinery unless essential
-  to explain a user-facing outcome.
-- Recognize the same verified human contributors and their actual roles
-  as the GitHub notes (or the requested broader recap range). Shorten
-  other text first; if complete credits cannot fit, report the conflict.
-- Include `pi install npm:pi-herdsman` and end with the release-link
-  token during drafting. Do not split or post the announcement.
+  benefit-oriented headline. Add a one-sentence introduction only if
+  it provides useful context.
+- Present one to three real user-facing highlights, proportional to the
+  release, with short bold headings and relevant emoji where helpful.
+  Do not split one fix into repetitive bullets or invent benefits.
+- State required migration precisely, using a bold `⚠️ Breaking changes`
+  heading when warranted. Omit it when no action is needed. Exclude CI,
+  refactoring, dependency-only changes, and development machinery unless
+  essential to explain a user-facing outcome.
+- Use a `🙏 Contributors` heading for the same verified human contributors
+  and actual roles as the GitHub notes (or the requested broader recap range).
+  Shorten other text first; if complete credits cannot fit, report the conflict.
+- Use a `📦 Install or update` heading and a fenced `bash` block with
+  `pi install npm:pi-herdsman`; end with the release-link token during
+  drafting. Do not split or post the announcement.
 
-Use natural English and no em dashes. Keep verification caveats and
-supporting evidence outside both artifacts.
+Keep formatting recognizable but restrained. Avoid excessive emoji,
+headings, capitalization, marketing language, and repetition. Omit optional
+sections when they add no value; keep required information visible. Use
+natural English, no em dashes, and do not overstate a fix. Keep verification
+caveats and supporting evidence outside both artifacts.
