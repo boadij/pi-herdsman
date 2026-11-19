@@ -89,11 +89,11 @@ Maintainer-only validation, smoke, and documentation-process material.
 
 Do not mix these procedures into normal user setup.
 
-### `SKILL.md`
+### Bundled skills
 
-`SKILL.md` is optional model-facing reinforcement of runtime behavior plus
-strategy, rationale, examples, and recovery guidance. It is not a second
-normative owner for public schemas or runtime semantics.
+Skills under `skills/` provide optional, task-specific model guidance, such as
+workflow explanation or definition management. They are not authoritative
+owners of runtime semantics or public schemas.
 
 ## Architecture decision records
 
@@ -112,7 +112,7 @@ When runtime guidance changes:
 - update the authoritative runtime contract first
 - update affected documentation or skill projections
 - remove obsolete reinforcement
-- keep runtime behavior sufficient when `SKILL.md` is not loaded
+- keep runtime behavior sufficient without loading an optional skill
 
 A high-salience invariant may appear at multiple model decision points when that
 materially improves reliability, but every projection must preserve one
@@ -172,6 +172,6 @@ A feature should normally change:
 - a guide when the user workflow changes
 - an entry page only when the reading path or first-use experience changes
 - README only when product positioning, first-use, or headline capability changes
-- `SKILL.md` only when model-facing coordination guidance changes
+- a bundled skill only when its task guidance changes
 
 Update only the surfaces whose ownership or reader path changed.

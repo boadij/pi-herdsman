@@ -793,7 +793,7 @@ remote 'set -e
         ...(typeof entry === "object" ? entry : {}),
         source,
         extensions: ["+dist/index.js"],
-        skills: ["+SKILL.md", "+skills/agent-definitions/SKILL.md"],
+        skills: ["+skills/agent-definitions/SKILL.md"],
       };
     });
     if (matches !== 1) throw Error("expected exactly one installed local package entry");

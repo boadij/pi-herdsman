@@ -3297,20 +3297,6 @@ export function startupExecutor(
   };
 }
 
-export function skillBlock(skill: string, name: string): string {
-  const start = `<!-- pi-herdsman-runtime-${name}:start -->`;
-  const end = `<!-- pi-herdsman-runtime-${name}:end -->`;
-  const from = skill.indexOf(start);
-  const to = skill.indexOf(end);
-  assert.notEqual(from, -1, `missing ${start}`);
-  assert.notEqual(to, -1, `missing ${end}`);
-  assert.ok(to > from, `${name} markers out of order`);
-  return skill
-    .slice(from + start.length, to)
-    .trim()
-    .replaceAll(/\s+/g, " ");
-}
-
 export function promptLaunchContents(args: string[]): string[] {
   const contents: string[] = [];
   for (let index = 0; index < args.length; index++) {

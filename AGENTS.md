@@ -33,7 +33,7 @@ current extension behavior. Historical ADRs instead preserve decisions made
 at the time, including rejected alternatives and later supersession; they do
 not redefine current runtime semantics.
 
-- Keep `SKILL.md`, `docs/reference/`, `docs/guides/`, and other current-behavior
+- Keep `docs/reference/`, `docs/guides/`, and other current-behavior
   documentation current-version-only.
 - Do not add historical release, migration, legacy-name, or compatibility
   guidance for removed behavior to current-behavior documentation.
@@ -92,12 +92,11 @@ state, validation, documentation, tests, and public interfaces.
 ## Runtime instruction authority
 
 Runtime behavior and authoritative runtime contracts define Herdsman's
-operational semantics. `SKILL.md`, documentation, examples, and tests project
-those semantics; they do not independently redefine them.
+operational semantics. Documentation, specialized skills, examples, and tests
+must reflect these semantics rather than redefine them.
 
-The runtime contract must remain sufficient without loading `SKILL.md`.
-`SKILL.md` may reinforce high-salience invariants and add strategy, rationale,
-examples, and recovery detail.
+The runtime contract must remain sufficient without loading any optional skill.
+Bundled skills provide task-specific guidance, not another operational contract.
 
 When changing an invariant:
 

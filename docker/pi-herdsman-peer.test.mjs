@@ -106,7 +106,7 @@ test("launcher resolves selected local packages and rejects ambiguous selections
           {
             source: rel,
             extensions: ["+dist/index.js"],
-            skills: ["+SKILL.md", "+skills/agent-definitions/SKILL.md"],
+            skills: ["+skills/agent-definitions/SKILL.md"],
           },
         ],
         "local",
