@@ -27,6 +27,8 @@ authored the fix. Corrections and additions are welcome.
 
 - **[@gian-reto](https://github.com/gian-reto)** - Shared a working declarative Nix derivation for Pi Herdsman, demonstrating an installation approach without requiring a dedicated flake ([issue #327](https://github.com/boadij/pi-herdsman/issues/327)).
 
+- **[@gnuts](https://github.com/gnuts)** - Shared multi-repository orchestration and cross-model review workflows, highlighted supervision and auditability challenges, and suggested interactive workflow coaching ([discussion #179](https://github.com/boadij/pi-herdsman/discussions/179)).
+
 - **[@jadc](https://github.com/jadc)** - Identified shell-history pollution from automatically launched Pi commands, prompting discussion of an upstream Herdr improvement ([issue #143](https://github.com/boadij/pi-herdsman/issues/143)).
 
 - **[@jszaday](https://github.com/jszaday)** - Implemented configurable Agent nesting and prompt visibility of nested descendants, and proposed nonblocking owner notifications ([PR #866](https://github.com/boadij/pi-herdsman/pull/866), [PR #877](https://github.com/boadij/pi-herdsman/pull/877), [issue #908](https://github.com/boadij/pi-herdsman/issues/908); follow-up [PR #917](https://github.com/boadij/pi-herdsman/pull/917)).
