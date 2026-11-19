@@ -126,7 +126,9 @@ verified, that machine does not contribute Lead results; an incomplete scan
 does not mean that no eligible Leads exist. Labels are not authority. Remote
 transport requires an independently working noninteractive OpenSSH target with
 normal strict host-key verification. `ssh://` targets and SSH-config aliases
-are supported; Herdr-only temporary authentication is not.
+are supported; Herdr-only temporary authentication is not. For authorized
+onboarding or reciprocal SSH setup, see the bundled
+[machine-pairing skill](../../skills/machine-pairing/SKILL.md).
 
 An eligible peer in `peers` has been verified for discovery, but
 `message_peer` still revalidates identity and authority when sending. A peer in
