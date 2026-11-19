@@ -39,6 +39,8 @@ export type HerdsmanConfig = {
   spawnPlacement: SpawnPlacement;
   defaultLeadExecution: LeadExecutionMode;
   contextRetirement: boolean;
+  peerCommunicationEnabled: boolean;
+  peerFederationEnabled: boolean;
   autoActivateManager: boolean;
   managerGitBootstrapWithoutConfirmation: boolean;
   inlineAttachmentLimitBytes: number;
@@ -62,6 +64,8 @@ export const DEFAULT_CONFIG: HerdsmanConfig = {
   spawnPlacement: "subtree",
   defaultLeadExecution: "flexible",
   contextRetirement: true,
+  peerCommunicationEnabled: true,
+  peerFederationEnabled: true,
   autoActivateManager: false,
   managerGitBootstrapWithoutConfirmation: false,
   inlineAttachmentLimitBytes: DEFAULT_BYTE_LIMIT,
@@ -106,6 +110,8 @@ const CONFIG_KEYS = new Set<ConfigKey>([
   "spawnPlacement",
   "defaultLeadExecution",
   "contextRetirement",
+  "peerCommunicationEnabled",
+  "peerFederationEnabled",
   "autoActivateManager",
   "managerGitBootstrapWithoutConfirmation",
   "inlineAttachmentLimitBytes",
@@ -191,6 +197,15 @@ function parseRawConfig(content: string): Partial<HerdsmanConfig> {
       throw new Error("Invalid Pi Herdsman config field contextRetirement");
     result.contextRetirement = record.contextRetirement;
   }
+  for (const key of [
+    "peerCommunicationEnabled",
+    "peerFederationEnabled",
+  ] as const)
+    if (key in record) {
+      if (typeof record[key] !== "boolean")
+        throw new Error(`Invalid Pi Herdsman config field ${key}`);
+      result[key] = record[key];
+    }
   if ("autoActivateManager" in record) {
     if (typeof record.autoActivateManager !== "boolean")
       throw new Error("Invalid Pi Herdsman config field autoActivateManager");
@@ -236,6 +251,14 @@ function parseRawConfig(content: string): Partial<HerdsmanConfig> {
     result.worktreeRemovalPreapprovedRepos = repos;
   }
   return result;
+}
+
+export function readPeerPolicy(): { local: boolean; remote: boolean } {
+  const { peerCommunicationEnabled, peerFederationEnabled } = readConfig();
+  return {
+    local: peerCommunicationEnabled,
+    remote: peerCommunicationEnabled && peerFederationEnabled,
+  };
 }
 
 export function isWorktreeRemovalPreapproved(repoKey: string): boolean {
@@ -598,6 +621,12 @@ export function updateConfig<K extends ConfigKey>(
         );
       if (key === "contextRetirement" && typeof value !== "boolean")
         throw new Error("Invalid Pi Herdsman config field contextRetirement");
+      if (
+        (key === "peerCommunicationEnabled" ||
+          key === "peerFederationEnabled") &&
+        typeof value !== "boolean"
+      )
+        throw new Error(`Invalid Pi Herdsman config field ${key}`);
       if (key === "autoActivateManager" && typeof value !== "boolean")
         throw new Error("Invalid Pi Herdsman config field autoActivateManager");
       if (
@@ -629,6 +658,8 @@ export function updateConfig<K extends ConfigKey>(
         key !== "defaultLeadExecution" &&
         key !== "contextRetirement" &&
         key !== "autoActivateManager" &&
+        key !== "peerCommunicationEnabled" &&
+        key !== "peerFederationEnabled" &&
         key !== "managerGitBootstrapWithoutConfirmation" &&
         key !== "managerMergeEnabled" &&
         key !== "managerMergeOverrides" &&

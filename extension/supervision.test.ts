@@ -19,6 +19,7 @@ import { createHash, randomUUID } from "node:crypto";
 import support, { PI_AGENT_ROOT, realFs } from "./support.ts";
 import { acquireProcessLock } from "./lock.ts";
 import { test } from "node:test";
+import { readPeerPolicy, updateConfig } from "./config.ts";
 const {
   chiefMessagePath,
   chiefMessageBytes,
@@ -175,6 +176,52 @@ test("peer delivery receipts bind exact session, ID, and content durably", () =>
     false,
   );
 });
+
+for (const disableAt of ["before drain", "during authorization"]) {
+  test(`peer inbox pauses ${disableAt} without blocking supervision`, async (t) => {
+    t.after(() => updateConfig("peerCommunicationEnabled", undefined));
+    const runtime = supervisionRuntime(socket());
+    const peer = message({ kind: "peer_message", createdAt: 1 });
+    const hierarchy = message({
+      toSessionId: peer.toSessionId,
+      createdAt: 2,
+    });
+    const peerPath = writeCoordinationMessage(peer, runtime);
+    writeCoordinationMessage(hierarchy, runtime);
+    const delivered = new Set<string>();
+    let disableDuringAuthorization = disableAt === "during authorization";
+    if (!disableDuringAuthorization)
+      updateConfig("peerCommunicationEnabled", false);
+    const options = {
+      runtime,
+      sessionId: peer.toSessionId,
+      isAuthorized: async (record: ChiefMessageRecord) => {
+        if (record.id === peer.id && disableDuringAuthorization) {
+          disableDuringAuthorization = false;
+          updateConfig("peerCommunicationEnabled", false);
+        }
+        return true;
+      },
+      isPeerDeliveryEnabled: () => readPeerPolicy().local,
+      isDelivered: (id: string) => delivered.has(id),
+      sendMessage: (
+        _payload: unknown,
+        _options: unknown,
+        record: ChiefMessageRecord,
+      ) => {
+        assert.ok(!delivered.has(record.id), "duplicate delivery");
+        delivered.add(record.id);
+      },
+    };
+    assert.equal(await drainCoordinationInbox(options), 1);
+    assert.deepEqual([...delivered], [hierarchy.id]);
+    assert.deepEqual(readCoordinationMessage(peerPath), peer);
+    updateConfig("peerCommunicationEnabled", true);
+    assert.equal(await drainCoordinationInbox(options), 1);
+    assert.deepEqual([...delivered], [hierarchy.id, peer.id]);
+    assert.equal(await drainCoordinationInbox(options), 0);
+  });
+}
 
 test("verified Pi-history delivery persists peer receipt before inbox removal", async () => {
   const runtime = peerRuntime(socket());

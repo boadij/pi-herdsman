@@ -1763,6 +1763,17 @@ test("peer provenance enrichment never replaces the Lead cwd", async (t) => {
   }
 });
 
+function onPeerAttachmentRead(path: string, action: () => void): void {
+  const expected = realFs.statSync(path);
+  support.fileReadHook = (fd) => {
+    if (typeof fd !== "number") return;
+    const current = realFs.fstatSync(fd);
+    if (current.dev !== expected.dev || current.ino !== expected.ino) return;
+    support.fileReadHook = undefined;
+    action();
+  };
+}
+
 test("peer publication rejects sender and target generation replacement during attachment preparation", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-a-pane";
@@ -1867,37 +1878,31 @@ test("peer publication rejects sender and target generation replacement during a
       const target = claim(targetId, "lead-b-pane", "lead-b-tab");
       const expectedSender = sender.record;
       const expectedTarget = target.record;
-      const preparationReached = testGate<void>();
-      let reached = false;
-      support.configReadHook = () => {
-        if (!reached) {
-          reached = true;
-          preparationReached.resolve();
-        }
-      };
-      const pending = peer.execute(
-        "message",
-        {
-          target: targetAddress,
-          message: "must not queue",
-          files: [attachment],
-        },
-        undefined,
-        undefined,
-        context,
-      );
-      await preparationReached.promise;
       const current = replaced === "sender" ? sender : target;
-      current.lease.release();
-      const replacement = claim(
-        current.record.piSessionId,
-        current.record.paneId,
-        current.record.tabId,
-      );
+      let replacement: ReturnType<typeof claim> | undefined;
+      onPeerAttachmentRead(attachment, () => {
+        current.lease.release();
+        replacement = claim(
+          current.record.piSessionId,
+          current.record.paneId,
+          current.record.tabId,
+        );
+      });
       await assert.rejects(
-        pending,
+        peer.execute(
+          "message",
+          {
+            target: targetAddress,
+            message: "must not queue",
+            files: [attachment],
+          },
+          undefined,
+          undefined,
+          context,
+        ),
         /sender or target changed before the message was queued/,
       );
+      assert.ok(replacement, "attachment read triggers generation replacement");
       assert.deepEqual(
         readPeerLeadRecord(runtime, senderId),
         replaced === "sender" ? replacement.record : expectedSender,
@@ -1912,7 +1917,7 @@ test("peer publication rejects sender and target generation replacement during a
       target.lease.release();
       removePeerLeadRecord(runtime, senderId);
       removePeerLeadRecord(runtime, targetId);
-      support.configReadHook = undefined;
+      support.fileReadHook = undefined;
     }
 
     {
@@ -1994,15 +1999,10 @@ test("peer publication rejects sender and target generation replacement during a
 
     const sender = claim(senderId, "lead-a-pane", "lead-a-tab");
     const target = claim(targetId, "lead-b-pane", "lead-b-tab");
-    const preparationReached = testGate<void>();
-    let reached = false;
-    support.configReadHook = () => {
-      if (!reached) {
-        reached = true;
-        preparationReached.resolve();
-      }
-    };
-    const pending = peer.execute(
+    onPeerAttachmentRead(attachment, () => {
+      primaryWorkspaceId = "new-primary";
+    });
+    await peer.execute(
       "message",
       {
         target: targetAddress,
@@ -2013,9 +2013,7 @@ test("peer publication rejects sender and target generation replacement during a
       undefined,
       context,
     );
-    await preparationReached.promise;
-    primaryWorkspaceId = "new-primary";
-    await pending;
+    assert.equal(primaryWorkspaceId, "new-primary");
     const queued = listCoordinationMessagePaths(runtime, targetId);
     assert.equal(queued.length, 1);
     removeChiefMessage(runtime, targetId, readChiefMessage(queued[0]).id);
@@ -2024,7 +2022,7 @@ test("peer publication rejects sender and target generation replacement during a
     removePeerLeadRecord(runtime, senderId);
     removePeerLeadRecord(runtime, targetId);
   } finally {
-    support.configReadHook = undefined;
+    support.fileReadHook = undefined;
     pi.events.get("session_shutdown")?.[0]();
     realFs.rmSync(configPath, { force: true });
     realFs.rmSync(attachment, { force: true });
@@ -2102,15 +2100,19 @@ test("peer publication tolerates sender and target presentation enrichment durin
       const target = claim(targetId, "lead-b-pane", "lead-b-tab");
       let messageId: string | undefined;
       try {
-        const preparationReached = testGate<void>();
-        let reached = false;
-        support.configReadHook = () => {
-          if (!reached) {
-            reached = true;
-            preparationReached.resolve();
-          }
+        const current = enriched === "sender" ? sender : target;
+        const updated = {
+          ...current.record,
+          name: `${current.record.name} enriched`,
+          repo: "pi-herdsman-enriched",
+          branch: "feature/enriched",
+          workspaceLabel: "pi-herdsman/feature/enriched",
+          updatedAt: current.record.updatedAt + 1,
         };
-        const pending = peer.execute(
+        onPeerAttachmentRead(attachment, () => {
+          writePeerLeadRecord(runtime, updated);
+        });
+        const queued = await peer.execute(
           "message",
           {
             target: targetAddress,
@@ -2121,24 +2123,10 @@ test("peer publication tolerates sender and target presentation enrichment durin
           undefined,
           context,
         );
-        await preparationReached.promise;
-
-        const current = enriched === "sender" ? sender : target;
-        const updated = {
-          ...current.record,
-          name: `${current.record.name} enriched`,
-          repo: "pi-herdsman-enriched",
-          branch: "feature/enriched",
-          workspaceLabel: "pi-herdsman/feature/enriched",
-          updatedAt: current.record.updatedAt + 1,
-        };
-        writePeerLeadRecord(runtime, updated);
         assert.deepEqual(
           readPeerLeadRecord(runtime, current.record.piSessionId),
           updated,
         );
-
-        const queued = await pending;
         assert.equal(queued.details?.target, targetAddress);
         messageId = queued.details?.id as string;
         assert.equal(listCoordinationMessagePaths(runtime, targetId).length, 1);
@@ -2148,7 +2136,7 @@ test("peer publication tolerates sender and target presentation enrichment durin
         assert.equal(message.fromSessionId, senderId);
         assert.equal(message.toSessionId, targetId);
       } finally {
-        support.configReadHook = undefined;
+        support.fileReadHook = undefined;
         if (messageId) removeChiefMessage(runtime, targetId, messageId);
         sender.lease.release();
         target.lease.release();
@@ -2157,7 +2145,7 @@ test("peer publication tolerates sender and target presentation enrichment durin
       }
     }
   } finally {
-    support.configReadHook = undefined;
+    support.fileReadHook = undefined;
     pi.events.get("session_shutdown")?.[0]();
     realFs.rmSync(configPath, { force: true });
     realFs.rmSync(attachment, { force: true });

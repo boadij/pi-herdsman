@@ -2425,6 +2425,10 @@ const remoteDiagnosticMessages: Record<string, [string, string]> = {
     "Remote peer probe failed",
     "Check Herdr machine status and the remote Pi session.",
   ],
+  federation_disabled: [
+    "Peer federation is disabled",
+    "Check the remote Herdsman communication settings.",
+  ],
   build_mismatch: ["Peer build mismatch", "Reload the outdated Pi session."],
   build_unverified: [
     "Peer build could not be verified",

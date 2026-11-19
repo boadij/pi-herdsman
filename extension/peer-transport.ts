@@ -11,8 +11,22 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
+import { readPeerPolicy } from "./config.ts";
 import { acquireProcessLock, ProcessLockOccupiedError } from "./lock.ts";
 import { herdsmanDataRoot } from "./storage.ts";
+
+const PEER_FEDERATION_DISABLED = "Peer federation is disabled";
+
+export class PeerFederationDisabledError extends Error {
+  constructor() {
+    super(PEER_FEDERATION_DISABLED);
+    this.name = "PeerFederationDisabledError";
+  }
+}
+
+function assertPeerFederationEnabled(): void {
+  if (!readPeerPolicy().remote) throw new PeerFederationDisabledError();
+}
 
 export type SavedPeerMachine = Readonly<{
   id: string;
@@ -198,9 +212,13 @@ export function tryClaimRemotePeerOutbound(
   }
 }
 
-export function persistRemotePeerOutbound(outbound: RemotePeerOutbound): void {
+export function persistRemotePeerOutbound(
+  outbound: RemotePeerOutbound,
+  storeCorrespondence?: () => void,
+): void {
+  const serialized = JSON.stringify(outbound);
   const frameBytes = Buffer.byteLength(outbound.envelope, "utf8");
-  const recordBytes = Buffer.byteLength(JSON.stringify(outbound), "utf8");
+  const recordBytes = Buffer.byteLength(serialized, "utf8");
   if (
     !UUID.test(outbound.id) ||
     frameBytes > PEER_TRANSPORT_FRAME_LIMIT_BYTES ||
@@ -208,7 +226,10 @@ export function persistRemotePeerOutbound(outbound: RemotePeerOutbound): void {
   )
     throw new Error("invalid remote peer outbound record");
   const path = join(outboundDirectory(), `${outbound.id}.json`);
-  writeFileSync(path, `${JSON.stringify(outbound)}\n`, {
+  // Authorize both writes together so an opt-out cannot strand a correspondence.
+  assertPeerFederationEnabled();
+  storeCorrespondence?.();
+  writeFileSync(path, `${serialized}\n`, {
     encoding: "utf8",
     flag: "wx",
     mode: 0o600,
@@ -393,10 +414,12 @@ function run(
 export async function listSavedPeerMachines(
   signal?: AbortSignal,
 ): Promise<SavedPeerMachine[]> {
+  assertPeerFederationEnabled();
   const [listText, statusText] = await Promise.all([
     run("herdr", ["machine", "list", "--json"], undefined, signal),
     run("herdr", ["machine", "status", "--json"], undefined, signal),
   ]);
+  assertPeerFederationEnabled();
   const list: unknown = JSON.parse(listText);
   const statuses: unknown = JSON.parse(statusText);
   if (!Array.isArray(list) || !Array.isArray(statuses))
@@ -476,6 +499,7 @@ export async function runPeerEndpoint(
   input?: string,
   signal?: AbortSignal,
 ): Promise<string> {
+  assertPeerFederationEnabled();
   const target = parsePeerSshTarget(machine.target);
   const args = [
     "-T",
@@ -489,7 +513,13 @@ export async function runPeerEndpoint(
     target.host,
     `pi-herdsman-peer ${action}`,
   ];
-  return run("ssh", args, input, signal);
+  try {
+    return await run("ssh", args, input, signal);
+  } catch (error) {
+    if (error instanceof Error && error.message === PEER_FEDERATION_DISABLED)
+      throw new PeerFederationDisabledError();
+    throw error;
+  }
 }
 
 export async function tryPollPeerReplies(
@@ -497,7 +527,8 @@ export async function tryPollPeerReplies(
 ): Promise<string | undefined> {
   try {
     return await poll();
-  } catch {
+  } catch (error) {
+    if (error instanceof PeerFederationDisabledError) throw error;
     return undefined;
   }
 }
@@ -507,6 +538,7 @@ export async function probePeerEndpoint(
   signal?: AbortSignal,
 ): Promise<RemotePeerSnapshot> {
   const output = await runPeerEndpoint(machine, "probe", undefined, signal);
+  assertPeerFederationEnabled();
   const probe: unknown = JSON.parse(output);
   if (
     !probe ||

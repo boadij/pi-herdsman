@@ -245,6 +245,7 @@ test("Settings categories and Agents & definitions retain their selections", asy
     "Sessions & agents",
     "Manager & repositories",
     "Interface",
+    "Communication",
   ]);
   assert.equal(calls[2]?.selected, "manager");
   assert.equal(calls[4]?.selected, "interface");
@@ -653,7 +654,7 @@ test("Settings categories expose only canonical entries and unavailable reposito
     },
   } as any);
   const ctx = { isProjectTrusted: () => false } as any;
-  for (const category of ["sessions", "manager", "interface"])
+  for (const category of ["sessions", "manager", "interface", "communication"])
     await runtime.openSettingsCategory(ctx, category);
   assert.deepEqual(
     seen["Sessions & agents"]!.map((i) => i.value),
@@ -677,12 +678,77 @@ test("Settings categories expose only canonical entries and unavailable reposito
     seen.Interface!.map((i) => i.value),
     ["agent-layout", "status-widget-rows"],
   );
+  assert.deepEqual(
+    seen.Communication!.map((i) => i.value),
+    ["peer-communication", "peer-federation"],
+  );
   assert.equal(
     seen["Manager & repositories"]!.find(
       (i) => i.value === "removal-confirmation",
     ).description,
     "Repository unavailable",
   );
+});
+
+test("Communication settings preserve the federation preference while inactive", async () => {
+  const config = {
+    ...readConfig(),
+    peerCommunicationEnabled: true,
+    peerFederationEnabled: true,
+  };
+  const descriptions: string[][] = [];
+  const notices: string[] = [];
+  const writes: [keyof typeof config, boolean][] = [];
+  const answers = [
+    "peer-communication",
+    "off",
+    "peer-federation",
+    "peer-communication",
+    "on",
+    "peer-federation",
+    "off",
+    undefined,
+  ];
+  const runtime = createLeadCommandRuntime({
+    readConfig: () => ({ ...config }),
+    updateConfig: (
+      key: "peerCommunicationEnabled" | "peerFederationEnabled",
+      value: boolean,
+    ) => {
+      writes.push([key, value]);
+      config[key] = value;
+    },
+    selectMenu: async (
+      _ctx: unknown,
+      title: string,
+      items: { description: string }[],
+    ) => {
+      if (title === "Communication")
+        descriptions.push(items.map((item) => item.description));
+      return answers.shift();
+    },
+  } as any);
+  await runtime.openSettingsCategory(
+    {
+      isProjectTrusted: () => false,
+      ui: { notify: (message: string) => notices.push(message) },
+    } as any,
+    "communication",
+  );
+  assert.deepEqual(descriptions, [
+    ["On", "On"],
+    ["Off", "On (inactive)"],
+    ["Off", "On (inactive)"],
+    ["On", "On"],
+    ["On", "Off"],
+  ]);
+  assert.deepEqual(writes, [
+    ["peerCommunicationEnabled", false],
+    ["peerCommunicationEnabled", true],
+    ["peerFederationEnabled", false],
+  ]);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0]!, /inactive while peer communication is off/);
 });
 
 test("Project setting combines scopes and skips unchanged values", async () => {

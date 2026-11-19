@@ -11,9 +11,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { herdsmanDataRoot } from "./storage.ts";
+import { updateConfig } from "./config.ts";
+import { herdsmanConfigPath, herdsmanDataRoot } from "./storage.ts";
 import {
   listRemotePeerOutbounds,
+  listSavedPeerMachines,
+  PeerFederationDisabledError,
   readRemotePeerOutbound,
   parsePeerSshTarget,
   peerRecoveryRequest,
@@ -30,6 +33,8 @@ import {
   acknowledgePeerReply,
   assertPeerDataRoot,
   createPeerCorrespondence,
+  preparePeerCorrespondence,
+  storePeerCorrespondence,
   listPeerCorrespondences,
   pollPeerReplies,
   peerPayloadDigest,
@@ -104,11 +109,67 @@ test("remote peer outbox survives until acknowledged delivery", () => {
     unlinkSync(oversizedPath);
   }
 
+  updateConfig("peerFederationEnabled", false);
+  try {
+    assert.throws(
+      () => persistRemotePeerOutbound({ ...outbound, id: randomUUID() }),
+      PeerFederationDisabledError,
+    );
+    assert.deepEqual(listRemotePeerOutbounds(), [outbound]);
+  } finally {
+    unlinkSync(herdsmanConfigPath());
+  }
+
   removeRemotePeerOutbound(id);
   assert.equal(readRemotePeerOutbound(id), undefined);
   assert.equal(
     listRemotePeerOutbounds().some((item) => item.id === id),
     false,
+  );
+});
+
+test("an authorized outbound commit completes both writes if federation changes after correspondence storage", (t) => {
+  const id = randomUUID();
+  const correspondence = preparePeerCorrespondence({
+    originSession: randomUUID(),
+    originGeneration: randomUUID(),
+    recipientSession: randomUUID(),
+    recipientGeneration: randomUUID(),
+    acceptanceId: id,
+  });
+  t.after(() => {
+    updateConfig("peerFederationEnabled", undefined);
+    removeRemotePeerOutbound(id);
+    removePeerCorrespondence(correspondence.id);
+  });
+  const outbound = {
+    id,
+    machine: {
+      id: "test-machine",
+      label: "test-machine",
+      target: "ssh://test-machine:2222",
+      reachable: true,
+    },
+    dataRoot: "/test/agent/pi-herdsman",
+    session: correspondence.originSession,
+    claimId: correspondence.originGeneration,
+    recipientSession: correspondence.recipientSession,
+    digest: "a".repeat(64),
+    envelope: JSON.stringify({ record: { id }, correspondence }),
+  };
+
+  persistRemotePeerOutbound(outbound, () => {
+    storePeerCorrespondence(correspondence);
+    updateConfig("peerFederationEnabled", false);
+  });
+  assert.deepEqual(readRemotePeerOutbound(id), outbound);
+  assert.deepEqual(
+    listPeerCorrespondences().find((item) => item.id === correspondence.id),
+    correspondence,
+  );
+  assert.throws(
+    () => persistRemotePeerOutbound({ ...outbound, id: randomUUID() }),
+    PeerFederationDisabledError,
   );
 });
 
@@ -285,6 +346,59 @@ test("ordinary Lead retry requires complete snapshot and exact ordinary Lead rol
     }),
     { kind: "pending" },
   );
+});
+
+test("remote transport reads live policy and distinguishes bridge denial from SSH errors", async (t) => {
+  if (process.platform === "win32")
+    return t.skip("uses a POSIX fake ssh executable");
+  const directory = mkdtempSync(join(tmpdir(), "herdsman-peer-policy-"));
+  const invoked = join(directory, "invoked");
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${directory}:${oldPath ?? ""}`;
+  try {
+    writeFileSync(
+      join(directory, "ssh"),
+      "#!/bin/sh\ntouch " +
+        JSON.stringify(invoked) +
+        "\ncat >/dev/null\nprintf '%s\\n' 'Peer federation is disabled' >&2\nexit 1\n",
+      { mode: 0o700 },
+    );
+    const machine = {
+      id: "fixture",
+      label: "fixture",
+      target: "fixture",
+      reachable: true,
+    };
+    updateConfig("peerFederationEnabled", false);
+    await assert.rejects(listSavedPeerMachines(), PeerFederationDisabledError);
+    for (const action of [
+      "probe",
+      "accept",
+      "status",
+      "poll",
+      "ack",
+      "finalize",
+      "recover",
+      "recover-recipient",
+    ] as const) {
+      await assert.rejects(
+        runPeerEndpoint(machine, action),
+        PeerFederationDisabledError,
+      );
+    }
+    assert.equal(existsSync(invoked), false);
+    updateConfig("peerFederationEnabled", true);
+    await assert.rejects(
+      tryPollPeerReplies(() => runPeerEndpoint(machine, "poll", "{}")),
+      PeerFederationDisabledError,
+    );
+    assert.equal(existsSync(invoked), true);
+  } finally {
+    if (oldPath === undefined) delete process.env.PATH;
+    else process.env.PATH = oldPath;
+    rmSync(herdsmanConfigPath(), { force: true });
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("SSH stdin EPIPE rejects the transport without an uncaught process error", async (t) => {

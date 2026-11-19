@@ -337,6 +337,7 @@ export type ChiefInboxDrainOptions = {
     | "followUp"
     | undefined
     | Promise<"steer" | "followUp" | undefined>;
+  isPeerDeliveryEnabled?: () => boolean;
   forceNonTriggering?: boolean;
   maxDeliveries?: number;
   senderTarget?: (
@@ -1320,6 +1321,19 @@ function deliveredMessageContent(
   return content + senderEnvironmentAnnotation(record.senderEnvironment);
 }
 
+function peerDeliveryPaused(
+  record: ChiefMessageRecord,
+  options: ChiefInboxDrainOptions,
+): boolean {
+  if (record.kind !== "peer_message") return false;
+  try {
+    return options.isPeerDeliveryEnabled?.() === false;
+  } catch {
+    // Invalid settings must not enable peer traffic or block supervision.
+    return true;
+  }
+}
+
 /** Drain only this session's inbox. Files remain when Pi rejects delivery. */
 export async function drainCoordinationInbox(
   options: ChiefInboxDrainOptions,
@@ -1358,6 +1372,7 @@ export async function drainCoordinationInbox(
       }
       continue;
     }
+    if (peerDeliveryPaused(record, options)) continue;
     examined++;
     let token: unknown;
     const clearTransaction = async (): Promise<void> => {
@@ -1407,6 +1422,10 @@ export async function drainCoordinationInbox(
           record.id,
         );
         await options.transaction?.revalidate(token, "before-rejected-remove");
+        if (peerDeliveryPaused(record, options)) {
+          await clearTransaction();
+          continue;
+        }
       } catch {
         // A shutdown or replacement wins over cleanup of this old record.
         await clearTransaction();
@@ -1507,6 +1526,10 @@ export async function drainCoordinationInbox(
           if (authorizationUnavailable) {
             await clearTransaction();
             break;
+          }
+          if (peerDeliveryPaused(record, options)) {
+            await clearTransaction();
+            continue;
           }
           await options.sendMessage(
             {

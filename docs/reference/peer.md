@@ -11,6 +11,31 @@ does not turn a Managed Lead into an ordinary peer. Incomplete,
 corrupt, ambiguous, or unavailable assignment evidence fails closed. If either
 Lead is assigned, verified matching group and socket evidence is required.
 
+## Communication controls
+
+The user-wide [communication settings](configuration.md#peer-communication)
+apply only to horizontal peer coordination. Turning off **Peer communication**
+blocks peer listing and new peer messages, and pauses delivery to Pi of all
+pending peer messages in the local inbox, regardless of where they originated.
+Turning off only **Peer federation** blocks cross-machine discovery and
+transfers, including retries and replies through existing return correspondences.
+Both endpoints must allow federation for a cross-machine transfer. An eligible
+message already committed to the recipient's local inbox can still reach Pi
+with federation off, as long as **Peer communication** remains on there.
+Neither setting changes Agent delegation, Manager supervision, or Chief
+coordination.
+
+Running sessions check the current settings at communication boundaries,
+including submission and delivery, without requiring a reload. A known target
+or a previously published presence record does not bypass these checks.
+Disabling communication does not delete queued messages, correspondence, or
+delivery receipts. Eligible pending work can resume when the applicable controls
+are enabled again, subject to existing identity and authorization checks.
+
+The Herdsman federation setting is separate from Herdr's saved machine pairing
+and enablement. Turning federation off does not remove or disable a Herdr
+machine; turning it on does not pair a machine or configure SSH access.
+
 ## Presence and identity
 
 An ordinary Lead or active Manager publishes one private peer record under the
@@ -116,8 +141,8 @@ identity or eligibility is uncertain. Names, paths, branches, and workspace
 labels are descriptive metadata, not target handles. The model-facing list has
 no `session_id`, `pane_id`, `tab_id`, or `workspace_id` fields.
 
-When the active coordinator is a Manager, the list also discovers live Managers
-on enabled, reachable saved Herdr machines. An ordinary Lead similarly
+With federation enabled, an active Manager can also discover live Managers on
+enabled, reachable saved Herdr machines. An ordinary Lead similarly
 discovers only remote Leads verified as ordinary and unassigned by the remote
 machine's authoritative assignment scan. Managed or assigned Leads are not
 remote federation targets. Those entries use the same stable target format and
@@ -158,6 +183,9 @@ Each diagnostic has one of these reasons:
 - `herdr_not_reachable`: Herdr did not confirm reachability for the saved
   machine; this does not establish that its physical host is offline.
 - `probe_failed`: the remote peer probe failed before identity was established.
+- `federation_disabled`: the remote bridge explicitly refused federation under
+  its [communication settings](#communication-controls). That machine contributes
+  no peer results; this is a policy refusal, not a network or probe failure.
 - `build_mismatch`: an observed peer has valid build evidence that differs from
   this runtime. The affected peer is excluded from `peers`.
 - `build_unverified`: an observed peer has missing or invalid build evidence
@@ -203,13 +231,14 @@ return correspondence. This does not grant general initiation permission.
 
 Remote sends are retained locally until the remote endpoint confirms durable
 acceptance. Failed sends remain queued and retry automatically while the
-coordinator inbox is active; `list_peers` also triggers immediate
-reconciliation. Acceptance is not delivery to Pi or completion of the requested
-work. An accepted request establishes a capability-scoped, durable return
-correspondence bound to the coordinator role. The recipient can reply to the
-exact originating session with `message_peer`; the reply is queued at the
-recipient and retrieved automatically while the origin's inbox runtime is
-active. Replies remain queued until acknowledged, including across temporary
+coordinator inbox is active and federation is enabled; `list_peers` also
+triggers reconciliation when federation is enabled. Acceptance is not delivery
+to Pi or completion of the requested work. An accepted request establishes a
+capability-scoped, durable return correspondence bound to the coordinator role.
+The recipient can reply to the exact originating session with `message_peer`;
+the reply is queued at the recipient and retrieved automatically while the
+origin's inbox runtime is active and both endpoints allow federation. Replies
+remain queued until acknowledged, including across temporary
 disconnections; reverse SSH is not required. Recovery is allowed only for the
 same exact Pi session after it re-establishes live authority for that role; a
 replacement session or a different role is not substituted. Requests also
