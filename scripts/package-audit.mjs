@@ -35,8 +35,8 @@ const expectedRoot = new Set([
   "LICENSE",
   "skills/agent-definitions/SKILL.md",
   "skills/agent-specialization-audit/SKILL.md",
-  "skills/machine-pairing/SKILL.md",
   "skills/herdsman-guide/SKILL.md",
+  "skills/machine-pairing/SKILL.md",
 ]);
 const coordinators = new Set([
   "chief.md",
