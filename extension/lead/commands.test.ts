@@ -6,7 +6,9 @@ import {
   visibleAgentSnapshots,
 } from "../agent-controller.ts";
 import {
+  DEFAULT_CONFIG,
   readConfig,
+  validByteLimit,
   validMaxAgentDepth,
   validStatusWidgetMaxRows,
 } from "../config.ts";
@@ -22,7 +24,7 @@ test("status widget rows Settings validates choices and reports persistence erro
       expected: [100],
       errors: 2,
     },
-    { choices: ["reset"], inputs: [], expected: [undefined], errors: 0 },
+    { choices: ["default"], inputs: [], expected: [undefined], errors: 0 },
     {
       choices: ["custom", undefined],
       inputs: [undefined],
@@ -51,7 +53,7 @@ test("status widget rows Settings validates choices and reports persistence erro
           assert.equal(
             items.find((item) => item.value === "status-widget-rows")
               .description,
-            "8",
+            "8 lines",
           );
           return settings++ === 0 ? "status-widget-rows" : undefined;
         }
@@ -89,14 +91,13 @@ test("status widget rows Settings validates choices and reports persistence erro
 test("max Agent depth Settings validates choices and reports persistence errors", async () => {
   for (const scenario of [
     { choices: ["4"], inputs: [], expected: [4], errors: 0 },
-    { choices: ["default"], inputs: [], expected: [], errors: 0 },
     {
       choices: ["custom", "custom", "custom", "custom"],
       inputs: ["0", "-1", "1.5", " 6 "],
       expected: [6],
       errors: 3,
     },
-    { choices: ["reset"], inputs: [], expected: [undefined], errors: 0 },
+    { choices: ["default"], inputs: [], expected: [undefined], errors: 0 },
     {
       choices: ["custom", undefined],
       inputs: [undefined],
@@ -121,10 +122,10 @@ test("max Agent depth Settings validates choices and reports persistence errors"
       placementSettings: async () => ({ effective: "tab" }),
       validMaxAgentDepth,
       selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
-        if (title === "Sessions & agents") {
+        if (title === "Delegation options") {
           assert.equal(
             items.find((item) => item.value === "max-agent-depth").description,
-            "2",
+            "2 levels",
           );
           return settings++ === 0 ? "max-agent-depth" : undefined;
         }
@@ -145,7 +146,7 @@ test("max Agent depth Settings validates choices and reports persistence errors"
             notices.push([message, level]),
         },
       } as any,
-      "sessions",
+      "delegation",
     );
     assert.deepEqual(updates, scenario.expected);
     assert.equal(
@@ -361,7 +362,7 @@ test("Value menus identify current options in text and message row shows effecti
   await runtime.openSettingsCategory(ctx, "sessions");
   assert.equal(
     menus[0]?.items.find((i) => i.value === "message-limits").description,
-    "Inline 4 KiB · mailbox 16 KiB",
+    "Files 4 KiB · Messages 16 KiB",
   );
   await runtime.openRemovalSetting(ctx);
   const removal = menus.at(-1)!;
@@ -377,49 +378,49 @@ test("Current setting choices remain visible after cursor movement and in non-TU
     {
       action: "project",
       answers: ["project", undefined, undefined],
-      title: "Project Manager auto-start",
+      title: "Project · Start Manager automatically",
       current: "inherit",
     },
     {
       action: "merge",
       answers: ["repository", undefined, undefined],
-      title: "Local branch integration · /repo",
+      title: "Repository · Merge accepted branches · /repo",
       current: "inherit",
     },
     {
       action: "merge",
       answers: ["global", undefined, undefined],
-      title: "Global Manager local merge",
+      title: "Global · Merge accepted branches",
       current: "off",
     },
     {
       action: "sessions",
       answers: ["default-lead-execution", undefined, undefined],
-      title: "Default Lead execution",
+      title: "Default Lead mode",
       current: "flexible",
     },
     {
-      action: "sessions",
+      action: "delegation",
       answers: ["max-agent-depth", undefined, undefined],
-      title: "Max Agent depth",
+      title: "Agent nesting limit",
       current: "default",
     },
     {
       action: "manager",
       answers: ["manager-git-bootstrap-confirmation", undefined, undefined],
-      title: "Manager Git setup prompt",
+      title: "Confirm Git initialization",
       current: "required",
     },
     {
       action: "interface",
       answers: ["status-widget-rows", undefined, undefined],
-      title: "Status widget rows",
+      title: "Status widget lines",
       current: "default",
     },
     {
       action: "limits",
       answers: ["inlineAttachmentLimitBytes", undefined, undefined],
-      title: "Limit",
+      title: "Shared file content",
       current: "4096",
     },
   ]) {
@@ -454,6 +455,20 @@ test("Current setting choices remain visible after cursor movement and in non-TU
             `${current.label}  ${current.description ?? ""}`,
             /current/,
           );
+          const defaultValue = {
+            "Agent nesting limit": "2",
+            "Status widget lines": "8",
+            "Shared file content": "131072",
+          }[title];
+          if (defaultValue) {
+            const values = items.map(({ value }) => value);
+            assert.equal(values[0], "default");
+            assert.equal(values.at(-1), "custom");
+            assert.equal(values.length, new Set(values).size);
+            assert.ok(!values.includes(defaultValue));
+            assert.ok(!values.includes("reset"));
+            assert.match(items[0].label, /^Use default /);
+          }
         }
         return answers.shift();
       },
@@ -469,6 +484,57 @@ test("Current setting choices remain visible after cursor movement and in non-TU
       await runtime.openMessageLimitsMenu(ctx);
     else await runtime.openSettingsCategory(ctx, scenario.action);
     assert.equal(found, true, scenario.title);
+  }
+});
+
+test("Message and file limit selectors restore defaults even when already effective", async () => {
+  for (const key of [
+    "inlineAttachmentLimitBytes",
+    "mailboxPayloadLimitBytes",
+  ] as const) {
+    const answers = [
+      key,
+      "custom",
+      key,
+      "custom",
+      key,
+      "default",
+      key,
+      "default",
+      undefined,
+    ];
+    const inputs = ["0", undefined];
+    const writes: unknown[][] = [];
+    const errors: string[] = [];
+    const runtime = createLeadCommandRuntime({
+      messageLimits: async () => ({
+        inline: { bytes: DEFAULT_CONFIG.inlineAttachmentLimitBytes },
+        mailbox: { bytes: DEFAULT_CONFIG.mailboxPayloadLimitBytes },
+      }),
+      formatMessageLimit: String,
+      validByteLimit,
+      input: async () => inputs.shift(),
+      selectMenu: async () => answers.shift(),
+      updateMessageLimit: (setting: string, value: unknown) => {
+        writes.push([setting, value]);
+        if (writes.length === 1) throw new Error("disk failure");
+      },
+    } as any);
+    await runtime.openMessageLimitsMenu({
+      ui: {
+        notify: (message: string, level?: string) => {
+          if (level === "error") errors.push(message);
+        },
+      },
+    } as any);
+    assert.deepEqual(writes, [
+      [key, undefined],
+      [key, undefined],
+    ]);
+    assert.deepEqual(
+      errors.map((message) => message.split(":").at(-1)?.trim()),
+      ["Enter an integer from 1 through 1024 KiB", "disk failure"],
+    );
   }
 });
 
@@ -640,50 +706,125 @@ test("role overview bypasses the idle-gated refresh and invalid commands do noth
   }
 });
 
-test("Settings categories expose only canonical entries and unavailable repository state", async () => {
-  const seen: Record<string, any[]> = {};
-  const runtime = createLeadCommandRuntime({
-    readConfig,
-    placementSettings: async () => ({ effective: "tab" }),
-    getRemovalPreauthorization: async () => {
-      throw new Error("No verified repository");
-    },
-    selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
-      seen[title] = items;
-      return undefined;
-    },
-  } as any);
-  const ctx = { isProjectTrusted: () => false } as any;
-  for (const category of ["sessions", "manager", "interface"])
-    await runtime.openSettingsCategory(ctx, category);
-  assert.deepEqual(
-    seen["Sessions & agents"]!.map((i) => i.value),
+test("Settings categories expose canonical rows, values and contextual help", async () => {
+  const expected = [
     [
-      "default-lead-execution",
-      "context-retirement",
-      "max-agent-depth",
-      "message-limits",
+      "sessions",
+      [
+        ["default-lead-execution", "Default Lead mode", "Flexible"],
+        [
+          "context-retirement",
+          "Finish Agents near context limit",
+          "On · Global",
+        ],
+        [
+          "message-limits",
+          "Message and file limits",
+          "Files 4097 B · Messages 16 KiB",
+        ],
+      ],
     ],
-  );
-  assert.deepEqual(
-    seen["Manager & repositories"]!.map((i) => i.value),
     [
-      "auto-activate-manager",
-      "manager-git-bootstrap-confirmation",
-      "manager-merge",
-      "removal-confirmation",
+      "manager",
+      [
+        [
+          "auto-activate-manager",
+          "Start Manager automatically",
+          "Off · Global",
+        ],
+        [
+          "manager-git-bootstrap-confirmation",
+          "Confirm Git initialization",
+          "Required",
+        ],
+        ["manager-merge", "Merge accepted branches", "Repository unavailable"],
+        [
+          "removal-confirmation",
+          "Confirm worktree removal",
+          "Repository unavailable",
+        ],
+      ],
     ],
-  );
-  assert.deepEqual(
-    seen.Interface!.map((i) => i.value),
-    ["agent-layout", "status-widget-rows"],
-  );
-  assert.equal(
-    seen["Manager & repositories"]!.find(
-      (i) => i.value === "removal-confirmation",
-    ).description,
-    "Repository unavailable",
-  );
+    [
+      "interface",
+      [
+        ["agent-layout", "Agent terminal layout", "Shared tab"],
+        ["status-widget-rows", "Status widget lines", "8 lines"],
+      ],
+    ],
+    [
+      "delegation",
+      [
+        ["max-agent-depth", "Agent nesting limit", "2 levels"],
+        ["cwd-override", "Delegate Agents to other directories (cwd)", "Off"],
+      ],
+    ],
+  ] as const;
+  // Assert each category in display order, including help on every row.
+  for (const [category, rows] of expected) {
+    const host = {
+      readConfig: () => DEFAULT_CONFIG,
+      placementSettings: async () => ({ effective: "tab" }),
+      messageLimits: async () => ({
+        inline: { bytes: 4097 },
+        mailbox: { bytes: 16384 },
+      }),
+      getRemovalPreauthorization: async () => {
+        throw new Error("No verified repository");
+      },
+      selectMenu: async (_ctx: unknown, _title: string, items: any[]) => {
+        assert.deepEqual(
+          items.map(({ value, label, description }) => [
+            value,
+            label,
+            description,
+          ]),
+          rows,
+        );
+        assert.ok(
+          items.every(({ help }) => help?.length > 0 && help.length <= 280),
+        );
+      },
+    };
+    await createLeadCommandRuntime(host as any).openSettingsCategory(
+      { isProjectTrusted: () => false } as any,
+      category,
+    );
+  }
+});
+
+test("Settings identifies trusted project and verified repository sources", async () => {
+  for (const [readFails, overrideMerge, project, merge] of [
+    [false, true, "Off · Project", "Conflict-free · Repository"],
+    [true, false, "Project unavailable", "Fast-forward · Global"],
+  ] as const) {
+    const runtime = createLeadCommandRuntime({
+      readConfig: () => ({
+        ...DEFAULT_CONFIG,
+        autoActivateManager: true,
+        managerMergeEnabled: true,
+        managerMergeOverrides: overrideMerge ? { "/repo": "divergent" } : {},
+      }),
+      readProjectOverrides: () => {
+        if (readFails) throw new Error("Unavailable");
+        return { autoActivateManager: false };
+      },
+      getRemovalPreauthorization: async () => ({
+        repoKey: "/repo",
+        enabled: true,
+      }),
+      selectMenu: async (_ctx: unknown, _title: string, items: any[]) => {
+        assert.deepEqual(
+          items.map(({ description }) => description),
+          [project, "Required", merge, "Skipped · Repository"],
+        );
+      },
+    } as any);
+    await runtime.openSettingsCategory(
+      { isProjectTrusted: () => true } as any,
+      "manager",
+    );
+  }
 });
 
 test("Delegate Agents to other directories (cwd) shows the current choice and persists globally", async () => {
@@ -711,20 +852,23 @@ test("Delegate Agents to other directories (cwd) shows the current choice and pe
       if (title === "Delegation options") {
         assert.deepEqual(
           items.map((item) => item.value),
-          ["cwd-override"],
+          ["max-agent-depth", "cwd-override"],
         );
-        assert.equal(selected, "cwd-override");
         assert.equal(
-          items[0]?.label,
+          selected,
+          attempts.length === 4 ? "max-agent-depth" : "cwd-override",
+        );
+        assert.equal(
+          items[1]?.label,
           "Delegate Agents to other directories (cwd)",
         );
         assert.equal(
-          items[0]?.description,
+          items[1]?.description,
           config.allowAgentCwdOverride ? "On" : "Off",
         );
         assert.equal(
-          items[0]?.help,
-          "Allow Leads to specify a different working directory using the optional cwd parameter in delegate_agent. Without it, Agents start in the Lead's current directory. Global setting. Run /reload after changing it. Cross-directory delegation is limited to ordinary Leads.",
+          items[1]?.help,
+          "Allow ordinary Leads to select another directory using `cwd` in `delegate_agent`. Without it, Agents use the Lead's directory. Global setting; run `/reload` after changing it.",
         );
         return attempts.length ? "cwd-override" : undefined;
       }
@@ -753,8 +897,13 @@ test("Delegate Agents to other directories (cwd) shows the current choice and pe
     ["allowAgentCwdOverride", false],
   ]);
   assert.equal(notices.length, writes.length);
-  for (const notice of notices)
-    assert.equal(notice, "Run /reload after changing it.");
+  assert.deepEqual(
+    notices,
+    ["On", "Off"].map(
+      (value) =>
+        `Delegate Agents to other directories (cwd): ${value}. Run /reload after changing it.`,
+    ),
+  );
 });
 
 test("Project setting combines scopes and skips unchanged values", async () => {
@@ -897,7 +1046,7 @@ test("Global integration confirms increases and rejects stale changes", async ()
         throw new Error("unavailable");
       },
       selectMenu: async (_ctx: unknown, title: string) => {
-        if (title === "Local branch integration")
+        if (title === "Merge accepted branches")
           return scopeCalls++ ? undefined : "global";
         if (during === "selection") current = true;
         return "divergent";
@@ -930,7 +1079,7 @@ test("Global integration preserves locked compare-and-set and no-op", async () =
       throw new Error("unavailable");
     },
     selectMenu: async (_ctx: unknown, title: string) =>
-      title === "Local branch integration"
+      title === "Merge accepted branches"
         ? scopeCalls++ < 2
           ? "global"
           : undefined

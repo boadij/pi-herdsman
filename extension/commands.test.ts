@@ -19427,11 +19427,11 @@ test("Herdsman menu filters Settings and handles empty results", async () => {
       }
       if (calls === 3) {
         assert.match(render(), /→ Default Lead mode/u);
-        for (const character of "message size limits")
+        for (const character of "message and file limits")
           component.handleInput(character);
-        assert.match(render(), /→ Message size limits/u);
+        assert.match(render(), /→ Message and file limits/u);
         assert.doesNotMatch(render(), /Default Lead mode/u);
-        for (let i = 0; i < "message size limits".length; i++)
+        for (let i = 0; i < "message and file limits".length; i++)
           component.handleInput("\u007f");
         assert.match(render(), /→ Default Lead mode/u);
         for (const character of "not-a-real-menu-item")
@@ -19719,6 +19719,11 @@ test("Delegation options renders the full working directory help", async () => {
           selectTuiItem(component, "Delegation options");
           break;
         case 2:
+          assert.match(
+            component.render(80).join("\n"),
+            /→ Agent nesting limit/u,
+          );
+          component.handleInput("\u001b[B");
           settings = component.render(80).join(" ").replace(/\s+/gu, " ");
           component.handleInput("\u001b");
           break;
@@ -19734,7 +19739,7 @@ test("Delegation options renders the full working directory help", async () => {
     );
     assert.ok(
       settings.includes(
-        "Allow Leads to specify a different working directory using the optional cwd parameter in delegate_agent. Without it, Agents start in the Lead's current directory. Global setting. Run /reload after changing it. Cross-directory delegation is limited to ordinary Leads.",
+        "Allow ordinary Leads to select another directory using `cwd` in `delegate_agent`. Without it, Agents use the Lead's directory. Global setting; run `/reload` after changing it.",
       ),
     );
   } finally {
@@ -20016,7 +20021,9 @@ test("settings navigation exposes message limits and one rough token formatter",
       return options.find((option) => option === "Settings");
     if (prompts.length === 2) return "Sessions & agents";
     if (prompts.length === 3)
-      return options.find((option) => option.startsWith("Message size limits"));
+      return options.find((option) =>
+        option.startsWith("Message and file limits"),
+      );
     if (prompts.length === 4) return options[0];
     if (prompts.length === 5) return options[1];
     return undefined;
@@ -20032,24 +20039,24 @@ test("settings navigation exposes message limits and one rough token formatter",
     ]);
     assert.equal(prompts[2]?.label, "Sessions & agents");
     assert.match(
-      prompts[2]?.options[3] ?? "",
-      /Message size limits.*Inline.*mailbox/u,
+      prompts[2]?.options[2] ?? "",
+      /^Message and file limits\s+Files 128 KiB · Messages 128 KiB$/u,
     );
-    assert.equal(prompts[3]?.label, "Message limits");
+    assert.equal(prompts[3]?.label, "Message and file limits");
     assert.ok(prompts.every(({ label }) => label !== "Scope"));
     assert.deepEqual(
       prompts[3]?.options.map((option) => option.split("  ")[0]),
-      ["Inline attachments", "Mailbox payload"],
+      ["Shared file content", "Coordination messages"],
     );
     assert.match(
       prompts[3]?.options[0] ?? "",
-      /Inline attachments  128 KiB · ≈32,768 tokens/u,
+      /Shared file content  128 KiB · ≈32,768 tokens/u,
     );
     assert.match(
       prompts[3]?.options[1] ?? "",
-      /Mailbox payload  128 KiB · ≈32,768 tokens/u,
+      /Coordination messages  128 KiB · ≈32,768 tokens/u,
     );
-    assert.match(notices.at(-1) ?? "", /4 KiB · ≈1,024 tokens/);
+    assert.match(notices.at(-1) ?? "", /1 KiB · ≈256 tokens/);
   } finally {
     updateConfig("spawnPlacement", previousPlacement);
     await pi.events.get("session_shutdown")?.[0]();
@@ -20078,13 +20085,15 @@ test("settings toggles context retirement and retains its updated value", async 
       label === "Sessions & agents" &&
       readConfig().contextRetirement !== false
     )
-      return options.find((option) => option.includes("Context retirement"));
+      return options.find((option) =>
+        option.includes("Finish Agents near context limit"),
+      );
     if (
-      label === "Context retirement" &&
+      label === "Finish Agents near context limit" &&
       readConfig().contextRetirement !== false
     )
       return options.find((option) => option.startsWith("Global default"));
-    if (label === "Global Context retirement") return "Off";
+    if (label === "Global · Finish Agents near context limit") return "Off";
     return undefined;
   };
   context.ui.notify = (message: string) => notices.push(message);
@@ -20093,18 +20102,24 @@ test("settings toggles context retirement and retains its updated value", async 
     assert.match(
       menus
         .find(({ label }) => label === "Sessions & agents")
-        ?.options.find((option) => option.includes("Context retirement")) ?? "",
-      /Context retirement\s+Global on · Effective on/,
+        ?.options.find((option) =>
+          option.includes("Finish Agents near context limit"),
+        ) ?? "",
+      /Finish Agents near context limit\s+On · Global/,
     );
     assert.equal(readConfig().contextRetirement, false);
-    assert.deepEqual(notices, ["Context retirement: off (global)."]);
+    assert.deepEqual(notices, [
+      "Finish Agents near context limit: Off (global).",
+    ]);
     await pi.commandOptions.get("herdsman").handler("", context);
     assert.match(
       menus
         .filter(({ label }) => label === "Sessions & agents")
         .at(-1)
-        ?.options.find((option) => option.includes("Context retirement")) ?? "",
-      /Context retirement\s+Global off · Effective off/,
+        ?.options.find((option) =>
+          option.includes("Finish Agents near context limit"),
+        ) ?? "",
+      /Finish Agents near context limit\s+Off · Global/,
     );
   } finally {
     updateConfig("contextRetirement", undefined);
@@ -20125,7 +20140,7 @@ test("Manager auto-start menu toggle does not change the running role", async ()
   const selections = [
     "Settings",
     "Manager & repositories",
-    "Manager auto-start",
+    "Start Manager automatically",
     "Global default",
     "On",
   ];
@@ -20140,7 +20155,7 @@ test("Manager auto-start menu toggle does not change the running role", async ()
     await pi.commandOptions.get("herdsman").handler("", context);
     assert.equal(readConfig().autoActivateManager, true);
     assert.deepEqual(pi.pi.getActiveTools(), activeTools);
-    assert.deepEqual(notices, ["Manager auto-start: on (global)."]);
+    assert.deepEqual(notices, ["Start Manager automatically: On (global)."]);
   } finally {
     updateConfig("autoActivateManager", undefined);
     await pi.events.get("session_shutdown")?.[0]();
@@ -20161,7 +20176,7 @@ test("Manager Git confirmation Settings toggle updates global config without cha
   const selections = [
     "Settings",
     "Manager & repositories",
-    "Git initialization prompt",
+    "Confirm Git initialization",
     "Skip confirmation on explicit Manager start",
   ];
   context.ui.select = async (_title: string, options: string[]) => {
@@ -20176,7 +20191,7 @@ test("Manager Git confirmation Settings toggle updates global config without cha
     await pi.commandOptions.get("herdsman").handler("", context);
     assert.equal(readConfig().managerGitBootstrapWithoutConfirmation, true);
     assert.deepEqual(pi.pi.getActiveTools(), activeTools);
-    assert.deepEqual(notices, []);
+    assert.deepEqual(notices, ["Confirm Git initialization: Skipped."]);
   } finally {
     updateConfig("managerGitBootstrapWithoutConfirmation", undefined);
     await pi.events.get("session_shutdown")?.[0]();
@@ -20197,7 +20212,7 @@ test("registered RPC command edits project Manager auto-start Off then Inherit",
   let selections = [
     "Settings",
     "Manager & repositories",
-    "Manager auto-start",
+    "Start Manager automatically",
     "Current project",
     "Off",
     undefined,
@@ -20215,7 +20230,7 @@ test("registered RPC command edits project Manager auto-start Off then Inherit",
   try {
     await pi.commandOptions.get("herdsman").handler("", context);
     assert.deepEqual(prompts[4]?.options, [
-      "Inherit global (on)  current",
+      "Use global setting (On)  current",
       "On",
       "Off",
     ]);
@@ -20226,9 +20241,9 @@ test("registered RPC command edits project Manager auto-start Off then Inherit",
     selections = [
       "Settings",
       "Manager & repositories",
-      "Manager auto-start",
+      "Start Manager automatically",
       "Current project",
-      "Inherit global (on)",
+      "Use global setting (On)",
       undefined,
       undefined,
       undefined,
@@ -20241,8 +20256,9 @@ test("registered RPC command edits project Manager auto-start Off then Inherit",
     assert.equal(readConfig().autoActivateManager, true);
     assert.equal(readEffectiveConfig(context).autoActivateManager, true);
     assert.deepEqual(
-      prompts.filter(({ label }) => label === "Project Manager auto-start")
-        .length,
+      prompts.filter(
+        ({ label }) => label === "Project · Start Manager automatically",
+      ).length,
       2,
     );
   } finally {
@@ -20281,10 +20297,10 @@ test("message limit edits stay in the submenu with the edited field selected", a
           selectTuiItem(component, "Sessions & agents");
           break;
         case 2:
-          selectTuiItem(component, "Message size limits");
+          selectTuiItem(component, "Message and file limits");
           break;
         case 3:
-          selectTuiItem(component, "Inline attachments");
+          selectTuiItem(component, "Shared file content");
           break;
         case 4:
           selectTuiItem(component, "4 KiB");
@@ -20295,9 +20311,9 @@ test("message limit edits stay in the submenu with the edited field selected", a
     });
   try {
     await pi.commandOptions.get("herdsman").handler("", context);
-    assert.ok(renders[5]?.some((line) => line.includes("Inline attachments")));
+    assert.ok(renders[5]?.some((line) => line.includes("Shared file content")));
     assert.match(
-      renders[5]?.find((line) => line.includes("Inline attachments")) ?? "",
+      renders[5]?.find((line) => line.includes("Shared file content")) ?? "",
       /^→/u,
     );
   } finally {
