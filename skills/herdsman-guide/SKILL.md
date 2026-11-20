@@ -49,6 +49,25 @@ documentation describes public behavior; this skill does not redefine it.
   and name the uncertainty. Do not infer actual permissions from documentation
   examples or configuration alone.
 
+## Explain menus and settings
+
+For questions about `/herdsman`, its menu, navigation, or visible settings,
+consult the Commands reference first. Use the human-visible category and option
+names, not a flat list of configuration keys.
+
+For defaults, accepted values, persistence, scope, inheritance, or reload
+requirements, consult the Configuration reference.
+
+Distinguish built-in defaults from configured and effective values. Do not
+claim to know the running session's values without current runtime evidence.
+
+Use the documentation available with this installation. If runtime evidence
+differs from documentation, acknowledge the discrepancy rather than silently
+combining different versions.
+
+For a broad question, explain the relevant menu hierarchy before
+implementation-level details. For a specific question, answer directly.
+
 ## Pick the appropriate scope
 
 - **Direct Pi work:** For a small or inseparable task, recommend local execution

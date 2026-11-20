@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import packageMetadata from "../../package.json" with { type: "json" };
 import {
@@ -768,37 +769,67 @@ test("Settings categories expose canonical rows, values and contextual help", as
       ],
     ],
   ] as const;
-  // Assert each category in display order, including help on every row.
-  for (const [category, rows] of expected) {
-    const host = {
-      readConfig: () => DEFAULT_CONFIG,
-      placementSettings: async () => ({ effective: "tab" }),
-      messageLimits: async () => ({
-        inline: { bytes: 4097 },
-        mailbox: { bytes: 16384 },
-      }),
-      getRemovalPreauthorization: async () => {
-        throw new Error("No verified repository");
-      },
-      selectMenu: async (_ctx: unknown, _title: string, items: any[]) => {
-        assert.deepEqual(
-          items.map(({ value, label, description }) => [
-            value,
-            label,
-            description,
-          ]),
-          rows,
-        );
-        assert.ok(
-          items.every(({ help }) => help?.length > 0 && help.length <= 280),
-        );
-      },
-    };
-    await createLeadCommandRuntime(host as any).openSettingsCategory(
-      { isProjectTrusted: () => false } as any,
-      category,
-    );
-  }
+  let categoryIndex = 0;
+  let selectedCategory: { value: string; label: string } | undefined;
+  const displayedRows: [string, string][] = [];
+  const host = {
+    readConfig: () => DEFAULT_CONFIG,
+    placementSettings: async () => ({ effective: "tab" }),
+    messageLimits: async () => ({
+      inline: { bytes: 4097 },
+      mailbox: { bytes: 16384 },
+    }),
+    getRemovalPreauthorization: async () => {
+      throw new Error("No verified repository");
+    },
+    selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
+      if (title === "Settings") {
+        selectedCategory = items[categoryIndex++];
+        if (!selectedCategory) assert.equal(items.length, expected.length);
+        return selectedCategory?.value;
+      }
+      assert.ok(selectedCategory);
+      assert.equal(title, selectedCategory.label);
+      const category = selectedCategory.value;
+      const rows = expected.find(([value]) => value === category)?.[1];
+      assert.deepEqual(
+        items.map(({ value, label, description }) => [
+          value,
+          label,
+          description,
+        ]),
+        rows,
+      );
+      assert.ok(
+        items.every(({ help }) => help?.length > 0 && help.length <= 280),
+      );
+      for (const item of items) {
+        assert.ok(!Object.hasOwn(item, "category"));
+        displayedRows.push([title, item.label]);
+      }
+    },
+  };
+  await createLeadCommandRuntime(host as any).openSettingsMenu({
+    isProjectTrusted: () => false,
+  } as any);
+
+  const commands = readFileSync(
+    new URL("../../docs/reference/commands.md", import.meta.url),
+    "utf8",
+  );
+  const table = commands.match(
+    /^### Settings menu\r?\n\r?\n([\s\S]*?)\r?\n\r?\n/m,
+  )?.[1];
+  assert.ok(table, "Settings menu inventory is missing");
+  const documentedRows = table
+    .split(/\r?\n/)
+    .slice(2)
+    .map((row) => {
+      const match = row.match(/^\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*$/);
+      assert.ok(match, `Invalid Settings menu inventory row: ${row}`);
+      return [match[1], match[2]];
+    });
+  assert.deepEqual(documentedRows, displayedRows);
 });
 
 test("Settings identifies trusted project and verified repository sources", async () => {

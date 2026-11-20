@@ -1532,6 +1532,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           [
             {
               value: "agent-layout",
+              category: "interface",
               label: "Agent terminal layout",
               description:
                 category === "interface"
@@ -1541,18 +1542,21 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             },
             {
               value: "default-lead-execution",
+              category: "sessions",
               label: "Default Lead mode",
               description: leadModeLabels[config.defaultLeadExecution],
               help: "Mode used for new ordinary Lead sessions without a saved choice. Existing sessions keep their mode.",
             },
             {
               value: "auto-activate-manager",
+              category: "manager",
               label: "Start Manager automatically",
               description: projectDescription("autoActivateManager"),
               help: "Try to start Manager when a new eligible session opens in a primary workspace. Does not change the current session or initialize Git.",
             },
             {
               value: "manager-git-bootstrap-confirmation",
+              category: "manager",
               label: "Confirm Git initialization",
               description: config.managerGitBootstrapWithoutConfirmation
                 ? "Skipped"
@@ -1561,12 +1565,14 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             },
             {
               value: "context-retirement",
+              category: "sessions",
               label: "Finish Agents near context limit",
               description: projectDescription("contextRetirement"),
               help: "Ask managed Agents to finish their assignments as context fills up, instead of compacting their sessions. Follow-up work needs a new Agent.",
             },
             {
               value: "manager-merge",
+              category: "manager",
               label: "Merge accepted branches",
               description: merge
                 ? mergeDescription(merge)
@@ -1575,30 +1581,35 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             },
             {
               value: "status-widget-rows",
+              category: "interface",
               label: "Status widget lines",
               description: countLabel(config.statusWidgetMaxRows, "line"),
               help: "Maximum number of lines in the compact status display, including its header and overflow line.",
             },
             {
               value: "max-agent-depth",
+              category: "delegation",
               label: "Agent nesting limit",
               description: countLabel(config.maxAgentDepth, "level"),
               help: "Maximum Agent levels below a Lead, Manager or Chief. 1 = no nested Agents; 2 = one nested level.",
             },
             {
               value: "message-limits",
+              category: "sessions",
               label: "Message and file limits",
               description: messageSummary,
               help: "Set the maximum size of shared file contents and coordination messages.",
             },
             {
               value: "cwd-override",
+              category: "delegation",
               label: "Delegate Agents to other directories (cwd)",
               description: config.allowAgentCwdOverride ? "On" : "Off",
               help: "Allow ordinary Leads to select another directory using `cwd` in `delegate_agent`. Without it, Agents use the Lead's directory. Global setting; run `/reload` after changing it.",
             },
             {
               value: "removal-confirmation",
+              category: "manager",
               label: "Confirm worktree removal",
               description: repository
                 ? `${repository.enabled ? "Skipped" : "Required"} · Repository`
@@ -1607,37 +1618,21 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             },
             {
               value: "peer-communication",
+              category: "communication",
               label: "Peer communication",
               description: config.peerCommunicationEnabled ? "On" : "Off",
               help: "Allow horizontal peer communication. Does not affect supervision or Agent delegation.",
             },
             {
               value: "peer-federation",
+              category: "communication",
               label: "Peer federation",
               description: `${config.peerFederationEnabled ? "On" : "Off"}${config.peerCommunicationEnabled ? "" : " (inactive)"}`,
               help: "Allow communication with peers on other machines when peer communication is on.",
             },
-          ].filter((item) =>
-            (category === "sessions"
-              ? [
-                  "default-lead-execution",
-                  "context-retirement",
-                  "message-limits",
-                ]
-              : category === "manager"
-                ? [
-                    "auto-activate-manager",
-                    "manager-git-bootstrap-confirmation",
-                    "manager-merge",
-                    "removal-confirmation",
-                  ]
-                : category === "delegation"
-                  ? ["max-agent-depth", "cwd-override"]
-                  : category === "communication"
-                    ? ["peer-communication", "peer-federation"]
-                    : ["agent-layout", "status-widget-rows"]
-            ).includes(item.value),
-          ),
+          ]
+            .filter((item) => item.category === category)
+            .map(({ category: _category, ...item }) => item),
           selectedSetting,
         );
         if (!selected) return;
