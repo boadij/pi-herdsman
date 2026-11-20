@@ -6410,7 +6410,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             );
           };
           const component = {
-            render(width: number): string[] {
+            render(width: number): readonly string[] {
               const status = supervisionStatus(ctx);
               const leads =
                 status === "unavailable"

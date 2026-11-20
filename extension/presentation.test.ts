@@ -1897,7 +1897,7 @@ const presentationTheme = {
 };
 
 function renderedText(
-  component: { render(width: number): string[] },
+  component: { render(width: number): readonly string[] },
   width = 160,
 ) {
   return stripVTControlCharacters(
