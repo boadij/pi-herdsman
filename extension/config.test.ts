@@ -100,6 +100,44 @@ function resetConfig(): void {
 
 test.afterEach(resetConfig);
 
+test("Configuration reference documents every built-in default", () => {
+  const reference = realFs.readFileSync(
+    new URL("../docs/reference/configuration.md", import.meta.url),
+    "utf8",
+  );
+  const table = reference.match(
+    /An absent file means these defaults:\r?\n\r?\n([\s\S]+?)\r?\n\r?\nMalformed JSON/,
+  )?.[1];
+  assert.ok(table, "Configuration defaults table is missing");
+
+  const documented = new Map<string, string>();
+  for (const row of table.split(/\r?\n/).slice(2)) {
+    const match = row.match(/^\|\s*`([^`]+)`\s*\|\s*([^|]+)\|/);
+    assert.ok(match, `Invalid configuration defaults row: ${row}`);
+    const [, field, display] = match;
+    assert.ok(!documented.has(field), `Duplicate documented field: ${field}`);
+    documented.set(
+      field,
+      display
+        .trim()
+        .replace(/\s+\([^)]*\)$/, "")
+        .replace(/^`(.*)`$/, "$1"),
+    );
+  }
+
+  assert.deepEqual(
+    [...documented.keys()].sort(),
+    Object.keys(DEFAULT_CONFIG).sort(),
+  );
+  for (const [field, value] of Object.entries(DEFAULT_CONFIG)) {
+    assert.equal(
+      documented.get(field),
+      typeof value === "string" ? value : JSON.stringify(value),
+      field,
+    );
+  }
+});
+
 test("Agent working directory override defaults off and persists only booleans", () => {
   assert.equal(readConfig().allowAgentCwdOverride, false);
   for (const value of [true, false]) {

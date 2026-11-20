@@ -67,19 +67,31 @@ Selecting `Agents & definitions` opens `Running agents`, `Agent definitions`,
 `Coordinator profiles`, and `Stop all agents…`. The root does not depend on
 Agent status or definitions to render.
 
-`Settings` groups controls under `Sessions & agents`, `Manager & repositories`,
-`Interface`, `Delegation options`, and `Communication`. These contain, respectively:
+### Settings menu
 
-- `Default Lead mode`, `Finish Agents near context limit`, and `Message and file limits`;
-- `Start Manager automatically`, `Confirm Git initialization`, `Merge accepted branches`,
-  and `Confirm worktree removal`;
-- `Agent terminal layout` and `Status widget lines`;
-- `Agent nesting limit` and [`Delegate Agents to other directories (cwd)`](configuration.md#schema-and-defaults),
-  a global Off/On setting. It allows Leads to specify a different working
-  directory using the optional `cwd` parameter in `delegate_agent`. Without it,
-  Agents start in the Lead's current directory. Run `/reload` after changing it.
-  Cross-directory delegation is limited to ordinary Leads;
-- [`Peer communication` and `Peer federation`](configuration.md#peer-communication).
+| Category                 | Setting                                      |
+| ------------------------ | -------------------------------------------- |
+| `Sessions & agents`      | `Default Lead mode`                          |
+| `Sessions & agents`      | `Finish Agents near context limit`           |
+| `Sessions & agents`      | `Message and file limits`                    |
+| `Manager & repositories` | `Start Manager automatically`                |
+| `Manager & repositories` | `Confirm Git initialization`                 |
+| `Manager & repositories` | `Merge accepted branches`                    |
+| `Manager & repositories` | `Confirm worktree removal`                   |
+| `Interface`              | `Agent terminal layout`                      |
+| `Interface`              | `Status widget lines`                        |
+| `Delegation options`     | `Agent nesting limit`                        |
+| `Delegation options`     | `Delegate Agents to other directories (cwd)` |
+| `Communication`          | `Peer communication`                         |
+| `Communication`          | `Peer federation`                            |
+
+[`Delegate Agents to other directories (cwd)`](configuration.md#schema-and-defaults)
+is a global Off/On setting. It allows Leads to specify a different working
+directory using the optional `cwd` parameter in `delegate_agent`. Without it,
+Agents start in the Lead's current directory. Run `/reload` after changing it.
+Cross-directory delegation is limited to ordinary Leads. See
+[`Peer communication` and `Peer federation`](configuration.md#peer-communication)
+in the Configuration reference.
 
 The default Lead mode applies only when a future ordinary Lead session has no
 persisted execution choice; changing it does not change the current session.
