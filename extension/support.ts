@@ -2509,6 +2509,8 @@ export function createStagedAssignmentFixture(
   let acceptedRequestIdWritten: string | undefined;
   let workingObservations = 0;
   let renderRequests = 0;
+  let observedLifecycle: "idle" | "working" | undefined;
+  let observedSessionId: string | undefined;
   const startup = startupExecutor(
     label,
     () => DEFAULT_PI_SESSION_ID,
@@ -2567,7 +2569,8 @@ export function createStagedAssignmentFixture(
                   ...JSON.parse(
                     listResponse(
                       label,
-                      state.activeRequestId ? "working" : "idle",
+                      observedLifecycle ??
+                        (state.activeRequestId ? "working" : "idle"),
                     ),
                   ).agents[0],
                   name: runScopedHerdrAlias(WORKSPACE, label, state.runId),
@@ -2578,7 +2581,7 @@ export function createStagedAssignmentFixture(
                     source: "herdr:pi",
                     agent: "pi",
                     kind: "id",
-                    value: state.piSessionId,
+                    value: observedSessionId ?? state.piSessionId,
                   },
                 },
               ]
@@ -2608,9 +2611,14 @@ export function createStagedAssignmentFixture(
         const result = await startup.exec(command, args, options);
         const payload = JSON.parse(result.stdout);
         const agents = payload.result?.snapshot?.agents ?? [];
+        for (const agent of agents) {
+          if (observedLifecycle) agent.agent_status = observedLifecycle;
+          if (observedSessionId && agent.agent_session)
+            agent.agent_session.value = observedSessionId;
+        }
         if (agents.some((agent: any) => agent.agent_status === "working"))
           workingObservations++;
-        return result;
+        return { ...result, stdout: JSON.stringify(payload) };
       }
       if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
         if (holdPreSubmitValidation && args[2] === "startup-pane") {
@@ -2729,6 +2737,10 @@ export function createStagedAssignmentFixture(
         undefined,
         context,
       );
+    },
+    observe(lifecycle?: "idle" | "working", sessionId?: string) {
+      observedLifecycle = lifecycle;
+      observedSessionId = sessionId;
     },
     markWorking(requestId: string) {
       const state = readAgentState(startup.mailbox);
