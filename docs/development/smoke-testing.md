@@ -468,8 +468,13 @@ definitions` remains available in each. Verify `/agents` opens the same menu,
 active role state is secondary metadata, and selected-row contextual help updates
 in the TUI. `Agents & definitions` groups running agents, definitions, Coordinator
 profiles, and stop-all. Verify `Settings` has `Sessions & agents`, `Manager &
-repositories`, and `Interface`, and that `Interface → Agent pane layout` opens
-the placement selector. `Lead mode` shows the current ordinary mode and opens the
+repositories`, `Interface`, and `Delegation options`. Check that `Agent terminal
+layout` opens the placement selector under `Interface`, and `Agent nesting limit`
+is selected first under `Delegation options`. At a normal terminal width, move
+to `Delegate Agents to other directories (cwd)` and check the full label,
+effective value, and wrapped help. Open a numeric selector and verify that the
+current choice remains marked when moving the cursor. For disposable settings,
+verify `Use default` removes an override even if it already equals the default. `Lead mode` shows the current ordinary mode and opens the
 `flexible` / `orchestrate` selector. `/lead` opens that selector directly, while
 `/lead flexible` and `/lead orchestrate` select directly through that control.
 For a Managed Lead, `/lead` shows managed with `managed-lead` help and no ordinary
@@ -483,10 +488,11 @@ disposable checkout through confirmed Herdr removal; verify managed · retired
 and exact-owner recovery without fresh delegation. Exercise unavailable evidence
 and verify managed · unavailable denies fresh work. Native history copying does
 not create an independent checkout or reset process configuration. Record each
-interactive result explicitly; simulated smoke does not prove these checks. Settings contains Default Lead mode,
-Manager auto-start, Context retirement, and Message size limits. Verify changing
-the default affects a future ordinary session without changing the current
-session.
+interactive result explicitly; simulated smoke does not prove these checks.
+Verify `Default Lead mode` affects a future ordinary session without changing
+the current session. Check that `Finish Agents near context limit` and `Start
+Manager automatically` show the effective scope and that `Message and file
+limits` shows byte sizes without token estimates on the category row.
 
 Navigate to Project management and Chief coordination from the menus. Confirm their
 Start, Overview, Refresh profile, and Leave actions use the existing `/manager` and `/chief`

@@ -68,33 +68,33 @@ Selecting `Agents & definitions` opens `Running agents`, `Agent definitions`,
 Agent status or definitions to render.
 
 `Settings` groups controls under `Sessions & agents`, `Manager & repositories`,
-`Interface`, and `Delegation options`. These contain, respectively:
+`Interface`, `Delegation options`, and `Communication`. These contain, respectively:
 
-- `Default Lead mode`, `Context retirement`, `Maximum delegation depth`, and
-  `Message size limits`;
-- `Manager auto-start`, `Git initialization prompt`, `Local branch integration`,
-  and `Worktree removal approval`;
-- `Agent pane layout` and `Status widget rows`;
-- [`Delegate Agents to other directories (cwd)`](configuration.md#schema-and-defaults),
+- `Default Lead mode`, `Finish Agents near context limit`, and `Message and file limits`;
+- `Start Manager automatically`, `Confirm Git initialization`, `Merge accepted branches`,
+  and `Confirm worktree removal`;
+- `Agent terminal layout` and `Status widget lines`;
+- `Agent nesting limit` and [`Delegate Agents to other directories (cwd)`](configuration.md#schema-and-defaults),
   a global Off/On setting. It allows Leads to specify a different working
   directory using the optional `cwd` parameter in `delegate_agent`. Without it,
   Agents start in the Lead's current directory. Run `/reload` after changing it.
-  Cross-directory delegation is limited to ordinary Leads.
+  Cross-directory delegation is limited to ordinary Leads;
+- [`Peer communication` and `Peer federation`](configuration.md#peer-communication).
 
 The default Lead mode applies only when a future ordinary Lead session has no
 persisted execution choice; changing it does not change the current session.
-Manager auto-start and context retirement offer global and trusted-project
+`Start Manager automatically` and `Finish Agents near context limit` offer global and trusted-project
 choices within each setting. Project inheritance removes the stored property in
 `.pi/settings.json`; invalid or untrusted project settings do not prevent global
-controls from being used. Local branch integration offers global and verified
+controls from being used. `Merge accepted branches` offers global and verified
 repository choices within the same setting. Repository permissions are stored
 in user-level Herdsman authorization, not project settings. They can be managed
 without an active Manager when the repository identity is verified; granting
 permission requires interactive confirmation.
-`Message size limits` edits the user-wide inline attachment and mailbox payload
-limits. It is available only to a lead Pi session with UI.
-Current values and presets show a rough token equivalent using four UTF-8
-bytes per token. The enforced limits are bytes, not tokens.
+`Message and file limits` edits the user-wide limits for `Shared file content`
+and `Coordination messages`. The Settings row shows exact sizes; detailed
+selectors also show rough token equivalents using four UTF-8 bytes per token.
+The enforced limits are bytes, not tokens.
 
 ## `/herdsman stats`
 
@@ -245,7 +245,7 @@ is sent.
 
 ## `/herdsman placement`
 
-Selecting `Settings` → `Agent pane layout` opens a native selector showing the effective setting.
+Selecting `Settings` → `Interface` → `Agent terminal layout` opens a native selector showing the effective setting.
 When unset, the effective setting is `subtree`.
 Explicit values continue to set directly:
 
@@ -290,7 +290,7 @@ holds the lease, activation fails and the
 caller remains an ordinary Lead. When an eligible `/manager` activation is
 requested in a non-Git workspace, `/manager` and **Start Manager mode** ask for
 confirmation naming the exact directory by default. The global Settings option
-**Git initialization prompt** is required by default; selecting Skip requires
+**Confirm Git initialization** requires confirmation by default; choosing to skip it requires
 confirmation and skips
 only this prompt for explicit starts. Either way, initialization creates a local
 Git repository and one empty initial commit; existing files remain uncommitted
@@ -319,7 +319,7 @@ Leaving Manager restores the session's ordinary Lead tool baseline and selected
 execution profile. Their `agents` allowlist independently controls fresh direct delegation. See
 [Coordination](../concepts/coordination.md) for the role and project boundaries.
 
-The effective `Manager auto-start` setting optionally makes a new session
+The effective `Start Manager automatically` setting optionally makes a new session
 attempt that same Manager startup when it has no persisted role intent and
 starts in the project's primary workspace. A trusted project value can
 override the global default. Explicit persisted Lead, Manager, or Chief intent
@@ -368,11 +368,11 @@ explicitly preauthorized by a human.
 
 An interactive user can inspect or change repository-scoped removal approval with
 `/manager removal-confirmation [required|skip]` or `Settings` →
-`Manager & repositories` → `Worktree removal approval`, without activating Manager.
+`Manager & repositories` → `Confirm worktree removal`, without activating Manager.
 A verified repository identity is required. `skip` requests a native confirmation naming the
 verified repository; `required` restores per-removal confirmation immediately.
 The bare command reports the effective policy. The opt-in waives only the extra
-prompt. `Local branch integration` also shows the effective policy and its global or
+prompt. `Merge accepted branches` also shows the effective policy and its global or
 repository source. Granting increased integration
 authority, including through inheritance, or creating a positive repository
 override requires confirmation.

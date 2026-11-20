@@ -88,8 +88,10 @@ are errors. Reads do not create the directory or file. Herdsman's human
 configuration controls update this single file atomically.
 
 `statusWidgetMaxRows` limits the total rendered lines in the ambient status
-widget, including its header and any overflow line. Settings offers presets,
-a custom value, and reset; reset removes the override and restores the default.
+widget, including its header and any overflow line. In Settings, `Status widget
+lines`, `Agent nesting limit`, and both `Message and file limits` selectors
+provide presets, `Custom…`, and `Use default`. `Use default` removes the
+stored override even when the current value already equals the default.
 This global-only display preference does not limit authoritative snapshots or
 expanded inspection. See [Status widget](status-widget.md) for layout details.
 
@@ -100,7 +102,8 @@ and its direct agents have depth 2. An agent whose depth equals
 default) allows one delegating level, and `4` allows chains of four agents.
 The setting is read from this user-wide file only and cannot be overridden by
 project settings, so deeper nesting is always an explicit user-level opt-in. It
-is also available in the `/herdsman` Settings menu as Maximum delegation depth.
+is also available under `/herdsman` → `Settings` → `Delegation options` →
+`Agent nesting limit`.
 
 The limit is read when `delegate_agent` or `continue_agent` prepares a launch
 and checked again immediately before the agent starts; a launch whose limit
@@ -169,16 +172,16 @@ when Manager is started explicitly. Automatic startup and session restoration
 never initialize Git because of this preference. Existing files remain
 uncommitted and absent from new worktrees until separately committed.
 
-The Settings menu places global and trusted-project choices within `Manager
-auto-start` and `Context retirement`. Choose `Inherit global`, On, or Off for
+The Settings menu places global and trusted-project choices within `Start Manager
+automatically` and `Finish Agents near context limit`. Choose `Use global setting`, On, or Off for
 the project; inheritance removes the stored project property. An explicit
 project value takes precedence over the global value. Untrusted projects cannot
 be read or edited through this menu, but global controls remain available.
 Changes follow the existing preference evaluation lifecycle and do not
 retroactively change an already-running role or operation.
 
-`Settings` → `Manager & repositories` also provides repository removal approval
-and local integration settings independently of Manager activation and project
+`Settings` → `Manager & repositories` provides `Confirm worktree removal`
+and `Merge accepted branches` independently of Manager activation and project
 trust, when repository identity is verified. These permissions are stored in
 user-level Herdsman configuration, not `.pi/settings.json`. Skipping removal
 approval requires native confirmation and waives only the extra per-removal
@@ -229,7 +232,7 @@ The permission covers the selected integration mode and the operation's narrowly
 scoped guarded cleanup of an integrated source checkout; it does not grant
 arbitrary removal authority. Settings provides `Off / Fast-forward only /
 Conflict-free merges` globally, and the verified repository setting provides
-`Inherit / Off / Fast-forward only / Conflict-free merges` controls for that
+`Use global setting / Off / Fast-forward only / Conflict-free merges` controls for that
 repository. Increasing effective authority or creating a positive repository
 override requires native confirmation. The policy is persisted
 in user-wide Herdsman configuration, not project settings. `cleanup_pending`

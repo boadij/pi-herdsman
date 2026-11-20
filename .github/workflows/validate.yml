@@ -181,6 +181,19 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run package:audit
+      - name: Probe the installed peer bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          npm pack --ignore-scripts --pack-destination "$work"
+          npm install --prefix "$work/install" --ignore-scripts --legacy-peer-deps --no-audit --no-fund "$work"/*.tgz
+          mkdir "$work/home" "$work/agent"
+          HOME="$work/home" PI_CODING_AGENT_DIR="$work/agent" \
+            "$work/install/node_modules/.bin/pi-herdsman-peer" probe |
+            jq -e --arg root "$work/agent/pi-herdsman" \
+              '.dataRoot == $root and .peers == [] and .ordinaryLeadsComplete'
 
   container:
     needs: scope

@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-ai";
 import type { SelectItem } from "@earendil-works/pi-tui";
 import {
+  DEFAULT_CONFIG,
   DEFAULT_MAX_AGENT_DEPTH,
   DEFAULT_STATUS_WIDGET_MAX_ROWS,
   effectiveMergePolicy,
@@ -33,7 +34,11 @@ import {
   type DefinitionEditScope,
   type RoleDefinitionName,
 } from "../agent-definitions.ts";
-import { isLeadExecutionMode, type LeadExecutionMode } from "../core.ts";
+import {
+  isLeadExecutionMode,
+  type LeadExecutionMode,
+  type SpawnPlacement,
+} from "../core.ts";
 import {
   compactModelToken,
   managedExecutionLabel,
@@ -160,7 +165,9 @@ type LeadCommandHost = {
     value: unknown,
     options?: { scope?: DefinitionEditScope; expectedContent?: string | null },
   ): { changed: boolean; path?: string };
-  placementSettings(ctx: ExtensionContext): Promise<{ effective: string }>;
+  placementSettings(
+    ctx: ExtensionContext,
+  ): Promise<{ effective: SpawnPlacement }>;
   updateSpawnPlacement(placement: string): void;
   messageLimits(
     ctx: ExtensionContext,
@@ -211,6 +218,26 @@ export type LeadCommandBaseHost = Omit<
   | "getThinkingLevel"
 >;
 
+const layoutLabels = {
+  tab: "Shared tab",
+  subtree: "Separate tabs",
+  split: "Split panes",
+} as const;
+
+const leadModeLabels = {
+  flexible: "Flexible",
+  orchestrate: "Orchestrate",
+} as const;
+
+const sizeLabel = (bytes: number) =>
+  bytes % 1024 === 0 ? `${bytes / 1024} KiB` : `${bytes} B`;
+
+const countLabel = (count: number, unit: "line" | "level") =>
+  `${count} ${unit}${count === 1 ? "" : "s"}`;
+
+const mergeDescription = (policy: ReturnType<typeof effectiveMergePolicy>) =>
+  `${!policy.enabled ? "Off" : policy.allowDivergence ? "Conflict-free" : "Fast-forward"} · ${policy.source === "repository" ? "Repository" : "Global"}`;
+
 export function createLeadCommandRuntime(host: LeadCommandHost) {
   const confirmMergeGrant = (
     ctx: ExtensionCommandContext,
@@ -245,28 +272,30 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       const current = await host.placementSettings(ctx);
       const selected = await host.selectMenu(
         ctx,
-        "Layout",
-        [
-          {
-            value: "tab",
-            label: "Lead agents tab",
-            description: current.effective === "tab" ? "current" : undefined,
-            help: "Place Lead-direct Agents in one lead-owned agents tab.",
-          },
-          {
-            value: "subtree",
-            label: "Subtree tabs",
-            description:
-              current.effective === "subtree" ? "current" : undefined,
-            help: "Give each Lead-direct Agent its own tab. Nested delegation still splits in its owner's current tab.",
-          },
-          {
-            value: "split",
-            label: "Split from caller",
-            description: current.effective === "split" ? "current" : undefined,
-            help: "Split Lead-direct Agents from the caller's pane. Nested delegation still splits in its owner's current tab.",
-          },
-        ],
+        "Agent terminal layout",
+        markCurrent(
+          [
+            {
+              value: "tab",
+              label: "Shared Agents tab",
+              help: "Directly delegated Agents from this controller share one tab.",
+            },
+            {
+              value: "subtree",
+              label: layoutLabels.subtree,
+              help: "Each directly delegated Agent gets its own tab.",
+            },
+            {
+              value: "split",
+              label: layoutLabels.split,
+              help: "Open directly delegated Agents in split panes beside the caller's pane.",
+            },
+          ].map((item) => ({
+            ...item,
+            help: `${item.help} Nested Agents still split within their owner's tab.`,
+          })),
+          current.effective,
+        ),
         current.effective,
       );
       if (!selected || selected === current.effective) return;
@@ -276,54 +305,69 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         throw new Error(
           `Agent placement did not become effective: ${verified.effective}`,
         );
-      ctx.ui.notify(`placement: ${verified.effective}`);
+      ctx.ui.notify(
+        `Agent terminal layout: ${layoutLabels[verified.effective]}`,
+      );
     },
     async openMessageLimitsMenu(ctx: ExtensionCommandContext): Promise<void> {
       let selectedLimit = "inlineAttachmentLimitBytes";
-      const presets = [1, 4, 16, 64, 128].map((kib) => ({
-        label: host.formatMessageLimit(kib * 1024),
-        bytes: kib * 1024,
-      }));
+      const labels = {
+        inlineAttachmentLimitBytes: "Shared file content",
+        mailboxPayloadLimitBytes: "Coordination messages",
+      } as const;
       while (true) {
         const limits = await host.messageLimits(ctx);
         const setting = await host.selectMenu(
           ctx,
-          "Message limits",
+          "Message and file limits",
           [
             {
               value: "inlineAttachmentLimitBytes",
-              label: "Inline attachments",
+              label: labels.inlineAttachmentLimitBytes,
               description: host.formatMessageLimit(limits.inline.bytes),
-              help: "Per-file limit for embedding complete strict UTF-8 file contents. Larger or ineligible files remain references.",
+              help: "Maximum size of complete text content included from a single attached file. Whether larger files can be referenced depends on the handoff.",
             },
             {
               value: "mailboxPayloadLimitBytes",
-              label: "Mailbox payload",
+              label: labels.mailboxPayloadLimitBytes,
               description: host.formatMessageLimit(limits.mailbox.bytes),
-              help: "Limit new managed-Agent request and ask payloads and new Manager project assignments.",
+              help: "Maximum payload size for managed Agent requests and other supported coordination messages, including Manager assignments.",
             },
           ],
           selectedLimit,
         );
-        if (!setting) return;
+        if (
+          setting !== "inlineAttachmentLimitBytes" &&
+          setting !== "mailboxPayloadLimitBytes"
+        )
+          return;
         selectedLimit = setting;
         const currentBytes =
           setting === "inlineAttachmentLimitBytes"
             ? limits.inline.bytes
             : limits.mailbox.bytes;
-        const currentChoice = presets.some(
-          ({ bytes }) => bytes === currentBytes,
-        )
-          ? String(currentBytes)
-          : "custom";
+        const defaultBytes = DEFAULT_CONFIG[setting];
+        const presets = [1, 4, 16, 64, 128]
+          .map((kib) => kib * 1024)
+          .filter((bytes) => bytes !== defaultBytes);
+        const currentChoice =
+          currentBytes === defaultBytes
+            ? "default"
+            : presets.includes(currentBytes)
+              ? String(currentBytes)
+              : "custom";
         const choice = await host.selectMenu(
           ctx,
-          "Limit",
+          labels[setting],
           markCurrent(
             [
-              ...presets.map(({ label, bytes }: any) => ({
+              {
+                value: "default",
+                label: `Use default (${host.formatMessageLimit(defaultBytes)})`,
+              },
+              ...presets.map((bytes) => ({
                 value: String(bytes),
-                label,
+                label: host.formatMessageLimit(bytes),
               })),
               {
                 value: "custom",
@@ -334,11 +378,6 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                     : undefined,
                 help: "Enter a custom limit in KiB, from 1 through 1024.",
               },
-              {
-                value: "reset",
-                label: "Reset",
-                help: "Remove the configured override and use the default.",
-              },
             ],
             currentChoice,
           ),
@@ -346,7 +385,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         );
         if (!choice) continue;
         let value: number | undefined;
-        if (choice === "reset") value = undefined;
+        if (choice === "default") value = undefined;
         else if (choice === "custom") {
           const input = await host.input(ctx, "Custom limit in KiB (1–1024)");
           if (input === undefined) continue;
@@ -361,10 +400,17 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           value = kib * 1024;
         } else value = Number(choice);
         if (value !== undefined && value === currentBytes) continue;
-        host.updateMessageLimit(selectedLimit, value);
-        ctx.ui.notify(
-          `${selectedLimit}: ${value === undefined ? "reset" : host.formatMessageLimit(value)}`,
-        );
+        try {
+          host.updateMessageLimit(setting, value);
+          ctx.ui.notify(
+            `${labels[setting]}: ${value === undefined ? "default restored" : host.formatMessageLimit(value)}`,
+          );
+        } catch (error) {
+          ctx.ui.notify(
+            `Could not update ${labels[setting]}: ${String(error)}`,
+            "error",
+          );
+        }
       }
     },
     executionSettings(
@@ -1418,7 +1464,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           : category === "manager"
             ? "auto-activate-manager"
             : category === "delegation"
-              ? "cwd-override"
+              ? "max-agent-depth"
               : category === "communication"
                 ? "peer-communication"
                 : "agent-layout";
@@ -1458,19 +1504,20 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         if (category === "sessions") {
           try {
             const limits = await host.messageLimits(ctx);
-            messageSummary = `Inline ${host.formatMessageLimit(limits.inline.bytes)} · mailbox ${host.formatMessageLimit(limits.mailbox.bytes)}`;
+            messageSummary = `Files ${sizeLabel(limits.inline.bytes)} · Messages ${sizeLabel(limits.mailbox.bytes)}`;
           } catch {
             messageSummary = "Unavailable";
           }
         }
         const projectDescription = (
           key: "autoActivateManager" | "contextRetirement",
-        ) =>
-          !project.trusted
-            ? `Effective ${config[key] ? "on" : "off"} (global; untrusted project)`
-            : "error" in project
-              ? "Project value unavailable"
-              : `Effective ${(Object.hasOwn(project.overrides, key) ? project.overrides[key] : config[key]) ? "on" : "off"}${Object.hasOwn(project.overrides, key) ? " (project)" : " (global)"}`;
+        ) => {
+          if ("error" in project) return "Project unavailable";
+          const overridden =
+            project.trusted && Object.hasOwn(project.overrides, key);
+          const enabled = overridden ? project.overrides[key] : config[key];
+          return `${enabled ? "On" : "Off"} · ${overridden ? "Project" : "Global"}`;
+        };
         const selected = await host.selectMenu(
           ctx,
           category === "sessions"
@@ -1485,76 +1532,78 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           [
             {
               value: "agent-layout",
-              label: "Agent pane layout",
+              label: "Agent terminal layout",
               description:
                 category === "interface"
-                  ? (await host.placementSettings(ctx)).effective
+                  ? layoutLabels[(await host.placementSettings(ctx)).effective]
                   : undefined,
+              help: "Choose how directly delegated Agents appear in the terminal. Nested Agents still split within their owner's tab.",
             },
             {
               value: "default-lead-execution",
               label: "Default Lead mode",
-              description: config.defaultLeadExecution,
-              help: "Used when a future ordinary Lead session has no persisted execution choice.",
+              description: leadModeLabels[config.defaultLeadExecution],
+              help: "Mode used for new ordinary Lead sessions without a saved choice. Existing sessions keep their mode.",
             },
             {
               value: "auto-activate-manager",
-              label: "Manager auto-start",
-              description: `Global ${config.autoActivateManager ? "on" : "off"} · ${projectDescription("autoActivateManager")}`,
-              help: "Attempt Manager mode automatically on eligible future session starts. Changing this does not alter the current role.",
+              label: "Start Manager automatically",
+              description: projectDescription("autoActivateManager"),
+              help: "Try to start Manager when a new eligible session opens in a primary workspace. Does not change the current session or initialize Git.",
             },
             {
               value: "manager-git-bootstrap-confirmation",
-              label: "Git initialization prompt",
+              label: "Confirm Git initialization",
               description: config.managerGitBootstrapWithoutConfirmation
                 ? "Skipped"
                 : "Required",
-              help: "Automatically initialize a non-Git workspace when Manager is started explicitly. Off by default.",
+              help: "Ask before initializing Git when Manager is started explicitly in a directory without a Git repository.",
             },
             {
               value: "context-retirement",
-              label: "Context retirement",
-              description: `Global ${config.contextRetirement ? "on" : "off"} · ${projectDescription("contextRetirement")}`,
-              help: "Retire managed-Agent sessions at automatic context pressure instead of allowing normal threshold compaction.",
+              label: "Finish Agents near context limit",
+              description: projectDescription("contextRetirement"),
+              help: "Ask managed Agents to finish their assignments as context fills up, instead of compacting their sessions. Follow-up work needs a new Agent.",
             },
             {
               value: "manager-merge",
-              label: "Local branch integration",
+              label: "Merge accepted branches",
               description: merge
-                ? `${!merge.enabled ? "Off" : merge.allowDivergence ? "Conflict-free merges" : "Fast-forward"} (${merge.source})`
+                ? mergeDescription(merge)
                 : "Repository unavailable",
-              help: "Choose whether Managers may integrate accepted local branches only by fast-forward or also by clean divergent merge, with guarded cleanup.",
+              help: "Control whether Manager can merge accepted local branches, using fast-forward only or conflict-free divergent merges.",
             },
             {
               value: "status-widget-rows",
-              label: "Status widget rows",
-              description: String(config.statusWidgetMaxRows),
-              help: "Maximum ambient widget lines, including header and overflow (1–100).",
+              label: "Status widget lines",
+              description: countLabel(config.statusWidgetMaxRows, "line"),
+              help: "Maximum number of lines in the compact status display, including its header and overflow line.",
             },
             {
               value: "max-agent-depth",
-              label: "Maximum delegation depth",
-              description: String(config.maxAgentDepth),
-              help: "Longest chain of nested Agents below the Lead, Manager or Chief (1 = Agents never delegate). Global only; checked at each launch. Existing Agents stay manageable when it is lowered.",
+              label: "Agent nesting limit",
+              description: countLabel(config.maxAgentDepth, "level"),
+              help: "Maximum Agent levels below a Lead, Manager or Chief. 1 = no nested Agents; 2 = one nested level.",
             },
             {
               value: "message-limits",
-              label: "Message size limits",
+              label: "Message and file limits",
               description: messageSummary,
-              help: "Configure inline attachment and managed mailbox payload byte limits.",
+              help: "Set the maximum size of shared file contents and coordination messages.",
             },
             {
               value: "cwd-override",
               label: "Delegate Agents to other directories (cwd)",
               description: config.allowAgentCwdOverride ? "On" : "Off",
-              help: "Allow Leads to specify a different working directory using the optional cwd parameter in delegate_agent. Without it, Agents start in the Lead's current directory. Global setting. Run /reload after changing it. Cross-directory delegation is limited to ordinary Leads.",
+              help: "Allow ordinary Leads to select another directory using `cwd` in `delegate_agent`. Without it, Agents use the Lead's directory. Global setting; run `/reload` after changing it.",
             },
             {
               value: "removal-confirmation",
-              label: "Worktree removal approval",
+              label: "Confirm worktree removal",
               description: repository
-                ? `${repository.enabled ? "Skipped" : "Required"} (repository)`
+                ? `${repository.enabled ? "Skipped" : "Required"} · Repository`
                 : "Repository unavailable",
+              help: "Require separate approval for explicit worktree removal. Other safety checks always apply.",
             },
             {
               value: "peer-communication",
@@ -1573,7 +1622,6 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               ? [
                   "default-lead-execution",
                   "context-retirement",
-                  "max-agent-depth",
                   "message-limits",
                 ]
               : category === "manager"
@@ -1584,7 +1632,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                     "removal-confirmation",
                   ]
                 : category === "delegation"
-                  ? ["cwd-override"]
+                  ? ["max-agent-depth", "cwd-override"]
                   : category === "communication"
                     ? ["peer-communication", "peer-federation"]
                     : ["agent-layout", "status-widget-rows"]
@@ -1618,7 +1666,9 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             continue;
           try {
             host.updateConfig("allowAgentCwdOverride", choice === "on");
-            ctx.ui.notify("Run /reload after changing it.");
+            ctx.ui.notify(
+              `Delegate Agents to other directories (cwd): ${choice === "on" ? "On" : "Off"}. Run /reload after changing it.`,
+            );
           } catch (error) {
             ctx.ui.notify(
               `Could not update “Delegate Agents to other directories (cwd)”: ${String(error)}`,
@@ -1669,7 +1719,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         } else if (selected === "manager-git-bootstrap-confirmation") {
           const choice = await host.selectMenu(
             ctx,
-            "Manager Git setup prompt",
+            "Confirm Git initialization",
             markCurrent(
               [
                 { value: "required", label: "Require confirmation" },
@@ -1703,6 +1753,9 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               "managerGitBootstrapWithoutConfirmation",
               choice === "skip",
             );
+            ctx.ui.notify(
+              `Confirm Git initialization: ${choice === "skip" ? "Skipped" : "Required"}.`,
+            );
           }
         } else if (selected === "status-widget-rows") {
           while (true) {
@@ -1714,26 +1767,27 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   : "custom";
             const choice = await host.selectMenu(
               ctx,
-              "Status widget rows",
+              "Status widget lines",
               markCurrent(
                 [
                   {
                     value: "default",
-                    label: `Default (${DEFAULT_STATUS_WIDGET_MAX_ROWS})`,
+                    label: `Use default (${DEFAULT_STATUS_WIDGET_MAX_ROWS})`,
                   },
-                  ...[3, 5, 8, 12, 20].map((rows) => ({
-                    value: String(rows),
-                    label: String(rows),
-                  })),
+                  ...[3, 5, 8, 12, 20]
+                    .filter((rows) => rows !== DEFAULT_STATUS_WIDGET_MAX_ROWS)
+                    .map((rows) => ({
+                      value: String(rows),
+                      label: countLabel(rows, "line"),
+                    })),
                   {
                     value: "custom",
                     label: "Custom…",
                     description:
                       currentChoice === "custom"
-                        ? String(config.statusWidgetMaxRows)
+                        ? countLabel(config.statusWidgetMaxRows, "line")
                         : undefined,
                   },
-                  { value: "reset", label: "Reset" },
                 ],
                 currentChoice,
               ),
@@ -1741,11 +1795,11 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             );
             if (!choice) break;
             let value: number | undefined;
-            if (choice === "reset") value = undefined;
+            if (choice === "default") value = undefined;
             else if (choice === "custom") {
               const input = await host.input(
                 ctx,
-                "Custom status widget rows (1–100)",
+                "Custom status widget lines (1–100)",
               );
               if (input === undefined) continue;
               value = Number(input.trim());
@@ -1756,22 +1810,18 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 ctx.ui.notify("Enter an integer from 1 through 100", "error");
                 continue;
               }
-            } else
-              value =
-                choice === "default"
-                  ? DEFAULT_STATUS_WIDGET_MAX_ROWS
-                  : Number(choice);
+            } else value = Number(choice);
             if (value !== undefined && value === config.statusWidgetMaxRows)
               break;
             try {
               host.updateConfig("statusWidgetMaxRows", value);
               ctx.ui.notify(
-                `Status widget rows: ${value === undefined ? "reset" : value}`,
+                `Status widget lines: ${value === undefined ? "default restored" : countLabel(value, "line")}`,
               );
               break;
             } catch (error) {
               ctx.ui.notify(
-                `Could not update status widget rows: ${String(error)}`,
+                `Could not update Status widget lines: ${String(error)}`,
                 "error",
               );
             }
@@ -1786,26 +1836,27 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   : "custom";
             const choice = await host.selectMenu(
               ctx,
-              "Max Agent depth",
+              "Agent nesting limit",
               markCurrent(
                 [
                   {
                     value: "default",
-                    label: `Default (${DEFAULT_MAX_AGENT_DEPTH})`,
+                    label: `Use default (${DEFAULT_MAX_AGENT_DEPTH})`,
                   },
-                  ...[1, 2, 3, 4, 5].map((depth) => ({
-                    value: String(depth),
-                    label: String(depth),
-                  })),
+                  ...[1, 2, 3, 4, 5]
+                    .filter((depth) => depth !== DEFAULT_MAX_AGENT_DEPTH)
+                    .map((depth) => ({
+                      value: String(depth),
+                      label: countLabel(depth, "level"),
+                    })),
                   {
                     value: "custom",
                     label: "Custom…",
                     description:
                       currentChoice === "custom"
-                        ? String(config.maxAgentDepth)
+                        ? countLabel(config.maxAgentDepth, "level")
                         : undefined,
                   },
-                  { value: "reset", label: "Reset" },
                 ],
                 currentChoice,
               ),
@@ -1813,11 +1864,11 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             );
             if (!choice) break;
             let value: number | undefined;
-            if (choice === "reset") value = undefined;
+            if (choice === "default") value = undefined;
             else if (choice === "custom") {
               const input = await host.input(
                 ctx,
-                "Custom max Agent depth (positive integer)",
+                "Custom Agent nesting limit (positive integer)",
               );
               if (input === undefined) continue;
               value = Number(input.trim());
@@ -1828,19 +1879,17 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 ctx.ui.notify("Enter a positive integer", "error");
                 continue;
               }
-            } else
-              value =
-                choice === "default" ? DEFAULT_MAX_AGENT_DEPTH : Number(choice);
+            } else value = Number(choice);
             if (value !== undefined && value === config.maxAgentDepth) break;
             try {
               host.updateConfig("maxAgentDepth", value);
               ctx.ui.notify(
-                `Max Agent depth: ${value === undefined ? "reset" : value}`,
+                `Agent nesting limit: ${value === undefined ? "default restored" : countLabel(value, "level")}`,
               );
               break;
             } catch (error) {
               ctx.ui.notify(
-                `Could not update max Agent depth: ${String(error)}`,
+                `Could not update Agent nesting limit: ${String(error)}`,
                 "error",
               );
             }
@@ -1850,19 +1899,31 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         else if (selected === "default-lead-execution") {
           const mode = await host.selectMenu(
             ctx,
-            "Default Lead execution",
+            "Default Lead mode",
             markCurrent(
               [
-                { value: "flexible", label: "flexible" },
-                { value: "orchestrate", label: "orchestrate" },
+                {
+                  value: "flexible",
+                  label: leadModeLabels.flexible,
+                  help: "Work directly or delegate tasks when useful.",
+                },
+                {
+                  value: "orchestrate",
+                  label: leadModeLabels.orchestrate,
+                  help: "Delegate execution work and focus on coordination and review.",
+                },
               ],
               config.defaultLeadExecution,
             ),
             config.defaultLeadExecution,
           );
-          if (mode && mode !== config.defaultLeadExecution) {
+          if (
+            mode &&
+            isLeadExecutionMode(mode) &&
+            mode !== config.defaultLeadExecution
+          ) {
             host.updateConfig("defaultLeadExecution", mode);
-            ctx.ui.notify(`Default Lead mode: ${mode}`);
+            ctx.ui.notify(`Default Lead mode: ${leadModeLabels[mode]}`);
           }
         } else if (
           selected === "context-retirement" ||
@@ -1887,8 +1948,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
     ): Promise<void> {
       const title =
         key === "autoActivateManager"
-          ? "Manager auto-start"
-          : "Context retirement";
+          ? "Start Manager automatically"
+          : "Finish Agents near context limit";
       let selectedScope = "global";
       while (true) {
         const global = host.readConfig()[key];
@@ -1920,7 +1981,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               description:
                 unavailable ??
                 (projectValue === undefined
-                  ? `Inherit global (${global ? "on" : "off"})`
+                  ? `Use global setting (${global ? "On" : "Off"})`
                   : projectValue
                     ? "On"
                     : "Off"),
@@ -1946,14 +2007,14 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 : "off";
         const choice = await host.selectMenu(
           ctx,
-          scope === "global" ? `Global ${title}` : `Project ${title}`,
+          `${scope === "global" ? "Global" : "Project"} · ${title}`,
           markCurrent(
             [
               ...(scope === "project"
                 ? [
                     {
                       value: "inherit",
-                      label: `Inherit global (${global ? "on" : "off"})`,
+                      label: `Use global setting (${global ? "On" : "Off"})`,
                     },
                   ]
                 : []),
@@ -1975,7 +2036,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             host.updateProjectOverride(ctx, key, value);
           }
           ctx.ui.notify(
-            `${title}: ${value === undefined ? "inherited" : value ? "on" : "off"} (${scope}).`,
+            `${title}: ${value === undefined ? "Uses global setting" : value ? "On" : "Off"} (${scope}).`,
           );
         } catch (error) {
           ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
@@ -2007,7 +2068,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               : "Conflict-free merges";
         const scope = await host.selectMenu(
           ctx,
-          "Local branch integration",
+          "Merge accepted branches",
           [
             {
               value: "global",
@@ -2018,7 +2079,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               value: "repository",
               label: "Current repository",
               description: repositoryPolicy
-                ? `${!repositoryPolicy.enabled ? "Off" : repositoryPolicy.allowDivergence ? "Conflict-free merges" : "Fast-forward"} (${repositoryPolicy.source})`
+                ? mergeDescription(repositoryPolicy)
                 : "Unavailable",
             },
           ],
@@ -2042,12 +2103,12 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   : "divergent";
           const choice = await host.selectMenu(
             ctx,
-            `Local branch integration · ${policy.repoKey}`,
+            `Repository · Merge accepted branches · ${policy.repoKey}`,
             markCurrent(
               [
                 {
                   value: "inherit",
-                  label: `Inherit global (${label(global)})`,
+                  label: `Use global setting (${label(global)})`,
                 },
                 { value: "off", label: "Off" },
                 { value: "fast-forward", label: "Fast-forward only" },
@@ -2076,7 +2137,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             );
             if (stored)
               ctx.ui.notify(
-                `Local branch integration updated for ${policy.repoKey}.`,
+                `Merge accepted branches: ${value === undefined ? "Uses global setting" : label(value)} (${policy.repoKey}).`,
               );
           } catch (error) {
             ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
@@ -2092,7 +2153,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               : "divergent";
         const choice = await host.selectMenu(
           ctx,
-          "Global Manager local merge",
+          "Global · Merge accepted branches",
           markCurrent(
             [
               { value: "off", label: "Off" },
@@ -2136,9 +2197,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
           continue;
         }
-        ctx.ui.notify(
-          `Global Manager local merge: ${setting === "divergent" ? "conflict-free merges" : setting ? "fast-forward only" : "off"}`,
-        );
+        ctx.ui.notify(`Merge accepted branches: ${label(setting)} (global).`);
       }
     },
     async openRemovalSetting(ctx: ExtensionCommandContext): Promise<void> {
@@ -2146,7 +2205,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         const policy = await host.getRemovalPreauthorization(ctx);
         const choice = await host.selectMenu(
           ctx,
-          `Worktree removal approval · ${policy.repoKey}`,
+          `Repository · Confirm worktree removal · ${policy.repoKey}`,
           markCurrent(
             [
               { value: "required", label: "Require approval for each removal" },
@@ -2167,7 +2226,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         );
         if (stored)
           ctx.ui.notify(
-            `Worktree removal approval ${choice === "skip" ? "skipped" : "required"} for ${policy.repoKey}.`,
+            `Confirm worktree removal: ${choice === "skip" ? "Skipped" : "Required"} (${policy.repoKey}).`,
           );
       } catch (error) {
         ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");

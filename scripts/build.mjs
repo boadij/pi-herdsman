@@ -24,6 +24,8 @@ await build({
     "@earendil-works/pi-ai",
     "@earendil-works/pi-coding-agent",
     "@earendil-works/pi-tui",
+    // Let Node load this CommonJS dependency and its built-in requires.
+    "proper-lockfile",
     "typebox",
   ],
 });
