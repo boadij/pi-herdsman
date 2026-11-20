@@ -2880,6 +2880,7 @@ test("coordination results keep collapsed identity bounded and render evidence t
     action: "delegate",
     definition: "researcher",
     label: "release-review",
+    cwd: join(homedir(), "target"),
     task,
     files,
   };
@@ -2921,7 +2922,7 @@ test("coordination results keep collapsed identity bounded and render evidence t
   const compactCall = renderedText(
     renderCoordinationCall("agent", "delegate", args, presentationTheme),
   );
-  assert.doesNotMatch(compactCall, /results:/);
+  assert.doesNotMatch(compactCall, /results:|cwd:/);
   const expanded = renderedText(
     renderCoordinationResult(
       "agent",
@@ -2938,7 +2939,8 @@ test("coordination results keep collapsed identity bounded and render evidence t
     }),
   );
   assert.ok(
-    expandedCall.includes(`task:\n${task}`) &&
+    expandedCall.includes("cwd: ~/target") &&
+      expandedCall.includes(`task:\n${task}`) &&
       expandedCall.includes(
         "files:\n  one.md\n  result:message-scout#2\n  result:researcher#1",
       ) &&
@@ -6780,6 +6782,7 @@ test("successful control results contain factual assignment evidence", (_t) => {
   const receipt = formatToolModelResult("delegate", {
     ok: true,
     agent: "reviewer",
+    cwd: "/workspace/target",
     request_id: "request-1",
     session_id: "session-1",
     evidence: {
@@ -6788,6 +6791,7 @@ test("successful control results contain factual assignment evidence", (_t) => {
       referenced: ["evidence:older-plan#1"],
     },
   });
+  assert.match(receipt, /^Cwd: \/workspace\/target$/m);
   assert.match(receipt, /Assignment accepted/);
   assert.match(receipt, /Current evidence — inline:\n- evidence:review#1/);
   assert.match(receipt, /Explicit attachments — inline:\n- patch\.md/);

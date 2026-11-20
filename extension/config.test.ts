@@ -100,6 +100,27 @@ function resetConfig(): void {
 
 test.afterEach(resetConfig);
 
+test("Agent working directory override defaults off and persists only booleans", () => {
+  assert.equal(readConfig().allowAgentCwdOverride, false);
+  for (const value of [true, false]) {
+    updateConfig("allowAgentCwdOverride", value);
+    assert.equal(readConfig().allowAgentCwdOverride, value);
+  }
+  assert.throws(
+    () => updateConfig("allowAgentCwdOverride", "true" as unknown as boolean),
+    /Invalid Pi Herdsman config field allowAgentCwdOverride/,
+  );
+  assert.equal(readConfig().allowAgentCwdOverride, false);
+  realFs.writeFileSync(
+    herdsmanConfigPath(),
+    '{"allowAgentCwdOverride":"true"}',
+  );
+  assert.throws(
+    () => readConfig(),
+    /Invalid Pi Herdsman config field allowAgentCwdOverride/,
+  );
+});
+
 test("status widget rows validates, persists, and resets", () => {
   assert.equal(readConfig().statusWidgetMaxRows, 8);
   for (const value of [1, 100]) {
@@ -456,6 +477,7 @@ test("trusted project preferences override only the two supported global values"
     for (const content of [
       '{"piHerdsman":{"autoActivateManager":"false"}}',
       '{"piHerdsman":{"defaultLeadExecution":"flexible"}}',
+      '{"piHerdsman":{"allowAgentCwdOverride":true}}',
       "{",
     ]) {
       realFs.writeFileSync(`${cwd}/.pi/settings.json`, content);

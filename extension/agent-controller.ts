@@ -14,12 +14,18 @@ import {
   truncateTail,
 } from "@earendil-works/pi-coding-agent";
 import { contentText } from "@earendil-works/pi-ai";
-import { readdirSync, realpathSync, statSync } from "node:fs";
+import {
+  accessSync,
+  constants,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import { unlinkSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
@@ -123,7 +129,10 @@ import {
   snapshotTextFiles,
   validateMessageFiles,
 } from "./core.ts";
-import { normalizeHerdrLifecycleState } from "./supervision.ts";
+import {
+  globalProjectAssignmentSnapshot,
+  normalizeHerdrLifecycleState,
+} from "./supervision.ts";
 import {
   herdrAgentAlias,
   herdrSessionSnapshot,
@@ -138,6 +147,8 @@ import {
   watchHerdrLifecycle,
   parseHerdrVersion,
   runHerdr,
+  readPiSessionHeaderIdentity,
+  resolveAssignmentCheckout,
   stopHerdrAgentPreservingPane,
   verifyRetainedHerdrPane,
   closeRetainedHerdrPane,
@@ -3547,6 +3558,7 @@ export type RootDelegationGeneration = {
   sessionId: string;
   roleGeneration: number;
   role: string | undefined;
+  sessionKind?: "ordinary" | "managed";
   authority: object | undefined;
   profile: object | undefined;
 };
@@ -3560,6 +3572,7 @@ function sameRootDelegationGeneration(
     a.sessionId === b.sessionId &&
     a.roleGeneration === b.roleGeneration &&
     a.role === b.role &&
+    a.sessionKind === b.sessionKind &&
     a.authority === b.authority &&
     a.profile === b.profile
   );
@@ -3635,6 +3648,7 @@ export type Params =
       definition: string;
       label?: string;
       task: string;
+      cwd?: string;
       files?: string[];
       retain?: boolean;
       retentionPersisted?: boolean;
@@ -3884,20 +3898,101 @@ export type PendingStart = {
   requestId?: string;
 };
 
+function readDelegationProjectAssignments() {
+  try {
+    return globalProjectAssignmentSnapshot();
+  } catch {
+    fail(
+      "invalid_request",
+      "Unable to verify local Manager checkout assignments; retry delegation",
+      "delegate",
+    );
+  }
+}
+
+function cwdIsWithin(checkout: string, cwd: string): boolean {
+  const rel = relative(checkout, cwd);
+  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+function legacyAssignmentCheckout(assignment: {
+  id: string;
+  piSessionFile?: string;
+}) {
+  if (!assignment.piSessionFile || !isAbsolute(assignment.piSessionFile))
+    return undefined;
+  try {
+    if (!statSync(assignment.piSessionFile).isFile()) return undefined;
+    const saved = readPiSessionHeaderIdentity(assignment.piSessionFile);
+    if (saved?.id === assignment.id && saved.cwd && isAbsolute(saved.cwd))
+      return realpathSync.native(saved.cwd);
+  } catch {
+    // Missing exact-session provenance is not evidence of an assigned path.
+  }
+  return undefined;
+}
+
+function resolveDelegationCwd(value: unknown, controllerCwd: string) {
+  if (
+    typeof value !== "string" ||
+    !value.trim() ||
+    [...value].some((character) => {
+      const code = character.charCodeAt(0);
+      return code < 32 || (code >= 127 && code <= 159);
+    })
+  )
+    fail(
+      "invalid_request",
+      "cwd must be a non-empty path without control characters",
+      "delegate",
+    );
+
+  try {
+    const cwd = realpathSync.native(resolve(controllerCwd, value));
+    const stat = statSync(cwd, { bigint: true });
+    if (!stat.isDirectory() || stat.ino === 0n)
+      throw new Error("Directory identity unavailable");
+    accessSync(cwd, constants.R_OK | constants.X_OK);
+    return { cwd, dev: stat.dev, ino: stat.ino };
+  } catch {
+    fail(
+      "invalid_request",
+      "cwd must resolve to a readable directory",
+      "delegate",
+    );
+  }
+}
+
 export function validateAssignmentCwd(
-  definition: { name: string; projectSource?: string },
+  definition: {
+    name: string;
+    projectSource?: string;
+    privateRepositorySource?: string;
+  },
   agentCwd: string,
   controllerCwd: string,
   scope: ControllerScope,
   operation: "delegate" | "continue",
+  verifiedCrossDirectory?: boolean,
 ): void {
-  if (definition.projectSource && !sameCwd(agentCwd, controllerCwd))
+  const privateSource =
+    operation === "delegate" && definition.privateRepositorySource;
+  if (!definition.projectSource && !privateSource && scope.kind === "root")
+    return;
+  if (!(verifiedCrossDirectory ?? !sameCwd(agentCwd, controllerCwd))) return;
+  if (definition.projectSource)
     fail(
       "invalid_request",
       `Project agent ${definition.name} belongs to ${resolve(controllerCwd)}`,
       operation,
     );
-  if (scope.kind === "managed-agent" && !sameCwd(agentCwd, controllerCwd))
+  if (privateSource)
+    fail(
+      "invalid_request",
+      `Agent ${definition.name} uses private-repository definition configuration`,
+      operation,
+    );
+  if (scope.kind === "managed-agent")
     fail(
       "invalid_request",
       `Delegated agents must use the delegating agent cwd ${resolve(controllerCwd)}`,
@@ -8081,6 +8176,16 @@ export function createAgentController(
         "retain is available only to managed Agents",
         p.action,
       );
+    const explicitCwd = p.action === "delegate" && Object.hasOwn(p, "cwd");
+    if (
+      explicitCwd &&
+      (scope?.kind !== "root" || !readConfig().allowAgentCwdOverride)
+    )
+      fail(
+        "invalid_request",
+        "Working directory override is unavailable",
+        "delegate",
+      );
     const rootAssignment =
       (p.action === "delegate" || p.action === "continue") &&
       scope?.kind === "root";
@@ -8180,6 +8285,23 @@ export function createAgentController(
           "The requested Agent continuation could not be resolved",
           "continue",
         );
+      const controllerCwd = ctx.cwd;
+      const requestedCwd = p.action === "delegate" ? p.cwd : undefined;
+      const verifiedCwd = explicitCwd
+        ? resolveDelegationCwd(requestedCwd, controllerCwd)
+        : undefined;
+      const crossDirectory =
+        verifiedCwd !== undefined && !sameCwd(verifiedCwd.cwd, controllerCwd);
+      if (
+        crossDirectory &&
+        (initiatingRootGeneration?.role !== "lead" ||
+          initiatingRootGeneration.sessionKind !== "ordinary")
+      )
+        fail(
+          "invalid_request",
+          "Cross-directory delegation requires an ordinary Lead",
+          "delegate",
+        );
       await herdrVersion(pi, ctx, signal);
       const agentDefinition =
         p.action === "continue"
@@ -8192,7 +8314,7 @@ export function createAgentController(
               )
             ).definition
           : p.definition;
-      const agentCwd = resumed ? resumed.cwd : ctx.cwd;
+      const agentCwd = resumed?.cwd ?? verifiedCwd?.cwd ?? ctx.cwd;
       const requestedLabel =
         resumed?.label ?? (p.action === "delegate" ? p.label : undefined);
       const agentContext = await contextAgentDefinitions(ctx);
@@ -8251,7 +8373,14 @@ export function createAgentController(
         }
       };
       assertRootDelegationAllowed();
-      validateAssignmentCwd(definition, agentCwd, ctx.cwd, scope, p.action);
+      validateAssignmentCwd(
+        definition,
+        agentCwd,
+        ctx.cwd,
+        scope,
+        p.action,
+        verifiedCwd ? crossDirectory : undefined,
+      );
       if (resumed && resumed.id === ctx.sessionManager.getSessionId())
         fail(
           "invalid_request",
@@ -9403,24 +9532,138 @@ export function createAgentController(
             sharedPromptPath: promptPaths[effectiveDefinition.body ? 1 : 0],
             cwd: agentCwd,
             managedAgent: true,
-            approveProject: sameCwd(agentCwd, ctx.cwd)
-              ? agentContext.projectTrusted
-              : undefined,
+            approveProject: verifiedCwd
+              ? !crossDirectory && agentContext.projectTrusted
+              : sameCwd(agentCwd, ctx.cwd)
+                ? agentContext.projectTrusted
+                : undefined,
             ...(!resumed ? { inheritedThinking: pi.getThinkingLevel() } : {}),
             modelDecision: childModel,
           });
           // Role/profile preflight may have changed while this assignment was prepared.
           assertRootDelegationAllowed();
-          if (readConfig().maxAgentDepth !== maxAgentDepth)
+          const launchConfig = readConfig();
+          if (launchConfig.maxAgentDepth !== maxAgentDepth)
             fail(
               "invalid_request",
-              `maxAgentDepth changed from ${maxAgentDepth} to ${readConfig().maxAgentDepth} while this Agent was being prepared, so it was not started; retry the delegation under the new limit`,
+              `maxAgentDepth changed from ${maxAgentDepth} to ${launchConfig.maxAgentDepth} while this Agent was being prepared, so it was not started; retry the delegation under the new limit`,
               p.action,
             );
+          const checkLaunchAuthority = (launchCwd: string) => {
+            const legacy = new Map<string, Set<string>>();
+            if (!verifiedCwd) return legacy;
+            assertRootDelegationAllowed();
+            if (!readConfig().allowAgentCwdOverride)
+              fail(
+                "invalid_request",
+                "Working directory override was disabled during preflight; retry delegation",
+                "delegate",
+              );
+            const assignments = crossDirectory
+              ? readDelegationProjectAssignments()
+              : undefined;
+            const current = resolveDelegationCwd(requestedCwd, ctx.cwd);
+            const stillCrossDirectory = !sameCwd(current.cwd, ctx.cwd);
+            if (
+              launchCwd !== verifiedCwd.cwd ||
+              current.cwd !== verifiedCwd.cwd ||
+              current.dev !== verifiedCwd.dev ||
+              current.ino !== verifiedCwd.ino ||
+              stillCrossDirectory !== crossDirectory
+            )
+              fail(
+                "invalid_request",
+                "Working directory changed during preflight; retry delegation",
+                "delegate",
+              );
+            for (const matches of assignments?.values() ?? []) {
+              for (const { assignment } of matches) {
+                // Manager publication records the verified canonical checkout
+                // path. Compare against the physical target, without following
+                // a redirect at a stale recorded path.
+                if (assignment.checkoutPath) {
+                  if (cwdIsWithin(assignment.checkoutPath, current.cwd))
+                    rejectAssignedCheckout();
+                  continue;
+                }
+                const checkout = legacyAssignmentCheckout(assignment);
+                if (!checkout || !cwdIsWithin(checkout, current.cwd)) continue;
+                const repositories = legacy.get(checkout) ?? new Set<string>();
+                repositories.add(assignment.repoKey);
+                legacy.set(checkout, repositories);
+              }
+            }
+            return legacy;
+          };
+          const rejectAssignedCheckout = (): never =>
+            fail(
+              "invalid_request",
+              "Working directory is inside a Manager-assigned checkout",
+              "delegate",
+            );
+          const assertLaunchAuthorized = (launchCwd: string) => {
+            const legacy = checkLaunchAuthority(launchCwd);
+            if (!legacy.size) return;
+            return (async () => {
+              // Probe only exact legacy session cwd candidates containing the target,
+              // once per checkout, not every repository or branch in authority.
+              const observed = new Map<string, string | undefined>();
+              for (const checkout of legacy.keys()) {
+                const topology = await runHerdr(
+                  pi,
+                  ctx,
+                  ["worktree", "list", "--cwd", checkout],
+                  { signal, timeout: 10_000 },
+                ).catch(() => undefined);
+                if (
+                  typeof topology?.source?.repo_key !== "string" ||
+                  !Array.isArray(topology.worktrees)
+                )
+                  fail(
+                    "invalid_request",
+                    "Unable to verify the legacy Manager checkout; retry delegation",
+                    "delegate",
+                  );
+                const placement = resolveAssignmentCheckout(
+                  {},
+                  topology.worktrees,
+                  checkout,
+                );
+                if (placement.status === "conflict")
+                  fail(
+                    "invalid_request",
+                    "Legacy Manager checkout placement is ambiguous; retry delegation",
+                    "delegate",
+                  );
+                observed.set(
+                  checkout,
+                  placement.status === "matched"
+                    ? topology.source.repo_key
+                    : undefined,
+                );
+              }
+              // No assignment-authority lock spans a Herdr call. Recheck all
+              // authority and cwd after the probes and reject unseen candidates.
+              for (const [checkout, repositories] of checkLaunchAuthority(
+                launchCwd,
+              )) {
+                if (!observed.has(checkout))
+                  fail(
+                    "invalid_request",
+                    "Manager checkout assignments changed during preflight; retry delegation",
+                    "delegate",
+                  );
+                const repo = observed.get(checkout);
+                if (repo !== undefined && repositories.has(repo))
+                  rejectAssignedCheckout();
+              }
+            })();
+          };
           started = await startHerdrAgent(pi, ctx, {
             label,
             runId,
             cwd: agentCwd,
+            ...(verifiedCwd ? { assertLaunchAuthorized } : {}),
             extensionPath: options.extensionPath,
             placement,
             ...(placementRevalidator ? { placementRevalidator } : {}),
@@ -9950,6 +10193,7 @@ export function createAgentController(
             action: p.action,
             agent: label,
             definition: agentDefinition,
+            ...(p.action === "delegate" ? { cwd: runtime.cwd } : {}),
             owner_session_id: runtime.ownerSessionId,
             pane_id: runtime.paneId,
             session_id: runtime.piSessionId,
@@ -10220,6 +10464,8 @@ export function createAgentController(
       });
     }
     const agentListParameters = emptyParameters;
+    const exposeCwd =
+      controllerScope.kind === "root" && readConfig().allowAgentCwdOverride;
     const agentDelegateParameters = Type.Object(
       {
         definition:
@@ -10244,6 +10490,17 @@ export function createAgentController(
           }),
         ),
         files: FILES_SCHEMA,
+        ...(exposeCwd
+          ? {
+              cwd: Type.Optional(
+                Type.String({
+                  minLength: 1,
+                  description:
+                    "Optional execution directory for this fresh Agent. Relative paths resolve against the controller cwd. Only ordinary Leads can select a different directory.",
+                }),
+              ),
+            }
+          : {}),
         ...(controllerScope.kind === "managed-agent"
           ? {
               retain: Type.Optional(

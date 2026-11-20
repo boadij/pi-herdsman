@@ -14951,22 +14951,25 @@ test("managed restricted tool policies add required tools without unrelated tool
   }
 });
 
-test("root assignments reject a generation owned by a different session", async () => {
+test("root assignments reject stale ownership and unauthorized cross-directory roles", async () => {
   const { createAgentController } = await import("./agent-controller.ts");
-  const context = fakeContext() as any;
+  const { readConfig, updateConfig } = await import("./config.ts");
+  const context = fakeContext();
   const pi = fakePi();
+  let generation = {
+    sessionId: "stale-root-session",
+    roleGeneration: 1,
+    role: "chief",
+    authority: undefined,
+    profile: undefined,
+    sessionKind: "ordinary" as "ordinary" | "managed",
+  };
   const controller = createAgentController(
     pi.pi as never,
     {
       scope: { kind: "root" },
       rootDelegationPolicy: () => "all",
-      rootDelegationGeneration: () => ({
-        sessionId: "stale-root-session",
-        roleGeneration: 1,
-        role: "chief",
-        authority: undefined,
-        profile: undefined,
-      }),
+      rootDelegationGeneration: () => generation,
       build: HERDSMAN_BUILD,
       extensionPath: "test",
       isContextRetired: () => false,
@@ -15000,6 +15003,39 @@ test("root assignments reject a generation owned by a different session", async 
       controller.action(context, params as any),
       /Root delegation session changed/,
     );
+
+  const previous = readConfig().allowAgentCwdOverride;
+  const foreignCwd = realFs.mkdtempSync(join(testTmpRoot, "foreign-cwd-"));
+  try {
+    context.cwd = testTmpRoot;
+    updateConfig("allowAgentCwdOverride", true);
+    for (const [role, sessionKind] of [
+      ["lead", "managed"],
+      ["manager", "ordinary"],
+      ["chief", "ordinary"],
+    ] as const) {
+      generation = {
+        ...generation,
+        sessionId: context.sessionManager.getSessionId(),
+        role,
+        sessionKind,
+      };
+      await assert.rejects(
+        controller.action(context, {
+          action: "delegate",
+          definition: "agent",
+          task: "must reject",
+          cwd: foreignCwd,
+        }),
+        /Cross-directory delegation requires an ordinary Lead/,
+        role,
+      );
+    }
+  } finally {
+    updateConfig("allowAgentCwdOverride", previous);
+    realFs.rmSync(foreignCwd, { recursive: true, force: true });
+  }
+
   assert.equal(
     pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
     false,

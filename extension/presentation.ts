@@ -3299,6 +3299,7 @@ export function formatToolModelResult(
   }
   return [
     `${action[0].toUpperCase()}${action.slice(1)} agent ${value(v.agent) || "unknown"}${definition ? ` (${definition})` : ""}.`,
+    ...(action === "delegate" && value(v.cwd) ? [`Cwd: ${v.cwd}`] : []),
     ...(value(v.session_id) ? [`Session: ${v.session_id}`] : []),
     ...(value(v.request_id) ? [`Request: ${v.request_id}`] : []),
     ...(value(v.assignment_request_id)
@@ -3513,6 +3514,8 @@ function renderExpandedCoordinationCall(
     if (action === "delegate") {
       if (args.definition) fields.push(["definition", args.definition]);
       if (args.label) fields.push(["label", args.label]);
+      if (typeof args.cwd === "string" && args.cwd)
+        fields.push(["cwd", displayHomePath(args.cwd)]);
     } else if (action === "continue") {
       if (args.session) fields.push(["session", args.session]);
     } else if (args.agent) fields.push(["agent", args.agent]);

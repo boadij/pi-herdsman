@@ -282,6 +282,78 @@ test("current error codes replace the legacy label and busy codes", async () => 
   }
 });
 
+test("cwd is exposed only on fresh root delegation with the global opt-in", async () => {
+  const { readConfig, updateConfig } = await import("./config.ts");
+  const previous = readConfig().allowAgentCwdOverride;
+  const assignment = { definition: "scout", task: "work" };
+  const assignmentWithCwd = { ...assignment, cwd: "." };
+  const parameters = (pi: ReturnType<typeof fakePi>, name: string) =>
+    pi.tools.find((tool) => tool.name === name)!.parameters;
+
+  try {
+    setLeadEnvironment();
+    updateConfig("allowAgentCwdOverride", false);
+    const disabled = fakePi();
+    registerExtension!(disabled.pi as never);
+    assert.equal(
+      Value.Check(parameters(disabled, "delegate_agent"), assignmentWithCwd),
+      false,
+    );
+    const blocked = await disabled.tools
+      .find((tool) => tool.name === "delegate_agent")!
+      .execute(
+        "cwd-disabled",
+        assignmentWithCwd,
+        undefined,
+        undefined,
+        fakeContext(),
+      );
+    assert.equal(blocked.details.error.category, "invalid_request");
+    assert.match(blocked.details.error.message, /override is unavailable/);
+    disabled.events.get("session_shutdown")?.[0]();
+
+    updateConfig("allowAgentCwdOverride", true);
+    const enabled = fakePi();
+    registerExtension!(enabled.pi as never);
+    assert.equal(
+      Value.Check(parameters(enabled, "delegate_agent"), assignment),
+      true,
+    );
+    assert.equal(
+      Value.Check(parameters(enabled, "delegate_agent"), assignmentWithCwd),
+      true,
+    );
+    assert.equal(
+      Value.Check(parameters(enabled, "continue_agent"), {
+        session: "saved",
+        task: "work",
+        cwd: ".",
+      }),
+      false,
+    );
+    enabled.events.get("session_shutdown")?.[0]();
+
+    const mailbox = setAgentEnvironment("cwd-nested", ["scout"]);
+    const nested = fakePi();
+    try {
+      registerExtension!(nested.pi as never);
+      assert.equal(
+        Value.Check(parameters(nested, "delegate_agent"), assignment),
+        true,
+      );
+      assert.equal(
+        Value.Check(parameters(nested, "delegate_agent"), assignmentWithCwd),
+        false,
+      );
+    } finally {
+      nested.events.get("session_shutdown")?.[0]();
+      resetAgentMailbox(mailbox);
+    }
+  } finally {
+    updateConfig("allowAgentCwdOverride", previous);
+  }
+});
+
 test("each Agent operation has its own schema without projection", () => {
   setLeadEnvironment();
   const pi = fakePi();

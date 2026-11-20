@@ -2042,10 +2042,13 @@ export function registerLeadRuntime(
     const state = leadRuntime;
     const ctx = state.leadContext;
     const role = verifiedActiveRootRole();
+    const sessionId = ctx?.sessionManager.getSessionId() ?? "";
     return {
-      sessionId: ctx?.sessionManager.getSessionId() ?? "",
+      sessionId,
       roleGeneration: state.chiefModeGeneration,
       role,
+      sessionKind:
+        sessionKind?.sessionId === sessionId ? sessionKind.kind : undefined,
       authority:
         role === "manager"
           ? state.managerLease

@@ -42,6 +42,7 @@ export type HerdsmanConfig = {
   peerCommunicationEnabled: boolean;
   peerFederationEnabled: boolean;
   autoActivateManager: boolean;
+  allowAgentCwdOverride: boolean;
   managerGitBootstrapWithoutConfirmation: boolean;
   inlineAttachmentLimitBytes: number;
   mailboxPayloadLimitBytes: number;
@@ -67,6 +68,7 @@ export const DEFAULT_CONFIG: HerdsmanConfig = {
   peerCommunicationEnabled: true,
   peerFederationEnabled: true,
   autoActivateManager: false,
+  allowAgentCwdOverride: false,
   managerGitBootstrapWithoutConfirmation: false,
   inlineAttachmentLimitBytes: DEFAULT_BYTE_LIMIT,
   mailboxPayloadLimitBytes: DEFAULT_BYTE_LIMIT,
@@ -113,6 +115,7 @@ const CONFIG_KEYS = new Set<ConfigKey>([
   "peerCommunicationEnabled",
   "peerFederationEnabled",
   "autoActivateManager",
+  "allowAgentCwdOverride",
   "managerGitBootstrapWithoutConfirmation",
   "inlineAttachmentLimitBytes",
   "mailboxPayloadLimitBytes",
@@ -210,6 +213,11 @@ function parseRawConfig(content: string): Partial<HerdsmanConfig> {
     if (typeof record.autoActivateManager !== "boolean")
       throw new Error("Invalid Pi Herdsman config field autoActivateManager");
     result.autoActivateManager = record.autoActivateManager;
+  }
+  if ("allowAgentCwdOverride" in record) {
+    if (typeof record.allowAgentCwdOverride !== "boolean")
+      throw new Error("Invalid Pi Herdsman config field allowAgentCwdOverride");
+    result.allowAgentCwdOverride = record.allowAgentCwdOverride;
   }
   if ("managerGitBootstrapWithoutConfirmation" in record) {
     if (typeof record.managerGitBootstrapWithoutConfirmation !== "boolean")
@@ -629,6 +637,10 @@ export function updateConfig<K extends ConfigKey>(
         throw new Error(`Invalid Pi Herdsman config field ${key}`);
       if (key === "autoActivateManager" && typeof value !== "boolean")
         throw new Error("Invalid Pi Herdsman config field autoActivateManager");
+      if (key === "allowAgentCwdOverride" && typeof value !== "boolean")
+        throw new Error(
+          "Invalid Pi Herdsman config field allowAgentCwdOverride",
+        );
       if (
         key === "managerGitBootstrapWithoutConfirmation" &&
         typeof value !== "boolean"
@@ -658,6 +670,7 @@ export function updateConfig<K extends ConfigKey>(
         key !== "defaultLeadExecution" &&
         key !== "contextRetirement" &&
         key !== "autoActivateManager" &&
+        key !== "allowAgentCwdOverride" &&
         key !== "peerCommunicationEnabled" &&
         key !== "peerFederationEnabled" &&
         key !== "managerGitBootstrapWithoutConfirmation" &&

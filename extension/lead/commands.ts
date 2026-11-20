@@ -1398,6 +1398,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             { value: "sessions", label: "Sessions & agents" },
             { value: "manager", label: "Manager & repositories" },
             { value: "interface", label: "Interface" },
+            { value: "delegation", label: "Delegation options" },
             { value: "communication", label: "Communication" },
           ],
           selectedCategory,
@@ -1416,9 +1417,11 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           ? "default-lead-execution"
           : category === "manager"
             ? "auto-activate-manager"
-            : category === "communication"
-              ? "peer-communication"
-              : "agent-layout";
+            : category === "delegation"
+              ? "cwd-override"
+              : category === "communication"
+                ? "peer-communication"
+                : "agent-layout";
       const loadProjectState = () => {
         if (!ctx.isProjectTrusted())
           return { trusted: false as const, overrides: {} };
@@ -1474,9 +1477,11 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             ? "Sessions & agents"
             : category === "manager"
               ? "Manager & repositories"
-              : category === "communication"
-                ? "Communication"
-                : "Interface",
+              : category === "delegation"
+                ? "Delegation options"
+                : category === "communication"
+                  ? "Communication"
+                  : "Interface",
           [
             {
               value: "agent-layout",
@@ -1539,6 +1544,12 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               help: "Configure inline attachment and managed mailbox payload byte limits.",
             },
             {
+              value: "cwd-override",
+              label: "Delegate Agents to other directories (cwd)",
+              description: config.allowAgentCwdOverride ? "On" : "Off",
+              help: "Allow Leads to specify a different working directory using the optional cwd parameter in delegate_agent. Without it, Agents start in the Lead's current directory. Global setting. Run /reload after changing it. Cross-directory delegation is limited to ordinary Leads.",
+            },
+            {
               value: "removal-confirmation",
               label: "Worktree removal approval",
               description: repository
@@ -1572,9 +1583,11 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                     "manager-merge",
                     "removal-confirmation",
                   ]
-                : category === "communication"
-                  ? ["peer-communication", "peer-federation"]
-                  : ["agent-layout", "status-widget-rows"]
+                : category === "delegation"
+                  ? ["cwd-override"]
+                  : category === "communication"
+                    ? ["peer-communication", "peer-federation"]
+                    : ["agent-layout", "status-widget-rows"]
             ).includes(item.value),
           ),
           selectedSetting,
@@ -1583,6 +1596,35 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         selectedSetting = selected;
         if (selected === "agent-layout") {
           await this.openPlacementMenu(ctx);
+        } else if (selected === "cwd-override") {
+          const current = config.allowAgentCwdOverride ? "on" : "off";
+          const choice = await host.selectMenu(
+            ctx,
+            "Delegate Agents to other directories (cwd)",
+            markCurrent(
+              [
+                { value: "off", label: "Off" },
+                { value: "on", label: "On" },
+              ],
+              current,
+            ),
+            current,
+          );
+          if (
+            (choice !== "on" && choice !== "off") ||
+            choice === current ||
+            ctx.signal?.aborted
+          )
+            continue;
+          try {
+            host.updateConfig("allowAgentCwdOverride", choice === "on");
+            ctx.ui.notify("Run /reload after changing it.");
+          } catch (error) {
+            ctx.ui.notify(
+              `Could not update “Delegate Agents to other directories (cwd)”: ${String(error)}`,
+              "error",
+            );
+          }
         } else if (
           selected === "peer-communication" ||
           selected === "peer-federation"
