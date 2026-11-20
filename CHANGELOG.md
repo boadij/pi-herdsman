@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.52.0](https://github.com/boadij/pi-herdsman/compare/v0.51.0...v0.52.0) (2026-11-20)
+
+
+### Features
+
+* **agents:** add on-demand specialization audit skill ([#1037](https://github.com/boadij/pi-herdsman/issues/1037)) ([6d16824](https://github.com/boadij/pi-herdsman/commit/6d16824b1a4778fa328b4762b358c3f86505c40d))
+* **agents:** include historical worktrees in specialization audits ([#1039](https://github.com/boadij/pi-herdsman/issues/1039)) ([6e4f5da](https://github.com/boadij/pi-herdsman/commit/6e4f5da6dbf950e6dfbb08e521c835e3dbde2ff8))
+* **agent:** support opt-in working-directory delegation ([#1058](https://github.com/boadij/pi-herdsman/issues/1058)) ([aadb1d1](https://github.com/boadij/pi-herdsman/commit/aadb1d19891a0618a982a696c4388af2893edbd6))
+* **peer:** add opt-out communication and federation controls ([#1059](https://github.com/boadij/pi-herdsman/issues/1059)) ([936b6a1](https://github.com/boadij/pi-herdsman/commit/936b6a1994794d1cf8df385af703e9424c26ee9f))
+* **skills:** add on-demand Herdsman guide ([#1054](https://github.com/boadij/pi-herdsman/issues/1054)) ([10b38e4](https://github.com/boadij/pi-herdsman/commit/10b38e459769093d2b4ac992293e5574570d2926))
+
+
+### Fixes
+
+* **release:** restore editorial quality and reuse verified evidence ([#1038](https://github.com/boadij/pi-herdsman/issues/1038)) ([764f017](https://github.com/boadij/pi-herdsman/commit/764f017848d2bb5663a62462bb43a2a5334907a4))
+* **supervision:** correct Manager-to-Chief message authority ([#1050](https://github.com/boadij/pi-herdsman/issues/1050)) ([c34f971](https://github.com/boadij/pi-herdsman/commit/c34f971bf35a1599d0f432ccd253df3aeccdf3c8))
+
+
+### Refactoring
+
+* **skills:** remove redundant root agents skill ([#1055](https://github.com/boadij/pi-herdsman/issues/1055)) ([ac75e1f](https://github.com/boadij/pi-herdsman/commit/ac75e1fe643714d4397fe3ccdfce81a50059fe12))
+* **ui:** keep Herdsman menu documentation in sync ([#1061](https://github.com/boadij/pi-herdsman/issues/1061)) ([62ff45b](https://github.com/boadij/pi-herdsman/commit/62ff45b6dd7800c3b8752c01e9db9b2f9d7d47d0))
+* **ui:** simplify Herdsman settings labels and choices ([#1060](https://github.com/boadij/pi-herdsman/issues/1060)) ([7ba3270](https://github.com/boadij/pi-herdsman/commit/7ba3270ad6fcaa96346d9aa1aa7c7c6fee941282))
+
+
+### Documentation
+
+* acknowledge gnuts community feedback ([#1046](https://github.com/boadij/pi-herdsman/issues/1046)) ([2331e25](https://github.com/boadij/pi-herdsman/commit/2331e25eb0262987ef1c31f67cb1526502a606ab))
+* **agents:** document optional session inspector install ([#1044](https://github.com/boadij/pi-herdsman/issues/1044)) ([b1502af](https://github.com/boadij/pi-herdsman/commit/b1502af6a9fdf638808a1533b2f5bd0213099c3a))
+* **agents:** explain recurring generalist specialization signal ([#1033](https://github.com/boadij/pi-herdsman/issues/1033)) ([85ee712](https://github.com/boadij/pi-herdsman/commit/85ee712654057ad7ff3109042ddd297761d79269))
+* credit teicheld's Manager-to-Chief bug report ([#1052](https://github.com/boadij/pi-herdsman/issues/1052)) ([614c418](https://github.com/boadij/pi-herdsman/commit/614c41869ae5a13fdb124c6fe4704710317e65f8))
+* **peer:** bundle machine pairing playbook ([#1051](https://github.com/boadij/pi-herdsman/issues/1051)) ([4708eea](https://github.com/boadij/pi-herdsman/commit/4708eea98a1e6adeee19e83a5aa073057ec94ead))
+* **release:** refine GitHub and Discord presentation ([#1041](https://github.com/boadij/pi-herdsman/issues/1041)) ([6fc332c](https://github.com/boadij/pi-herdsman/commit/6fc332cfa89bfd564f068aa7d32a97a1729c2364))
+
 ## [0.51.0](https://github.com/boadij/pi-herdsman/compare/v0.50.1...v0.51.0) (2026-11-18)
 
 
