@@ -53,7 +53,11 @@ import {
   updatePeerRecipientGeneration,
   type PeerCorrespondence,
 } from "../extension/peer-correspondence.ts";
-import { PEER_TRANSPORT_FRAME_LIMIT_BYTES } from "../extension/peer-transport.ts";
+import { readPeerPolicy } from "../extension/config.ts";
+import {
+  PEER_TRANSPORT_FRAME_LIMIT_BYTES,
+  PeerFederationDisabledError,
+} from "../extension/peer-transport.ts";
 import {
   afterDurablePeerAcceptanceStep,
   afterPendingMarkerTempWriteForTests,
@@ -89,6 +93,16 @@ if (!isAbsolute(agentDir)) {
   );
   process.exit(1);
 }
+
+const rejectPeerFederation = (): never => {
+  console.error(new PeerFederationDisabledError().message);
+  process.exit(1);
+};
+const requirePeerFederation = (): void => {
+  if (!readPeerPolicy().remote) rejectPeerFederation();
+};
+
+if (action === "probe") requirePeerFederation();
 
 const runtime = peerRuntime();
 const bridgeDirectory = dirname(fileURLToPath(import.meta.url));
@@ -135,6 +149,7 @@ if (action === "probe") {
   } catch {
     ordinaryLeadsComplete = false;
   }
+  requirePeerFederation();
   console.log(
     JSON.stringify({
       dataRoot: herdsmanDataRoot(),
@@ -155,6 +170,7 @@ if (action === "probe") {
       throw new Error("peer transfer exceeds the size limit");
     chunks.push(buffer);
   }
+  if (action === "accept" || action === "poll") requirePeerFederation();
   let envelope = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
     record?: Record<string, any>;
     recipientClaimId?: unknown;
@@ -210,7 +226,9 @@ if (action === "probe") {
             : prior.status === "pending"
               ? "pending"
               : "conflict";
-      if (status === "pending" && prior.transfer) {
+      // A pending status replay can publish a new inbox entry; report its
+      // durable state without replaying the transfer while disabled.
+      if (status === "pending" && prior.transfer && readPeerPolicy().remote) {
         envelope = prior.transfer;
         action = "accept";
         recoveringStatus = true;
@@ -312,6 +330,7 @@ if (action === "probe") {
         );
         console.log(JSON.stringify({ recovered: true, id }));
       } else if (action === "poll") {
+        requirePeerFederation();
         let replies: ReturnType<typeof pollPeerReplies>;
         try {
           replies = pollPeerReplies(
@@ -515,6 +534,11 @@ if (action === "probe") {
       closeSync(fd);
       fd = undefined;
       beforePendingMarkerPublishForTests(marker, content);
+      if (!readPeerPolicy().remote) {
+        // process.exit does not run the cleanup in finally.
+        rmSync(temp, { force: true });
+        rejectPeerFederation();
+      }
       let alreadyExists = false;
       try {
         linkSync(temp, marker);
@@ -713,72 +737,70 @@ if (action === "probe") {
       }
       verifyPeerCorrespondence(envelope.correspondence!);
     }
-    const publish = () => {
-      if (published && correspondenceRole === "manager") {
-        return;
+    const publishIfUncommitted = (): boolean => {
+      if (published) return true;
+      if (
+        hasPeerDeliveryReceipt(
+          runtime,
+          record.toSessionId,
+          record.id,
+          acceptedDigest,
+        )
+      ) {
+        verifyPeerCorrespondence(envelope.correspondence!);
+        return true;
       }
+      if (!readPeerPolicy().remote) return false;
+      storePeerCorrespondence(envelope.correspondence!);
+      // Correspondence is retryable through the durable pending marker.
+      if (!readPeerPolicy().remote) return false;
+      writeCoordinationMessage(accepted, runtime);
+      return true;
+    };
+    const publishForManager = () => {
+      if (published) return true;
       const current = listPeerLeadRecords(runtime).find(
         (peer) =>
           peer.piSessionId === record.toSessionId &&
           peer.claim.id === envelope.recipientClaimId,
       );
-      const authorized =
-        current &&
-        (correspondenceRole === "manager"
-          ? current.role === "manager"
-          : isRemoteOrdinaryLead(current, globalProjectAssignmentSnapshot()));
-      if (!authorized || (!published && !compatible(current)))
+      if (!current || current.role !== "manager" || !compatible(current))
         throw new Error(
           "exact correspondence recipient is not live or authorized",
         );
-      if (!published) {
-        if (
-          hasPeerDeliveryReceipt(
-            runtime,
-            record.toSessionId,
-            record.id,
-            acceptedDigest,
-          )
-        )
-          verifyPeerCorrespondence(envelope.correspondence!);
-        else {
-          storePeerCorrespondence(envelope.correspondence!);
-          writeCoordinationMessage(accepted, runtime);
-        }
-      }
+      return publishIfUncommitted();
     };
-    if (correspondenceRole === "lead") {
-      withProjectAssignmentAuthority((assignments) => {
-        const current = listPeerLeadRecords(runtime).find(
-          (peer) =>
-            peer.piSessionId === record.toSessionId &&
-            peer.claim.id === envelope.recipientClaimId,
-        );
-        if (
-          !current ||
-          !isRemoteOrdinaryLead(current, assignments) ||
-          (!published && !compatible(current))
-        )
-          throw new Error(
-            "exact correspondence recipient is not live or authorized",
-          );
-        if (!published) {
-          if (
-            hasPeerDeliveryReceipt(
-              runtime,
-              record.toSessionId,
-              record.id,
-              acceptedDigest,
+    const canFinalize =
+      correspondenceRole === "lead"
+        ? withProjectAssignmentAuthority((assignments) => {
+            const current = listPeerLeadRecords(runtime).find(
+              (peer) =>
+                peer.piSessionId === record.toSessionId &&
+                peer.claim.id === envelope.recipientClaimId,
+            );
+            if (
+              !current ||
+              !isRemoteOrdinaryLead(current, assignments) ||
+              (!published && !compatible(current))
             )
-          )
-            verifyPeerCorrespondence(envelope.correspondence!);
-          else {
-            storePeerCorrespondence(envelope.correspondence!);
-            writeCoordinationMessage(accepted, runtime);
-          }
-        }
-      });
-    } else publish();
+              throw new Error(
+                "exact correspondence recipient is not live or authorized",
+              );
+            return publishIfUncommitted();
+          })
+        : publishForManager();
+    if (!canFinalize) {
+      if (!recoveringStatus) rejectPeerFederation();
+      console.log(
+        JSON.stringify({
+          dataRoot: herdsmanDataRoot(),
+          id: record.id,
+          digest,
+          status: "pending",
+        }),
+      );
+      break acceptTransfer;
+    }
     if (!published) afterDurablePeerAcceptanceStep("inbox-publication-durable");
     const markerTemp = `${marker}.${randomUUID()}.tmp`;
     try {

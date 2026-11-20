@@ -247,6 +247,7 @@ test("Settings categories and Agents & definitions retain their selections", asy
     "Manager & repositories",
     "Interface",
     "Delegation options",
+    "Communication",
   ]);
   assert.equal(calls[2]?.selected, "manager");
   assert.equal(calls[4]?.selected, "interface");
@@ -759,6 +760,13 @@ test("Settings categories expose canonical rows, values and contextual help", as
         ["cwd-override", "Delegate Agents to other directories (cwd)", "Off"],
       ],
     ],
+    [
+      "communication",
+      [
+        ["peer-communication", "Peer communication", "On"],
+        ["peer-federation", "Peer federation", "On"],
+      ],
+    ],
   ] as const;
   // Assert each category in display order, including help on every row.
   for (const [category, rows] of expected) {
@@ -904,6 +912,67 @@ test("Delegate Agents to other directories (cwd) shows the current choice and pe
         `Delegate Agents to other directories (cwd): ${value}. Run /reload after changing it.`,
     ),
   );
+});
+
+test("Communication settings preserve the federation preference while inactive", async () => {
+  const config = {
+    ...readConfig(),
+    peerCommunicationEnabled: true,
+    peerFederationEnabled: true,
+  };
+  const descriptions: string[][] = [];
+  const notices: string[] = [];
+  const writes: [keyof typeof config, boolean][] = [];
+  const answers = [
+    "peer-communication",
+    "off",
+    "peer-federation",
+    "peer-communication",
+    "on",
+    "peer-federation",
+    "off",
+    undefined,
+  ];
+  const runtime = createLeadCommandRuntime({
+    readConfig: () => ({ ...config }),
+    updateConfig: (
+      key: "peerCommunicationEnabled" | "peerFederationEnabled",
+      value: boolean,
+    ) => {
+      writes.push([key, value]);
+      config[key] = value;
+    },
+    selectMenu: async (
+      _ctx: unknown,
+      title: string,
+      items: { description: string }[],
+    ) => {
+      if (title === "Communication")
+        descriptions.push(items.map((item) => item.description));
+      return answers.shift();
+    },
+  } as any);
+  await runtime.openSettingsCategory(
+    {
+      isProjectTrusted: () => false,
+      ui: { notify: (message: string) => notices.push(message) },
+    } as any,
+    "communication",
+  );
+  assert.deepEqual(descriptions, [
+    ["On", "On"],
+    ["Off", "On (inactive)"],
+    ["Off", "On (inactive)"],
+    ["On", "On"],
+    ["On", "Off"],
+  ]);
+  assert.deepEqual(writes, [
+    ["peerCommunicationEnabled", false],
+    ["peerCommunicationEnabled", true],
+    ["peerFederationEnabled", false],
+  ]);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0]!, /inactive while peer communication is off/);
 });
 
 test("Project setting combines scopes and skips unchanged values", async () => {

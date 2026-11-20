@@ -1445,6 +1445,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             { value: "manager", label: "Manager & repositories" },
             { value: "interface", label: "Interface" },
             { value: "delegation", label: "Delegation options" },
+            { value: "communication", label: "Communication" },
           ],
           selectedCategory,
         );
@@ -1464,7 +1465,9 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             ? "auto-activate-manager"
             : category === "delegation"
               ? "max-agent-depth"
-              : "agent-layout";
+              : category === "communication"
+                ? "peer-communication"
+                : "agent-layout";
       const loadProjectState = () => {
         if (!ctx.isProjectTrusted())
           return { trusted: false as const, overrides: {} };
@@ -1523,7 +1526,9 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               ? "Manager & repositories"
               : category === "delegation"
                 ? "Delegation options"
-                : "Interface",
+                : category === "communication"
+                  ? "Communication"
+                  : "Interface",
           [
             {
               value: "agent-layout",
@@ -1600,6 +1605,18 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 : "Repository unavailable",
               help: "Require separate approval for explicit worktree removal. Other safety checks always apply.",
             },
+            {
+              value: "peer-communication",
+              label: "Peer communication",
+              description: config.peerCommunicationEnabled ? "On" : "Off",
+              help: "Allow horizontal peer communication. Does not affect supervision or Agent delegation.",
+            },
+            {
+              value: "peer-federation",
+              label: "Peer federation",
+              description: `${config.peerFederationEnabled ? "On" : "Off"}${config.peerCommunicationEnabled ? "" : " (inactive)"}`,
+              help: "Allow communication with peers on other machines when peer communication is on.",
+            },
           ].filter((item) =>
             (category === "sessions"
               ? [
@@ -1616,7 +1633,9 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   ]
                 : category === "delegation"
                   ? ["max-agent-depth", "cwd-override"]
-                  : ["agent-layout", "status-widget-rows"]
+                  : category === "communication"
+                    ? ["peer-communication", "peer-federation"]
+                    : ["agent-layout", "status-widget-rows"]
             ).includes(item.value),
           ),
           selectedSetting,
@@ -1655,6 +1674,47 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               `Could not update “Delegate Agents to other directories (cwd)”: ${String(error)}`,
               "error",
             );
+          }
+        } else if (
+          selected === "peer-communication" ||
+          selected === "peer-federation"
+        ) {
+          const federation = selected === "peer-federation";
+          const key = federation
+            ? "peerFederationEnabled"
+            : "peerCommunicationEnabled";
+          const inactiveMessage =
+            "Peer federation is inactive while peer communication is off. Its saved setting is unchanged.";
+          try {
+            const current = host.readConfig();
+            if (federation && !current.peerCommunicationEnabled) {
+              ctx.ui.notify(inactiveMessage, "info");
+              continue;
+            }
+            const currentChoice = current[key] ? "on" : "off";
+            const choice = await host.selectMenu(
+              ctx,
+              federation ? "Peer federation" : "Peer communication",
+              markCurrent(
+                [
+                  { value: "on", label: "On" },
+                  { value: "off", label: "Off" },
+                ],
+                currentChoice,
+              ),
+              currentChoice,
+            );
+            if ((choice !== "on" && choice !== "off") || ctx.signal?.aborted)
+              continue;
+            const latest = host.readConfig();
+            if (federation && !latest.peerCommunicationEnabled) {
+              ctx.ui.notify(inactiveMessage, "info");
+              continue;
+            }
+            const enabled = choice === "on";
+            if (enabled !== latest[key]) host.updateConfig(key, enabled);
+          } catch (error) {
+            ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
           }
         } else if (selected === "manager-git-bootstrap-confirmation") {
           const choice = await host.selectMenu(

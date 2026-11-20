@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { test } from "node:test";
+import { updateConfig } from "../config.ts";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { fakeContext, HERDSMAN_BUILD, testTmpRoot } from "../support.ts";
 import { supervisionRuntime, writeProjectMessage } from "../supervision.ts";
 import { createLeadCoordinationRuntime } from "./coordination.ts";
 
-test("scoped peer presence writes its worktree group", async () => {
+test("scoped peer presence follows the live master setting", async (t) => {
+  t.after(() => updateConfig("peerCommunicationEnabled", undefined));
   const sessionId = randomUUID();
   const repoKey = "a".repeat(64);
   const records: any[] = [];
@@ -48,6 +50,9 @@ test("scoped peer presence writes its worktree group", async () => {
         writePeerLeadRecord: (_runtime: unknown, record: unknown) =>
           records.push(record),
         readPeerLeadRecord: () => records.at(-1),
+        removePeerLeadRecord: () => {
+          records.length = 0;
+        },
         samePeerLeadGeneration: () => true,
         samePeerLeadRecord: () => true,
         workspacePresentationProvenance: async () => {
@@ -77,6 +82,10 @@ test("scoped peer presence writes its worktree group", async () => {
   process.env.HERDR_WORKSPACE_ID = "workspace";
   process.env.HERDR_SOCKET_PATH = "socket";
   try {
+    updateConfig("peerCommunicationEnabled", false);
+    await runtime.schedulePeerPresence(context);
+    assert.equal(records.length, 0);
+    updateConfig("peerCommunicationEnabled", true);
     await runtime.schedulePeerPresence(context);
     await groupedRecordWritten;
     assert.ok(
@@ -86,6 +95,9 @@ test("scoped peer presence writes its worktree group", async () => {
           record.group.primaryWorkspaceId === "primary-workspace",
       ),
     );
+    updateConfig("peerCommunicationEnabled", false);
+    await runtime.reconcileRemotePeers(context);
+    assert.equal(records.length, 0);
   } finally {
     for (const [key, value] of Object.entries(env)) {
       if (value === undefined) delete process.env[key];

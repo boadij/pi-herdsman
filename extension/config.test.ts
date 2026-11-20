@@ -78,6 +78,7 @@ const {
   MAX_BYTE_LIMIT,
   MIN_BYTE_LIMIT,
   readConfig,
+  readPeerPolicy,
   isWorktreeRemovalPreapproved,
   setWorktreeRemovalPreapproved,
   effectiveMergePolicy,
@@ -191,6 +192,50 @@ test("missing config resolves to defaults without creating storage", () => {
   assert.equal(readConfig().autoActivateManager, false);
   assert.equal(readConfig().managerGitBootstrapWithoutConfirmation, false);
   assert.equal(realFs.existsSync(herdsmanDataRoot()), false);
+});
+
+test("peer policy defaults to enabled and rereads the saved global preferences", () => {
+  assert.deepEqual(readPeerPolicy(), { local: true, remote: true });
+  for (const [local, federation, remote] of [
+    [true, false, false],
+    [false, true, false],
+    [false, false, false],
+    [true, true, true],
+  ] as const) {
+    realFs.mkdirSync(herdsmanDataRoot(), { recursive: true });
+    realFs.writeFileSync(
+      herdsmanConfigPath(),
+      JSON.stringify({
+        peerCommunicationEnabled: local,
+        peerFederationEnabled: federation,
+      }),
+    );
+    assert.deepEqual(readPeerPolicy(), { local, remote });
+  }
+  updateConfig("peerCommunicationEnabled", false);
+  assert.equal(readConfig().peerFederationEnabled, true);
+  updateConfig("peerCommunicationEnabled", undefined);
+  assert.deepEqual(readPeerPolicy(), { local: true, remote: true });
+});
+
+test("peer settings reject non-boolean values on read and update", () => {
+  realFs.mkdirSync(herdsmanDataRoot(), { recursive: true });
+  for (const key of [
+    "peerCommunicationEnabled",
+    "peerFederationEnabled",
+  ] as const) {
+    const message = new RegExp(key);
+    for (const value of ["false", 0, null]) {
+      realFs.writeFileSync(herdsmanConfigPath(), "{}");
+      assert.throws(() => updateConfig(key, value as never), message);
+      assert.equal(realFs.readFileSync(herdsmanConfigPath(), "utf8"), "{}");
+      realFs.writeFileSync(
+        herdsmanConfigPath(),
+        JSON.stringify({ [key]: value }),
+      );
+      assert.throws(() => readPeerPolicy(), message);
+    }
+  }
 });
 
 test("worktree-removal preauthorization is repository-scoped and survives reload", () => {

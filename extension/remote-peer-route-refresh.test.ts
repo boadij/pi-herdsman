@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mock, test } from "node:test";
+import { updateConfig } from "./config.ts";
 import type { RemotePeerSnapshot, SavedPeerMachine } from "./peer-transport.ts";
 
 const realTransport = await import("./peer-transport.ts");
@@ -18,6 +19,7 @@ let outboundListCalls = 0;
 let outboundReadCalls = 0;
 let currentCorrespondence: (id: string) => any;
 let currentOutbound: (id: string) => any;
+let beforeOutboundPersist = () => {};
 let onEndpointCall: (action: string) => void = () => {};
 let outboundInventory: any[] = [];
 const queuedReplies: any[] = [];
@@ -48,6 +50,12 @@ let outboundCorrespondence: any;
 mock.module("./peer-transport.ts", {
   namedExports: {
     ...realTransport,
+    persistRemotePeerOutbound: (
+      ...args: Parameters<typeof realTransport.persistRemotePeerOutbound>
+    ) => {
+      beforeOutboundPersist();
+      realTransport.persistRemotePeerOutbound(...args);
+    },
     listRemotePeerOutbounds: () => {
       outboundListCalls++;
       return outboundInventory.map((item) => ({ ...item }));
@@ -149,7 +157,6 @@ mock.module("./peer-correspondence.ts", {
       if (index < 0) correspondences.push(item);
       else correspondences[index] = item;
     },
-    createPeerCorrespondence: (item: unknown) => item,
     queuePeerReply: (...args: any[]) => {
       queuedReplies.push(args);
       return "queued";
@@ -205,6 +212,7 @@ const gate = <T>() => {
 function fixture(
   role: "manager" | "lead" = "manager",
   messageLimits?: () => Promise<any>,
+  localTarget = false,
 ) {
   const root = mkdtempSync(join(tmpdir(), "peer-route-refresh-"));
   process.env.PI_CODING_AGENT_DIR = root;
@@ -218,6 +226,7 @@ function fixture(
   outboundListCalls = 0;
   outboundReadCalls = 0;
   onEndpointCall = () => {};
+  beforeOutboundPersist = () => {};
   currentCorrespondence = (id) =>
     correspondences.find((item) => item.id === id);
   currentOutbound = () => undefined;
@@ -254,9 +263,9 @@ function fixture(
     roleSuspended: false,
   };
   const sender = {
-    version: 2,
+    version: 2 as const,
     build: support.HERDSMAN_BUILD,
-    sessionKind: "ordinary",
+    sessionKind: "ordinary" as "ordinary" | "managed",
     role,
     name: "Local Research Manager",
     paneId: "route-test-pane",
@@ -289,8 +298,13 @@ function fixture(
     supervisionRuntime: () => supervision.supervisionRuntime(),
     peerRuntime: () => supervision.peerRuntime(),
     readPeerLeadRecord: (_runtime: unknown, id: string) =>
-      id === self ? sender : undefined,
+      id === self
+        ? sender
+        : localTarget && id === "local-target"
+          ? { ...sender, piSessionId: id }
+          : undefined,
     listPeerLeadRecords: () => [],
+    samePeerLeadGeneration: supervision.samePeerLeadGeneration,
     currentManager: async () => manager,
     workspaceId: () => "route-test-workspace",
     currentWorktreeScope: async () => ({
@@ -387,6 +401,124 @@ const send = (
     context,
   );
 };
+
+test("federation disabled during discovery discards remote results and cached routes", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  nextSnapshots = [snapshot([remote("peer-A")])];
+  assert.equal((await list(f.runtime, f.context)).details.peers.length, 1);
+
+  const probing = gate<void>();
+  const response = gate<Snapshot>();
+  probeImpl = async () => {
+    probing.resolve();
+    return response.promise;
+  };
+  const pending = list(f.runtime, f.context);
+  await probing.promise;
+  updateConfig("peerFederationEnabled", false);
+  response.resolve(snapshot([remote("peer-A")]));
+  const result = await pending;
+  assert.deepEqual(result.details.peers, []);
+  assert.deepEqual(endpointCalls, []);
+  updateConfig("peerFederationEnabled", true);
+  await assert.rejects(
+    send(f.runtime, f.context, "peer-A"),
+    /no_authorized_target/u,
+  );
+});
+
+test("federation disabled during a submission probe prevents durable outbound creation", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  const result = snapshot([remote("peer-A")]);
+  nextSnapshots = [result];
+  await list(f.runtime, f.context);
+  probeImpl = async () => {
+    updateConfig("peerFederationEnabled", false);
+    return result;
+  };
+
+  await assert.rejects(
+    send(f.runtime, f.context, "peer-A"),
+    /Peer federation is disabled/u,
+  );
+  assert.deepEqual(realTransport.listRemotePeerOutbounds(), []);
+  assert.deepEqual(realCorrespondence.listPeerCorrespondences(), []);
+  assert.deepEqual(endpointCalls, []);
+});
+
+test("late transport opt-out leaves neither a new correspondence nor a retryable outbound", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  const result = snapshot([remote("peer-A")]);
+  nextSnapshots = [result, result];
+  await list(f.runtime, f.context);
+  beforeOutboundPersist = () => updateConfig("peerFederationEnabled", false);
+
+  await assert.rejects(
+    send(f.runtime, f.context, "peer-A"),
+    realTransport.PeerFederationDisabledError,
+  );
+  assert.deepEqual(correspondences, []);
+  assert.deepEqual(realCorrespondence.listPeerCorrespondences(), []);
+  assert.deepEqual(realTransport.listRemotePeerOutbounds(), []);
+  assert.deepEqual(endpointCalls, []);
+});
+
+test("remote federation refusal invalidates a cached route without reporting a network failure", async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  machines.push(machine("one"));
+  nextSnapshots = [snapshot([remote("peer-A")])];
+  assert.equal((await list(f.runtime, f.context)).details.peers.length, 1);
+  probeImpl = async () => {
+    throw new realTransport.PeerFederationDisabledError();
+  };
+  const result = await list(f.runtime, f.context);
+  assert.deepEqual(result.details.peers, []);
+  assert.deepEqual(result.details.remote_diagnostics, [
+    { machine: "one", reason: "federation_disabled" },
+  ]);
+  await assert.rejects(
+    send(f.runtime, f.context, "peer-A"),
+    /no_authorized_target/u,
+  );
+});
+
+test("local publication rechecks the master setting after evidence verification", async (t) => {
+  const f = fixture("manager", undefined, true);
+  t.after(f.close);
+  const target = { ...f.sender, piSessionId: "local-target" };
+  const queue = (verifyEvidence?: () => void) =>
+    f.runtime.queuePeerRecord(
+      "local update",
+      target.piSessionId,
+      f.context,
+      f.sender,
+      target,
+      undefined,
+      undefined,
+      [],
+      verifyEvidence,
+      null,
+    );
+  updateConfig("peerFederationEnabled", false);
+  assert.equal((await queue()).toSessionId, target.piSessionId);
+  assert.equal(deliveredReplies.length, 1);
+  await assert.rejects(
+    queue(() => updateConfig("peerCommunicationEnabled", false)),
+    /Peer communication is disabled/u,
+  );
+  assert.equal(deliveredReplies.length, 1);
+  await assert.rejects(
+    list(f.runtime, f.context),
+    /Peer communication is disabled/u,
+  );
+});
 
 test("remote inventories are loaded once per reconciliation, including empty snapshots", async (t) => {
   const f = fixture();
@@ -519,7 +651,7 @@ test("later machine skips correspondence finalized during earlier machine proces
   );
 });
 
-test("outbound delivery uses the freshly read retargeted envelope", async (t) => {
+test("outbound delivery pauses with federation and resumes using the current envelope", async (t) => {
   const f = fixture();
   t.after(f.close);
   const id = "22222222-2222-4222-8222-222222222222";
@@ -561,6 +693,12 @@ test("outbound delivery uses the freshly read retargeted envelope", async (t) =>
   machines.push(machine("one"));
   nextSnapshots = [snapshot([remote("peer-B", "current-generation")])];
 
+  updateConfig("peerFederationEnabled", false);
+  await list(f.runtime, f.context);
+  assert.deepEqual(endpointCalls, []);
+  assert.equal(outboundListCalls, 0);
+
+  updateConfig("peerFederationEnabled", true);
   await list(f.runtime, f.context);
 
   assert.deepEqual(acceptedEnvelopes, [envelope("current-generation")]);

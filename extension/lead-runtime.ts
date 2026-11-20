@@ -83,7 +83,11 @@ import {
   runHerdr,
 } from "./herdr.ts";
 import { ProcessLockOccupiedError } from "./lock.ts";
-import { DEFAULT_STATUS_WIDGET_MAX_ROWS, readConfig } from "./config.ts";
+import {
+  DEFAULT_STATUS_WIDGET_MAX_ROWS,
+  readConfig,
+  readPeerPolicy,
+} from "./config.ts";
 import { contentText } from "@earendil-works/pi-ai";
 import { isLeadExecutionMode, type LeadExecutionMode } from "./core.ts";
 import {
@@ -2926,13 +2930,7 @@ export function registerLeadRuntime(
         activeLeadRole(leadRuntime) === "manager" ||
         activeLeadRole(leadRuntime) === "lead"
       )
-        await coordinationRuntime.peerMessage(
-          "remote-reconciliation",
-          { action: "list", internal: true },
-          signal,
-          undefined,
-          ctx,
-        );
+        await coordinationRuntime.reconcileRemotePeers(ctx, signal);
     },
   };
   inboxRuntime = createLeadInboxRuntime(inboxServices);
@@ -8599,6 +8597,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         }
         if (
           record.kind === "peer_message" &&
+          readPeerPolicy().local &&
           record.toSessionId === sessionId &&
           sessionId === ctx.sessionManager.getSessionId()
         )
@@ -9051,6 +9050,10 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                         !canMessagePeer(localSource, recipientContext))
                   )
                     throw new Error("Peer eligibility changed before delivery");
+                  if (!readPeerPolicy().local)
+                    throw new Error(
+                      "Peer communication is disabled in Herdsman settings",
+                    );
                   importResultBindings(pi, ctx, resultBindings, record.kind);
                   reservePayload();
                   submitted = pi.sendMessage(payload, options);
@@ -9135,6 +9138,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
               }
           },
         },
+        isPeerDeliveryEnabled: () => readPeerPolicy().local,
         forceNonTriggering: !!phase,
         maxDeliveries: budget
           ? Math.max(0, COORDINATION_INBOX_SCAN_LIMIT - budget.count)

@@ -68,7 +68,7 @@ Selecting `Agents & definitions` opens `Running agents`, `Agent definitions`,
 Agent status or definitions to render.
 
 `Settings` groups controls under `Sessions & agents`, `Manager & repositories`,
-`Interface`, and `Delegation options`. These contain, respectively:
+`Interface`, `Delegation options`, and `Communication`. These contain, respectively:
 
 - `Default Lead mode`, `Finish Agents near context limit`, and `Message and file limits`;
 - `Start Manager automatically`, `Confirm Git initialization`, `Merge accepted branches`,
@@ -78,7 +78,8 @@ Agent status or definitions to render.
   a global Off/On setting. It allows Leads to specify a different working
   directory using the optional `cwd` parameter in `delegate_agent`. Without it,
   Agents start in the Lead's current directory. Run `/reload` after changing it.
-  Cross-directory delegation is limited to ordinary Leads.
+  Cross-directory delegation is limited to ordinary Leads;
+- [`Peer communication` and `Peer federation`](configuration.md#peer-communication).
 
 The default Lead mode applies only when a future ordinary Lead session has no
 persisted execution choice; changing it does not change the current session.

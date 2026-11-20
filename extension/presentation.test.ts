@@ -3596,6 +3596,7 @@ test("remote peer diagnostics explain safe remediation and stay bounded", () => 
         { reason: "machine_list_failed" },
         { machine: "base\n\u0000 host", reason: "herdr_not_reachable" },
         { machine: "probe", reason: "probe_failed" },
+        { machine: "disabled", reason: "federation_disabled" },
         {
           machine: "build",
           peer: "worker".repeat(40),
@@ -3613,7 +3614,7 @@ test("remote peer diagnostics explain safe remediation and stay bounded", () => 
     renderedText(
       renderCoordinationResult("peer", "list", result, {}, presentationTheme),
     ),
-    "peer · 6 discovered · 6 warnings",
+    "peer · 6 discovered · 7 warnings",
   );
 
   const expanded = renderedText(
@@ -3629,6 +3630,8 @@ test("remote peer diagnostics explain safe remediation and stay bounded", () => 
     "Saved Herdr machines could not be listed",
     "Herdr reachability not confirmed",
     "Remote peer probe failed",
+    "Peer federation is disabled",
+    "Check the remote Herdsman communication settings.",
     "Peer build mismatch",
     "Peer build could not be verified",
     "Ordinary-Lead eligibility could not be verified",

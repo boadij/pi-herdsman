@@ -207,7 +207,7 @@ function mutate<T>(id: string, action: (c: PeerCorrespondence) => T): T {
     lock.release();
   }
 }
-export function createPeerCorrespondence(
+export function preparePeerCorrespondence(
   input: Omit<PeerCorrespondence, "id" | "capability" | "replies">,
 ): PeerCorrespondence {
   const c: PeerCorrespondence = {
@@ -218,6 +218,12 @@ export function createPeerCorrespondence(
     replies: [],
   };
   if (!valid(c)) throw new Error("invalid peer correspondence");
+  return c;
+}
+export function createPeerCorrespondence(
+  input: Parameters<typeof preparePeerCorrespondence>[0],
+): PeerCorrespondence {
+  const c = preparePeerCorrespondence(input);
   save(c);
   return c;
 }

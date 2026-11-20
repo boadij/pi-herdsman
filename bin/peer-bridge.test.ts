@@ -14,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { test } from "node:test";
+import { updateConfig } from "../extension/config.ts";
 import { acquireProcessLock } from "../extension/lock.ts";
 import { HERDSMAN_BUILD } from "../extension/support.ts";
 import {
@@ -40,6 +41,7 @@ import {
 import {
   listPeerCorrespondences,
   peerPayloadDigest,
+  queuePeerReply,
   storePeerCorrespondence,
   type PeerCorrespondence,
 } from "../extension/peer-correspondence.ts";
@@ -343,6 +345,32 @@ test("bridge recovers after process death at both durable acceptance cut points"
       });
       if (cut === "pending-marker-durable" && !replacement && !retargetCrash) {
         const before = readFileSync(marker, "utf8");
+        updateConfig("peerFederationEnabled", false);
+        for (const action of ["probe", "poll", "status"]) {
+          const disabled = spawnSync(
+            process.execPath,
+            ["--experimental-strip-types", "bin/peer-bridge.ts", action],
+            { input: statusRequest, encoding: "utf8" },
+          );
+          if (action === "status") {
+            assert.equal(disabled.status, 0, disabled.stderr);
+            assert.deepEqual(JSON.parse(disabled.stdout), {
+              dataRoot: herdsmanDataRoot(),
+              id: messageId,
+              digest,
+              status: "pending",
+            });
+          } else {
+            assert.equal(disabled.status, 1, disabled.stderr);
+            assert.equal(disabled.stderr.trim(), "Peer federation is disabled");
+          }
+        }
+        assert.equal(readFileSync(marker, "utf8"), before);
+        assert.equal(
+          existsSync(chiefMessagePath(runtime, sessionId, messageId)),
+          false,
+        );
+        updateConfig("peerFederationEnabled", true);
         writePeerLeadRecord(runtime, {
           ...manager,
           build: { ...HERDSMAN_BUILD, sha256: "a".repeat(64) },
@@ -737,6 +765,17 @@ test("partial pending-marker write leaves no final marker and identical retry su
           encoding: "utf8",
         },
       );
+    updateConfig("peerFederationEnabled", false);
+    const disabled = run(false);
+    assert.equal(disabled.status, 1, disabled.stderr);
+    assert.equal(disabled.stderr.trim(), "Peer federation is disabled");
+    assert.equal(existsSync(marker), false);
+    assert.equal(
+      existsSync(chiefMessagePath(runtime, sessionId, record.id)),
+      false,
+    );
+    updateConfig("peerFederationEnabled", true);
+
     const failed = run(true);
     assert.notEqual(failed.status, 0, failed.stderr);
     assert.match(failed.stderr, /injected pending marker temp write failure/);
@@ -754,6 +793,32 @@ test("partial pending-marker write leaves no final marker and identical retry su
     });
     assert.notEqual(conflicting.status, 0);
     assert.match(conflicting.stderr, /conflicting peer message identity/);
+
+    const correspondence = transfer.correspondence;
+    const replyId = id();
+    queuePeerReply(correspondence, replyId, "durable reply");
+    const request = {
+      ...correspondence,
+      expectedDataRoot: herdsmanDataRoot(),
+      replyId,
+    };
+    const correspondenceAction = (action: string) =>
+      spawnSync(
+        process.execPath,
+        ["--experimental-strip-types", "bin/peer-bridge.ts", action],
+        { input: JSON.stringify(request), encoding: "utf8" },
+      );
+    assert.equal(correspondenceAction("poll").status, 0);
+    updateConfig("peerCommunicationEnabled", false);
+    const blockedPoll = correspondenceAction("poll");
+    assert.equal(blockedPoll.stderr.trim(), "Peer federation is disabled");
+    assert.equal(correspondenceAction("ack").status, 0);
+    assert.equal(correspondenceAction("finalize").status, 0);
+    assert.equal(
+      listPeerCorrespondences().find((item) => item.id === correspondence.id)
+        ?.finalized,
+      true,
+    );
   } finally {
     claim.release();
     if (previousData === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -1441,7 +1506,10 @@ test("short writes complete before publication and accepted EEXIST race cleans t
       updatedAt: Date.now(),
     };
     writePeerLeadRecord(runtime, manager);
-    const makeTransfer = (text: string) => {
+    const makeTransfer = (
+      text: string,
+      role: "lead" | "manager" = "manager",
+    ) => {
       const record = {
         version: 2 as const,
         build: manager.build,
@@ -1452,7 +1520,8 @@ test("short writes complete before publication and accepted EEXIST race cleans t
         toSessionId: sessionId,
         leadSessionId: sessionId,
         text,
-        peerSource: { role: "manager" as const },
+        peerSource:
+          role === "lead" ? { role, remoteOrdinary: true as const } : { role },
         createdAt: Date.now(),
       };
       return {
@@ -1467,17 +1536,18 @@ test("short writes complete before publication and accepted EEXIST race cleans t
           recipientGeneration: manager.claim.id,
           acceptanceId: record.id,
           replies: [],
+          ...(role === "lead" ? { role } : {}),
         },
         recipientClaimId: manager.claim.id,
         expectedDataRoot: herdsmanDataRoot(),
       };
     };
-    const run = (transfer: ReturnType<typeof makeTransfer>, support: string) =>
+    const run = (transfer: ReturnType<typeof makeTransfer>, support?: string) =>
       spawnSync(
         process.execPath,
         [
           "--experimental-strip-types",
-          `--import=./bin/${support}`,
+          ...(support ? [`--import=${support}`] : []),
           "bin/peer-bridge.ts",
           "accept",
         ],
@@ -1499,10 +1569,31 @@ test("short writes complete before publication and accepted EEXIST race cleans t
         "peer-acceptances",
         `${createHash("sha256").update(`${originSession}\0${transfer.record.id}`).digest("hex")}.json`,
       );
+    const configUrl = new URL("../extension/config.ts", import.meta.url);
+    const seamUrl = new URL("./peer-bridge-fault-seam.ts", import.meta.url);
+    const disableDuringPublish = `
+      import { updateConfig } from ${JSON.stringify(configUrl.href)};
+      import { setPendingMarkerPublishHookForTests } from ${JSON.stringify(seamUrl.href)};
+      setPendingMarkerPublishHookForTests(() => updateConfig("peerFederationEnabled", false));
+    `;
+    const blocked = makeTransfer("disabled before durable publication");
+    const denial = run(
+      blocked,
+      `data:text/javascript,${encodeURIComponent(disableDuringPublish)}`,
+    );
+    assert.equal(denial.status, 1, denial.stderr);
+    assert.equal(denial.stderr.trim(), "Peer federation is disabled");
+    assert.deepEqual(readdirSync(join(runtime.root, "peer-acceptances")), []);
+    assert.equal(
+      existsSync(chiefMessagePath(runtime, sessionId, blocked.record.id)),
+      false,
+    );
+    updateConfig("peerFederationEnabled", true);
+
     const shortWrite = makeTransfer("all bytes before publication");
     const shortWriteResult = run(
       shortWrite,
-      "peer-bridge-short-write.test-support.mjs",
+      "./bin/peer-bridge-short-write.test-support.mjs",
     );
     assert.equal(shortWriteResult.error, undefined, shortWriteResult.stderr);
     assert.equal(
@@ -1518,7 +1609,7 @@ test("short writes complete before publication and accepted EEXIST race cleans t
     ]);
 
     const raced = makeTransfer("accepted marker race");
-    const raceResult = run(raced, "peer-bridge-eexist.test-support.mjs");
+    const raceResult = run(raced, "./bin/peer-bridge-eexist.test-support.mjs");
     assert.equal(raceResult.status, 0, raceResult.stderr);
     assert.deepEqual(JSON.parse(raceResult.stdout), {
       accepted: true,
@@ -1532,6 +1623,58 @@ test("short writes complete before publication and accepted EEXIST race cleans t
       readdirSync(join(runtime.root, "peer-acceptances")).sort(),
       [basename(markerPath(shortWrite)), basename(markerPath(raced))].sort(),
     );
+
+    const disableAfterPending = `
+      import { updateConfig } from ${JSON.stringify(configUrl.href)};
+      import { setPeerAcceptanceFaultHookForTests } from ${JSON.stringify(seamUrl.href)};
+      setPeerAcceptanceFaultHookForTests((cut) => {
+        if (cut === "pending-marker-durable") updateConfig("peerFederationEnabled", false);
+      });
+    `;
+    for (const role of ["manager", "lead"] as const) {
+      writePeerLeadRecord(runtime, { ...manager, role });
+      const transfer = makeTransfer(
+        "disable between pending marker and inbox",
+        role,
+      );
+      const denied = run(
+        transfer,
+        `data:text/javascript,${encodeURIComponent(disableAfterPending)}`,
+      );
+      assert.equal(denied.status, 1, denied.stderr);
+      assert.equal(denied.stderr.trim(), "Peer federation is disabled");
+      const marker = markerPath(transfer);
+      assert.equal(JSON.parse(readFileSync(marker, "utf8")).status, "pending");
+      const inbox = chiefMessagePath(runtime, sessionId, transfer.record.id);
+      assert.equal(existsSync(inbox), false);
+      assert.equal(
+        listPeerCorrespondences().some(
+          (item) => item.id === transfer.correspondence.id,
+        ),
+        false,
+      );
+      updateConfig("peerFederationEnabled", true);
+      const status = spawnSync(
+        process.execPath,
+        ["--experimental-strip-types", "bin/peer-bridge.ts", "status"],
+        {
+          input: JSON.stringify({
+            id: transfer.record.id,
+            originSession,
+            recipientSession: sessionId,
+            digest: peerPayloadDigest({
+              record: transfer.record,
+              attachments: transfer.attachments,
+            }),
+            expectedDataRoot: herdsmanDataRoot(),
+          }),
+          encoding: "utf8",
+        },
+      );
+      assert.equal(status.status, 0, status.stderr);
+      assert.equal(JSON.parse(status.stdout).status, "accepted");
+      assert.deepEqual(readCoordinationMessage(inbox), transfer.record);
+    }
   } finally {
     claim.release();
     if (previousData === undefined) delete process.env.PI_CODING_AGENT_DIR;

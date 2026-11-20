@@ -52,6 +52,8 @@ schema is:
   "spawnPlacement": "subtree",
   "contextRetirement": true,
   "autoActivateManager": false,
+  "peerCommunicationEnabled": true,
+  "peerFederationEnabled": true,
   "managerGitBootstrapWithoutConfirmation": false,
   "inlineAttachmentLimitBytes": 131072,
   "mailboxPayloadLimitBytes": 131072,
@@ -72,6 +74,8 @@ An absent file means these defaults:
 | `spawnPlacement`                         |          `subtree` | `tab`, `subtree`, `split`                                                     |
 | `contextRetirement`                      |               true | boolean                                                                       |
 | `autoActivateManager`                    |              false | boolean                                                                       |
+| `peerCommunicationEnabled`               |               true | boolean; global-only                                                          |
+| `peerFederationEnabled`                  |               true | boolean; global-only                                                          |
 | `managerGitBootstrapWithoutConfirmation` |              false | boolean; global-only, skips confirmation only for explicit Manager start      |
 | `inlineAttachmentLimitBytes`             | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB)                             |
 | `mailboxPayloadLimitBytes`               | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB)                             |
@@ -189,6 +193,27 @@ Updates to an existing project settings file coordinate with Pi's settings
 lock. When `.pi/settings.json` does not exist yet, concurrent independent
 writers can still race: Pi checks for the missing file before acquiring the
 lock for its creation.
+
+### Peer communication
+
+In `/herdsman` → Settings → Communication, **Peer communication** controls
+horizontal peer messaging, and **Peer federation** controls its cross-machine
+subset. Both are on by default, including when their keys are omitted from
+the global file. Neither setting can be overridden by a project.
+
+| Peer communication | Peer federation | Effective scope        |
+| ------------------ | --------------- | ---------------------- |
+| On                 | On              | Local and remote peers |
+| On                 | Off             | Local peers only       |
+| Off                | On              | No peer communication  |
+| Off                | Off             | No peer communication  |
+
+Turning off peer communication leaves the saved federation preference intact;
+the menu shows federation as inactive. Running sessions check the current
+settings at subsequent peer communication boundaries without `/reload`.
+These settings do not change Herdr machine pairing or enablement.
+See [Peer reference](peer.md#communication-controls) for how the settings
+affect discovery, delivery, and pending messages.
 
 ### Manager local merge
 

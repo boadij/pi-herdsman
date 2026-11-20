@@ -19345,6 +19345,7 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
     "Manager & repositories",
     "Interface",
     "Delegation options",
+    "Communication",
   ]);
   assert.equal(prompts[2]?.label, prompts[0]?.label);
   assert.deepEqual(prompts[2]?.options, prompts[0]?.options);
@@ -20036,6 +20037,7 @@ test("settings navigation exposes message limits and one rough token formatter",
       "Manager & repositories",
       "Interface",
       "Delegation options",
+      "Communication",
     ]);
     assert.equal(prompts[2]?.label, "Sessions & agents");
     assert.match(
