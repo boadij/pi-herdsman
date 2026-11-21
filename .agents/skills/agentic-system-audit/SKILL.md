@@ -499,6 +499,25 @@ Use these to find candidates. They do not replace closure.
 - **Is the same fact sent twice?** Check model/human identity, paths, model, state, warnings, next-action text.
 - **Is this field mismatch semantic drift?** Find all producers, scope, reachability, and consumers first.
 
+## Workflow optimization lens
+
+Use actual execution traces to find avoidable work before recommending a
+workflow change. Compare launches, serial handoffs, duplicate evidence lookup
+and collection, and elapsed time on the critical path—not prompt length.
+
+- Combine consecutive read-only steps that use overlapping tools or evidence
+  unless separating them protects independent checking or authority.
+- Give executors the concise task procedure at launch through their definition
+  or assignment. Distinguish reading evidence needed for the task from
+  searching for instructions on how to proceed.
+- Pass one traceable evidence record, with source and snapshot references, to
+  reviewers and routing decision-makers instead of making them reconstruct it.
+  Recheck live or disputed facts rather than treating the record as current
+  state or authorization.
+
+Preserve explicit human consent for the exact action, independent checks at
+mutation time, and verification of the actual outcome.
+
 # Efficiency rules
 
 1. Start from entry points and contract surfaces.
