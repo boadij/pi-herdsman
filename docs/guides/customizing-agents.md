@@ -172,11 +172,10 @@ and cannot be delegated to. It appears under `Coordinators`, with
 Model, Thinking, and Details settings but no `Enabled` action. These settings
 do not add it to Agent discovery or delegation.
 
-The bundled default permits Code Mode and [session skill loading](../reference/agent-definition-schema.md#session-skill-loading),
-alongside mandatory Herdsman coordination tools. Inspection and execution are
-delegated to managed Agents by default. Manager owns project supervision and
-assignment boundaries; the Lead owns technical decisions and execution
-orchestration.
+The bundled default selects Code Mode alongside mandatory Herdsman
+coordination tools. Inspection and execution are delegated to managed Agents
+by default. Manager owns project supervision and assignment boundaries; the
+Lead owns technical decisions and execution orchestration.
 Herdsman automatically hands off the normal assignment response, deferring it
 until delegated Agent work settles. See [Project orchestration](project-orchestration.md)
 for the automatic result and `message_supervisor` coordination contract.
@@ -420,9 +419,14 @@ integration-level verification; loaded provider code is not sandboxed by this
 setting.
 
 Managed roles retain their required coordination tools independently of
-ordinary tool selection. The [agent-definition schema](../reference/agent-definition-schema.md)
-owns the exact precedence, protected-tool, collision, and launcher-injected
-extension rules.
+ordinary tool selection. Skill access is independent too: for example, an
+Agent with `tools: [codemode]` can load a skill selected in `skills` without
+adding `load_skill` to its tool list. See
+[Session skill loading](../reference/agent-definition-schema.md#session-skill-loading)
+for eligibility and Pi launch restrictions. The
+[agent-definition schema](../reference/agent-definition-schema.md) owns the
+exact precedence, protected-tool, collision, and launcher-injected extension
+rules.
 
 For an integration-level smoke check, load the repository's
 `scripts/tool-policy-diagnostic.mjs` extension and set `POLICY_EVIDENCE`,

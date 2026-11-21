@@ -49,7 +49,13 @@ test("Pi declares the session loader only when needed and disallows nesting", as
   const manual = testSkill(cwd, "manual", true);
   const missing = testSkill(cwd, "missing");
   const content = "---\nname: guide\n---\n# Full skill instructions\n";
-  await writeFile(guide.filePath, content, "utf8");
+  const userGuide = testSkill(cwd, "user-guide");
+  userGuide.sourceInfo.scope = "user";
+  await Promise.all(
+    [guide, userGuide].map(({ filePath }) =>
+      writeFile(filePath, content, "utf8"),
+    ),
+  );
 
   const faux = fauxProvider({
     provider: "session-skill-loader-test",
@@ -65,7 +71,9 @@ test("Pi declares the session loader only when needed and disallows nesting", as
   });
   let tools: string[] | undefined;
   let skills = [guide, manual];
-  const resourceLoader = new DefaultResourceLoader({
+  let chief = false;
+  let shadowRead = false;
+  const resourceOptions = {
     cwd,
     agentDir: cwd,
     settingsManager,
@@ -77,34 +85,60 @@ test("Pi declares the session loader only when needed and disallows nesting", as
     skillsOverride: () => ({ skills: [guide, manual], diagnostics: [] }),
     extensionFactories: [
       createCodemodeExtension({ mode: "only" }),
-      (pi) => {
+      (pi: ExtensionAPI) => {
         pi.on("before_agent_start", (event) => {
+          if (shadowRead) {
+            shadowRead = false;
+            pi.registerTool({
+              name: "read",
+              label: "Not a native reader",
+              description: "A custom tool sharing the name read.",
+              parameters: { type: "object", properties: {} },
+              async execute() {
+                return { content: [], details: undefined };
+              },
+            });
+          }
           if (tools) pi.setActiveTools(tools);
           event.systemPromptOptions.skills = skills;
         });
-        registerSkillLoader(pi);
+        registerSkillLoader(pi, () => chief);
       },
     ],
-  });
-  await resourceLoader.reload();
-  const { session } = await createAgentSession({
-    cwd,
-    agentDir: cwd,
-    modelRuntime,
-    model: faux.getModel()!,
-    resourceLoader,
-    settingsManager,
-    sessionManager: SessionManager.inMemory(cwd),
-    tools: ["+codemode", "+load_skill", "+grep", "+powershell"],
-  });
-  t.after(() => session.dispose());
+  };
+  async function startSession(
+    selection: Pick<
+      NonNullable<Parameters<typeof createAgentSession>[0]>,
+      "tools" | "excludeTools" | "noTools"
+    > = {},
+  ) {
+    const resourceLoader = new DefaultResourceLoader(resourceOptions);
+    await resourceLoader.reload();
+    const { session } = await createAgentSession({
+      cwd,
+      agentDir: cwd,
+      modelRuntime,
+      model: faux.getModel()!,
+      resourceLoader,
+      settingsManager,
+      sessionManager: SessionManager.inMemory(cwd),
+      ...selection,
+    });
+    t.after(() => session.dispose());
+    return session;
+  }
+  const session = await startSession();
 
   let declarations: ReturnType<typeof getCurrentTools> = [];
-  async function prompt(call?: ReturnType<typeof fauxToolCall>) {
+  async function prompt(
+    call?: ReturnType<typeof fauxToolCall>,
+    afterDeclaration?: () => void,
+  ) {
     declarations = [];
     faux.setResponses([
       (context) => {
         declarations = getCurrentTools(context.messages);
+        afterDeclaration?.();
         return call
           ? fauxAssistantMessage([call], { stopReason: "toolUse" })
           : fauxAssistantMessage("done");
@@ -125,7 +159,7 @@ test("Pi declares the session loader only when needed and disallows nesting", as
 
   assert.ok(
     session.getActiveToolNames().includes("load_skill"),
-    "explicit launch selection",
+    "intrinsic activation without a launch selection",
   );
   assert.equal(await prompt(), undefined, "native readers mask the loader");
 
@@ -185,6 +219,38 @@ test("Pi declares the session loader only when needed and disallows nesting", as
     ]);
   }
 
+  shadowRead = true;
+  tools = ["load_skill", "read"];
+  assert.ok(await prompt(fauxToolCall("load_skill", { name: "guide" })));
+  assert.ok(declarations.some(({ name }) => name === "read"));
+  assert.equal(lastToolResult().isError, false);
+
+  skills = [guide, userGuide];
+  const beforeChief = await prompt(
+    fauxToolCall("load_skill", { name: "guide" }),
+    () => {
+      chief = true;
+    },
+  );
+  assert.ok(beforeChief?.description.includes('- "guide":'));
+  assert.equal(lastToolResult().isError, true);
+  assert.deepEqual(lastToolResult().content, [
+    { type: "text", text: "Skill unavailable in this session" },
+  ]);
+
+  const chiefDeclaration = await prompt(
+    fauxToolCall("load_skill", { name: "user-guide" }),
+  );
+  assert.ok(chiefDeclaration);
+  assert.ok(chiefDeclaration.description.includes('- "user-guide":'));
+  assert.ok(!chiefDeclaration.description.includes('- "guide":'));
+  assert.equal(lastToolResult().isError, false);
+
+  skills = [guide];
+  assert.equal(await prompt(), undefined, "Chief has no user-scoped skills");
+  chief = false;
+  assert.ok(await prompt(), "project skills return outside Chief scope");
+
   for (const emptyCatalog of [[], [manual]]) {
     skills = emptyCatalog;
     assert.equal(await prompt(), undefined);
@@ -202,6 +268,24 @@ test("Pi declares the session loader only when needed and disallows nesting", as
 
   tools = ["codemode"];
   assert.equal(await prompt(), undefined, "removed by turn policy");
+
+  for (const selection of [
+    { tools: ["read"] },
+    { excludeTools: ["load_skill"] },
+    { tools: ["load_skill"], excludeTools: ["load_skill"] },
+  ]) {
+    const restricted = await startSession(selection);
+    restricted.setActiveToolsByName(["load_skill"]);
+    assert.ok(
+      !restricted.getAllTools().some(({ name }) => name === "load_skill"),
+    );
+    assert.ok(!restricted.getActiveToolNames().includes("load_skill"));
+  }
+  const managed = await startSession({
+    noTools: "all",
+    tools: ["load_skill"],
+  });
+  assert.deepEqual(managed.getActiveToolNames(), ["load_skill"]);
 });
 
 test("the loader rejects stale session identity and revoked tool access", async (t) => {
@@ -210,7 +294,7 @@ test("the loader rejects stale session identity and revoked tool access", async 
   registerSkillLoader(pi as unknown as ExtensionAPI);
   const start = events.get("before_agent_start")?.[0];
   assert.ok(start);
-  assert.equal(tools[0].defaultActive, false);
+  assert.equal(tools[0].defaultActive, true);
   const context = fakeContext();
   await start(
     { systemPromptOptions: { skills: [testSkill("/unused", "guide")] } },

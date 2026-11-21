@@ -6,12 +6,34 @@ const TOOL = "load_skill";
 const DESCRIPTION = "Load a skill by its exact name.";
 const READERS = new Set(["read", "bash"]);
 
-export function registerSkillLoader(pi: ExtensionAPI): void {
+export function registerSkillLoader(
+  pi: ExtensionAPI,
+  isChief: () => boolean = () => false,
+  isSessionAuthorized: (sessionId: string) => boolean = () => true,
+): void {
   let current: { sessionId: string; skills: Map<string, Skill> } | undefined;
+  function nativeReaderAvailable(active: readonly string[]): boolean {
+    return pi
+      .getAllTools()
+      .some(
+        ({ name, sourceInfo }) =>
+          READERS.has(name) &&
+          sourceInfo.source === "builtin" &&
+          active.includes(name),
+      );
+  }
+  function inScope(skill: Skill): boolean {
+    return !isChief() || skill.sourceInfo.scope === "user";
+  }
 
   pi.on("before_agent_start", (event, ctx) => {
+    const sessionId = ctx.sessionManager.getSessionId();
+    if (!isSessionAuthorized(sessionId)) {
+      current = undefined;
+      return;
+    }
     current = {
-      sessionId: ctx.sessionManager.getSessionId(),
+      sessionId,
       skills: new Map(
         (event.systemPromptOptions?.skills ?? [])
           .filter((skill) => !skill.disableModelInvocation)
@@ -25,22 +47,25 @@ export function registerSkillLoader(pi: ExtensionAPI): void {
     label: "Load skill",
     description: DESCRIPTION,
     exposure: "model-only",
-    defaultActive: false,
+    defaultActive: true,
     annotations: { readOnlyHint: true },
     parameters: Type.Object(
       { name: Type.String({ minLength: 1 }) },
       { additionalProperties: false },
     ),
     prepareLoadout({ declared }) {
+      if (!current || !isSessionAuthorized(current.sessionId))
+        return { hiddenDeclarations: [TOOL] };
       // Pi supplies the active set before any hook hides declarations, so
       // this also detects native readers hidden by Code Mode.
+      const eligible = [...current.skills.values()].filter(inScope);
       if (
-        !current?.skills.size ||
-        declared.some(({ name }) => READERS.has(name))
+        !eligible.length ||
+        nativeReaderAvailable(declared.map(({ name }) => name))
       ) {
         return { hiddenDeclarations: [TOOL] };
       }
-      const catalog = [...current.skills.values()].map(
+      const catalog = eligible.map(
         ({ name, description }) =>
           `- ${JSON.stringify(name)}: ${JSON.stringify(description)}`,
       );
@@ -52,12 +77,15 @@ export function registerSkillLoader(pi: ExtensionAPI): void {
     },
     async execute(_id, { name }, _signal, _update, ctx) {
       const active = pi.getActiveTools();
+      const sessionId = ctx.sessionManager.getSessionId();
       const skill = current?.skills.get(name);
       if (
         !skill ||
-        current?.sessionId !== ctx.sessionManager.getSessionId() ||
+        current?.sessionId !== sessionId ||
+        !isSessionAuthorized(sessionId) ||
         !active.includes(TOOL) ||
-        active.some((tool) => READERS.has(tool))
+        !inScope(skill) ||
+        nativeReaderAvailable(active)
       ) {
         throw new Error("Skill unavailable in this session");
       }

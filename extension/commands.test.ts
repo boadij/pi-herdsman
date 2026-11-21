@@ -688,7 +688,7 @@ const leadTools = [
   "list_peers",
   "message_peer",
 ];
-const leadToolsWithSkill = ["load_skill", ...leadTools];
+const leadToolsWithSkill = [...leadTools, "load_skill"];
 const leadToolsWithoutAgents = [
   "message_supervisor",
   "list_peers",
@@ -707,13 +707,15 @@ const managerTools = [
   "stop_lead",
   "remove_worktree",
   "integrate_branch",
+  "load_skill",
 ];
-const chiefTools = [
+const chiefCoordinationTools = [
   "list_staff",
   "inspect_staff",
   "read_staff_transcript",
   "message_staff",
 ];
+const chiefTools = [...chiefCoordinationTools, "load_skill"];
 
 const sessionLeadExecutionState = (
   entries: readonly unknown[],
@@ -1547,13 +1549,13 @@ test("a restricted Flexible definition cannot replace the ordinary tool baseline
     await pi.events.get("session_start")![0](undefined, context);
     assert.deepEqual(
       new Set(pi.pi.getActiveTools()),
-      new Set(["read", ...leadTools]),
+      new Set(["read", ...leadToolsWithSkill]),
     );
     await pi.commandOptions.get("lead").handler("orchestrate", context);
     await pi.commandOptions.get("lead").handler("flexible", context);
     assert.deepEqual(
       new Set(pi.pi.getActiveTools()),
-      new Set(["read", ...leadTools]),
+      new Set(["read", ...leadToolsWithSkill]),
     );
     assert.deepEqual(
       sessionLeadExecutionState(pi.entries)?.leadTools,
@@ -1762,6 +1764,13 @@ test("failed inherited capture still enforces invalid-profile fail-closed tools"
     failPersistence = true;
     await pi.events.get("session_tree")![0](undefined, context);
     assert.deepEqual(pi.pi.getActiveTools(), leadToolsWithoutAgents);
+    assert.deepEqual(
+      pi.events.get("tool_call")![0]({ toolName: "load_skill" }, context),
+      {
+        block: true,
+        reason: "Skill loading is unavailable in the active role.",
+      },
+    );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
   }
@@ -1900,14 +1909,22 @@ test("session tree restoration respects checkpoint order and tool policies", asy
       expected: leadToolsWithSkill,
     },
     {
-      name: "an explicit Flexible policy does not inherit newer tools",
-      profile: "tools: [read]",
+      name: "an empty Flexible allowlist retains only coordination and skill loading",
+      profile: "tools: []",
       branch: [
         checkpoint("flexible", ["read", "bash"]),
         toolChange(["history"]),
       ],
       restored: ["read", "bash", "history"],
-      expected: ["read", ...leadTools],
+      expected: leadToolsWithSkill,
+    },
+    {
+      name: "an external registration filter keeps skill loading unavailable",
+      profile: "tools: []",
+      loaderFiltered: true,
+      branch: [checkpoint("flexible", ["read"])],
+      restored: ["read"],
+      expected: leadTools,
     },
     {
       name: "excluded tools remain unavailable with newer tool evidence",
@@ -1958,6 +1975,13 @@ test("session tree restoration respects checkpoint order and tool policies", asy
       const context = fakeContext(pi.entries, scenario.branch) as any;
       context.cwd = cwd;
       registerExtension!(pi.pi as never);
+      if (scenario.loaderFiltered) {
+        const getAllTools = pi.pi.getAllTools;
+        pi.pi.getAllTools = () =>
+          getAllTools().filter(
+            (tool) => !isRecord(tool) || tool.name !== "load_skill",
+          );
+      }
       try {
         await pi.events.get("session_start")![0](undefined, context);
         pi.pi.setActiveTools(scenario.restored);
@@ -1966,6 +1990,19 @@ test("session tree restoration respects checkpoint order and tool policies", asy
         assert.deepEqual(
           new Set(pi.pi.getActiveTools()),
           new Set(scenario.expected),
+        );
+        const skillCall = pi.events.get("tool_call")![0](
+          { toolName: "load_skill" },
+          context,
+        );
+        assert.deepEqual(
+          skillCall,
+          scenario.loaderFiltered
+            ? {
+                block: true,
+                reason: "Skill loading is unavailable in the active role.",
+              }
+            : undefined,
         );
         assert.equal(pi.entries.length, entriesBefore);
         if ("extraTools" in scenario) {
@@ -10235,8 +10272,8 @@ async function managerDelegateAssignmentTest(
       assert.equal(args.includes("--no-tools"), false);
       assert.deepEqual(args[toolsIndex + 1]!.split(","), [
         "codemode",
-        "load_skill",
         ...leadTools,
+        "load_skill",
         "mcp__",
       ]);
       assert.ok(
@@ -15248,12 +15285,7 @@ test("Chief shutdown releases its lease when ordinary tool restoration fails", a
 
   await pi.events.get("session_shutdown")![0]();
 
-  assert.deepEqual(pi.pi.getActiveTools(), [
-    "list_staff",
-    "inspect_staff",
-    "read_staff_transcript",
-    "message_staff",
-  ]);
+  assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
   assert.ok(
     entries.some(
       (entry: any) =>
@@ -15540,12 +15572,7 @@ test("selecting a historical Chief branch activates its lease and staff tools", 
     await pi.events.get("session_tree")![0](undefined, context);
     assert.equal("waitForIdle" in context, false);
     context.waitForIdle = commandWaitForIdle;
-    assert.deepEqual(pi.pi.getActiveTools(), [
-      "list_staff",
-      "inspect_staff",
-      "read_staff_transcript",
-      "message_staff",
-    ]);
+    assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
     assert.equal(readPeerLeadRecord(peerRuntime(), sessionId), undefined);
     assert.throws(() =>
       claimChiefLease({
@@ -15677,7 +15704,7 @@ test("manual chief leave completes lead cleanup when tool restoration fails", as
   assert.deepEqual(pi.pi.getActiveTools(), restoredLeadTools);
   assert.ok(leadTools.every((name) => restoredLeadTools.includes(name)));
   assert.equal(
-    chiefTools.some((name) => restoredLeadTools.includes(name)),
+    chiefCoordinationTools.some((name) => restoredLeadTools.includes(name)),
     false,
   );
   assert.deepEqual(
@@ -15733,7 +15760,6 @@ test("lead session-start retries an exact baseline after restoration fails", asy
   const ordinaryBaseline = ["read", "bash"];
   const baseline = [
     ...ordinaryBaseline,
-    "load_skill",
     "list_agents",
     "delegate_agent",
     "continue_agent",
@@ -15746,6 +15772,7 @@ test("lead session-start retries an exact baseline after restoration fails", asy
     "message_supervisor",
     "list_peers",
     "message_peer",
+    "load_skill",
   ];
   entries.push({
     type: "custom",
@@ -15775,7 +15802,9 @@ test("lead session-start retries an exact baseline after restoration fails", asy
   await start(undefined, context);
 
   assert.equal(
-    chiefTools.some((name) => pi.pi.getActiveTools().includes(name)),
+    chiefCoordinationTools.some((name) =>
+      pi.pi.getActiveTools().includes(name),
+    ),
     false,
   );
   assert.ok(
@@ -15840,7 +15869,6 @@ test("lead session-start continues when chief lease release fails", async () => 
   assert.deepEqual(pi.pi.getActiveTools(), [
     "read",
     "bash",
-    "load_skill",
     "list_agents",
     "delegate_agent",
     "continue_agent",
@@ -15853,6 +15881,7 @@ test("lead session-start continues when chief lease release fails", async () => 
     "message_supervisor",
     "list_peers",
     "message_peer",
+    "load_skill",
   ]);
   assert.ok(
     entries.some(
@@ -18604,19 +18633,14 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
   registerExtension!(pi.pi as never);
   await pi.events.get("session_start")![0](undefined, context);
   await pi.commandOptions.get("chief").handler("", context);
-  assert.deepEqual(pi.pi.getActiveTools(), [
-    "list_staff",
-    "inspect_staff",
-    "read_staff_transcript",
-    "message_staff",
-  ]);
+  assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
 
   await pi.commandOptions.get("chief").handler("leave", context);
   assert.deepEqual(pi.pi.getActiveTools(), [
     "read",
     "bash",
-    "load_skill",
     ...ordinaryTools.filter((name) => !["read", "bash"].includes(name)),
+    "load_skill",
   ]);
   const role = entries
     .filter((entry: any) => entry.customType === "pi-herdsman-role")
@@ -18644,8 +18668,8 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
   assert.deepEqual(reloaded.pi.getActiveTools(), [
     "read",
     "bash",
-    "load_skill",
     ...ordinaryTools.filter((name) => !["read", "bash"].includes(name)),
+    "load_skill",
   ]);
 
   await reloaded.events.get("session_shutdown")?.[0]();
@@ -19162,18 +19186,12 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
   await pi.events.get("session_start")![0](undefined, context);
-  assert.deepEqual(pi.pi.getActiveTools(), [
-    "list_staff",
-    "inspect_staff",
-    "read_staff_transcript",
-    "message_staff",
-  ]);
+  assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
   await pi.commandOptions.get("chief").handler("leave", context);
   assert.deepEqual(pi.pi.getActiveTools(), [
     "read",
     "bash",
     "foreign_tool",
-    "load_skill",
     "list_agents",
     "delegate_agent",
     "continue_agent",
@@ -19186,6 +19204,7 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
     "message_supervisor",
     "list_peers",
     "message_peer",
+    "load_skill",
   ]);
   await pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_SOCKET_PATH;

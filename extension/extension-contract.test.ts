@@ -982,7 +982,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   for (const tool of lead.tools) {
     if (tool.name === "load_skill") {
       assertPortableToolSchema(tool, "model-only");
-      assert.equal(tool.defaultActive, false);
+      assert.equal(tool.defaultActive, true);
       continue;
     }
     assertPortableToolSchema(tool);
@@ -4468,6 +4468,70 @@ test("persisted Chief keeps verified authority and mandatory tools when definiti
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_SOCKET_PATH;
+  }
+});
+
+test("persisted Chief projects intrinsic skill loading only for a valid profile", async (t) => {
+  for (const valid of [true, false]) {
+    await t.test(valid ? "empty policy" : "invalid policy", async () => {
+      setLeadEnvironment();
+      process.env.HERDR_PANE_ID = "chief-pane";
+      process.env.HERDR_TAB_ID = "chief-tab";
+      process.env.HERDR_SOCKET_PATH = join(
+        tmpdir(),
+        `supervision-chief-skill-${randomUUID()}.sock`,
+      );
+      const directory = join(PI_AGENT_ROOT, "coordinators");
+      realFs.mkdirSync(directory, { recursive: true });
+      const profile = join(directory, "chief.md");
+      const entries = [
+        {
+          type: "custom",
+          customType: "pi-herdsman-role",
+          data: { sessionId: LEAD_SESSION_ID, role: "chief", leadTools: [] },
+        },
+      ];
+      const pi = fakePi({
+        entries,
+        activeTools: ["load_skill"],
+        allTools: [...REGISTERED_ROLE_TOOLS, { name: "load_skill" }],
+      });
+      writeFileSync(
+        profile,
+        `---\nname: chief\ntools: ${valid ? "[]" : "invalid"}\n---\n`,
+      );
+      try {
+        registerExtension!(pi.pi as never);
+        const context = fakeContext(entries);
+        await pi.events.get("session_start")![0](undefined, context);
+        assert.deepEqual(pi.pi.getActiveTools(), [
+          "list_staff",
+          "inspect_staff",
+          "read_staff_transcript",
+          "message_staff",
+          ...(valid ? ["load_skill"] : []),
+        ]);
+        const result = await pi.events.get("tool_call")![0](
+          { toolName: "load_skill" },
+          context,
+        );
+        assert.deepEqual(
+          result,
+          valid
+            ? undefined
+            : {
+                block: true,
+                reason: "Skill loading is unavailable in the active role.",
+              },
+        );
+      } finally {
+        await pi.events.get("session_shutdown")?.[0]();
+        realFs.rmSync(profile, { force: true });
+        delete process.env.HERDR_PANE_ID;
+        delete process.env.HERDR_TAB_ID;
+        delete process.env.HERDR_SOCKET_PATH;
+      }
+    });
   }
 });
 

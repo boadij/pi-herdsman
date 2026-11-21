@@ -1231,6 +1231,7 @@ function registerExtensionImpl(
     ...PEER_TOOLS,
     ...STAFF_TOOLS,
     "read_evidence",
+    "load_skill",
     "delegate_work",
     "resume_work",
     "stop_lead",
@@ -2646,7 +2647,7 @@ function registerExtensionImpl(
     }
   }
   if (processRole !== "managed-agent") {
-    registerSkillLoader(pi);
+    registerSkillLoader(pi, () => activeRole() === "chief");
     return;
   }
   pi.registerTool({
@@ -2697,7 +2698,7 @@ function registerExtensionImpl(
       }
     },
   });
-  registerManagedAgentRuntime(pi, {
+  const isVerifiedSession = registerManagedAgentRuntime(pi, {
     build: HERDSMAN_BUILD,
     shellTimeoutSeconds: STALE_AFTER_MS / 1000,
     statusRuntime: leadStatusRuntime!,
@@ -2712,5 +2713,5 @@ function registerExtensionImpl(
       (await contextAgentDefinitions(ctx)).definitions,
     appendError: (ctx, kind, error) => appendDurableError(pi, ctx, kind, error),
   });
-  registerSkillLoader(pi);
+  registerSkillLoader(pi, undefined, isVerifiedSession);
 }

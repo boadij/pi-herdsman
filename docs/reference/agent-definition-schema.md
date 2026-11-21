@@ -178,18 +178,17 @@ profiles reject `model`, `thinking`, `systemPromptMode`, `enabled`, `permission`
 described below.
 
 An omitted `tools` field inherits the value from lower-precedence definition
-layers. The bundled Flexible Lead selects `tools: [+codemode, +load_skill]`,
-preserving the ordinary Lead baseline while adding those tools when registered.
+layers. The bundled Flexible Lead selects `tools: [+codemode]`,
+preserving the ordinary Lead baseline while adding Code Mode when registered.
 While that relative ordinary Lead projection is active, observed changes to
 Pi's active ordinary tools update the saved baseline before subsequent role
 reconciliation. Explicit allowlists and `excludeTools` remain authoritative,
 and restrictive roles do not supply the ordinary baseline. The bundled
-Orchestrate Lead selects `tools: [codemode, load_skill]`; Manager and Chief
-select `tools: [codemode]`. Code Mode is available only when Pi has loaded its
-built-in extension. See [Session skill loading](#session-skill-loading) for
-when `load_skill` is visible. Explicit effective allowlists select matching
-registered ordinary tools; required coordination tools remain available
-independently. `excludeTools` is applied after the ordinary allowlist.
+Orchestrate Lead, Manager, and Chief select `tools: [codemode]`. Code Mode is
+available only when Pi has loaded its built-in extension. Explicit effective
+allowlists select matching registered ordinary tools; required coordination
+tools and [session skill loading](#session-skill-loading) are independent of
+that selection. `excludeTools` is applied after the ordinary allowlist.
 Herdsman's coordination tools cannot be activated through this policy;
 role-required coordination tools are restored after filtering and cannot be
 excluded. Unregistered configured tools remain unavailable rather than widening
@@ -317,20 +316,27 @@ schema or make authorization decisions from it.
 
 ## Session skill loading
 
-`load_skill` is an optional tool, not a definition setting. When permitted by
-the role's `tools` policy, it loads a Pi-resolved, model-invocable skill from the
-current session by exact name. Pi hides its declaration if no eligible skills
-exist or if `read` or `bash` is active for native skill loading, including
-readers available through Code Mode. The loader itself cannot be called from
-Code Mode. Loading a skill does not grant general filesystem access or change
-the role's permissions.
+Herdsman provides `load_skill` automatically in authorized Agent and
+Coordinator sessions when Pi has resolved eligible skills and neither native
+`read` nor native `bash` is active. Native readers available through Code Mode
+also count; a third-party tool with the same name does not. If no eligible
+skills exist, the loader is hidden and cannot load a skill.
 
-The bundled Flexible, Orchestrate, and managed Lead profiles permit
-`load_skill`. The managed Lead retains `noSkills: true`: Pi skips automatic
-skill discovery but still accepts explicit `skills` entries. Manager and Chief
-can opt in with a `tools: [+load_skill]` overlay; custom Agents can include
-`load_skill` in their `tools` lists. An explicit allowlist that omits
-`load_skill`, such as `tools: [codemode]`, does not permit it.
+The loader accepts the exact name of a skill Pi resolved for the current
+session and allows the model to invoke. In Chief sessions, the loader is
+limited to user-scoped skills. `noSkills: true` disables automatic discovery,
+not explicit `skills` selections. The loader is callable directly by the
+model, not from Code Mode, and loading a skill does not expand execution
+permissions or grant general filesystem access.
+
+No `tools` entry is needed: `tools: []` and `noTools: true` restrict ordinary
+tools without disabling skill access. A definition cannot remove the loader
+with `tools: [-load_skill]` or an `excludeTools` pattern that matches
+`load_skill`; those exclusions are invalid. This does not override Pi's own
+launch restrictions: if an independent Pi launch excludes the loader from
+registration, Herdsman cannot make it available. Sessions restricted to
+mandatory coordination tools after an authorization or profile failure do
+not gain skill access through the loader.
 
 ## Automatic Pi context inheritance
 
@@ -393,19 +399,21 @@ explicit `tools`.
 
 An explicit `tools` allowlist takes precedence over the default-selection
 switches `noTools` and `noBuiltinTools`; `excludeTools` removes matching
-ordinary tool names. Managed agents and managed project Leads retain their applicable role-required
-Herdsman coordination tools, which are protected from exclusions and subject to delegation policy. When `tools`
-is omitted, Pi Herdsman does not emit `--tools`, preserving Pi's
-configured/default tool selection. When `tools` is explicitly set, the
-selected allowlist is closed across Pi callable tool sources and augmented
-with the runtime role's mandatory tools. Unselected tools do not become callable
-merely because additional MCP servers, extensions, or custom tools are configured.
-An explicit empty policy disables ordinary tools. `noBuiltinTools: true` alone
-does not close the policy; other normal Pi tool sources remain available.
-Exact exclusions naming mandatory tools are ignored. Wildcard exclusions
-matching any mandatory Herdsman tool are invalid and reject launch: Pi exclusions
-cannot express everything matching a pattern except required infrastructure.
+ordinary tool names. Managed Agents and managed project Leads retain their
+applicable role-required coordination tools, which are protected from
+exclusions and subject to delegation policy. When `tools` is omitted and
+`noTools` is not set to `true`, Herdsman leaves Pi's default selection in place.
+An explicit allowlist is closed across Pi callable tool sources and augmented
+with the role's mandatory tools and intrinsic skill loader. Unselected tools
+do not become callable merely because additional MCP servers, extensions, or
+custom tools are configured. An explicit empty policy disables ordinary tools.
+`noBuiltinTools: true` alone does not close the policy; other normal Pi tool
+sources remain available. Exact exclusions naming mandatory coordination tools
+are ignored. Wildcard exclusions matching a mandatory Herdsman tool are
+invalid: Pi exclusions cannot express everything matching a pattern except
+required infrastructure.
 Unmanaged Pi launches do not receive these managed-role exceptions.
+[Session skill loading](#session-skill-loading) has separate exclusion rules.
 
 Loading extension code and exposing its tools are separate concerns. An
 extension listed in `extensions` is loaded, while its registered tools still
@@ -461,10 +469,8 @@ leaf, `agent` is removed from its `tools` list.
 
 `tools` and `excludeTools` configure ordinary execution tools, not this
 mandatory role infrastructure. They cannot remove required coordination tools
-or `await_owner` and `notify_owner`. When `tools` is omitted, Pi Herdsman emits no `--tools` option
-and Pi's configured/default selection remains in effect. An explicit `tools`
-allowlist is augmented with the managed agent's mandatory role tools; the
-configuration-only `agent` name is excluded from that allowlist.
+or `await_owner` and `notify_owner`. An explicit `tools` allowlist does not
+include the configuration-only `agent` name.
 
 ## Body composition
 
