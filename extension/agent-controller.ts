@@ -268,16 +268,14 @@ export function buildAgentStatusSnapshot(
   const ownerSessionId = ctx.sessionManager.getSessionId();
   const unresolvedMailboxState =
     host.scope.kind === "root" && view.stateIssues.length > 0;
-  const listed = view.visible.map((snapshot: VisibleManagedAgentSnapshot) =>
-    host.listedAgentRecord(
+  const agents = view.visible.map((observed) => {
+    const agent = host.listedAgentRecord(
       view,
-      snapshot,
+      observed,
       ownerSessionId,
       host.scope,
       unresolvedMailboxState,
-    ),
-  );
-  const agents = listed.map((agent) => {
+    );
     const runtime = host.runtimeForLabel(agent.agent as string);
     const tokens =
       agent.tokens && typeof agent.tokens === "object" ? agent.tokens : {};
@@ -293,9 +291,34 @@ export function buildAgentStatusSnapshot(
       agent.state === "lost"
         ? agent.state
         : "unknown";
+    const { presence, state: durableState, lifecycleState } = observed;
+    const verifiedLive =
+      presence.kind === "live" &&
+      runtime !== undefined &&
+      runtimeIdentityMatches(runtime, durableState, presence.agent);
+    const startupTransition =
+      state === "unknown" &&
+      verifiedLive &&
+      !durableState.completedRequestId &&
+      !durableState.resultError &&
+      !durableState.pendingAskId &&
+      ((lifecycleState === "working" && !durableState.activeRequestId) ||
+        (lifecycleState === "idle" && !!durableState.activeRequestId));
     return {
       label: agent.agent as string,
       state,
+      ...(verifiedLive &&
+      (state === "working" || state === "blocked") &&
+      durableState.activeRequestId !== undefined
+        ? { activeRequestId: durableState.activeRequestId }
+        : {}),
+      ...(startupTransition
+        ? {
+            startupTransition: {
+              activeRequestId: durableState.activeRequestId,
+            },
+          }
+        : {}),
       definition:
         collapseDisplayText(
           typeof agent.agent_definition === "string" &&
@@ -441,11 +464,23 @@ export function createAgentStatusRuntime() {
   ): StatusSnapshot => {
     const pendingStarts = options?.pendingStartEntries() ?? [];
     if (!pendingStarts.length) return snapshot;
-    const agents = snapshot.agents.map((agent) =>
-      options!.hasPendingStart(agent.label) && agent.state === "settling"
+    const agents = snapshot.agents.map((agent) => {
+      if (agent.state === "settling" && options!.hasPendingStart(agent.label))
+        return { ...agent, state: "starting" as const };
+      if (
+        agent.state !== "unknown" ||
+        !agent.startupTransition ||
+        snapshot.stale ||
+        snapshot.unavailable
+      )
+        return agent;
+      const pending = pendingStarts.find(({ label }) => label === agent.label);
+      const { activeRequestId } = agent.startupTransition;
+      return pending?.requestId &&
+        (activeRequestId === undefined || activeRequestId === pending.requestId)
         ? { ...agent, state: "starting" as const }
-        : agent,
-    );
+        : agent;
+    });
     const pendingAgents = pendingStarts
       .filter(
         ({ label }) => !snapshot.agents.some((agent) => agent.label === label),
@@ -472,12 +507,10 @@ export function createAgentStatusRuntime() {
       const runtime = options.runtimeForLabel(label);
       const resolved =
         pending.requestId !== undefined &&
-        (agent?.state === "working" ||
-          agent?.state === "blocked" ||
+        (runtime?.completedRequestId === pending.requestId ||
           (runtime?.activeRequestId === pending.requestId &&
-            agent !== undefined &&
-            agent.state !== "settling") ||
-          runtime?.completedRequestId === pending.requestId);
+            agent?.activeRequestId === pending.requestId &&
+            (agent.state === "working" || agent.state === "blocked")));
       if (resolved) options.clearPendingStart(label, pending);
     }
   };
@@ -6452,6 +6485,7 @@ export function createAgentController(
     preserveOwnerMessages = false,
   ): Promise<void> => {
     const state = snapshot.state;
+    const pending = pendingStarts.get(state.agentLabel);
     const mailbox = agentMailboxPath(state.workspaceId, state.agentLabel);
     const release = assignmentLockHeld
       ? undefined
@@ -6639,6 +6673,20 @@ export function createAgentController(
         report.onCleanupFailure(state.agentLabel, message);
         return;
       }
+      const runtime = runtimes.get(state.agentLabel);
+      if (
+        pending?.requestId !== undefined &&
+        pendingStarts.get(state.agentLabel) === pending &&
+        runtime &&
+        sameIdentity(
+          recordDependencies.runtimeIdentityState(runtime),
+          current,
+        ) &&
+        (runtime.activeRequestId === pending.requestId ||
+          (current.lastAck?.accepted &&
+            current.lastAck.requestId === pending.requestId))
+      )
+        pendingStarts.delete(state.agentLabel);
       invalidateRuntime(state.agentLabel, state.workspaceId);
       report?.onClosed?.({
         state: current,

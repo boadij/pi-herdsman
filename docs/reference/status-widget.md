@@ -398,10 +398,17 @@ observed lifecycle state, but elapsed values do not advance past that
 observation.
 While a controller-local start remains pending, an authoritative `settling`
 row is presented as `starting` so launch and request handoff remain visually
-continuous. `working`, `blocked`, and `unknown` authoritative states are never
-overridden. A starting row is removed when its exact request becomes active or
-terminal, its local runtime is removed, startup fails or rolls back, the
-controller session restarts, or shutdown clears transient state.
+continuous. A fresh, available snapshot can also show `starting` for an
+authoritative `unknown` row during a verified handoff: the live Agent must
+match the controller's runtime identity, and Herdr must report work before an
+active request is recorded, or report idle while the exact pending request is
+recorded as active. This changes only the display, not the authoritative state
+or available actions. Unverified identity, an unknown Herdr lifecycle, stale
+observations, request mismatches, and unresolved errors do not qualify for
+this override. The pending start ends when the exact request is observed
+working or blocked, or reaches terminal completion. A verified stop with
+successful cleanup, startup failure or rollback, session restart, and
+shutdown also clear transient startup state.
 
 The normal widget retains owned `lost` and fail-closed `unknown` rows because
 they represent durable unresolved generations whose physical state is either

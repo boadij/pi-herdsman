@@ -537,6 +537,70 @@ test("Agent status observer retains unavailable with pending starts", async (t) 
   runtime.shutdown();
 });
 
+test("Agent status reconciles active startup only for the pending request", async (t) => {
+  const { createAgentStatusRuntime } = await import("./agent-controller.ts");
+  const status = createAgentStatusRuntime();
+  t.after(status.shutdown);
+  const ctx = fakeContext() as any;
+  ctx.mode = "tui";
+  ctx.hasUI = true;
+  const pending = {
+    label: "scout",
+    definition: "scout",
+    requestId: randomUUID(),
+    startedAt: 123,
+  };
+  const runtime = {
+    label: pending.label,
+    agentDefinition: pending.definition,
+    herdrAgent: "scout-runtime",
+    workspaceId: WORKSPACE,
+    paneId: "scout-pane",
+    cwd: "/tmp",
+    runId: randomUUID(),
+    ownerSessionId: LEAD_SESSION_ID,
+    mailboxPath: "/tmp/scout-mailbox",
+    activeRequestId: randomUUID(),
+  };
+  let cleared = 0;
+  let observed = 0;
+  status.configure({
+    loadSnapshot: async () => ({
+      agents: [
+        {
+          label: pending.label,
+          definition: pending.definition,
+          state: "working",
+          activeRequestId: pending.requestId,
+        },
+      ],
+      stale: false,
+      unavailable: false,
+    }),
+    pendingStartEntries: () => (cleared ? [] : [pending]),
+    hasPendingStart: () => !cleared,
+    clearPendingStart: (label, expected) => {
+      assert.equal(label, pending.label);
+      assert.equal(expected, pending);
+      cleared++;
+      return true;
+    },
+    runtimeForLabel: () => runtime,
+    ownToolsSnapshot: () => ({}),
+  });
+  status.startObserver(ctx, () => observed++);
+  await t.waitFor(() =>
+    assert.equal(status.getSnapshot().agents[0]?.state, "working"),
+  );
+  assert.equal(cleared, 0);
+
+  runtime.activeRequestId = pending.requestId;
+  const beforeRefresh = observed;
+  status.requestRefresh();
+  await t.waitFor(() => assert.ok(observed > beforeRefresh));
+  assert.equal(cleared, 1);
+});
+
 import {
   CHILD_SESSION_ID,
   DEFAULT_PI_SESSION_ID,
@@ -3664,7 +3728,48 @@ test("staged fresh assignment bridges pending start through working", async (t) 
     assert.match(renderedAfterAck, /flexible.*◌ 1/);
     assert.doesNotMatch(renderedAfterAck, /settling/);
 
+    const assertUnknownHandoff = async (marker: RegExp) => {
+      const observation = (await list()).details.agents[0];
+      assert.equal(observation.state, "unknown");
+      await t.waitFor(
+        () => assert.match(fixture.widgetValue.render(160).join("\n"), marker),
+        { timeout: 3_000 },
+      );
+      return observation;
+    };
+    fixture.observe("working");
+    assert.equal(
+      (await assertUnknownHandoff(/flexible.*◌ 1/)).recovery_only,
+      undefined,
+    );
+
+    fixture.observe("working", randomUUID());
+    assert.equal(
+      (await assertUnknownHandoff(/flexible.*\? 1/)).recovery_only,
+      true,
+    );
+
+    fixture.observe("idle");
     fixture.markWorking(requestId);
+    await assertUnknownHandoff(/flexible.*◌ 1/);
+
+    const otherRequest = randomUUID();
+    fixture.observe("working");
+    fixture.markWorking(otherRequest);
+    const otherWorking = (await list()).details.agents[0];
+    assert.equal(otherWorking.state, "working");
+    assert.equal(otherWorking.active_request_id, otherRequest);
+    await t.waitFor(() =>
+      assert.match(fixture.widgetValue.render(160).join("\n"), /flexible.*● 1/),
+    );
+
+    fixture.observe("idle");
+    await assertUnknownHandoff(/flexible.*\? 1/);
+
+    fixture.markWorking(requestId);
+    await assertUnknownHandoff(/flexible.*◌ 1/);
+
+    fixture.observe();
     const working = await list();
     assert.equal(working.details.agents[0].state, "working");
     assert.equal(working.details.agents[0].active_request_id, requestId);
@@ -3698,6 +3803,41 @@ test("staged fresh assignment bridges pending start through working", async (t) 
     ]);
     fixture.shutdown();
   }
+});
+
+test("staged fresh assignment removes its pending start when stopped before working", async (t) => {
+  const fixture = createStagedAssignmentFixture("agent");
+  t.after(fixture.shutdown);
+  await fixture.sessionStart;
+  fixture.releaseInitialStatus();
+  fixture.releaseStart();
+  fixture.releasePreSubmitValidation();
+  fixture.releaseAcknowledgement();
+
+  const delegated = await registeredAgentTool(fixture.pi, "delegate").execute(
+    "delegate",
+    { definition: "agent", task: "stop before working" },
+    undefined,
+    undefined,
+    fixture.context,
+  );
+  assert.equal(delegated.details.ok, true, JSON.stringify(delegated.details));
+  assert.equal(readAgentState(fixture.mailbox)?.activeRequestId, undefined);
+  const render = () => fixture.widgetValue.render(160).join("\n");
+  await t.waitFor(() => assert.match(render(), /flexible.*◌ 1/));
+
+  const stopped = await registeredAgentTool(fixture.pi, "stop").execute(
+    "stop",
+    { agent: "agent" },
+    undefined,
+    undefined,
+    fixture.context,
+  );
+  assert.equal(stopped.details.ok, true, JSON.stringify(stopped.details));
+  assert.equal(readAgentState(fixture.mailbox), undefined);
+  await t.waitFor(() => {
+    assert.doesNotMatch(render(), /◌ 1|└─/);
+  });
 });
 
 test("fixture mailbox consumer retries a failed acknowledgement callback", async (t) => {
