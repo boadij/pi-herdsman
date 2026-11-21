@@ -1,3 +1,4 @@
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type {
   AgentToolResult,
   ExtensionAPI,
@@ -26,6 +27,7 @@ import {
 import { OperationError } from "../errors.ts";
 import {
   localRepositoryScope,
+  herdrAgentAlias,
   verifiedHerdrAgent,
   matchesExpectedSession,
   sameDirectory,
@@ -3923,6 +3925,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         throw new Error(
           `Branch ${branch} already has live Lead session ${herdrSessionId(leads[0])}. Coordinate with that Lead or close it before starting managed work on this branch.`,
         );
+      return inventory;
     };
     if (branchWorktrees[0]?.open_workspace_id)
       await assertUnoccupied(branchWorktrees[0].open_workspace_id);
@@ -4028,8 +4031,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       )
         throw new Error("Manager identity changed before project activation");
       let workspaceId: string | undefined;
-      let paneId: string | undefined;
-      let tabId: string | undefined;
+      let initialPaneId: string | undefined;
+      let initialTabId: string | undefined;
       let cwd: string | undefined;
       const assignedPlacement =
         operation.action === "resume"
@@ -4075,8 +4078,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             { signal },
           );
           workspaceId = opened?.workspace?.workspace_id;
-          paneId = opened?.root_pane?.pane_id;
-          tabId = opened?.tab?.tab_id ?? opened?.root_pane?.tab_id;
+          initialPaneId = opened?.root_pane?.pane_id;
+          initialTabId = opened?.tab?.tab_id ?? opened?.root_pane?.tab_id;
           cwd = opened?.worktree?.path;
           if (
             assignedPlacement?.status === "matched" &&
@@ -4105,8 +4108,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           timeout: 180_000,
         });
         workspaceId = created?.workspace?.workspace_id;
-        paneId = created?.root_pane?.pane_id;
-        tabId = created?.tab?.tab_id;
+        initialPaneId = created?.root_pane?.pane_id;
+        initialTabId = created?.tab?.tab_id;
         cwd = created?.worktree?.path;
         if (
           created?.worktree?.branch &&
@@ -4119,23 +4122,23 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       if (
         typeof workspaceId !== "string" ||
         !workspaceId ||
-        typeof paneId !== "string" ||
-        !paneId ||
-        typeof tabId !== "string" ||
-        !tabId ||
+        typeof initialPaneId !== "string" ||
+        !initialPaneId ||
+        typeof initialTabId !== "string" ||
+        !initialTabId ||
         typeof cwd !== "string" ||
         !cwd
       )
         throw new Error("Herdr did not return exact worktree identities");
-      if (operation.action === "delegate") {
+      const assertAssignedGitCheckout = async (checkout: string) => {
         const [common, branchResult] = await Promise.all([
           pi.exec(
             "git",
             ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-            { cwd: cwd!, signal, timeout: 10_000 },
+            { cwd: checkout, signal, timeout: 10_000 },
           ),
           pi.exec("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], {
-            cwd: cwd!,
+            cwd: checkout,
             signal,
             timeout: 10_000,
           }),
@@ -4154,6 +4157,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           throw new Error(
             "Herdr checkout does not match the assigned repository and branch",
           );
+      };
+      if (operation.action === "delegate") {
+        await assertAssignedGitCheckout(cwd);
         if (
           !isAbsolute(cwd!) ||
           workspaceId === primaryWorkspaceId ||
@@ -4246,6 +4252,23 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       let previousLeadInstanceId: string | undefined;
       let leadStartupStartedAt: number | undefined;
       let freshRestorationAttestation = false;
+      let requireResolvedSession = false;
+      const label = `lead-${id.slice(0, 8)}`;
+      const expectedName = herdrAgentAlias(workspaceId!, label, id);
+      let paneId = initialPaneId;
+      let tabId = initialTabId;
+      const isCurrentCandidate = (agent: HerdrRecord) =>
+        agent.workspace_id === workspaceId &&
+        (agent.name === expectedName ||
+          (isPiAgent(agent) &&
+            (herdrSessionId(agent) === assignment.id ||
+              (agent.pane_id === initialPaneId &&
+                agent.tab_id === initialTabId))));
+      const assertManagerCurrent = async () => {
+        const fresh = await currentManager(ctx);
+        if (!fresh || !sameManagerDescriptor(fresh, manager))
+          throw new Error("Manager changed during project activation");
+      };
       const verifyLeadCandidate = (candidate: any): boolean => {
         const reported = sessionIdentity(candidate?.agent_session);
         if (!reported) return false;
@@ -4254,6 +4277,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           throw new Error(
             "Herdr session identity does not match the Manager assignment",
           );
+        if (requireResolvedSession && !resolvedSessionId) return false;
         const state = readLeadCoordinationState(
           supervisionRuntime(),
           assignment.id,
@@ -4291,35 +4315,48 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         return state?.role === "lead" && state.piSessionId === assignment.id;
       };
       const currentInventory = await herdrSessionSnapshot(pi, ctx, signal);
-      const currentCandidates = currentInventory.agents.filter(
-        (agent: any) =>
-          isPiAgent(agent) &&
-          agent.workspace_id === workspaceId &&
-          agent.pane_id === paneId &&
-          agent.tab_id === tabId,
-      );
+      const currentCandidates =
+        currentInventory.agents.filter(isCurrentCandidate);
       if (currentCandidates.length > 1)
         throw new Error("Ambiguous Lead session in new worktree");
       if (currentCandidates.length === 1) {
-        if (verifyLeadCandidate(currentCandidates[0]))
-          lead = currentCandidates[0];
+        const candidate = currentCandidates[0];
+        if (
+          typeof candidate.pane_id !== "string" ||
+          !candidate.pane_id ||
+          typeof candidate.tab_id !== "string" ||
+          !candidate.tab_id
+        )
+          throw new Error(
+            "Herdr did not report exact existing Lead tab identities",
+          );
+        requireResolvedSession =
+          candidate.pane_id !== initialPaneId ||
+          candidate.tab_id !== initialTabId;
+        paneId = candidate.pane_id;
+        tabId = candidate.tab_id;
+        if (verifyLeadCandidate(candidate)) lead = candidate;
       }
-      let effectiveProjectTrusted: boolean | undefined;
-      if (!lead) {
+      const originalPaneRunsPi = async () => {
         const processInfo = await runHerdr(
           pi,
           ctx,
-          ["pane", "process-info", "--pane", paneId],
+          ["pane", "process-info", "--pane", initialPaneId],
           { signal },
         );
         const foreground = processInfo?.process_info?.foreground_processes;
+        return (
+          Array.isArray(foreground) &&
+          foreground.some((process: any) => {
+            const executable = `${process?.argv0 ?? ""} ${process?.cmdline ?? ""}`;
+            return /(^|[\\/\s])pi(?:\s|$)/i.test(executable);
+          })
+        );
+      };
+      let effectiveProjectTrusted: boolean | undefined;
+      if (!lead) {
         const piAlreadyRunning =
-          currentCandidates.length === 1 ||
-          (Array.isArray(foreground) &&
-            foreground.some((process: any) => {
-              const executable = `${process?.argv0 ?? ""} ${process?.cmdline ?? ""}`;
-              return /(^|[\\/\s])pi(?:\s|$)/i.test(executable);
-            }));
+          currentCandidates.length === 1 || (await originalPaneRunsPi());
         if (!piAlreadyRunning) {
           await assertResumePlacement();
           await assertUnoccupied(workspaceId!);
@@ -4407,6 +4444,63 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               : {}),
             modelDecision,
           });
+          // Keep the initial tab: Herdr cannot conditionally close it while
+          // proving atomically that no user process has taken ownership.
+          const created = await runHerdr(
+            pi,
+            ctx,
+            [
+              "tab",
+              "create",
+              "--workspace",
+              workspaceId!,
+              "--cwd",
+              cwd!,
+              "--label",
+              label,
+              "--env",
+              `PI_CODING_AGENT_DIR=${getAgentDir()}`,
+              "--no-focus",
+            ],
+            { signal },
+          );
+          const tab = created?.tab;
+          const pane = created?.root_pane;
+          if (
+            typeof tab?.tab_id !== "string" ||
+            !tab.tab_id ||
+            tab.workspace_id !== workspaceId ||
+            tab.tab_id === initialTabId ||
+            typeof pane?.pane_id !== "string" ||
+            !pane.pane_id ||
+            pane.pane_id === initialPaneId ||
+            typeof pane.terminal_id !== "string" ||
+            !pane.terminal_id ||
+            pane.workspace_id !== workspaceId ||
+            pane.tab_id !== tab.tab_id
+          )
+            throw new Error("Herdr did not return exact Lead tab identities");
+          if (operation.action === "delegate")
+            await assertAssignedGitCheckout(cwd);
+          else await assertResumePlacement();
+          const latestInventory = await assertUnoccupied(workspaceId!);
+          if (
+            latestInventory.agents.some(isCurrentCandidate) ||
+            (await originalPaneRunsPi())
+          )
+            throw new Error(
+              "A Lead appeared during tab creation; work was preserved",
+            );
+          await assertManagerCurrent();
+          if (
+            readProjectAssignment(runtime, manager.repoKey, branch)?.id !==
+            assignment.id
+          )
+            throw new Error(
+              "Project assignment changed during Lead tab creation",
+            );
+          tabId = tab.tab_id;
+          paneId = pane.pane_id;
           previousLeadInstanceId = readLeadCoordinationState(
             supervisionRuntime(),
             assignment.id,
@@ -4418,7 +4512,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             tabId,
             paneId,
             cwd,
-            label: `lead-${id.slice(0, 8)}`,
+            label,
             runId: id,
             extensionPath: HERDSMAN_EXTENSION_PATH,
             agentArgs: [...launchArgs, "--session-id", assignment.id],
@@ -4566,11 +4660,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         await assertResumePlacement();
         await queueResumeHandoff(false);
       }
-      const assertManagerCurrent = async () => {
-        const fresh = await currentManager(ctx);
-        if (!fresh || !sameManagerDescriptor(fresh, manager))
-          throw new Error("Manager changed during project activation");
-      };
       await assertManagerCurrent();
       const latestState = readLeadCoordinationState(
         supervisionRuntime(),
