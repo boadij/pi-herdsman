@@ -10055,7 +10055,7 @@ async function managerDelegateAssignmentTest(
           },
         },
         ...(args[2] === childWorkspace
-          ? { root_pane: { pane_id: "child-pane", tab_id: "child-tab" } }
+          ? { root_pane: { pane_id: "worktree-pane", tab_id: "worktree-tab" } }
           : {}),
       });
     if (command === "herdr" && args[0] === "worktree" && args[1] === "list") {
@@ -10105,11 +10105,32 @@ async function managerDelegateAssignmentTest(
       created = true;
       return respond({
         workspace: { workspace_id: childWorkspace },
-        tab: { tab_id: "child-tab" },
-        root_pane: { pane_id: "child-pane", tab_id: "child-tab" },
+        tab: { tab_id: "worktree-tab" },
+        root_pane: { pane_id: "worktree-pane", tab_id: "worktree-tab" },
         worktree: {
           branch: createdBranch,
           path: trustPath,
+        },
+      });
+    }
+    if (command === "herdr" && args[0] === "tab" && args[1] === "create") {
+      assert.equal(args[args.indexOf("--workspace") + 1], childWorkspace);
+      assert.equal(
+        realFs.realpathSync(args[args.indexOf("--cwd") + 1]!),
+        childCwd,
+      );
+      assert.equal(
+        args[args.indexOf("--env") + 1],
+        `PI_CODING_AGENT_DIR=${PI_AGENT_ROOT}`,
+      );
+      assert.ok(args.includes("--no-focus"));
+      return respond({
+        tab: { tab_id: "child-tab", workspace_id: childWorkspace },
+        root_pane: {
+          pane_id: "child-pane",
+          workspace_id: childWorkspace,
+          tab_id: "child-tab",
+          terminal_id: "child-terminal",
         },
       });
     }
@@ -10147,7 +10168,7 @@ async function managerDelegateAssignmentTest(
     if (command === "herdr" && args[0] === "pane" && args[1] === "process-info")
       return respond({
         process_info: {
-          pane_id: "child-pane",
+          pane_id: args[3],
           shell_pid: 33,
           foreground_process_group_id: 33,
           foreground_processes: [{ pid: 33, argv0: "/bin/zsh" }],
