@@ -514,6 +514,7 @@ test("Agent status observer retains unavailable with pending starts", async (t) 
     label: "scout",
     definition: "scout",
     task: "inspect",
+    runId: randomUUID(),
     startedAt: 123,
   };
   runtime.configure({
@@ -532,7 +533,13 @@ test("Agent status observer retains unavailable with pending starts", async (t) 
   await t.waitFor(() => assert.ok(changes >= 2));
   assert.equal(runtime.getSnapshot().unavailable, true);
   assert.deepEqual(runtime.getSnapshot().agents, [
-    { ...pending, state: "starting" },
+    {
+      label: pending.label,
+      definition: pending.definition,
+      task: pending.task,
+      startedAt: pending.startedAt,
+      state: "starting",
+    },
   ]);
   runtime.shutdown();
 });
@@ -548,6 +555,7 @@ test("Agent status reconciles active startup only for the pending request", asyn
     label: "scout",
     definition: "scout",
     requestId: randomUUID(),
+    runId: randomUUID(),
     startedAt: 123,
   };
   const runtime = {
@@ -557,7 +565,7 @@ test("Agent status reconciles active startup only for the pending request", asyn
     workspaceId: WORKSPACE,
     paneId: "scout-pane",
     cwd: "/tmp",
-    runId: randomUUID(),
+    runId: pending.runId,
     ownerSessionId: LEAD_SESSION_ID,
     mailboxPath: "/tmp/scout-mailbox",
     activeRequestId: randomUUID(),
@@ -3697,6 +3705,67 @@ test("staged fresh assignment bridges pending start through working", async (t) 
     assert.doesNotMatch(renderedBeforeAck, /settling/);
     assert.match(renderedBeforeAck, /agent/);
 
+    // Durable identity is visible, but validation still gates runtime registration.
+    const rendersBeforeRuntime = fixture.renderRequests;
+    const workingBeforeRuntime = fixture.workingObservations;
+    fixture.observe("working");
+    const beforeRuntime = (await list()).details.agents[0];
+    assert.equal(fixture.requestObserved, false);
+    const durableBeforeRuntime = readAgentState(fixture.mailbox);
+    assert.ok(durableBeforeRuntime);
+    assert.equal(durableBeforeRuntime.activeRequestId, undefined);
+    assert.equal(beforeRuntime.state, "unknown");
+    assert.equal(beforeRuntime.recovery_only, undefined);
+    await t.waitFor(
+      () => {
+        assert.ok(fixture.workingObservations >= workingBeforeRuntime + 2);
+        assert.ok(fixture.renderRequests > rendersBeforeRuntime);
+      },
+      { timeout: 3_000 },
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    // Capture before releasing the gate; assert after the assignment settles
+    // so a rendering mismatch cannot interrupt the gated handoff.
+    const [beforeRuntimeHeader, ...beforeRuntimeRows] =
+      fixture.widgetValue.render(160);
+    const assertUnknownHandoff = async (marker: RegExp) => {
+      const observation = (await list()).details.agents[0];
+      assert.equal(observation.state, "unknown");
+      await t.waitFor(
+        () => assert.match(fixture.widgetValue.render(160).join("\n"), marker),
+        { timeout: 3_000 },
+      );
+      return observation;
+    };
+
+    // The inventory fixture follows the durable identity. A different live
+    // generation with the same label is not evidence for this pending start.
+    writeAgentState(fixture.mailbox, {
+      ...durableBeforeRuntime,
+      runId: randomUUID(),
+    });
+    assert.equal(
+      (await assertUnknownHandoff(/flexible.*\? 1/)).recovery_only,
+      undefined,
+    );
+    writeAgentState(fixture.mailbox, durableBeforeRuntime);
+    await assertUnknownHandoff(/flexible.*◌ 1/);
+
+    fixture.observe("unknown");
+    assert.equal(
+      (await assertUnknownHandoff(/flexible.*\? 1/)).recovery_only,
+      undefined,
+    );
+    fixture.observe("working");
+    await assertUnknownHandoff(/flexible.*◌ 1/);
+
+    fixture.observe("working", randomUUID());
+    assert.equal(
+      (await assertUnknownHandoff(/flexible.*\? 1/)).recovery_only,
+      true,
+    );
+    fixture.observe();
+
     fixture.releasePreSubmitValidation();
     await t.waitFor(
       () =>
@@ -3728,15 +3797,6 @@ test("staged fresh assignment bridges pending start through working", async (t) 
     assert.match(renderedAfterAck, /flexible.*◌ 1/);
     assert.doesNotMatch(renderedAfterAck, /settling/);
 
-    const assertUnknownHandoff = async (marker: RegExp) => {
-      const observation = (await list()).details.agents[0];
-      assert.equal(observation.state, "unknown");
-      await t.waitFor(
-        () => assert.match(fixture.widgetValue.render(160).join("\n"), marker),
-        { timeout: 3_000 },
-      );
-      return observation;
-    };
     fixture.observe("working");
     assert.equal(
       (await assertUnknownHandoff(/flexible.*◌ 1/)).recovery_only,
@@ -3791,6 +3851,14 @@ test("staged fresh assignment bridges pending start through working", async (t) 
     const settling = await list();
     assert.equal(settling.details.agents[0].state, "working");
     assert.doesNotMatch(fixture.widgetValue.render(160).join("\n"), /ready/);
+    assert.match(
+      beforeRuntimeHeader,
+      /flexible.*◌ 1/,
+      [beforeRuntimeHeader, ...beforeRuntimeRows].join("\n"),
+    );
+    const beforeRuntimeRow = beforeRuntimeRows.find((row) => /agent/.test(row));
+    assert.ok(beforeRuntimeRow);
+    assert.doesNotMatch(beforeRuntimeRow, /unknown/);
   } finally {
     abort.abort();
     fixture.releaseInitialStatus();

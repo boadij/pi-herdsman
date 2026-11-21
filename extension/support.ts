@@ -2509,7 +2509,7 @@ export function createStagedAssignmentFixture(
   let acceptedRequestIdWritten: string | undefined;
   let workingObservations = 0;
   let renderRequests = 0;
-  let observedLifecycle: "idle" | "working" | undefined;
+  let observedLifecycle: "idle" | "working" | "unknown" | undefined;
   let observedSessionId: string | undefined;
   const startup = startupExecutor(
     label,
@@ -2566,13 +2566,10 @@ export function createStagedAssignmentFixture(
           state && !paneClosed
             ? [
                 {
-                  ...JSON.parse(
-                    listResponse(
-                      label,
-                      observedLifecycle ??
-                        (state.activeRequestId ? "working" : "idle"),
-                    ),
-                  ).agents[0],
+                  ...JSON.parse(listResponse(label)).agents[0],
+                  agent_status:
+                    observedLifecycle ??
+                    (state.activeRequestId ? "working" : "idle"),
                   name: runScopedHerdrAlias(WORKSPACE, label, state.runId),
                   pane_id: "startup-pane",
                   workspace_id: WORKSPACE,
@@ -2738,7 +2735,7 @@ export function createStagedAssignmentFixture(
         context,
       );
     },
-    observe(lifecycle?: "idle" | "working", sessionId?: string) {
+    observe(lifecycle?: "idle" | "working" | "unknown", sessionId?: string) {
       observedLifecycle = lifecycle;
       observedSessionId = sessionId;
     },
