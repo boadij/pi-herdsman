@@ -14,19 +14,14 @@ ${@:-None provided.}
    delimited drafts, and one verified roster (earlier recap expands only
    Discord scope). Stop on missing evidence or moved refs; if several
    candidates verify, ask the maintainer to choose and continue the drafter.
-2. Keep the exact drafter result ref. In Code Mode, use `read_evidence`
-   to read its full evidence into memory, joining pages
-   in order using both continuation offsets; strip only the tool-added
-   separator newline and continuation marker, and concatenate without adding
-   a separator. Programmatically extract
-   exactly one ordered, non-overlapping pair each of standalone
+2. Keep the exact drafter result ref and review its complete evidence.
+   Extract exactly one ordered, non-overlapping pair each of standalone
    `BEGIN RELEASE BODY` / `END RELEASE BODY` and
    `BEGIN DISCORD DRAFT` / `END DISCORD DRAFT` lines. Slice immediately
    after each opening line ending to the start of its closing marker:
-   the newline before each end marker is part of the artifact. Stop on
-   ambiguity, incomplete evidence or inability to preserve bytes. Do not
-   retype, trim or normalize. Keep the Lead's work in memory: no scratch
-   files or hashing on the Lead.
+   the newline before each end marker is part of the artifact. Do not
+   retype, trim or normalize. Stop on ambiguity, incomplete evidence
+   or inability to preserve bytes.
 3. Review the pinned release diff/metadata, exact squash title/message,
    and both artifacts for accuracy and disclosure without erasing credits.
    Check headings, install/runtime requirements, migration and readable
@@ -37,13 +32,10 @@ ${@:-None provided.}
    must match the roster (plus requested recap), migration and install
    command, with exactly one literal `{{RELEASE_URL}}`, no other
    placeholders and room for the final URL within 1,600 characters.
-4. Use Code Mode to emit the exact reviewed material from the in-memory
-   slices, including the body's `JSON.stringify` string literal so
-   whitespace and final newlines are unambiguous. Make the complete
-   display available to the maintainer in the approval exchange; a tool
-   result the maintainer cannot see is not a display. Stop if the exact
-   material cannot be shown. Ask for three independent answers in that
-   one exchange:
+4. Make the complete reviewed material available to the maintainer in
+   the approval exchange, with whitespace and final newlines unambiguous.
+   Stop if the exact material cannot be shown. Ask for three independent
+   answers in that one exchange:
    - **Squash:** Approve this upstream PR at these pinned head/base SHAs
      and this exact title/message? The push to `main` triggers Release
      Please and may create the tag and GitHub Release and publish to npm
@@ -58,12 +50,12 @@ ${@:-None provided.}
    Assign bundled `ship` the self-contained procedure below. Transfer
    the actual drafter result ref in `delegate_agent.files`, not just in
    task text. Identify that same ref in the task along with the pinned
-   record/provenance, exact squash material, and the exact displayed body
-   JSON string literal (insert it directly from memory, without retyping).
-   Include relevant review evidence and state both grants explicitly with
-   their distinct bindings; evidence is not authorization. Stop if the
-   exact handoff cannot be transferred. Moved reviewed refs require
-   fresh validation, draft and grants.
+   record/provenance, exact approved squash title/message and exact
+   approved release body. Include relevant review evidence and explicitly
+   state both grants with their distinct bindings and the writer
+   confirmation. Evidence is not authorization. Stop if the exact handoff
+   cannot be transferred. Moved reviewed refs require fresh validation,
+   draft and grants.
 6. If `ship` verifies a pending approval, obtain separate, direct,
    explicit human approval for that exact run/attempt. The authorized
    human operator immediately reverifies pending state, run/attempt,
@@ -129,22 +121,21 @@ mutation (or report that approval could not be established). On a fresh
 assignment after human approval, verify the updated run state and recheck
 all gates.
 
-**Exact input before squash.** Read the actual transferred drafter ref
-with `read_evidence` and apply the same paging and slice rules as the Lead.
-Materialize that body slice directly as UTF-8 in private scratch outside
-the worktree using Bash `printf '%s'` with a programmatically shell-quoted
-argument. Never interpolate draft text as shell code or use command
-substitution for content. Decode the separately supplied approved JSON
-string literal with `jq -ej` (require a string), and compare with `cmp`.
-Stop on missing or ambiguous evidence, a failed grant binding, or any
-byte difference. Materialize the exact approved squash title/message
-without retyping or normalizing.
+**Exact input before squash.** Independently reconstruct the body from
+the complete transferred drafter result using step 2's marker rules.
+Safely materialize the reconstructed and separately supplied approved
+body as UTF-8 in private scratch outside the worktree and compare their
+bytes with `cmp`. Never interpolate draft text as shell code or use
+command substitution for content. Stop on missing, incomplete or
+ambiguous evidence, a failed grant binding, or any byte difference.
+Materialize the exact approved squash title/message without retyping
+or normalizing.
 
 Offline, round-trip both an emoji/multiline/trailing-newline fixture and
-the reconstructed body using Bash and jq, not Code Mode's unavailable
-`TextEncoder`. Hash the validated body with SHA-256 and keep the tested
-body JSON for the actual PATCH. Before use, require its decoded body
-to match the validated bytes and SHA-256; stop on any error or mismatch.
+the reconstructed body using Bash and jq. Hash the validated body with
+SHA-256 and keep the tested body JSON for the actual PATCH. Before use,
+require its decoded body to match the validated bytes and SHA-256; stop
+on any error or mismatch.
 
 ```sh
 set -euo pipefail
