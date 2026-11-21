@@ -3348,12 +3348,26 @@ export function registerLeadRuntime(
         scope,
         sessionId,
       );
-      const manager = await roleTransitions.currentManager(ctx);
+      if (!current() || !assignment)
+        throw new Error("Managed project assignment changed.");
+      const manager = roleTransitions.managerForScope(scope);
+      const supervision = options.roleTransitionHost.supervisionRuntime();
+      const coordination = manager
+        ? options.roleTransitionHost.readLeadCoordinationState(
+            supervision,
+            manager.piSessionId,
+          )
+        : undefined;
       if (
         !current() ||
-        !assignment ||
         !manager ||
-        manager.repoKey !== assignment.repoKey
+        manager.repoKey !== assignment.repoKey ||
+        !manager.build ||
+        !coordination ||
+        coordination.role !== "manager" ||
+        coordination.piSessionId !== manager.piSessionId ||
+        !coordination.build ||
+        !sameRuntimeBuild(manager.build, coordination.build)
       )
         throw new Error("Managed project Manager is unavailable.");
       const target = await verifiedHerdrAgent(manager, {
@@ -3365,10 +3379,18 @@ export function registerLeadRuntime(
         isPiAgent: options.identityHost.isPiAgent,
         matchesExpectedSession: options.identityHost.matchesExpectedSession,
       });
-      const currentManager = await roleTransitions.currentManager(ctx);
       const currentScope = await roleTransitions.currentWorktreeScope(ctx);
       const currentAssignment = currentScope
         ? roleTransitions.projectAssignmentForScope(currentScope, sessionId)
+        : undefined;
+      const currentManager = roleTransitions.managerForScope(
+        currentScope ?? undefined,
+      );
+      const currentCoordination = currentManager
+        ? options.roleTransitionHost.readLeadCoordinationState(
+            supervision,
+            currentManager.piSessionId,
+          )
         : undefined;
       if (
         !current() ||
@@ -3379,7 +3401,14 @@ export function registerLeadRuntime(
         currentAssignment.branch !== assignment.branch ||
         !currentManager ||
         currentManager.repoKey !== assignment.repoKey ||
-        !options.projectHost.sameManagerDescriptor(currentManager, manager)
+        !options.projectHost.sameManagerDescriptor(currentManager, manager) ||
+        !currentManager.build ||
+        !currentCoordination ||
+        currentCoordination.role !== "manager" ||
+        currentCoordination.piSessionId !== currentManager.piSessionId ||
+        currentCoordination.instanceId !== coordination.instanceId ||
+        !currentCoordination.build ||
+        !sameRuntimeBuild(currentManager.build, currentCoordination.build)
       )
         throw new Error("Managed project Manager changed.");
       await options.commandHost.runHerdr(
