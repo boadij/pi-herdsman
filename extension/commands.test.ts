@@ -664,6 +664,7 @@ import {
   type ExecResult,
   type FixtureIdentity,
 } from "./support.ts";
+import { sameDirectory } from "./herdr.ts";
 import {
   createLeadToolState,
   sessionLeadExecutionState as readLeadExecutionState,
@@ -10116,8 +10117,8 @@ async function managerDelegateAssignmentTest(
     if (command === "herdr" && args[0] === "tab" && args[1] === "create") {
       assert.equal(args[args.indexOf("--workspace") + 1], childWorkspace);
       assert.equal(
-        realFs.realpathSync(args[args.indexOf("--cwd") + 1]!),
-        realFs.realpathSync(childCwd),
+        sameDirectory(args[args.indexOf("--cwd") + 1]!, childCwd),
+        true,
       );
       assert.equal(
         args[args.indexOf("--env") + 1],
