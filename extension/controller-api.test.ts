@@ -4394,8 +4394,8 @@ async function runManagerStartupScenario(
       gitBranchOutput = branch;
       return respond({
         workspace: { workspace_id: childWorkspace },
-        tab: { tab_id: "child-tab" },
-        root_pane: { pane_id: "child-pane", tab_id: "child-tab" },
+        tab: { tab_id: "worktree-tab" },
+        root_pane: { pane_id: "worktree-pane", tab_id: "worktree-tab" },
         worktree: { branch, path: childPath },
       });
     }
@@ -4411,11 +4411,27 @@ async function runManagerStartupScenario(
         throw new Error("fresh worktree must not be opened again");
       return respond({
         workspace: { workspace_id: childWorkspace },
-        tab: { tab_id: "child-tab" },
-        root_pane: { pane_id: "child-pane", tab_id: "child-tab" },
+        tab: { tab_id: "worktree-tab" },
+        root_pane: { pane_id: "worktree-pane", tab_id: "worktree-tab" },
         worktree: {
           branch: args[args.indexOf("--branch") + 1],
           path: childPath,
+        },
+      });
+    }
+    if (command === "herdr" && args[0] === "tab" && args[1] === "create") {
+      assert.equal(args[args.indexOf("--workspace") + 1], childWorkspace);
+      assert.equal(
+        args[args.indexOf("--env") + 1],
+        `PI_CODING_AGENT_DIR=${PI_AGENT_ROOT}`,
+      );
+      return respond({
+        tab: { tab_id: "child-tab", workspace_id: childWorkspace },
+        root_pane: {
+          pane_id: "child-pane",
+          tab_id: "child-tab",
+          workspace_id: childWorkspace,
+          terminal_id: "child-terminal",
         },
       });
     }
@@ -4504,6 +4520,15 @@ async function runManagerStartupScenario(
       args[0] === "pane" &&
       args[1] === "process-info"
     ) {
+      if (args[3] === "worktree-pane")
+        return respond({
+          process_info: {
+            pane_id: "worktree-pane",
+            shell_pid: 32,
+            foreground_process_group_id: 32,
+            foreground_processes: [{ pid: 32, argv0: "/bin/zsh" }],
+          },
+        });
       const treeAgent = ownedTree.find(
         (state) =>
           state.paneId === args[3] && !closedTreePanes.has(state.paneId),
