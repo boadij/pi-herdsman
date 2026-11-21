@@ -862,8 +862,9 @@ export function createLeadToolState(
     definition: AgentDefinition,
     requiredTools: readonly string[],
   ) => {
-    const policy = configuredToolPolicy(definition, requiredTools);
-    const required = new Set(requiredTools);
+    const requiredNames = [...requiredTools, "load_skill"];
+    const policy = configuredToolPolicy(definition, requiredNames);
+    const required = new Set(requiredNames);
     const selected =
       policy.mode === "explicit"
         ? policy.tools.flatMap((pattern) =>
@@ -888,7 +889,7 @@ export function createLeadToolState(
       normalizeBaseTools(
         selected.filter((name) => toolPolicyAllowsName(policy, required, name)),
       ),
-      requiredTools,
+      requiredNames,
     );
   };
   return {
@@ -2113,11 +2114,14 @@ export function registerLeadRuntime(
         : options.roleTransitionHost.chiefTools),
       ...supervisoryAgentTools(ctx, profile.definition),
     ];
-    const projected = leadToolState.projectRoleTools(
-      profile.baseline,
-      profile.definition,
-      required,
-    );
+    const projected =
+      profile.valid && !leadRuntime.roleSuspended
+        ? leadToolState.projectRoleTools(
+            profile.baseline,
+            profile.definition,
+            required,
+          )
+        : leadToolState.appendRegisteredTools([], required);
     const tools = projected.filter(
       (name) =>
         !(AGENT_COORDINATION_TOOLS as readonly string[]).includes(name) ||
@@ -4714,15 +4718,40 @@ export function registerLeadRuntime(
       return result;
     },
   );
-  pi.on("tool_call", (event: any, ctx: ExtensionContext) =>
-    isQuarantinedSession(ctx)
-      ? {
+  pi.on("tool_call", (event: any, ctx: ExtensionContext) => {
+    if (isQuarantinedSession(ctx))
+      return {
+        block: true,
+        reason: "Managed Agent session requires recovery by its original Lead.",
+      };
+    if (event.toolName === "load_skill") {
+      // The inherited-tool policy can allow untracked ordinary tools; the
+      // intrinsic loader must still belong to the current role projection.
+      try {
+        const role = verifiedActiveRootRole();
+        const allowed =
+          role === "lead"
+            ? executionTools()
+            : role === "manager" || role === "chief"
+              ? supervisoryTools(ctx, role)
+              : undefined;
+        if (
+          sessionKind?.sessionId !== ctx.sessionManager.getSessionId() ||
+          !allowed?.includes(event.toolName)
+        )
+          return {
+            block: true,
+            reason: "Skill loading is unavailable in the active role.",
+          };
+      } catch {
+        return {
           block: true,
-          reason:
-            "Managed Agent session requires recovery by its original Lead.",
-        }
-      : agentEvents.toolCall(event, ctx),
-  );
+          reason: "Skill loading authorization is unavailable.",
+        };
+      }
+    }
+    return agentEvents.toolCall(event, ctx);
+  });
   pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
     inheritedProjection = undefined;
     await sessionStart.sessionStart(ctx);

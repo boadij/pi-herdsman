@@ -68,6 +68,7 @@ import {
   type AgentDefinition,
   type Frontmatter,
 } from "./agent-definitions.ts";
+import { registerSkillLoader } from "./skill-loader.ts";
 import { createLeadCommandRuntime } from "./lead/commands.ts";
 
 function withPiAgentDir<T>(agentDir: string, callback: () => T): T {
@@ -1071,6 +1072,7 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   );
   assert.equal(bundled.name, "managed-lead");
   assert.deepEqual(bundled.frontmatter.tools, ["codemode"]);
+  assert.equal(bundled.frontmatter.noSkills, true);
   const requiredTools = [
     ...AGENT_COORDINATION_TOOLS,
     "message_supervisor",
@@ -1082,9 +1084,11 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
     bodyPromptPath: "/prompt",
   });
   assert.equal(launchArgs.includes("--no-tools"), false);
+  assert.equal(launchArgs.includes("--no-skills"), true);
   assert.deepEqual(launchArgs[launchArgs.indexOf("--tools") + 1]?.split(","), [
     "codemode",
     ...requiredTools,
+    "load_skill",
     "mcp__",
   ]);
   assert.equal(launchArgs[launchArgs.indexOf("--exclude-tools") + 1], "mcp__");
@@ -1759,7 +1763,11 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
       });
       const toolsIndex = args.indexOf("--tools");
       assert.notEqual(toolsIndex, -1);
-      assert.deepEqual(args[toolsIndex + 1].split(","), [...tools, "mcp__"]);
+      assert.deepEqual(args[toolsIndex + 1].split(","), [
+        ...tools,
+        "load_skill",
+        "mcp__",
+      ]);
       const launchedTools = args.flatMap((arg) => arg.split(","));
       for (const tool of forbidden)
         assert.equal(launchedTools.includes(tool), false);
@@ -1791,6 +1799,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
       "notify_owner",
       "read_evidence",
       "attach_handoff",
+      "load_skill",
       "mcp__",
     ]);
     assert.equal(
@@ -2042,6 +2051,7 @@ test("preserves role-required tools through native allowlists and exclusions", (
     "read",
     "message_supervisor",
     "list_peers",
+    "load_skill",
     "mcp__",
   ]);
   const excluded = args.indexOf("--exclude-tools");
@@ -2056,7 +2066,7 @@ test("preserves role-required tools through native allowlists and exclusions", (
   );
   assert.equal(closed.includes("--no-tools"), true);
   const required = closed.indexOf("--tools");
-  assert.equal(closed[required + 1], "message_supervisor,mcp__");
+  assert.equal(closed[required + 1], "message_supervisor,load_skill,mcp__");
 });
 
 test("composes all definition layers with provenance and whole-array replacement", () => {
@@ -2543,7 +2553,7 @@ test("builds exact Pi capability launch arguments", () => {
     promptPath,
     "--no-tools",
     "--tools",
-    "read,grep,mcp__",
+    "read,grep,load_skill,mcp__",
     "--exclude-tools",
     "bash,write,mcp__",
     "--skill",
@@ -2709,6 +2719,7 @@ test("bundled generalist definition retains its declared tool policy", () => {
       "notify_owner",
       "read_evidence",
       "attach_handoff",
+      "load_skill",
       "mcp__",
     ].join(","),
   );
@@ -2807,13 +2818,13 @@ test("noTools relative launch filters MCP tools unless an MCP tool is selected",
   const restricted = launch(["+codemode"]);
   assert.equal(
     restricted[restricted.indexOf("--tools") + 1],
-    "+codemode,+mcp__",
+    "+codemode,+load_skill,+mcp__",
   );
   assert.equal(restricted[restricted.indexOf("--exclude-tools") + 1], "mcp__");
   const explicitlySelected = launch(["+codemode", "+mcp__probe__secret"]);
   assert.equal(
     explicitlySelected[explicitlySelected.indexOf("--tools") + 1],
-    "+codemode,+mcp__probe__secret",
+    "+codemode,+mcp__probe__secret,+load_skill",
   );
   assert.equal(explicitlySelected.includes("--exclude-tools"), false);
 });
@@ -3017,7 +3028,7 @@ test("managed launch policy always includes await_owner and attach_handoff", () 
       { tools: ["read", " await_owner", "read"] },
       [
         "--tools",
-        "read,await_owner,notify_owner,read_evidence,attach_handoff,mcp__",
+        "read,await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
         "--exclude-tools",
         "mcp__",
       ],
@@ -3027,7 +3038,7 @@ test("managed launch policy always includes await_owner and attach_handoff", () 
       [
         "--no-tools",
         "--tools",
-        "await_owner,notify_owner,read_evidence,attach_handoff,mcp__",
+        "await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
         "--exclude-tools",
         "mcp__",
       ],
@@ -3037,7 +3048,7 @@ test("managed launch policy always includes await_owner and attach_handoff", () 
       [
         "--no-tools",
         "--tools",
-        "read,await_owner,notify_owner,read_evidence,attach_handoff,mcp__",
+        "read,await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
         "--exclude-tools",
         "mcp__",
       ],
@@ -3047,7 +3058,7 @@ test("managed launch policy always includes await_owner and attach_handoff", () 
       [
         "--no-tools",
         "--tools",
-        "await_owner,notify_owner,read_evidence,attach_handoff,mcp__",
+        "await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
         "--exclude-tools",
         "mcp__",
       ],
@@ -3083,6 +3094,7 @@ test("managed launch policy always includes await_owner and attach_handoff", () 
   );
   assert.deepEqual(regularArgs[regularArgs.indexOf("--tools") + 1].split(","), [
     "read",
+    "load_skill",
     "mcp__",
   ]);
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-agent-standalone-"));
@@ -3110,6 +3122,10 @@ test("keeps omitted tools default and closes an explicit empty allowlist", () =>
   assert.deepEqual(launch({ tools: [] }), [
     "--no-context-files",
     "--no-tools",
+    "--tools",
+    "load_skill,mcp__",
+    "--exclude-tools",
+    "mcp__",
     "--no-skills",
   ]);
 });
@@ -3157,6 +3173,10 @@ test("passes native capability combinations through to Pi", () => {
     [
       "--no-tools",
       "--no-builtin-tools",
+      "--tools",
+      "load_skill,mcp__",
+      "--exclude-tools",
+      "mcp__",
       "--no-skills",
       "--skill",
       "explicit-skill",
@@ -3422,11 +3442,11 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
   };
   assert.deepEqual(toolArgs({ agents: ["child"], tools: ["read"] }), [
     "--tools",
-    ["read", ...roleTools, "mcp__"].join(","),
+    ["read", ...roleTools, "load_skill", "mcp__"].join(","),
   ]);
   assert.deepEqual(
     toolArgs({ agents: ["child"], noTools: true, tools: ["read"] }),
-    ["--tools", ["read", ...leafTools, "mcp__"].join(",")],
+    ["--tools", ["read", ...leafTools, "load_skill", "mcp__"].join(",")],
   );
   assert.equal(
     make({ agents: ["child"], noTools: true, tools: ["read"] }).includes(
@@ -3444,7 +3464,7 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
   assert.notEqual(toolsIndex, -1);
   assert.equal(
     exclusions[toolsIndex + 1],
-    ["read", ...roleTools, "mcp__"].join(","),
+    ["read", ...roleTools, "load_skill", "mcp__"].join(","),
   );
   const exclusionsIndex = exclusions.indexOf("--exclude-tools");
   assert.notEqual(exclusionsIndex, -1);
@@ -3454,7 +3474,7 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
   ]);
   assert.deepEqual(toolArgs({ agents: ["child"], noTools: true }), [
     "--tools",
-    [...leafTools, "mcp__"].join(","),
+    [...leafTools, "load_skill", "mcp__"].join(","),
   ]);
   assert.equal(
     make({ agents: ["child"], noTools: true }).includes("--no-tools"),
@@ -3462,7 +3482,7 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
   );
   assert.deepEqual(toolArgs({ agents: ["child"], tools: [] }), [
     "--tools",
-    [...leafTools, "mcp__"].join(","),
+    [...leafTools, "load_skill", "mcp__"].join(","),
   ]);
   assert.equal(
     make({ agents: ["child"], tools: [] }).includes("--no-tools"),
@@ -3470,7 +3490,7 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
   );
   assert.deepEqual(toolArgs({ agents: ["child"], tools: ["agent"] }), [
     "--tools",
-    [...roleTools, "mcp__"].join(","),
+    [...roleTools, "load_skill", "mcp__"].join(","),
   ]);
   assert.equal(
     /(?:^|,)agent(?:,|$)/u.test(
@@ -3509,7 +3529,7 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
     ),
     [
       "--tools",
-      "read,bash,await_owner,notify_owner,read_evidence,attach_handoff,mcp__",
+      "read,bash,await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
     ],
   );
   const empty = projectAgentDefinition(
@@ -3539,12 +3559,13 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
       (value) =>
         value === "--no-tools" ||
         value === "--tools" ||
-        value === "await_owner,notify_owner,read_evidence,attach_handoff,mcp__",
+        value ===
+          "await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
     ),
     [
       "--no-tools",
       "--tools",
-      "await_owner,notify_owner,read_evidence,attach_handoff,mcp__",
+      "await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
     ],
   );
   const denied = projectAgentDefinition(
@@ -3577,7 +3598,7 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
       "--no-context-files",
       "--no-tools",
       "--tools",
-      "await_owner,notify_owner,read_evidence,attach_handoff,mcp__",
+      "await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
       "--exclude-tools",
       "mcp__",
       "--no-skills",
@@ -4001,61 +4022,61 @@ test("closed policies preserve native selectors and protect mandatory tools", ()
     [{ noBuiltinTools: true }, undefined, undefined, false],
     [
       { tools: ["read"] },
-      "read,await_owner,notify_owner,read_evidence,attach_handoff,mcp__",
+      "read,await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
       "mcp__",
       false,
     ],
     [
       { tools: ["*search"] },
-      "*search,await_owner,notify_owner,read_evidence,attach_handoff,mcp__",
+      "*search,await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
       "mcp__",
       false,
     ],
     [
       { tools: ["read", "mcp__github__*"] },
-      "read,mcp__github__*,await_owner,notify_owner,read_evidence,attach_handoff",
+      "read,mcp__github__*,await_owner,notify_owner,read_evidence,attach_handoff,load_skill",
       undefined,
       false,
     ],
     [
       { tools: ["list_mcp_resources"] },
-      "list_mcp_resources,await_owner,notify_owner,read_evidence,attach_handoff,mcp__",
+      "list_mcp_resources,await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
       "mcp__",
       false,
     ],
     [
       { tools: [] },
-      "await_owner,notify_owner,read_evidence,attach_handoff,mcp__",
+      "await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
       "mcp__",
       true,
     ],
     [
       { tools: [","] },
-      "await_owner,notify_owner,read_evidence,attach_handoff,mcp__",
+      "await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
       "mcp__",
       true,
     ],
     [
       { noTools: true },
-      "await_owner,notify_owner,read_evidence,attach_handoff,mcp__",
+      "await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
       "mcp__",
       true,
     ],
     [
       { noTools: true, tools: ["read"] },
-      "read,await_owner,notify_owner,read_evidence,attach_handoff,mcp__",
+      "read,await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
       "mcp__",
       true,
     ],
     [
       { tools: ["read"], excludeTools: ["await_owner"] },
-      "read,await_owner,notify_owner,read_evidence,attach_handoff,mcp__",
+      "read,await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
       "mcp__",
       false,
     ],
     [
       { tools: ["read"], excludeTools: ["write*", "mcp__", "write*"] },
-      "read,await_owner,notify_owner,read_evidence,attach_handoff,mcp__",
+      "read,await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
       "write*,mcp__",
       false,
     ],
@@ -4084,7 +4105,119 @@ test("closed policies preserve native selectors and protect mandatory tools", ()
       {},
     );
     assert.equal(args.includes("--no-tools"), true);
-    assert.equal(args.includes("--tools"), false);
+    assert.equal(args[args.indexOf("--tools") + 1], "load_skill,mcp__");
+  }
+});
+
+test("definition layers and effective policies cannot exclude intrinsic skill loading", () => {
+  const base: Frontmatter = {
+    name: "policy",
+    tools: ["codemode", "load_skill"],
+  };
+  for (const override of [
+    { tools: ["-load_skill"] },
+    { tools: ["codemode", "-load_skill"] },
+    { excludeTools: ["load_skill"] },
+    { excludeTools: ["load_*"] },
+    { excludeTools: ["+load_*"] },
+    { excludeTools: ["*"] },
+  ]) {
+    assert.throws(
+      () => mergeFrontmatter(base, override),
+      /agent policy field .* intrinsic tool "load_skill"/,
+    );
+    assert.throws(
+      () =>
+        configuredToolPolicy(
+          {
+            name: "policy",
+            path: "/policy.md",
+            body: "",
+            frontmatter: override,
+          },
+          [],
+        ),
+      /agent policy field .* intrinsic tool "load_skill"/,
+    );
+  }
+  assert.deepEqual(mergeFrontmatter(base, { tools: ["codemode"] }).tools, [
+    "codemode",
+  ]);
+  assert.deepEqual(
+    mergeFrontmatter(base, { excludeTools: ["-load_skill"] }).excludeTools,
+    [],
+  );
+});
+
+test("installed Pi honors managed launch selection and external restrictions", async (t) => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-intrinsic-launch-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  const modelRuntime = await ModelRuntime.create({
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  for (const [frontmatter, externalTools, externalExclusions, expected] of [
+    [{ noTools: true }, undefined, undefined, ["load_skill"]],
+    [{ tools: [] }, undefined, undefined, ["load_skill"]],
+    [
+      { noTools: true, tools: ["+grep"] },
+      undefined,
+      undefined,
+      ["grep", "load_skill"],
+    ],
+    [{ tools: ["grep"] }, undefined, undefined, ["grep", "load_skill"]],
+    [{}, ["grep"], undefined, ["grep"]],
+    [{}, ["load_skill", "grep"], ["load_*"], ["grep"]],
+  ] satisfies [
+    Frontmatter,
+    string[] | undefined,
+    string[] | undefined,
+    string[],
+  ][]) {
+    const args = agentLaunchArgs(
+      { name: "policy", path: join(cwd, "policy.md"), body: "", frontmatter },
+      { cwd },
+    );
+    const select = (flag: string) => {
+      const index = args.indexOf(flag);
+      return index < 0 ? undefined : args[index + 1].split(",");
+    };
+    const settingsManager = SettingsManager.inMemory();
+    const resourceLoader = new DefaultResourceLoader({
+      cwd,
+      agentDir: cwd,
+      settingsManager,
+      noExtensions: true,
+      noSkills: true,
+      extensionFactories: [(pi) => registerSkillLoader(pi)],
+    });
+    await resourceLoader.reload();
+    const { session } = await createAgentSession({
+      cwd,
+      agentDir: cwd,
+      resourceLoader,
+      settingsManager,
+      modelRuntime,
+      sessionManager: SessionManager.inMemory(cwd),
+      noTools: args.includes("--no-tools") ? "all" : undefined,
+      tools: externalTools ?? select("--tools"),
+      excludeTools: externalExclusions ?? select("--exclude-tools"),
+    });
+    try {
+      await session.bindExtensions({});
+      assert.deepEqual(session.getActiveToolNames().sort(), expected);
+      assert.equal(
+        session.getAllTools().some(({ name }) => name === "load_skill"),
+        expected.includes("load_skill"),
+      );
+      session.setActiveToolsByName(["load_skill"]);
+      assert.deepEqual(
+        session.getActiveToolNames(),
+        expected.includes("load_skill") ? ["load_skill"] : [],
+      );
+    } finally {
+      await session.dispose();
+    }
   }
 });
 
@@ -4111,12 +4244,6 @@ test("wildcard exclusions reject mandatory overlap and escape regex syntax", () 
       options: { requiredTools: ["list_peers"] },
       pattern: "list*",
       required: "list_peers",
-    },
-    {
-      frontmatter: { excludeTools: ["*"] },
-      options: { managedAgent: true },
-      pattern: "*",
-      required: "await_owner",
     },
     {
       frontmatter: { excludeTools: ["tool.[x]+?*"] },
@@ -4181,7 +4308,10 @@ test("relative tool policy preserves Pi selection while terminal removals remain
   });
   assert.deepEqual(
     args.slice(args.indexOf("--tools"), args.indexOf("--tools") + 2),
-    ["--tools", "-bash,+codemode,-write,+write,+message_supervisor"],
+    [
+      "--tools",
+      "-bash,+codemode,-write,+write,+message_supervisor,+load_skill",
+    ],
   );
   assert.equal(args[args.indexOf("--exclude-tools") + 1], "bash");
   assert.throws(

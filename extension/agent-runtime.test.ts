@@ -5531,6 +5531,7 @@ test("a stray agent variable does not suppress the active Lead tool surface", as
     "message_supervisor",
     "list_peers",
     "message_peer",
+    "load_skill",
   ]);
   assert.deepEqual(lead.commands, ["lead", "herdsman", "agents"]);
   lead.events.get("session_shutdown")?.[0]();
@@ -8441,7 +8442,7 @@ test("deferred bootstrap failures publish failed outcomes and never become ready
   ] as const) {
     const label = `bootstrap-${scenario}`;
     const mailbox = setAgentEnvironment(label);
-    const agent = fakePi();
+    const agent = fakePi({ activeTools: ["load_skill"] });
     registerExtension!(agent.pi as never);
     if (scenario !== "missing" && scenario !== "session-mismatch")
       agent.pi.events.on(
@@ -8482,6 +8483,31 @@ test("deferred bootstrap failures publish failed outcomes and never become ready
         scenario,
       );
       assert.equal(readAgentState(mailbox), undefined, scenario);
+      await invokeEventHandlers(agent, "before_agent_start")(
+        {
+          systemPromptOptions: {
+            sections: {},
+            skills: [{ name: "guide", description: "Selected skill" }],
+          },
+        },
+        context,
+      );
+      const loader = agent.tools.find(({ name }) => name === "load_skill");
+      assert.ok(loader);
+      assert.ok(agent.pi.getActiveTools().includes("load_skill"));
+      assert.deepEqual(loader.prepareLoadout({ declared: [] }), {
+        hiddenDeclarations: ["load_skill"],
+      });
+      await assert.rejects(
+        loader.execute(
+          "call",
+          { name: "guide" },
+          undefined,
+          undefined,
+          context,
+        ),
+        { message: "Skill unavailable in this session" },
+      );
     } finally {
       agent.events.get("session_shutdown")?.[0]();
       resetAgentMailbox(mailbox);

@@ -295,6 +295,7 @@ function validateArrayFields(
           );
     }
   }
+  validateIntrinsicToolPolicy(frontmatter, invalid);
 }
 
 function applyArrayModifiers(
@@ -485,6 +486,22 @@ export function matchesToolPattern(pattern: string, name: string): boolean {
   return new RegExp(`^${source}$`, "u").test(name);
 }
 
+function validateIntrinsicToolPolicy(
+  frontmatter: Frontmatter,
+  invalid: (field: string, reason: string) => never,
+): void {
+  // Check exclusions before layer composition can erase the modifiers.
+  for (const pattern of normalizedToolNames(frontmatter.excludeTools)) {
+    if (matchesToolPattern(pattern.replace(/^\+/u, ""), "load_skill"))
+      invalid(
+        "excludeTools",
+        `pattern ${JSON.stringify(pattern)} cannot exclude intrinsic tool "load_skill"`,
+      );
+  }
+  if (normalizedToolNames(frontmatter.tools).includes("-load_skill"))
+    invalid("tools", 'modifier cannot remove intrinsic tool "load_skill"');
+}
+
 export type ConfiguredToolPolicy = {
   mode: "inherit" | "relative" | "explicit";
   explicit: boolean;
@@ -496,6 +513,9 @@ export function configuredToolPolicy(
   definition: AgentDefinition,
   requiredTools: readonly string[],
 ): ConfiguredToolPolicy {
+  validateIntrinsicToolPolicy(definition.frontmatter, (field, reason) => {
+    throw new Error(`agent ${definition.name} field ${field}: ${reason}`);
+  });
   const configured = normalizedToolNames(definition.frontmatter.tools);
   const relative =
     definition.frontmatter.tools !== undefined &&
@@ -1834,6 +1854,7 @@ export function agentLaunchArgs(
         : ["await_owner", "notify_owner", "read_evidence", "attach_handoff"]
       : []),
     ...(options.requiredTools ?? []),
+    "load_skill",
   ].filter((tool, index, all) => all.indexOf(tool) === index);
   const policy = configuredToolPolicy(agent, requiredTools);
   const noTools =

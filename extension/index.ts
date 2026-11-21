@@ -200,6 +200,7 @@ import {
   createLeadRoleTransitions,
 } from "./lead-runtime.ts";
 import { readRootOwners } from "./lead/coordination.ts";
+import { registerSkillLoader } from "./skill-loader.ts";
 
 import {
   populateMenuFrame,
@@ -1230,6 +1231,7 @@ function registerExtensionImpl(
     ...PEER_TOOLS,
     ...STAFF_TOOLS,
     "read_evidence",
+    "load_skill",
     "delegate_work",
     "resume_work",
     "stop_lead",
@@ -2644,7 +2646,10 @@ function registerExtensionImpl(
       }
     }
   }
-  if (processRole !== "managed-agent") return;
+  if (processRole !== "managed-agent") {
+    registerSkillLoader(pi, () => activeRole() === "chief");
+    return;
+  }
   pi.registerTool({
     name: "read_evidence",
     label: "Read accepted evidence",
@@ -2693,7 +2698,7 @@ function registerExtensionImpl(
       }
     },
   });
-  registerManagedAgentRuntime(pi, {
+  const isVerifiedSession = registerManagedAgentRuntime(pi, {
     build: HERDSMAN_BUILD,
     shellTimeoutSeconds: STALE_AFTER_MS / 1000,
     statusRuntime: leadStatusRuntime!,
@@ -2708,4 +2713,5 @@ function registerExtensionImpl(
       (await contextAgentDefinitions(ctx)).definitions,
     appendError: (ctx, kind, error) => appendDurableError(pi, ctx, kind, error),
   });
+  registerSkillLoader(pi, undefined, isVerifiedSession);
 }

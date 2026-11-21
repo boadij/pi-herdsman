@@ -12798,6 +12798,7 @@ test("registered lead exposes only explicit live controls", async () => {
     "message_supervisor",
     "list_peers",
     "message_peer",
+    "load_skill",
   ]);
   const listed = await tool.execute("id", {}, undefined, undefined, context);
   assert.deepEqual(listed.details.agents[0].available_tools, [
@@ -14945,6 +14946,7 @@ test("managed restricted tool policies add required tools without unrelated tool
         "notify_owner",
         "read_evidence",
         "attach_handoff",
+        "load_skill",
       ],
     },
     {
@@ -14955,6 +14957,7 @@ test("managed restricted tool policies add required tools without unrelated tool
         "notify_owner",
         "read_evidence",
         "attach_handoff",
+        "load_skill",
       ],
     },
   ];
@@ -14970,9 +14973,7 @@ test("managed restricted tool policies add required tools without unrelated tool
     );
     const selected = args[args.indexOf("--tools") + 1]?.split(",") ?? [];
     assert.ok(args.includes("--no-tools") || args.includes("--tools"));
-    for (const required of expected)
-      assert.ok(selected.includes(required), `${required} should be selected`);
-    assert.ok(selected.every((name) => [...expected, "mcp__"].includes(name)));
+    assert.deepEqual(selected, [...expected, "mcp__"]);
   }
 });
 

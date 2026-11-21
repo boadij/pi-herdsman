@@ -2866,7 +2866,7 @@ export function registerManagedAgentRuntime(
     appendError(ctx: ExtensionContext, kind: string, error: unknown): void;
     getAgentDefinitions(ctx: ExtensionContext): Promise<AgentDefinition[]>;
   },
-): void {
+): (sessionId: string) => boolean {
   let leafStatus: ReturnType<typeof createManagedAgentLeafStatus> | undefined;
   let getLocalActivity: (
     ctx: ExtensionContext,
@@ -3077,6 +3077,20 @@ export function registerManagedAgentRuntime(
     }
   });
   const execution = createManagedAgentExecutionState();
+  const isVerifiedSession = (sessionId: string): boolean =>
+    execution.initialized &&
+    !!execution.assignment &&
+    execution.agentContext?.sessionManager.getSessionId() === sessionId;
+  pi.on("tool_call", (event, ctx) => {
+    if (
+      event.toolName === "load_skill" &&
+      !isVerifiedSession(ctx.sessionManager.getSessionId())
+    )
+      return {
+        block: true,
+        reason: "Skill loading requires a verified managed Agent session.",
+      };
+  });
   const metadataPublisher = createManagedAgentMetadataPublisher(pi);
   leafStatus = createManagedAgentLeafStatus({
     snapshot: (ctx, signal) =>
@@ -3584,6 +3598,7 @@ export function registerManagedAgentRuntime(
     options.statusRuntime.invalidateWidget();
     leafStatus?.invalidate();
   });
+  return isVerifiedSession;
 }
 
 export function createManagedAgentRequestState(
