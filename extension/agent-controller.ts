@@ -298,7 +298,7 @@ export function buildAgentStatusSnapshot(
       runtimeIdentityMatches(runtime, durableState, presence.agent);
     const startupTransition =
       state === "unknown" &&
-      verifiedLive &&
+      (verifiedLive || (runtime === undefined && presence.kind === "live")) &&
       !durableState.completedRequestId &&
       !durableState.resultError &&
       !durableState.pendingAskId &&
@@ -315,6 +315,7 @@ export function buildAgentStatusSnapshot(
       ...(startupTransition
         ? {
             startupTransition: {
+              runId: durableState.runId,
               activeRequestId: durableState.activeRequestId,
             },
           }
@@ -475,8 +476,8 @@ export function createAgentStatusRuntime() {
       )
         return agent;
       const pending = pendingStarts.find(({ label }) => label === agent.label);
-      const { activeRequestId } = agent.startupTransition;
-      return pending?.requestId &&
+      const { runId, activeRequestId } = agent.startupTransition;
+      return pending?.runId === runId &&
         (activeRequestId === undefined || activeRequestId === pending.requestId)
         ? { ...agent, state: "starting" as const }
         : agent;
@@ -3924,6 +3925,7 @@ export function validateIdentity(
 
 export type PendingStart = {
   label: string;
+  runId: string;
   definition: string;
   task?: string;
   startedAt: number;
@@ -9375,6 +9377,7 @@ export function createAgentController(
         }
         const pendingStart: PendingStart = {
           label,
+          runId,
           definition: agentDefinition,
           requestId: assignment!.requestId,
           ...(p.task !== undefined ? { task: p.task } : {}),

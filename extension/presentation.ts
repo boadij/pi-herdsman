@@ -231,7 +231,7 @@ export interface StatusAgent {
   /** Observed request for a verified working or blocked row. */
   activeRequestId?: string;
   /** Presentation-only evidence for a verified handoff, not control state. */
-  startupTransition?: { activeRequestId?: string };
+  startupTransition?: { runId: string; activeRequestId?: string };
   definition: string;
   paneId?: string;
   sessionId?: string;
