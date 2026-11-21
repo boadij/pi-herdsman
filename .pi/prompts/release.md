@@ -9,8 +9,10 @@ or Discord recap scope, not the target, authority or safeguards:
 
 ${@:-None provided.}
 
-1. While CI runs, assign project `release-drafter` one read-only /release
-   preflight and research pass: return a pinned candidate record, both
+1. Confirm this is an eligible Herdsman Lead and project `release-drafter`
+   and bundled `ship` are available for delegation; otherwise report the
+   specific blocker. While CI runs, assign `release-drafter` one read-only
+   /release preflight and research pass: return a pinned candidate record, both
    delimited drafts, and one verified roster (earlier recap expands only
    Discord scope). Stop on missing evidence or moved refs; if several
    candidates verify, ask the maintainer to choose and continue the drafter.
@@ -22,7 +24,8 @@ ${@:-None provided.}
    the newline before each end marker is part of the artifact. Do not
    retype, trim or normalize. Stop on ambiguity, incomplete evidence
    or inability to preserve bytes.
-3. Review the pinned release diff/metadata, exact squash title/message,
+3. Review the pinned release diff/metadata, exact squash API
+   `commit_title` and `commit_message` (extra detail, possibly empty),
    and both artifacts for accuracy and disclosure without erasing credits.
    Check headings, install/runtime requirements, migration and readable
    previous-to-proposed-tag comparison. Require a deduplicated Authors
@@ -34,24 +37,30 @@ ${@:-None provided.}
    placeholders and room for the final URL within 1,600 characters.
 4. Make the complete reviewed material available to the maintainer in
    the approval exchange, with whitespace and final newlines unambiguous.
+   Display the exact API fields, including `commit_message: ""` when empty,
+   separately from the expected stored Git commit message.
    Stop if the exact material cannot be shown. Ask for three independent
    answers in that one exchange:
    - **Squash:** Approve this upstream PR at these pinned head/base SHAs
-     and this exact title/message? The push to `main` triggers Release
-     Please and may create the tag and GitHub Release and publish to npm
+     and these exact API `commit_title` and `commit_message` values? The push
+     to `main` triggers Release Please and may create the tag and GitHub
+     Release and publish to npm
      and GHCR even if notes are withheld.
    - **Body only:** Approve setting only the resulting published release's
      body to this exact displayed text from this immutable drafter result ref?
    - **No other writer:** Confirm no overlapping ship attempt or
      release-body editor will run during this attempt?
+   Offer one copyable three-line reply (`Squash: yes`, `Body only: yes`,
+   `No other writer: confirmed`); each answer remains independent.
 5. Invocation, silence and ambiguous answers are not consent. Require
    both exact grants and writer confirmation; stop on a known competing
    writer. Coordination is not a cross-host exclusion guarantee.
    Assign bundled `ship` the self-contained procedure below. Transfer
    the actual drafter result ref in `delegate_agent.files`, not just in
    task text. Identify that same ref in the task along with the pinned
-   record/provenance, exact approved squash title/message and exact
-   approved release body. Include relevant review evidence and explicitly
+   record/provenance, exact approved API `commit_title` and `commit_message`
+   (including an empty string), and exact approved release body. Include
+   relevant review evidence and explicitly
    state both grants with their distinct bindings and the writer
    confirmation. Evidence is not authorization. Stop if the exact handoff
    cannot be transferred. Moved reviewed refs require fresh validation,
@@ -128,8 +137,11 @@ body as UTF-8 in private scratch outside the worktree and compare their
 bytes with `cmp`. Never interpolate draft text as shell code or use
 command substitution for content. Stop on missing, incomplete or
 ambiguous evidence, a failed grant binding, or any byte difference.
-Materialize the exact approved squash title/message without retyping
-or normalizing.
+Materialize the independently approved API `commit_title` and
+`commit_message` as exact `title_file` and `api_message_file` inputs;
+an approved empty API message is a zero-byte file. Never derive the API
+`commit_message` from the expected stored Git commit message. Keep the
+expected stored message separate for post-merge verification.
 
 Offline, round-trip both an emoji/multiline/trailing-newline fixture and
 the reconstructed body using Bash and jq. Hash the validated body with
@@ -149,7 +161,7 @@ for kind in fixture body; do
           then .body else error("invalid body payload") end' "$payload" | cmp - "$input"
 done
 sha256sum "$body_file"
-jq -n --arg sha "$head_sha" --rawfile title "$title_file" --rawfile message "$message_file" \
+jq -n --arg sha "$head_sha" --rawfile title "$title_file" --rawfile message "$api_message_file" \
   '{sha: $sha, merge_method: "squash", commit_title: $title, commit_message: $message}' \
   > "$scratch/merge.json"
 ```
@@ -158,16 +170,32 @@ jq -n --arg sha "$head_sha" --rawfile title "$title_file" --rawfile message "$me
 Immediately before mutation independently reread `branches/main` and REST
 `pulls/$pr` for the eligible open upstream PR and identical refs/SHAs;
 require pinned version and provenance, current synthetic SHA if used,
-and verified absence of proposed tag/release. Prefer one matching-head
-`PUT pulls/$pr/merge` with `--input "$scratch/merge.json"`; capture
+and verified absence of proposed tag/release. Immediately before the
+request, compare the saved JSON with the independently approved API values;
+stop on any difference (including an unexpected field or missing empty
+`commit_message`). Do not rebuild the checked file:
+
+```sh
+jq -e --arg sha "$head_sha" --rawfile title "$title_file" \
+  --rawfile message "$api_message_file" \
+  'type == "object" and
+   (keys == ["commit_message", "commit_title", "merge_method", "sha"]) and
+   .sha == $sha and .merge_method == "squash" and
+   .commit_title == $title and .commit_message == $message' \
+  "$scratch/merge.json" >/dev/null
+```
+
+Prefer one matching-head `PUT pulls/$pr/merge` with the same validated
+`--input "$scratch/merge.json"`; capture
 `merged` and `sha`. This guards the head, not the base atomically; stop
 if atomicity is required. Reread the merged PR and reconcile its final
 `merge_commit_sha` with any response SHA, never the premerge test SHA.
 Confirm the pinned head and use `git/commits/$merge_sha` to verify SHA,
 sole pinned-base parent and exact stored squash title and message.
-Compare decoded commit text against the approved subject/body with Git's
-separator and any known service terminal newline convention accounted
-for in advance; don't trim to make it match. On ambiguous PUT, read state
+Compare decoded stored commit text against the separately expected stored
+Git message, derived from the approved API fields with Git's separator
+and any known service terminal newline convention accounted for in advance;
+don't trim to make it match. On ambiguous PUT, read state
 without retry and require all the same checks before editing notes. If
 merged but a check fails or cannot be established, withhold notes.
 
