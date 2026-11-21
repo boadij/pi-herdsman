@@ -50,13 +50,11 @@ frontmatter supports `name`, `description`, `body`, `tools`, and
 model, thinking, system-prompt launch mode, skills, extensions, context
 inheritance, or permission policy are not supported.
 
-The bundled `flexible-lead` selects `tools: [+codemode]`, adding Pi's native
-Code Mode when available while preserving Pi's normal ordinary tool baseline.
-If Code Mode is unavailable, the inherited tools remain unchanged. The profile
-also supplies flexible direct/delegated-work guidance.
-The bundled `orchestrator-lead` selects `tools: [codemode]`, making Pi's
-native Code Mode available when loaded while keeping other ordinary tools
-disabled. Inspection and execution are delegated to Agents by default.
+The bundled `flexible-lead` preserves Pi's ordinary tool baseline and supports
+both direct and delegated work. The bundled `orchestrator-lead` uses an
+explicit tool allowlist and delegates inspection and execution to Agents by
+default. See the [Coordinator tool defaults](../reference/agent-definition-schema.md#reserved-coordinator-definitions)
+for the bundled selections.
 For example, an overlay can opt into direct tools:
 
 ```markdown
@@ -72,11 +70,11 @@ Use the repository's documented smoke command when validating integration work.
 An explicit tool list selects registered ordinary tools; exclusions are then
 applied. At the effective-definition level, `tools: []` disables ordinary
 tools, whereas an absent `tools` field preserves Pi's normal selection.
-Overlays that omit `tools` still inherit the bundled `[codemode]`. Herdsman-owned
-tools cannot be enabled through a profile, and required Lead coordination
-tools are retained. A configured tool that is not registered
-is simply unavailable. Profile resolution respects project trust. Definition
-changes take effect when the profile is next resolved: at session start/resume,
+Overlays that omit `tools` inherit the lower-precedence selection. Herdsman's
+coordination tools cannot be enabled through the ordinary tool policy, and
+required Lead coordination tools are retained. Unregistered tools are
+unavailable. Profile resolution respects project trust. Definition changes
+take effect when the profile is next resolved: at session start/resume,
 or when a user explicitly selects an execution mode with `/lead` (including
 reselecting the current mode).
 
@@ -174,9 +172,9 @@ and cannot be delegated to. It appears under `Coordinators`, with
 Model, Thinking, and Details settings but no `Enabled` action. These settings
 do not add it to Agent discovery or delegation.
 
-The bundled default selects `tools: [codemode]`, alongside mandatory
-Herdsman coordination tools. Inspection and execution are delegated to
-managed Agents by default. Manager owns project supervision and
+The bundled default permits Code Mode and [session skill loading](../reference/agent-definition-schema.md#session-skill-loading),
+alongside mandatory Herdsman coordination tools. Inspection and execution are
+delegated to managed Agents by default. Manager owns project supervision and
 assignment boundaries; the Lead owns technical decisions and execution
 orchestration.
 Herdsman automatically hands off the normal assignment response, deferring it

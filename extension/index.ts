@@ -200,6 +200,7 @@ import {
   createLeadRoleTransitions,
 } from "./lead-runtime.ts";
 import { readRootOwners } from "./lead/coordination.ts";
+import { registerSkillLoader } from "./skill-loader.ts";
 
 import {
   populateMenuFrame,
@@ -2644,7 +2645,10 @@ function registerExtensionImpl(
       }
     }
   }
-  if (processRole !== "managed-agent") return;
+  if (processRole !== "managed-agent") {
+    registerSkillLoader(pi);
+    return;
+  }
   pi.registerTool({
     name: "read_evidence",
     label: "Read accepted evidence",
@@ -2708,4 +2712,5 @@ function registerExtensionImpl(
       (await contextAgentDefinitions(ctx)).definitions,
     appendError: (ctx, kind, error) => appendDurableError(pi, ctx, kind, error),
   });
+  registerSkillLoader(pi);
 }

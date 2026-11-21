@@ -12786,6 +12786,7 @@ test("registered lead exposes only explicit live controls", async () => {
     fakeContext(accepting.entries),
   );
   assert.deepEqual(accepting.pi.getActiveTools(), [
+    "load_skill",
     "list_agents",
     "delegate_agent",
     "continue_agent",

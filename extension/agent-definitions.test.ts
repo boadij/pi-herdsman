@@ -1070,7 +1070,8 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
     discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME),
   );
   assert.equal(bundled.name, "managed-lead");
-  assert.deepEqual(bundled.frontmatter.tools, ["codemode"]);
+  assert.deepEqual(bundled.frontmatter.tools, ["codemode", "load_skill"]);
+  assert.equal(bundled.frontmatter.noSkills, true);
   const requiredTools = [
     ...AGENT_COORDINATION_TOOLS,
     "message_supervisor",
@@ -1084,6 +1085,7 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   assert.equal(launchArgs.includes("--no-tools"), false);
   assert.deepEqual(launchArgs[launchArgs.indexOf("--tools") + 1]?.split(","), [
     "codemode",
+    "load_skill",
     ...requiredTools,
     "mcp__",
   ]);
@@ -1239,8 +1241,8 @@ test("reserves independent runtime role profiles with narrow fields", () => {
   const [flexible, orchestrator] = withPiAgentDir(global, () =>
     discoverRoleDefinitions(),
   );
-  assert.deepEqual(flexible!.frontmatter.tools, ["+codemode"]);
-  assert.deepEqual(orchestrator!.frontmatter.tools, ["codemode"]);
+  assert.deepEqual(flexible!.frontmatter.tools, ["+codemode", "+load_skill"]);
+  assert.deepEqual(orchestrator!.frontmatter.tools, ["codemode", "load_skill"]);
   writeFileSync(
     join(agents, "orchestrator-lead.md"),
     "---\nname: orchestrator-lead\nbodyMode: replace\n---\nCustom strategy",

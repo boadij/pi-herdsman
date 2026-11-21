@@ -8,7 +8,7 @@ extensions: [builtin:codemode]
 noExtensions: true
 noSkills: true
 systemPromptMode: append
-tools: [codemode]
+tools: [codemode, load_skill]
 ---
 
 Delegate bounded project execution to Agents whenever an Agent can reasonably own it.

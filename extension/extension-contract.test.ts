@@ -613,6 +613,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     [
       ...semanticNames,
       "read_evidence",
+      "load_skill",
       "list_staff",
       "inspect_staff",
       "read_staff_transcript",
@@ -668,7 +669,13 @@ test("semantic coordination tools expose exact strict object contracts", () => {
   registerExtension!(leaf.pi as never);
   assert.deepEqual(
     leaf.tools.map((tool) => tool.name).sort(),
-    ["await_owner", "notify_owner", "attach_handoff", "read_evidence"].sort(),
+    [
+      "await_owner",
+      "notify_owner",
+      "attach_handoff",
+      "read_evidence",
+      "load_skill",
+    ].sort(),
   );
   const askOwner = leaf.tools.find((tool) => tool.name === "await_owner")!;
   assertPortableToolSchema(askOwner, "model-only");
@@ -954,6 +961,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     lead.tools.map((tool) => tool.name).sort(),
     [
       ...SEMANTIC_TOOL_CASES.map(([name]) => name),
+      "load_skill",
       "list_staff",
       "inspect_staff",
       "read_staff_transcript",
@@ -972,12 +980,12 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     false,
   );
   for (const tool of lead.tools) {
-    assertPortableToolSchema(
-      tool,
-      tool.name === "delegate_agent" || tool.name === "continue_agent"
-        ? "direct"
-        : "direct",
-    );
+    if (tool.name === "load_skill") {
+      assertPortableToolSchema(tool, "model-only");
+      assert.equal(tool.defaultActive, false);
+      continue;
+    }
+    assertPortableToolSchema(tool);
     if (tool.name === "read_evidence") continue;
     assert.equal(tool.executionMode, "sequential");
     assert.equal(typeof tool.renderCall, "function");

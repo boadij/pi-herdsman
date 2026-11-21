@@ -688,6 +688,7 @@ const leadTools = [
   "list_peers",
   "message_peer",
 ];
+const leadToolsWithSkill = ["load_skill", ...leadTools];
 const leadToolsWithoutAgents = [
   "message_supervisor",
   "list_peers",
@@ -1369,17 +1370,20 @@ test("ordinary Lead profile switches retain the saved tool baseline", async () =
     await pi.events.get("session_start")![0](undefined, context);
     assert.deepEqual(
       new Set(pi.pi.getActiveTools()),
-      new Set([...baseline, ...leadTools]),
+      new Set([...baseline, ...leadToolsWithSkill]),
     );
     await pi.commandOptions.get("lead").handler("orchestrate", context);
-    assert.deepEqual(new Set(pi.pi.getActiveTools()), new Set(leadTools));
+    assert.deepEqual(
+      new Set(pi.pi.getActiveTools()),
+      new Set(leadToolsWithSkill),
+    );
     const persisted = sessionLeadExecutionState(entries);
     assert.equal(persisted?.mode, "orchestrate");
     assert.deepEqual(persisted?.leadTools, [...baseline]);
     await pi.commandOptions.get("lead").handler("flexible", context);
     assert.deepEqual(
       new Set(pi.pi.getActiveTools()),
-      new Set([...baseline, ...leadTools]),
+      new Set([...baseline, ...leadToolsWithSkill]),
     );
     assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, baseline);
     pi.pi.setActiveTools([...pi.pi.getActiveTools(), "history"]);
@@ -1392,7 +1396,7 @@ test("ordinary Lead profile switches retain the saved tool baseline", async () =
     );
     assert.deepEqual(
       new Set(pi.pi.getActiveTools()),
-      new Set([...baseline, "history", ...leadTools]),
+      new Set([...baseline, "history", ...leadToolsWithSkill]),
     );
     assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
       ...baseline,
@@ -1459,7 +1463,7 @@ test("ordinary mode persistence rollback restores inherited tool tracking", asyn
     assert.equal(sessionLeadExecutionState(entries)?.mode, "flexible");
     assert.deepEqual(
       new Set(pi.pi.getActiveTools()),
-      new Set(["read", "bash", ...leadTools]),
+      new Set(["read", "bash", ...leadToolsWithSkill]),
     );
     pi.pi.setActiveTools([
       ...pi.pi.getActiveTools().filter((name) => name !== "bash"),
@@ -1477,7 +1481,7 @@ test("ordinary mode persistence rollback restores inherited tool tracking", asyn
     );
     assert.deepEqual(
       new Set(pi.pi.getActiveTools()),
-      new Set(["read", "history", ...leadTools]),
+      new Set(["read", "history", ...leadToolsWithSkill]),
     );
     assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
       "read",
@@ -1582,7 +1586,7 @@ test("live Flexible tool changes survive order-preserving projection while exclu
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, context);
-    const requested = ["read", ...leadTools];
+    const requested = ["read", ...leadToolsWithSkill];
     assert.deepEqual(pi.toolSelections.at(-1), requested);
     assert.deepEqual(new Set(pi.pi.getActiveTools()), new Set(requested));
     assert.notDeepEqual(pi.pi.getActiveTools(), requested);
@@ -1610,7 +1614,7 @@ test("live Flexible tool changes survive order-preserving projection while exclu
 
     assert.deepEqual(
       new Set(pi.pi.getActiveTools()),
-      new Set(["read", "history", "notes", ...leadTools]),
+      new Set(["read", "history", "notes", ...leadToolsWithSkill]),
     );
     assert.equal(pi.pi.getActiveTools().includes("inactive"), false);
     assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
@@ -1631,7 +1635,7 @@ test("live Flexible tool changes survive order-preserving projection while exclu
     );
     assert.deepEqual(
       new Set(pi.pi.getActiveTools()),
-      new Set(["read", "history", ...leadTools]),
+      new Set(["read", "history", ...leadToolsWithSkill]),
     );
     assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
       "read",
@@ -1713,7 +1717,7 @@ test("failed inherited-tool persistence enforces policy and retries", async (t) 
       "read",
       "history",
       "notes",
-      ...leadTools,
+      ...leadToolsWithSkill,
     ]);
     assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
       "read",
@@ -1818,7 +1822,11 @@ test("session tree navigation restores each branch's execution mode, baseline, a
     await pi.commandOptions.get("lead").handler("orchestrate", context);
     branch = branchEntry("flexible", ["read", "bash"]);
     await pi.events.get("session_tree")![0](undefined, context);
-    assert.deepEqual(pi.pi.getActiveTools(), ["read", "bash", ...leadTools]);
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      "read",
+      "bash",
+      ...leadToolsWithSkill,
+    ]);
     let event: any = {
       systemPrompt: "base",
       systemPromptOptions: { sections: {}, contextFiles: [] },
@@ -1831,7 +1839,7 @@ test("session tree navigation restores each branch's execution mode, baseline, a
 
     branch = branchEntry("orchestrate", ["read", "edit"]);
     await pi.events.get("session_tree")![0](undefined, context);
-    assert.deepEqual(pi.pi.getActiveTools(), leadTools);
+    assert.deepEqual(pi.pi.getActiveTools(), leadToolsWithSkill);
     event = {
       systemPrompt: "base",
       systemPromptOptions: { sections: {}, contextFiles: [] },
@@ -1865,7 +1873,7 @@ test("session tree restoration respects checkpoint order and tool policies", asy
       name: "a newer Flexible checkpoint wins over an older wider selection",
       branch: [toolChange(["history"]), checkpoint("flexible", ["read"])],
       restored: ["read", "history"],
-      expected: ["read", ...leadTools],
+      expected: ["read", ...leadToolsWithSkill],
     },
     {
       name: "a newer same-session role checkpoint wins over a Pi tool change",
@@ -1883,13 +1891,13 @@ test("session tree restoration respects checkpoint order and tool policies", asy
         },
       ],
       restored: ["read", "history"],
-      expected: ["read", ...leadTools],
+      expected: ["read", ...leadToolsWithSkill],
     },
     {
       name: "a newer Orchestrate checkpoint keeps its restriction",
       branch: [toolChange(["history"]), checkpoint("orchestrate", ["read"])],
       restored: ["read", "history"],
-      expected: leadTools,
+      expected: leadToolsWithSkill,
     },
     {
       name: "an explicit Flexible policy does not inherit newer tools",
@@ -1909,7 +1917,7 @@ test("session tree restoration respects checkpoint order and tool policies", asy
         toolChange(["history"]),
       ],
       restored: ["read", "history"],
-      expected: ["read", "history", ...leadTools],
+      expected: ["read", "history", ...leadToolsWithSkill],
     },
     {
       name: "a newer removal does not resurrect a disabled tool",
@@ -1918,14 +1926,14 @@ test("session tree restoration respects checkpoint order and tool policies", asy
         toolChange([], ["bash"]),
       ],
       restored: ["read"],
-      expected: ["read", ...leadTools],
+      expected: ["read", ...leadToolsWithSkill],
     },
     {
       name: "relative CodeMode is projected without entering the inherited baseline",
       branch: [checkpoint("flexible", ["read"]), toolChange(["history"])],
       restored: ["read", "history", "codemode"],
       extraTools: ["codemode"],
-      expected: ["read", "history", "codemode", ...leadTools],
+      expected: ["read", "history", "codemode", ...leadToolsWithSkill],
     },
   ];
   for (const scenario of cases) {
@@ -1976,7 +1984,7 @@ test("session tree restoration respects checkpoint order and tool policies", asy
           await pi.commandOptions.get("lead").handler("flexible", context);
           assert.deepEqual(
             new Set(pi.pi.getActiveTools()),
-            new Set(["read", "bash", "history", ...leadTools]),
+            new Set(["read", "bash", "history", ...leadToolsWithSkill]),
           );
         }
       } finally {
@@ -2004,7 +2012,11 @@ test("session startup restores execution from the selected branch only", async (
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, context);
-    assert.deepEqual(pi.pi.getActiveTools(), ["read", "bash", ...leadTools]);
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      "read",
+      "bash",
+      ...leadToolsWithSkill,
+    ]);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
   }
@@ -2056,7 +2068,7 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
   try {
     await pi.events.get("session_start")![0](undefined, context);
     await pi.commandOptions.get("lead").handler("orchestrate", context);
-    assert.deepEqual(pi.pi.getActiveTools(), leadTools);
+    assert.deepEqual(pi.pi.getActiveTools(), leadToolsWithSkill);
     await pi.commandOptions.get("manager").handler("", context);
     assert.deepEqual(pi.pi.getActiveTools(), managerTools);
     const targetId = `manager-peer-${randomUUID()}`;
@@ -2119,7 +2131,10 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
       leadTools: [...baseline],
     });
     await pi.commandOptions.get("manager").handler("leave", context);
-    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      ...baseline,
+      ...leadToolsWithSkill,
+    ]);
     assert.deepEqual(sessionLeadExecutionState(pi.entries)?.leadTools, [
       ...baseline,
     ]);
@@ -2136,7 +2151,7 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
       ...baseline,
       "history",
       "notes",
-      ...leadTools,
+      ...leadToolsWithSkill,
     ]);
     writeFileSync(managerOverride, "---\nname: manager\ntools: [read]\n---\n");
     await pi.commandOptions.get("manager").handler("", context);
@@ -2163,7 +2178,7 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
       ...baseline,
       "history",
       "notes",
-      ...leadTools,
+      ...leadToolsWithSkill,
     ]);
     releaseIdle();
     await refresh;
@@ -2172,7 +2187,7 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
       ...baseline,
       "history",
       "notes",
-      ...leadTools,
+      ...leadToolsWithSkill,
     ]);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
@@ -3175,7 +3190,10 @@ test("Chief transitions and mode changes preserve the ordinary Lead baseline", a
       "chief-baseline-tab",
       "Lead",
     ]);
-    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      ...baseline,
+      ...leadToolsWithSkill,
+    ]);
     assert.deepEqual(sessionLeadExecutionState(pi.entries)?.leadTools, [
       ...baseline,
     ]);
@@ -3227,7 +3245,7 @@ test("persisted Chief restores the saved ordinary execution profile on exit", as
       false,
     );
 
-    const restoredTools = leadTools;
+    const restoredTools = leadToolsWithSkill;
     const setActiveTools = pi.pi.setActiveTools;
     let failRestore = true;
     pi.pi.setActiveTools = (next: string[]) => {
@@ -4314,7 +4332,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       /^message staff  lead:0123456789/,
     );
     await first.events.get("session_start")![0](undefined, ctx1);
-    assert.deepEqual(first.pi.getActiveTools(), ["read", ...leadTools]);
+    assert.deepEqual(first.pi.getActiveTools(), [
+      "read",
+      ...leadToolsWithSkill,
+    ]);
     assert.equal(first.pi.getActiveTools().includes("message_staff"), false);
     assert.equal(
       first.pi
@@ -4629,7 +4650,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     ctx2.ui.notify = (message: string) => collisionNotices.push(message);
     identitySessionId = secondSessionId;
     await second.events.get("session_start")![0](undefined, ctx2);
-    assert.deepEqual(second.pi.getActiveTools(), ["read", ...leadTools]);
+    assert.deepEqual(second.pi.getActiveTools(), [
+      "read",
+      ...leadToolsWithSkill,
+    ]);
     assert.ok(
       collisionNotices.some((message) =>
         message.includes(
@@ -4643,7 +4667,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       undefined,
     );
     await second.commandOptions.get("manager").handler("", ctx2);
-    assert.deepEqual(second.pi.getActiveTools(), ["read", ...leadTools]);
+    assert.deepEqual(second.pi.getActiveTools(), [
+      "read",
+      ...leadToolsWithSkill,
+    ]);
     assert.ok(
       collisionNotices.some((message) =>
         /already has an active Manager/.test(message),
@@ -4764,7 +4791,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
         leadMetadata[nameTokenIndex - 1] === "--token",
       JSON.stringify(leadMetadata),
     );
-    assert.deepEqual(first.pi.getActiveTools(), ["read", ...leadTools]);
+    assert.deepEqual(first.pi.getActiveTools(), [
+      "read",
+      ...leadToolsWithSkill,
+    ]);
     assert.equal(first.pi.getActiveTools().includes("message_staff"), false);
     assert.equal(
       first.tools.find((tool) => tool.name === "message_staff"),
@@ -4866,7 +4896,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
         undefined,
         replacementContext,
       );
-      assert.deepEqual(replacement.pi.getActiveTools(), ["read", ...leadTools]);
+      assert.deepEqual(replacement.pi.getActiveTools(), [
+        "read",
+        ...leadToolsWithSkill,
+      ]);
     } finally {
       await replacement.events.get("session_shutdown")![0]();
     }
@@ -4958,7 +4991,7 @@ test("failed Manager activation preserves late inherited tools through rollback"
       "bash",
       "history",
       "notes",
-      ...leadTools,
+      ...leadToolsWithSkill,
     ]);
 
     await agentTool(pi, "delegate").execute(
@@ -4973,7 +5006,7 @@ test("failed Manager activation preserves late inherited tools through rollback"
       "bash",
       "history",
       "notes",
-      ...leadTools,
+      ...leadToolsWithSkill,
     ]);
     assert.deepEqual(sessionLeadExecutionState(pi.entries)?.leadTools, [
       "read",
@@ -6875,7 +6908,7 @@ test("Manager auto-start rejects mismatched Herdr identity and releases its leas
     context.sessionManager.getSessionId = () => sessionId;
     await pi.events.get("session_start")![0](undefined, context);
     assert.equal(coordinationRestoredBeforeIdentityCheck, true);
-    assert.deepEqual(pi.pi.getActiveTools(), ["read", ...leadTools]);
+    assert.deepEqual(pi.pi.getActiveTools(), ["read", ...leadToolsWithSkill]);
     assert.equal(
       readManagerDescriptor(supervisionRuntime(), WORKSPACE),
       undefined,
@@ -7214,7 +7247,7 @@ test("linked and non-project sessions derive ordinary Lead tools", async () => {
     registerExtension!(pi.pi as never);
     try {
       await pi.events.get("session_start")![0](undefined, fakeContext());
-      assert.deepEqual(pi.pi.getActiveTools(), ["read", ...leadTools]);
+      assert.deepEqual(pi.pi.getActiveTools(), ["read", ...leadToolsWithSkill]);
       assert.equal(
         readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
         "lead",
@@ -10202,6 +10235,7 @@ async function managerDelegateAssignmentTest(
       assert.equal(args.includes("--no-tools"), false);
       assert.deepEqual(args[toolsIndex + 1]!.split(","), [
         "codemode",
+        "load_skill",
         ...leadTools,
         "mcp__",
       ]);
@@ -15255,7 +15289,7 @@ test("Chief activation rollback fails closed when its restrictive projection fai
   await pi.events.get("session_start")![0](undefined, context);
   await pi.commandOptions.get("lead").handler("orchestrate", context);
   const projected = pi.pi.getActiveTools();
-  assert.deepEqual(projected, leadTools);
+  assert.deepEqual(projected, leadToolsWithSkill);
   assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
     "read",
     "bash",
@@ -15319,7 +15353,7 @@ test("Chief activation rollback fails closed when its restrictive projection fai
   });
   lease.release();
   await pi.events.get("session_start")![0](undefined, context);
-  assert.deepEqual(pi.pi.getActiveTools(), leadTools);
+  assert.deepEqual(pi.pi.getActiveTools(), leadToolsWithSkill);
   await pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_SOCKET_PATH;
   delete process.env.HERDR_PANE_ID;
@@ -15699,6 +15733,7 @@ test("lead session-start retries an exact baseline after restoration fails", asy
   const ordinaryBaseline = ["read", "bash"];
   const baseline = [
     ...ordinaryBaseline,
+    "load_skill",
     "list_agents",
     "delegate_agent",
     "continue_agent",
@@ -15805,6 +15840,7 @@ test("lead session-start continues when chief lease release fails", async () => 
   assert.deepEqual(pi.pi.getActiveTools(), [
     "read",
     "bash",
+    "load_skill",
     "list_agents",
     "delegate_agent",
     "continue_agent",
@@ -16685,7 +16721,7 @@ test("Chief activation replaces the lead widget and overview selection is intera
   });
   registerExtension!(pi.pi as never);
   await pi.events.get("session_start")![0](undefined, context);
-  assert.deepEqual(pi.pi.getActiveTools(), ["read", ...leadTools]);
+  assert.deepEqual(pi.pi.getActiveTools(), ["read", ...leadToolsWithSkill]);
   await pi.commandOptions.get("chief").handler("", context);
   assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
   assert.equal(pi.pi.getActiveTools().includes("read_evidence"), false);
@@ -18579,6 +18615,7 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
   assert.deepEqual(pi.pi.getActiveTools(), [
     "read",
     "bash",
+    "load_skill",
     ...ordinaryTools.filter((name) => !["read", "bash"].includes(name)),
   ]);
   const role = entries
@@ -18607,6 +18644,7 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
   assert.deepEqual(reloaded.pi.getActiveTools(), [
     "read",
     "bash",
+    "load_skill",
     ...ordinaryTools.filter((name) => !["read", "bash"].includes(name)),
   ]);
 
@@ -18663,7 +18701,11 @@ test("ordinary branch tool state wins over an older lead checkpoint", async () =
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
   await pi.events.get("session_start")![0](undefined, context);
-  assert.deepEqual(pi.pi.getActiveTools(), branchTools);
+  assert.deepEqual(pi.pi.getActiveTools(), [
+    "read",
+    "grep",
+    ...leadToolsWithSkill,
+  ]);
   await pi.events.get("session_shutdown")?.[0]();
 });
 
@@ -19131,6 +19173,7 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
     "read",
     "bash",
     "foreign_tool",
+    "load_skill",
     "list_agents",
     "delegate_agent",
     "continue_agent",
