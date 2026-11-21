@@ -1802,11 +1802,13 @@ export async function startHerdrAgent(
             "--timeout",
             String(Math.min(remaining, childTimeout)),
             "--",
+            // Publish Pi session identity before Herdsman's startup handler
+            // makes the managed mailbox state observable.
+            "--extension",
+            HERDR_AGENT_STATE_EXTENSION,
             ...(options.extensionPath
               ? ["--extension", options.extensionPath]
               : []),
-            "--extension",
-            HERDR_AGENT_STATE_EXTENSION,
             ...(options.agentArgs ?? []),
           ],
           {

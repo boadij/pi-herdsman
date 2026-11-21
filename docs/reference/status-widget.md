@@ -399,14 +399,17 @@ observation.
 While a controller-local start remains pending, an authoritative `settling`
 row is presented as `starting` so launch and request handoff remain visually
 continuous. A fresh, available snapshot can also show `starting` for an
-authoritative `unknown` row during a verified handoff: the live Agent must
-match the controller's runtime identity, and Herdr must report work before an
-active request is recorded, or report idle while the exact pending request is
-recorded as active. This changes only the display, not the authoritative state
-or available actions. Unverified identity, an unknown Herdr lifecycle, stale
-observations, request mismatches, and unresolved errors do not qualify for
-this override. The pending start ends when the exact request is observed
-working or blocked, or reaches terminal completion. A verified stop with
+authoritative `unknown` row during a verified handoff. The live Agent must
+match the pending launch generation, and any registered runtime must match
+its identity. Herdr can report work before an active request is recorded, or
+idle while the exact pending request is active. Before runtime registration
+and request activation, Herdr can also report the exact Pi session while its
+native lifecycle is still `unknown` and interactive readiness has not been
+reported. This changes only the display, not the authoritative state or
+available actions. Unverified identity, stale observations, request mismatches,
+and unresolved errors do not qualify for this override. The pending start ends
+when the exact request is observed working or blocked, or reaches terminal
+completion. A verified stop with
 successful cleanup, startup failure or rollback, session restart, and
 shutdown also clear transient startup state.
 

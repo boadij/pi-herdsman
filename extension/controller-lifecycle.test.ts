@@ -3705,10 +3705,11 @@ test("staged fresh assignment bridges pending start through working", async (t) 
     assert.doesNotMatch(renderedBeforeAck, /settling/);
     assert.match(renderedBeforeAck, /agent/);
 
-    // Durable identity is visible, but validation still gates runtime registration.
+    // The exact session is already visible, but the native lifecycle and
+    // interactive readiness have not arrived and no controller runtime exists.
     const rendersBeforeRuntime = fixture.renderRequests;
-    const workingBeforeRuntime = fixture.workingObservations;
-    fixture.observe("working");
+    const unknownBeforeRuntime = fixture.unknownObservations;
+    fixture.observe("unknown");
     const beforeRuntime = (await list()).details.agents[0];
     assert.equal(fixture.requestObserved, false);
     const durableBeforeRuntime = readAgentState(fixture.mailbox);
@@ -3718,7 +3719,7 @@ test("staged fresh assignment bridges pending start through working", async (t) 
     assert.equal(beforeRuntime.recovery_only, undefined);
     await t.waitFor(
       () => {
-        assert.ok(fixture.workingObservations >= workingBeforeRuntime + 2);
+        assert.ok(fixture.unknownObservations >= unknownBeforeRuntime + 2);
         assert.ok(fixture.renderRequests > rendersBeforeRuntime);
       },
       { timeout: 3_000 },
@@ -3738,8 +3739,8 @@ test("staged fresh assignment bridges pending start through working", async (t) 
       return observation;
     };
 
-    // The inventory fixture follows the durable identity. A different live
-    // generation with the same label is not evidence for this pending start.
+    // Herdr already reports the exact session but has not reported interactive
+    // readiness or a known lifecycle. Only the matching launch may bridge it.
     writeAgentState(fixture.mailbox, {
       ...durableBeforeRuntime,
       runId: randomUUID(),
@@ -3749,9 +3750,10 @@ test("staged fresh assignment bridges pending start through working", async (t) 
       undefined,
     );
     writeAgentState(fixture.mailbox, durableBeforeRuntime);
+    fixture.observe("working");
     await assertUnknownHandoff(/flexible.*◌ 1/);
 
-    fixture.observe("unknown");
+    fixture.observe("unknown", undefined, true);
     assert.equal(
       (await assertUnknownHandoff(/flexible.*\? 1/)).recovery_only,
       undefined,
@@ -3759,7 +3761,7 @@ test("staged fresh assignment bridges pending start through working", async (t) 
     fixture.observe("working");
     await assertUnknownHandoff(/flexible.*◌ 1/);
 
-    fixture.observe("working", randomUUID());
+    fixture.observe("unknown", randomUUID());
     assert.equal(
       (await assertUnknownHandoff(/flexible.*\? 1/)).recovery_only,
       true,

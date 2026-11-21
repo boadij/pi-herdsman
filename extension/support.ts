@@ -2508,9 +2508,11 @@ export function createStagedAssignmentFixture(
   let preSubmitValidationReady = false;
   let acceptedRequestIdWritten: string | undefined;
   let workingObservations = 0;
+  let unknownObservations = 0;
   let renderRequests = 0;
   let observedLifecycle: "idle" | "working" | "unknown" | undefined;
   let observedSessionId: string | undefined;
+  let interactiveReady: boolean | undefined;
   const startup = startupExecutor(
     label,
     () => DEFAULT_PI_SESSION_ID,
@@ -2610,11 +2612,15 @@ export function createStagedAssignmentFixture(
         const agents = payload.result?.snapshot?.agents ?? [];
         for (const agent of agents) {
           if (observedLifecycle) agent.agent_status = observedLifecycle;
+          if (interactiveReady !== undefined)
+            agent.interactive_ready = interactiveReady;
           if (observedSessionId && agent.agent_session)
             agent.agent_session.value = observedSessionId;
         }
         if (agents.some((agent: any) => agent.agent_status === "working"))
           workingObservations++;
+        if (agents.some((agent: any) => agent.agent_status === "unknown"))
+          unknownObservations++;
         return { ...result, stdout: JSON.stringify(payload) };
       }
       if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
@@ -2714,6 +2720,9 @@ export function createStagedAssignmentFixture(
     get workingObservations(): number {
       return workingObservations;
     },
+    get unknownObservations(): number {
+      return unknownObservations;
+    },
     get renderRequests(): number {
       return renderRequests;
     },
@@ -2735,9 +2744,14 @@ export function createStagedAssignmentFixture(
         context,
       );
     },
-    observe(lifecycle?: "idle" | "working" | "unknown", sessionId?: string) {
+    observe(
+      lifecycle?: "idle" | "working" | "unknown",
+      sessionId?: string,
+      ready?: boolean,
+    ) {
       observedLifecycle = lifecycle;
       observedSessionId = sessionId;
+      interactiveReady = ready;
     },
     markWorking(requestId: string) {
       const state = readAgentState(startup.mailbox);

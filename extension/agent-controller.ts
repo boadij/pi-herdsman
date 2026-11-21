@@ -296,13 +296,21 @@ export function buildAgentStatusSnapshot(
       presence.kind === "live" &&
       runtime !== undefined &&
       runtimeIdentityMatches(runtime, durableState, presence.agent);
+    // Herdr can identify the exact session before it reports a ready Pi TUI
+    // and a known lifecycle. Only a still-pending launch can bridge this gap.
+    const beforeInteractiveReady =
+      runtime === undefined &&
+      presence.kind === "live" &&
+      presence.agent.agent_status === "unknown" &&
+      presence.agent.interactive_ready !== true;
     const startupTransition =
       state === "unknown" &&
       (verifiedLive || (runtime === undefined && presence.kind === "live")) &&
       !durableState.completedRequestId &&
       !durableState.resultError &&
       !durableState.pendingAskId &&
-      ((lifecycleState === "working" && !durableState.activeRequestId) ||
+      (((lifecycleState === "working" || beforeInteractiveReady) &&
+        !durableState.activeRequestId) ||
         (lifecycleState === "idle" && !!durableState.activeRequestId));
     return {
       label: agent.agent as string,
