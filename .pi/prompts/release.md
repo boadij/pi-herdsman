@@ -12,8 +12,8 @@ ${@:-None provided.}
 1. Confirm this is an eligible Herdsman Lead and project `release-drafter`
    and bundled `ship` are available for delegation; otherwise report the
    specific blocker. While CI runs, assign `release-drafter` one read-only
-   /release preflight and research pass: return a pinned candidate record, both
-   delimited drafts, and one verified roster (earlier recap expands only
+   /release preflight and research pass: return a pinned candidate record,
+   both delimited drafts, and one verified roster (earlier recap expands only
    Discord scope). Stop on missing evidence or moved refs; if several
    candidates verify, ask the maintainer to choose and continue the drafter.
 2. Keep the exact drafter result ref and review its complete evidence.
@@ -40,18 +40,16 @@ ${@:-None provided.}
    Display the exact API fields, including `commit_message: ""` when empty,
    separately from the expected stored Git commit message.
    Stop if the exact material cannot be shown. Ask for three independent
-   answers in that one exchange:
+   answers in one exchange. Offer a copyable reply with three distinct
+   lines (`Squash: yes`, `Body only: yes`, `No other writer: confirmed`):
    - **Squash:** Approve this upstream PR at these pinned head/base SHAs
      and these exact API `commit_title` and `commit_message` values? The push
      to `main` triggers Release Please and may create the tag and GitHub
-     Release and publish to npm
-     and GHCR even if notes are withheld.
+     Release and publish to npm and GHCR even if notes are withheld.
    - **Body only:** Approve setting only the resulting published release's
      body to this exact displayed text from this immutable drafter result ref?
    - **No other writer:** Confirm no overlapping ship attempt or
      release-body editor will run during this attempt?
-   Offer one copyable three-line reply (`Squash: yes`, `Body only: yes`,
-   `No other writer: confirmed`); each answer remains independent.
 5. Invocation, silence and ambiguous answers are not consent. Require
    both exact grants and writer confirmation; stop on a known competing
    writer. Coordination is not a cross-host exclusion guarantee.
@@ -60,8 +58,8 @@ ${@:-None provided.}
    task text. Identify that same ref in the task along with the pinned
    record/provenance, exact approved API `commit_title` and `commit_message`
    (including an empty string), and exact approved release body. Include
-   relevant review evidence and explicitly
-   state both grants with their distinct bindings and the writer
+   relevant review evidence and explicitly state both grants with their
+   distinct bindings and the writer
    confirmation. Evidence is not authorization. Stop if the exact handoff
    cannot be transferred. Moved reviewed refs require fresh validation,
    draft and grants.
@@ -195,8 +193,7 @@ sole pinned-base parent and exact stored squash title and message.
 Compare decoded stored commit text against the separately expected stored
 Git message, derived from the approved API fields with Git's separator
 and any known service terminal newline convention accounted for in advance;
-don't trim to make it match. On ambiguous PUT, read state
-without retry and require all the same checks before editing notes. If
+don't trim to make it match. On ambiguous PUT, read state without retry and require all the same checks before editing notes. If
 merged but a check fails or cannot be established, withhold notes.
 
 **Publication and body.** Immediately look up `releases/tags/$tag` for

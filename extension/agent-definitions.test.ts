@@ -1688,12 +1688,11 @@ test("project release-drafter opts into native Code Mode without discovery", () 
   try {
     const path = join(projectRoot, ".pi", "agents", "release-drafter.md");
     mkdirSync(join(projectRoot, ".pi", "agents"), { recursive: true });
-    writeFileSync(
-      path,
-      readFileSync(
-        resolve(import.meta.dirname, "../.pi/agents/release-drafter.md"),
-      ),
+    const tracked = resolve(
+      import.meta.dirname,
+      "../.pi/agents/release-drafter.md",
     );
+    writeFileSync(path, readFileSync(tracked));
     const definition = withPiAgentDir(global, () =>
       discoverAgent("release-drafter", { projectRoot }),
     );
