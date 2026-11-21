@@ -18,6 +18,7 @@ import { initTheme, ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import packageMetadata from "../package.json" with { type: "json" };
 
 import { Value } from "typebox/value";
+import { sameRuntimeBuild } from "./compatibility.ts";
 import type { ManagedAgentState } from "./mailbox.ts";
 import {
   acquireProcessLock,
@@ -23877,21 +23878,32 @@ test("managed Lead sampler requires a verified assignment, caches its sample, an
   const managerId = randomUUID();
   const managerPaneId = "managed-marker-manager-pane";
   const managerTabId = "managed-marker-manager-tab";
-  const managerLease = claimManagerLease({
-    build: HERDSMAN_BUILD,
+  const managerIdentity = {
     piSessionId: managerId,
     paneId: managerPaneId,
     tabId: managerTabId,
     workspaceId: WORKSPACE,
     repoKey,
+  };
+  let managerLease = claimManagerLease({
+    ...managerIdentity,
+    build: HERDSMAN_BUILD,
   });
-  writeLeadCoordinationState(supervisionRuntime(), {
-    version: 1,
-    role: "manager",
-    instanceId: randomUUID(),
-    piSessionId: managerId,
-    updatedAt: Date.now(),
-  });
+  const publishManager = (build: typeof HERDSMAN_BUILD) =>
+    writeLeadCoordinationState(supervisionRuntime(), {
+      version: 1,
+      role: "manager",
+      instanceId: randomUUID(),
+      piSessionId: managerId,
+      updatedAt: Date.now(),
+      build,
+    });
+  publishManager(HERDSMAN_BUILD);
+  const foreignBuild = {
+    ...HERDSMAN_BUILD,
+    version: `${HERDSMAN_BUILD.version}-foreign`,
+  };
+  let replaceManagerOnGet = false;
   const managerAgent = {
     agent: "pi",
     pane_id: managerPaneId,
@@ -23965,7 +23977,11 @@ test("managed Lead sampler requires a verified assignment, caches its sample, an
           stderr: "",
           code: 0,
         };
-      if (command === "herdr" && args[0] === "agent" && args[1] === "get")
+      if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
+        if (replaceManagerOnGet) {
+          replaceManagerOnGet = false;
+          publishManager(foreignBuild);
+        }
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
@@ -23974,9 +23990,14 @@ test("managed Lead sampler requires a verified assignment, caches its sample, an
           stderr: "",
           code: 0,
         };
+      }
       if (command === "herdr" && args[0] === "agent" && args[1] === "focus") {
         focused.push(args[2]!);
-        return { stdout: "{}", stderr: "", code: 0 };
+        return {
+          stdout: JSON.stringify({ id: AGENT_ID, result: {} }),
+          stderr: "",
+          code: 0,
+        };
       }
       return executor(command, args, options);
     },
@@ -23999,7 +24020,9 @@ test("managed Lead sampler requires a verified assignment, caches its sample, an
           },
         );
     },
-    notify: (message: string) => notices.push(message),
+    notify: (message: string, level: string) => {
+      if (level === "warning") notices.push(message);
+    },
   };
   registerExtension!(pi.pi as never);
   t.after(async () => {
@@ -24028,16 +24051,40 @@ test("managed Lead sampler requires a verified assignment, caches its sample, an
     "rendering uses the cached sample",
   );
 
-  widget!.handleMouse({
-    type: "click",
-    button: "left",
-    x: visibleWidth("? lead · "),
-    y: 0,
-    width: 120,
-  });
+  const clickManaged = () =>
+    widget!.handleMouse({
+      type: "click",
+      button: "left",
+      x: visibleWidth("? lead · "),
+      y: 0,
+      width: 120,
+    });
+  clickManaged();
   await t.waitFor(() =>
     assert.deepEqual(focused, [managerPaneId], notices.join(" | ")),
   );
+
+  assert.equal(sameRuntimeBuild(foreignBuild, HERDSMAN_BUILD), false);
+  managerLease.release();
+  managerLease = claimManagerLease({ ...managerIdentity, build: foreignBuild });
+  publishManager(foreignBuild);
+  clickManaged();
+  await t.waitFor(() =>
+    assert.deepEqual(
+      focused,
+      [managerPaneId, managerPaneId],
+      notices.join(" | "),
+    ),
+  );
+  assert.equal(notices.length, 0, notices.join(" | "));
+
+  replaceManagerOnGet = true;
+  clickManaged();
+  await t.waitFor(() =>
+    assert.ok(notices.includes("Managed project Manager changed.")),
+  );
+  assert.equal(replaceManagerOnGet, false);
+  assert.deepEqual(focused, [managerPaneId, managerPaneId]);
 
   const statusTick = statusTicks[0];
   assert.equal(
