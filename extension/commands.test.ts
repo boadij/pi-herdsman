@@ -10117,7 +10117,7 @@ async function managerDelegateAssignmentTest(
       assert.equal(args[args.indexOf("--workspace") + 1], childWorkspace);
       assert.equal(
         realFs.realpathSync(args[args.indexOf("--cwd") + 1]!),
-        childCwd,
+        realFs.realpathSync(childCwd),
       );
       assert.equal(
         args[args.indexOf("--env") + 1],
