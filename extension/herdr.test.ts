@@ -2145,9 +2145,9 @@ test("start injects mandatory extensions before definition args and configures t
   );
   assert.deepEqual(startArgs.slice(startArgs.indexOf("--") + 1), [
     "--extension",
-    join(dirname(fileURLToPath(import.meta.url)), "index.ts"),
-    "--extension",
     join(getAgentDir(), "extensions", "herdr-agent-state.ts"),
+    "--extension",
+    join(dirname(fileURLToPath(import.meta.url)), "index.ts"),
     "--extension",
     definitionExtension,
     "--name",
