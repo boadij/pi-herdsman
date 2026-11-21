@@ -27,6 +27,8 @@ const {
 const { readProjectAssignment, writeProjectAssignment } =
   await import("../supervision.ts");
 const { claimManagerLease } = await import("../supervision.ts");
+const { getAgentDir } = await import("@earendil-works/pi-coding-agent");
+const { herdrAgentAlias } = await import("../herdr.ts");
 
 const lifecycleStop = "stop after assignment publication";
 
@@ -762,16 +764,19 @@ function projectLifecycle(options: {
   retained?: ReturnType<typeof persistRequiredEvidenceSnapshot>;
   rejectEvidence?: boolean;
   rejectAtPublication?: boolean;
+  launch?: (options: any) => never;
+  switchBranchOnTabCreate?: boolean;
 }) {
   const repoKey = realFs.realpathSync(process.cwd());
   const managerCheckout = repoKey;
-  const worktreePath = join(tmpdir(), `project-${randomUUID()}`);
+  const worktreePath = join(tmpdir(), `project worktree-${randomUUID()}`);
   mkdirSync(worktreePath);
   const workspaceId = `workspace-${randomUUID()}`;
   const assignments = join(tmpdir(), `assignments-${randomUUID()}`);
   const assignmentRoot = join(assignments, "root");
   mkdirSync(assignmentRoot, { recursive: true });
   const branch = "feature/baseline";
+  let checkoutBranch = branch;
   const supervision = {
     root: assignmentRoot,
     assignments,
@@ -801,6 +806,7 @@ function projectLifecycle(options: {
   const runtime = createLeadProjectRuntime({
     activeRole: () => "manager",
     pi: {
+      getThinkingLevel: () => "low",
       exec: async (command: string, args: string[]) => {
         if (command === "herdr") {
           const result =
@@ -822,7 +828,7 @@ function projectLifecycle(options: {
           stdout = repoKey;
         else if (args[0] === "rev-parse" && args.includes("--git-common-dir"))
           stdout = repoKey;
-        else if (args[0] === "symbolic-ref") stdout = `${branch}\n`;
+        else if (args[0] === "symbolic-ref") stdout = `${checkoutBranch}\n`;
         return { stdout, stderr: "", code: 0 };
       },
     } as any,
@@ -837,7 +843,8 @@ function projectLifecycle(options: {
       worktrees: topology.worktrees,
     }),
     supervisionRuntime: () => supervision as any,
-    readProjectAssignment: () => undefined,
+    readProjectAssignment: () =>
+      readProjectAssignment(supervision as any, repoKey, branch),
     listProjectAssignments: () => [],
     reconcileProjectAssignments: async () => {},
     runHerdr: async (_pi: any, _ctx: any, args: string[]) => {
@@ -858,11 +865,49 @@ function projectLifecycle(options: {
           tab: { tab_id: "tab" },
           worktree: { path: worktreePath, branch },
         };
+      if (options.launch && args[0] === "pane" && args[1] === "process-info")
+        return { process_info: { foreground_processes: [] } };
+      if (options.launch && args[0] === "tab" && args[1] === "create") {
+        if (options.switchBranchOnTabCreate) checkoutBranch = "feature/other";
+        const id = readProjectAssignment(
+          supervision as any,
+          repoKey,
+          branch,
+        )?.id;
+        assert.ok(id);
+        assert.deepEqual(args, [
+          "tab",
+          "create",
+          "--workspace",
+          workspaceId,
+          "--cwd",
+          worktreePath,
+          "--label",
+          `lead-${id.slice(0, 8)}`,
+          "--env",
+          `PI_CODING_AGENT_DIR=${getAgentDir()}`,
+          "--no-focus",
+        ]);
+        return {
+          tab: { workspace_id: workspaceId, tab_id: "lead-tab" },
+          root_pane: {
+            workspace_id: workspaceId,
+            tab_id: "lead-tab",
+            pane_id: "lead-pane",
+            terminal_id: "lead-terminal",
+          },
+        };
+      }
       throw new Error(`Unexpected Herdr request: ${args.join(" ")}`);
     },
     herdrSessionSnapshot: async () => {
+      if (options.launch) return { agents: [] };
       throw new Error(lifecycleStop);
     },
+    scanAgentStates: () => ({ states: [] }),
+    readLeadCoordinationState: () => undefined,
+    startHerdrAgentInPane: async (_pi: unknown, _ctx: unknown, launch: any) =>
+      options.launch?.(launch),
     liveAgent: async () => [],
     messageLimits: async () => ({
       inline: { bytes: 1000 },
@@ -953,6 +998,36 @@ function projectLifecycle(options: {
     },
   };
 }
+
+test("fresh delegation launches in the profile-aware worktree tab", async () => {
+  const lifecycle = projectLifecycle({
+    launch: (options) => {
+      assert.equal(options.workspaceId, lifecycle.workspaceId);
+      assert.equal(options.cwd, lifecycle.worktreePath);
+      assert.equal(options.tabId, "lead-tab");
+      assert.equal(options.paneId, "lead-pane");
+      assert.deepEqual(options.agentArgs.slice(-2), [
+        "--session-id",
+        lifecycle.published?.id,
+      ]);
+      throw new Error("launch observed");
+    },
+  });
+  await assert.rejects(lifecycle.activate(), /launch observed/);
+  assert.ok(lifecycle.published);
+});
+
+test("fresh delegation refuses to launch after the checkout branch changes during tab creation", async () => {
+  const lifecycle = projectLifecycle({
+    switchBranchOnTabCreate: true,
+    launch: () => assert.fail("must not launch on a different branch"),
+  });
+  await assert.rejects(
+    lifecycle.activate(),
+    /checkout does not match the assigned repository and branch/,
+  );
+  assert.equal(lifecycle.published?.branch, lifecycle.branch);
+});
 
 test("delegation copies retained evidence under the destination and rejects stale authority", async () => {
   const source = persistRequiredEvidenceSnapshot(
@@ -1694,6 +1769,15 @@ test("resume preserves queued manager message when controlled recovery fails", a
   const topologyCalls: string[][] = [];
   const unrelatedRepo = join(tmpdir(), `unrelated-${randomUUID()}`);
   let launches = 0;
+  const tabCreates: string[][] = [];
+  let tabFailure:
+    | "create"
+    | "topology"
+    | "manager"
+    | "competing-start"
+    | "foreground-start"
+    | undefined;
+  let launchPlacement: unknown;
   let alreadyRunning = false;
   let startingUnverifiedPi = false;
   let snapshotCalls = 0;
@@ -1743,7 +1827,8 @@ test("resume preserves queued manager message when controlled recovery fails", a
       },
     } as any,
     activeRole: () => "manager",
-    currentManager: async () => manager,
+    currentManager: async () =>
+      tabFailure === "manager" && tabCreates.length ? undefined : manager,
     managerLease: () => ({ descriptor: manager }),
     sameManagerDescriptor: () => true,
     supervisionRuntime: () => ({
@@ -1785,10 +1870,30 @@ test("resume preserves queued manager message when controlled recovery fails", a
           tab: { tab_id: "tab" },
           worktree: { path: checkout, branch: assignment.branch },
         };
+      if (args[0] === "tab" && args[1] === "create") {
+        tabCreates.push(args);
+        if (tabFailure === "create") throw new Error("controlled tab failure");
+        return {
+          tab: { workspace_id: "resume-workspace", tab_id: "lead-tab" },
+          root_pane: {
+            workspace_id: "resume-workspace",
+            tab_id: "lead-tab",
+            pane_id: "lead-pane",
+            terminal_id:
+              tabFailure === "topology" ? undefined : "lead-terminal",
+          },
+        };
+      }
       if (args[0] === "pane" && args[1] === "process-info")
         return {
           process_info: {
-            foreground_processes: startingUnverifiedPi ? [{ argv0: "pi" }] : [],
+            foreground_processes:
+              startingUnverifiedPi ||
+              (tabFailure === "foreground-start" &&
+                tabCreates.length &&
+                args[3] === "pane")
+                ? [{ argv0: "pi" }]
+                : [],
           },
         };
       throw new Error(`Unexpected Herdr request: ${args.join(" ")}`);
@@ -1806,19 +1911,27 @@ test("resume preserves queued manager message when controlled recovery fails", a
       snapshotCalls++;
       return {
         agents:
-          startingUnverifiedPi && snapshotCalls > 2
+          startingUnverifiedPi ||
+          (tabFailure === "competing-start" && tabCreates.length)
             ? [
                 {
                   workspace_id: "resume-workspace",
-                  pane_id: "pane",
-                  tab_id: "tab",
-                  agent_session: { value: id },
+                  name: herdrAgentAlias(
+                    "resume-workspace",
+                    `lead-${id.slice(0, 8)}`,
+                    id,
+                  ),
+                  pane_id: "lead-pane",
+                  tab_id: "lead-tab",
+                  ...(snapshotCalls > 2
+                    ? { agent_session: { value: id } }
+                    : {}),
                 },
               ]
             : [],
       };
     },
-    isPiAgent: () => true,
+    isPiAgent: (candidate: any) => Boolean(candidate.agent_session),
     sessionIdentity: (session: any) => session?.value,
     herdrSessionId: (candidate: any) => candidate?.agent_session?.value,
     liveAgent: async () =>
@@ -1828,13 +1941,16 @@ test("resume preserves queued manager message when controlled recovery fails", a
         ? [
             {
               workspace_id: "resume-workspace",
-              pane_id: "pane",
-              tab_id: "tab",
+              pane_id: "lead-pane",
+              tab_id: "lead-tab",
               agent_session: { value: id },
             },
           ]
         : [],
-    readLeadCoordinationState: () => ({ role: "lead", piSessionId: id }),
+    readLeadCoordinationState: () =>
+      startingUnverifiedPi && snapshotCalls <= 3
+        ? undefined
+        : { role: "lead", piSessionId: id },
     requireCompatibleBuild: () => {},
     supervisedSessionFile: () => undefined,
     scanAgentStates: () => ({ states: [] }),
@@ -1855,6 +1971,12 @@ test("resume preserves queued manager message when controlled recovery fails", a
     ) => {
       launches++;
       launchedArgs = options.agentArgs;
+      launchPlacement = [
+        options.workspaceId,
+        options.tabId,
+        options.paneId,
+        options.cwd,
+      ];
       events.push("launch");
       throw new Error("controlled launch failed");
     },
@@ -1900,7 +2022,29 @@ test("resume preserves queued manager message when controlled recovery fails", a
     new AbortController().signal,
   )) as any;
   assert.equal(launches, 1);
+  assert.deepEqual(tabCreates, [
+    [
+      "tab",
+      "create",
+      "--workspace",
+      "resume-workspace",
+      "--cwd",
+      checkout,
+      "--label",
+      `lead-${id.slice(0, 8)}`,
+      "--env",
+      `PI_CODING_AGENT_DIR=${getAgentDir()}`,
+      "--no-focus",
+    ],
+  ]);
+  assert.deepEqual(launchPlacement, [
+    "resume-workspace",
+    "lead-tab",
+    "lead-pane",
+    checkout,
+  ]);
   assert.ok(launchedArgs);
+  assert.equal(launchedArgs!.includes("--model"), false);
   assert.equal(launchedArgs!.includes("--no-extensions"), false);
   assert.deepEqual(launchedArgs!.slice(-2), ["--session-id", id]);
   assert.equal(result.details.status, "recovery_unverified");
@@ -1921,6 +2065,28 @@ test("resume preserves queued manager message when controlled recovery fails", a
   );
   assert.equal(events[1].createdAt + 1, events[0].createdAt);
 
+  for (const [failure, diagnostic] of [
+    ["create", /controlled tab failure/],
+    ["topology", /exact Lead tab identities/],
+    ["manager", /Manager changed during project activation/],
+    ["competing-start", /A Lead appeared during tab creation/],
+    ["foreground-start", /A Lead appeared during tab creation/],
+  ] as const) {
+    tabFailure = failure;
+    tabCreates.length = 0;
+    events.length = 0;
+    const failed = (await runtime.activateProjectLead(
+      { action: "resume", branch: assignment.branch, message: "continue" },
+      ctx,
+      new AbortController().signal,
+    )) as any;
+    assert.equal(failed.details.status, "recovery_unverified");
+    assert.match(failed.content[0].text, diagnostic);
+    assert.equal(tabCreates.length, 1);
+    assert.equal(launches, 1, `must not launch after tab ${failure} failure`);
+  }
+  tabFailure = undefined;
+  tabCreates.length = 0;
   alreadyRunning = true;
   events.length = 0;
   const runningResult = (await runtime.activateProjectLead(
@@ -1929,6 +2095,7 @@ test("resume preserves queued manager message when controlled recovery fails", a
     new AbortController().signal,
   )) as any;
   assert.equal(runningResult.details.already_running, true);
+  assert.equal(tabCreates.length, 0);
   assert.deepEqual(
     events.map((event) => event.kind),
     ["manager_message"],
@@ -1954,6 +2121,8 @@ test("resume preserves queued manager message when controlled recovery fails", a
     new AbortController().signal,
   )) as any;
   assert.equal(launches, 1, "an existing Pi process is not relaunched");
+  assert.equal(tabCreates.length, 0);
+  assert.ok(snapshotCalls >= 4, "waits for coordination state");
   assert.equal(recovered.details.ok, true, JSON.stringify(recovered));
   assert.equal(recovered.details.message_queued, true);
   assert.ok(recovered.details.message_id);
