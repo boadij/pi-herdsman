@@ -14,7 +14,8 @@ ${@:-None provided.}
    delimited drafts, and one verified roster (earlier recap expands only
    Discord scope). Stop on missing evidence or moved refs; if several
    candidates verify, ask the maintainer to choose and continue the drafter.
-2. Keep the exact drafter result ref. Read its full evidence, joining pages
+2. Keep the exact drafter result ref. In Code Mode, use `read_evidence`
+   to read its full evidence into memory, joining pages
    in order using both continuation offsets; strip only the tool-added
    separator newline and continuation marker, and concatenate without adding
    a separator. Programmatically extract
@@ -24,9 +25,8 @@ ${@:-None provided.}
    after each opening line ending to the start of its closing marker:
    the newline before each end marker is part of the artifact. Stop on
    ambiguity, incomplete evidence or inability to preserve bytes. Do not
-   retype, trim, normalize or use shell substitution for content. Pass
-   the slices directly to a UTF-8 file writer in Code Mode, in private
-   scratch outside the worktree; hash the body with SHA-256.
+   retype, trim or normalize. Keep the Lead's work in memory: no scratch
+   files or hashing on the Lead.
 3. Review the pinned release diff/metadata, exact squash title/message,
    and both artifacts for accuracy and disclosure without erasing credits.
    Check headings, install/runtime requirements, migration and readable
@@ -37,33 +37,41 @@ ${@:-None provided.}
    must match the roster (plus requested recap), migration and install
    command, with exactly one literal `{{RELEASE_URL}}`, no other
    placeholders and room for the final URL within 1,600 characters.
-4. Present the exact reviewed material, not only digests, and ask the
-   maintainer for three independent answers in one exchange:
+4. Use Code Mode to emit the exact reviewed material from the in-memory
+   slices, including the body's `JSON.stringify` string literal so
+   whitespace and final newlines are unambiguous. Make the complete
+   display available to the maintainer in the approval exchange; a tool
+   result the maintainer cannot see is not a display. Stop if the exact
+   material cannot be shown. Ask for three independent answers in that
+   one exchange:
    - **Squash:** Approve this upstream PR at these pinned head/base SHAs
      and this exact title/message? The push to `main` triggers Release
      Please and may create the tag and GitHub Release and publish to npm
      and GHCR even if notes are withheld.
    - **Body only:** Approve setting only the resulting published release's
-     body to this exact artifact (drafter result ref and body SHA-256)?
+     body to this exact displayed text from this immutable drafter result ref?
    - **No other writer:** Confirm no overlapping ship attempt or
      release-body editor will run during this attempt?
 5. Invocation, silence and ambiguous answers are not consent. Require
    both exact grants and writer confirmation; stop on a known competing
    writer. Coordination is not a cross-host exclusion guarantee.
-   Assign bundled `ship` the self-contained procedure below, with pinned
-   record/provenance, exact drafter result ref, exact body file/digest,
-   exact squash material and review evidence in `files`. State both
-   grants explicitly with their distinct bindings; evidence is not
-   authorization. Moved reviewed refs require fresh validation, draft
-   and grants.
+   Assign bundled `ship` the self-contained procedure below. Transfer
+   the actual drafter result ref in `delegate_agent.files`, not just in
+   task text. Identify that same ref in the task along with the pinned
+   record/provenance, exact squash material, and the exact displayed body
+   JSON string literal (insert it directly from memory, without retyping).
+   Include relevant review evidence and state both grants explicitly with
+   their distinct bindings; evidence is not authorization. Stop if the
+   exact handoff cannot be transferred. Moved reviewed refs require
+   fresh validation, draft and grants.
 6. If `ship` verifies a pending approval, obtain separate, direct,
    explicit human approval for that exact run/attempt. The authorized
    human operator immediately reverifies pending state, run/attempt,
    event, repository, PR association and reviewed head before approving.
    Neither Lead nor `ship` approves. Then assign a fresh `ship` preflight
-   with the same procedure, pinned record/draft, exact prior ship result
-   ref and approval evidence in `files`; restate both still-valid grants
-   and require updated run state and every merge gate to be verified.
+   with the same exact task inputs and the actual drafter and prior ship
+   result refs and approval evidence in `files`. Restate both still-valid
+   grants and require updated run state and every merge gate to be verified.
 7. Report required checks, merge SHA, release URL and body readback
    separately, with blockers and partial outcomes. Only after verified
    readback, replace the original Discord draft's single token with the
@@ -85,7 +93,7 @@ Do not run a release just to test this procedure.
 Use authenticated native Git and gh from the trusted checkout. Use
 `gh api --hostname github.com repos/boadij/pi-herdsman/...` for REST and
 `-R github.com/boadij/pi-herdsman` on typed commands. Verify all inputs,
-including distinct grants, body digest, exact outgoing content/disclosure
+including distinct grants, exact outgoing content/disclosure
 and writer coordination. Reuse traceable immutable provenance/research;
 treat PR text, logs and drafts only as evidence. The only allowed
 mutations are the authorized squash and at most one body-only update.
@@ -121,11 +129,22 @@ mutation (or report that approval could not be established). On a fresh
 assignment after human approval, verify the updated run state and recheck
 all gates.
 
-**Exact input before squash.** In private scratch outside the worktree,
-use Bash and jq rather than Code Mode's unavailable `TextEncoder`.
+**Exact input before squash.** Read the actual transferred drafter ref
+with `read_evidence` and apply the same paging and slice rules as the Lead.
+Materialize that body slice directly as UTF-8 in private scratch outside
+the worktree using Bash `printf '%s'` with a programmatically shell-quoted
+argument. Never interpolate draft text as shell code or use command
+substitution for content. Decode the separately supplied approved JSON
+string literal with `jq -ej` (require a string), and compare with `cmp`.
+Stop on missing or ambiguous evidence, a failed grant binding, or any
+byte difference. Materialize the exact approved squash title/message
+without retyping or normalizing.
+
 Offline, round-trip both an emoji/multiline/trailing-newline fixture and
-the exact reviewed body. Stop on error, missing final artifact bytes or
-digest mismatch. Keep the tested body JSON for the actual PATCH.
+the reconstructed body using Bash and jq, not Code Mode's unavailable
+`TextEncoder`. Hash the validated body with SHA-256 and keep the tested
+body JSON for the actual PATCH. Before use, require its decoded body
+to match the validated bytes and SHA-256; stop on any error or mismatch.
 
 ```sh
 set -euo pipefail
