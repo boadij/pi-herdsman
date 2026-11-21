@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.52.1](https://github.com/boadij/pi-herdsman/compare/v0.52.0...v0.52.1) (2026-11-21)
+
+
+### Fixes
+
+* **ui:** allow managed Leads to focus Managers across builds ([#1073](https://github.com/boadij/pi-herdsman/issues/1073)) ([c5b35de](https://github.com/boadij/pi-herdsman/commit/c5b35deaf831008b4aa8864d0d1ef43d984e0176))
+* **ui:** close remaining Agent startup status gap ([#1071](https://github.com/boadij/pi-herdsman/issues/1071)) ([f25bce5](https://github.com/boadij/pi-herdsman/commit/f25bce5c24ab333104d963e7d3c15495819c2964))
+* **ui:** preserve verified Agent startup status ([#1068](https://github.com/boadij/pi-herdsman/issues/1068)) ([bf65910](https://github.com/boadij/pi-herdsman/commit/bf6591034052461de36656b5337e3b4820c82819))
+
+
+### Documentation
+
+* **audit:** add workflow optimization lens ([#1069](https://github.com/boadij/pi-herdsman/issues/1069)) ([39b6b46](https://github.com/boadij/pi-herdsman/commit/39b6b464cab27420243ecbbb4f575a721482bea5))
+
+
+### Other Changes
+
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.11.11 ([#1067](https://github.com/boadij/pi-herdsman/issues/1067)) ([d75e6e7](https://github.com/boadij/pi-herdsman/commit/d75e6e7a0a0a9555c5c09bb50d3ed7feac873aaa))
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.11.12 ([#1074](https://github.com/boadij/pi-herdsman/issues/1074)) ([f3e1ce8](https://github.com/boadij/pi-herdsman/commit/f3e1ce82c4ba597b15ef1156140bb9bb9b367668))
+* **release:** streamline guarded release preparation ([#1070](https://github.com/boadij/pi-herdsman/issues/1070)) ([2c0abbe](https://github.com/boadij/pi-herdsman/commit/2c0abbe5da865fcb8b830600332d6b61229b2818))
+* **runtime:** validate and adopt Pi 1.6.0 ([#1063](https://github.com/boadij/pi-herdsman/issues/1063)) ([37bae59](https://github.com/boadij/pi-herdsman/commit/37bae5982c95c9b653141193e445fee2cbaf5e6c))
+
 ## [0.52.0](https://github.com/boadij/pi-herdsman/compare/v0.51.0...v0.52.0) (2026-11-20)
 
 
