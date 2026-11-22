@@ -7017,7 +7017,7 @@ test("model-facing Agent results show current choices and label requests as unob
   });
   assert.match(
     catalog,
-    /agent_models \(current override choices; the session-start catalog may be stale\):/,
+    /agent_models \(current override choices; the session catalog may be stale\):/,
   );
   assert.ok(catalog.includes(JSON.stringify(entries)));
   assert.match(

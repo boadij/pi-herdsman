@@ -7431,13 +7431,14 @@ test("Lead keeps the startup model catalog when the live Pi scope changes", asyn
       ["test/second"],
     );
     await pi.events.get("session_start")![0](undefined, ctx);
-    assert.match((await prompt())!, /test\/second/);
+    const refreshed = await prompt();
+    assert.match(refreshed!, /test\/second/);
 
     updateConfig("allowAgentModelOverrides", false);
     await pi.events.get("session_start")![0](undefined, ctx);
     assert.equal(await prompt(), undefined);
     updateConfig("allowAgentModelOverrides", true);
-    assert.equal(await prompt(), undefined);
+    assert.equal(await prompt(), refreshed);
   } finally {
     await pi.events.get("session_shutdown")?.[0](undefined, ctx);
     updateConfig("allowAgentModelOverrides", prior.allowAgentModelOverrides);

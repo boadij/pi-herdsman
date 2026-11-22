@@ -68,7 +68,7 @@ import {
   VALID_THINKING_LEVELS,
   type AgentDefinition,
 } from "./agent-definitions.ts";
-import { startupAgentModelCatalog } from "./agent-model-overrides.ts";
+import { sessionAgentModelCatalog } from "./agent-model-overrides.ts";
 import {
   captureStartupDiagnostic,
   herdrSessionSnapshot,
@@ -1150,7 +1150,7 @@ function registerExtensionImpl(
   );
   let startupDefinitionRoster:
     { sessionId: string; definitions: Record<string, unknown>[] } | undefined;
-  let startupModelCatalog: { sessionId: string; text: string } | undefined;
+  let modelCatalogSnapshot: { sessionId: string; text: string } | undefined;
   let leadRuntime!: LeadRuntimeState;
   let leadToolState!: ReturnType<typeof createLeadToolState>;
   const activeRole = (): SessionRole => activeLeadRole(leadRuntime);
@@ -1513,11 +1513,24 @@ function registerExtensionImpl(
           ctx,
         ),
       definitionRoster: () => startupDefinitionRoster,
-      modelCatalog: (ctx: ExtensionContext) =>
-        startupModelCatalog?.sessionId === ctx.sessionManager.getSessionId() &&
-        pi.getActiveTools().includes("delegate_agent")
-          ? startupModelCatalog.text
-          : undefined,
+      modelCatalog: (ctx: ExtensionContext) => {
+        if (!pi.getActiveTools().includes("delegate_agent")) return undefined;
+        const config = readConfig();
+        if (!config.allowAgentModelOverrides) return undefined;
+
+        const sessionId = ctx.sessionManager.getSessionId();
+        if (modelCatalogSnapshot?.sessionId !== sessionId) {
+          try {
+            const text = sessionAgentModelCatalog(ctx, config);
+            if (text !== undefined) modelCatalogSnapshot = { sessionId, text };
+          } catch (error) {
+            appendDurableError(pi, ctx, "pi_herdsman_definition_error", error);
+          }
+        }
+        return modelCatalogSnapshot?.sessionId === sessionId
+          ? modelCatalogSnapshot.text
+          : undefined;
+      },
       isRoleSuspended: () => leadRuntime.roleSuspended,
     };
     const initialStatusBreadcrumb =
@@ -2365,7 +2378,7 @@ function registerExtensionImpl(
       const shutdownOptions = {
         clearStartupDefinitionRoster: () => {
           startupDefinitionRoster = undefined;
-          startupModelCatalog = undefined;
+          modelCatalogSnapshot = undefined;
         },
         isLead: () => activeRole() === "lead" && !leadRuntime.roleSuspended,
       };
@@ -2402,10 +2415,10 @@ function registerExtensionImpl(
           startupDefinitionRoster = undefined;
         },
         snapshotModelCatalog: (ctx: ExtensionContext) => {
-          startupModelCatalog = undefined;
-          const text = startupAgentModelCatalog(ctx, readConfig());
+          modelCatalogSnapshot = undefined;
+          const text = sessionAgentModelCatalog(ctx, readConfig());
           if (text)
-            startupModelCatalog = {
+            modelCatalogSnapshot = {
               sessionId: ctx.sessionManager.getSessionId(),
               text,
             };

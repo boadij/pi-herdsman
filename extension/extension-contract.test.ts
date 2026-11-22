@@ -6,7 +6,11 @@ import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { createServer, type Socket } from "node:net";
 import packageMetadata from "../package.json" with { type: "json" };
-import { validateToolArguments } from "@earendil-works/pi-ai";
+import {
+  validateToolArguments,
+  type Api,
+  type Model,
+} from "@earendil-works/pi-ai";
 import {
   buildSessionProjection,
   convertToLlm,
@@ -127,37 +131,71 @@ async function invokeBeforeAgentStart(
 async function assertLiveDelegateSchema(
   pi: ReturnType<typeof fakePi>,
   context: ExtensionContext,
-  scope: "empty-root" | "delegating-agent",
+  scope: "empty-root" | "lead" | "delegating-agent",
 ) {
   const configPath = join(PI_AGENT_ROOT, "pi-herdsman", "config.json");
   realFs.mkdirSync(dirname(configPath), { recursive: true });
   const latest = (name: string) =>
     pi.tools.filter((tool) => tool.name === name).at(-1)!;
   const continuation = latest("continue_agent");
-  const canDelegate = scope === "delegating-agent";
   const originalTools = pi.pi.getActiveTools();
-  const states =
-    scope === "empty-root"
-      ? [
-          { cwd: false, model: false },
-          { cwd: true, model: true },
-          { cwd: true, model: true },
-          { cwd: true, model: false },
-          { cwd: true, model: true },
-          { cwd: false, model: true },
-          { cwd: false, model: false },
-        ]
-      : [false, true, true, false].map((enabled) => ({
-          cwd: enabled,
-          model: enabled,
-        }));
+  const available = {
+    provider: "vendor",
+    id: "available",
+    reasoning: false,
+  } as Model<Api>;
+  const outsideScope = { ...available, id: "outside-scope" };
+  const states = [
+    { model: false, cwd: false },
+    { model: true, cwd: true, fail: true },
+    { model: true, cwd: true },
+    { model: true, cwd: true },
+    { model: true, cwd: true, changeScope: true },
+    { model: false, cwd: true },
+    { model: true, cwd: true },
+    { model: true, cwd: false, hideTool: true },
+    { model: true, cwd: false, switchSession: true, changeScope: true },
+    { model: true, cwd: false, switchSession: true },
+    { model: false, cwd: false },
+  ];
+  const otherSessionId = randomUUID();
+  const otherSession = {
+    ...context.sessionManager,
+    getSessionId: () => otherSessionId,
+  };
+  let snapshot: string | undefined;
+  let emptySnapshot: string | undefined;
+  let catalogReads = 0;
+  let shouldFail = false;
+  const modelRegistry = {
+    getAvailable: () => {
+      catalogReads++;
+      if (shouldFail) throw new Error("test model registry unavailable");
+      return [available];
+    },
+  } as ExtensionContext["modelRegistry"];
   try {
-    for (const [turn, { cwd, model }] of states.entries()) {
-      const delegateActive = canDelegate && turn < 3;
-      if (canDelegate && !delegateActive)
-        pi.pi.setActiveTools(
-          pi.pi.getActiveTools().filter((name) => name !== "delegate_agent"),
-        );
+    for (const {
+      cwd,
+      model,
+      fail,
+      changeScope,
+      hideTool,
+      switchSession,
+    } of states) {
+      const toolHidden = scope === "delegating-agent" && hideTool;
+      const delegateActive = scope !== "empty-root" && !toolHidden;
+      pi.pi.setActiveTools(
+        toolHidden
+          ? originalTools.filter((name) => name !== "delegate_agent")
+          : originalTools,
+      );
+      const turnContext: ExtensionContext = {
+        ...context,
+        sessionManager: switchSession ? otherSession : context.sessionManager,
+        modelRegistry,
+        scopedModels: changeScope ? [{ model: outsideScope }] : [],
+      };
       writeFileSync(
         configPath,
         JSON.stringify({
@@ -167,15 +205,19 @@ async function assertLiveDelegateSchema(
       );
       const previous = latest("delegate_agent");
       const registrations = pi.tools.length;
-      const expectCwd = scope === "empty-root" && cwd;
+      const expectCwd = scope !== "delegating-agent" && cwd;
       const changed =
         "model" in previous.parameters.properties !== model ||
         "cwd" in previous.parameters.properties !== expectCwd;
+      const sections: Record<string, string> = { agent_models: "stale" };
       const event = {
         systemPrompt: "base",
-        systemPromptOptions: { sections: {}, contextFiles: [] },
+        systemPromptOptions: { sections, contextFiles: [] },
       };
-      await invokeBeforeAgentStart(pi, event, context);
+      const readsBeforePrompt = catalogReads;
+      shouldFail = !!fail;
+      await invokeBeforeAgentStart(pi, event, turnContext);
+      shouldFail = false;
       const delegate = latest("delegate_agent");
       assert.equal(delegate !== previous, changed);
       assert.equal("model" in delegate.parameters.properties, model);
@@ -185,20 +227,54 @@ async function assertLiveDelegateSchema(
       assert.equal(
         pi.pi.getActiveTools().includes("delegate_agent"),
         delegateActive,
+        `scope=${scope}, model=${model}, hideTool=${hideTool}`,
       );
       assert.equal(latest("continue_agent"), continuation);
       assert.ok(!("model" in continuation.parameters.properties));
       assert.ok(!("thinking" in continuation.parameters.properties));
-      assert.ok(!("agent_models" in event.systemPromptOptions.sections));
+      const projected = sections.agent_models;
+      const eligible =
+        model &&
+        delegateActive &&
+        !(switchSession && scope === "delegating-agent");
+      const saved = switchSession ? emptySnapshot : snapshot;
+      assert.equal(
+        catalogReads - readsBeforePrompt,
+        Number(eligible && saved === undefined),
+      );
+      if (eligible && fail) {
+        assert.ok(
+          pi.entries.some(
+            (entry: any) =>
+              entry.customType === "pi_herdsman_definition_error" &&
+              /test model registry unavailable/.test(entry.data?.error),
+          ),
+        );
+      }
+      if (!eligible || fail) assert.equal(projected, undefined);
+      else if (saved !== undefined) assert.equal(projected, saved);
+      else assert.ok(projected);
+
+      // Listing remains live and must not alter either session's snapshot.
       const listed = await latest("list_agents").execute(
         "list",
         {},
         undefined,
         undefined,
-        context,
+        { ...turnContext, sessionManager: context.sessionManager },
       );
       assert.ok(listed.details.ok, JSON.stringify(listed.details));
       assert.equal("agent_models" in listed.details, model);
+      if (model)
+        assert.equal(listed.details.agent_models.length, changeScope ? 0 : 1);
+      if (eligible && !fail && saved === undefined) {
+        assert.deepEqual(
+          JSON.parse(projected.split("\n\n")[0]),
+          listed.details.agent_models,
+        );
+        if (switchSession) emptySnapshot = projected;
+        else snapshot = projected;
+      }
     }
   } finally {
     pi.pi.setActiveTools(originalTools);
@@ -4432,13 +4508,18 @@ test("Lead empty allowlist hides fresh delegation and the Agent roster", async (
   }
 });
 
-test("ordinary Lead exposes only allowlisted Agents", async () => {
+test("ordinary Lead exposes only allowlisted Agents and initializes its model catalog on demand", async () => {
   setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `catalog-${randomUUID()}.sock`,
+  );
   const roleDirectory = join(PI_AGENT_ROOT, "coordinators");
   realFs.mkdirSync(roleDirectory, { recursive: true });
   const role = join(roleDirectory, "flexible-lead.md");
   writeFileSync(role, "---\nname: flexible-lead\nagents: [agent]\n---\n");
-  const pi = fakePi();
+  const pi = fakePi({ allTools: REGISTERED_ROLE_TOOLS });
   registerExtension!(pi.pi as never);
   const context = fakeContext(pi.entries) as any;
   try {
@@ -4462,10 +4543,12 @@ test("ordinary Lead exposes only allowlisted Agents", async () => {
         context,
       );
     assert.match(denied.details.error.message, /not allowed/);
+    await assertLiveDelegateSchema(pi, context, "lead");
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     realFs.rmSync(role, { force: true });
     delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_SOCKET_PATH;
   }
 });
 
@@ -5912,7 +5995,7 @@ test("pending retirement survives branch switch in the exact assigned checkout",
   }
 });
 
-test("delegating agents receive only their allowed definition roster", async () => {
+test("delegating agents receive their allowed roster and initialize their model catalog on demand", async () => {
   const mailbox = setAgentEnvironment("delegating-agent", ["generalist"]);
   const controllerState = {
     ...managedState("delegating-agent"),
