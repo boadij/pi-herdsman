@@ -1070,6 +1070,8 @@ export function fakePi(
   const execOptions: { timeout?: number; signal?: AbortSignal }[] = [];
   const entries = options.entries ?? [];
   let sessionName = options.sessionName;
+  if (sessionName !== undefined)
+    entries.push({ type: "session_info", id: randomUUID(), name: sessionName });
   const sent: unknown[] = [];
   const sentMessageCalls: { message: unknown; options?: unknown }[] = [];
   const sentUsers: unknown[] = [];
@@ -1125,11 +1127,11 @@ export function fakePi(
         : (options.allTools ?? []);
     },
     getSessionName() {
-      return sessionName;
+      return sessionName?.trim() || undefined;
     },
     setSessionName(name: string) {
       sessionName = name;
-      entries.push({ type: "session_info", name });
+      entries.push({ type: "session_info", id: randomUUID(), name });
     },
     getThinkingLevel() {
       return options.thinkingLevel ?? "medium";

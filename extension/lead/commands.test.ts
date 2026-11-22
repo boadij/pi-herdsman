@@ -907,7 +907,7 @@ test("Delegate Agents to other directories (cwd) shows the current choice and pe
         );
         assert.equal(
           items[1]?.help,
-          "Allow ordinary Leads to select another directory using `cwd` in `delegate_agent`. Without it, Agents use the Lead's directory. Global setting; run `/reload` after changing it.",
+          "Allow ordinary Leads to select another directory using `cwd` in `delegate_agent`. Without it, Agents use the Lead's directory. Global setting; changes apply to subsequent model turns without `/reload`.",
         );
         return attempts.length ? "cwd-override" : undefined;
       }
@@ -940,7 +940,7 @@ test("Delegate Agents to other directories (cwd) shows the current choice and pe
     notices,
     ["On", "Off"].map(
       (value) =>
-        `Delegate Agents to other directories (cwd): ${value}. Run /reload after changing it.`,
+        `Delegate Agents to other directories (cwd): ${value}. Applies to subsequent delegations and model turns.`,
     ),
   );
 });

@@ -71,10 +71,11 @@ session.
 
 Fresh delegation runs in the calling controller's working directory unless
 you supply `cwd`. The global
-[`allowAgentCwdOverride` setting](configuration.md#schema-and-defaults) adds
-this optional field to root controllers' schemas after `/reload`. Nested
-Agent controllers do not accept it. Disabling the setting rejects explicit
-`cwd` even before the schema is refreshed.
+[`allowAgentCwdOverride` setting](configuration.md#schema-and-defaults) controls
+whether root controllers advertise this optional field. The schema refreshes
+before a new model run and at the end of each turn when the setting changes.
+Nested Agent controllers do not accept `cwd`. Disabling the setting rejects
+explicit `cwd` even before the schema is refreshed.
 
 An explicit `cwd` must be a non-empty path without control characters and
 resolve to an existing, accessible directory. Relative paths resolve against

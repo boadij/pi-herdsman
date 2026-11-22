@@ -88,8 +88,9 @@ Agent status or definitions to render.
 [`Delegate Agents to other directories (cwd)`](configuration.md#schema-and-defaults)
 is a global Off/On setting. It allows Leads to specify a different working
 directory using the optional `cwd` parameter in `delegate_agent`. Without it,
-Agents start in the Lead's current directory. Run `/reload` after changing it.
-Cross-directory delegation is limited to ordinary Leads. See
+Agents start in the Lead's current directory. Changes apply to subsequent
+delegations and model turns without `/reload`. Cross-directory delegation is
+limited to ordinary Leads. See
 [`Peer communication` and `Peer federation`](configuration.md#peer-communication)
 in the Configuration reference.
 
@@ -289,6 +290,22 @@ overview`, `Pending removal requests`, `Refresh Manager profile`, and `Leave Man
 mode` while active. `Chief coordination` offers the corresponding Chief actions. These menu actions
 use the same commands as `/manager` and `/chief`; they do not add role
 eligibility or authority rules.
+
+## Native Pi session names
+
+Ordinary Lead sessions are automatically named **Flexible Lead** or
+**Orchestrator Lead** according to the effective profile. Verified active
+Managers and Chiefs use **Manager** and **Chief**. Herdsman updates names it
+owns after successful profile and role changes, including when restoring
+session state or reconciling it after tree navigation.
+
+A name set with Pi's `/name <name>` takes precedence, even when it matches the
+automatic name. Herdsman also preserves an explicit clear recorded in Pi's
+session history. A native fork or clone does not inherit automatic naming
+ownership: any name decision Pi copies into the new history is preserved.
+Assigned Leads and managed Agents keep their existing naming conventions.
+
+A native name replaces Pi's first-message preview in the session selector.
 
 ## Project Manager and Chief
 

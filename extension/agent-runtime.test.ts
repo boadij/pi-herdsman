@@ -8227,6 +8227,8 @@ test("agent persists one identity entry before mailbox initialization", async ()
   const start = agent.events.get("session_start")![0];
   await start(undefined, context);
   await start({ reason: "reload" }, context);
+  const nameEntryId = (agent.entries[1] as { id?: unknown })?.id;
+  assert.equal(typeof nameEntryId, "string");
   assert.deepEqual(agent.entries, [
     {
       type: "custom",
@@ -8237,7 +8239,12 @@ test("agent persists one identity entry before mailbox initialization", async ()
         label: "registered-agent",
       },
     },
-    { type: "session_info", name: "agent · registered-agent" },
+    { type: "session_info", id: nameEntryId, name: "agent · registered-agent" },
+    {
+      type: "custom",
+      customType: "pi-herdsman-session-name-owner",
+      data: { sessionId: context.sessionManager.getSessionId(), nameEntryId },
+    },
   ]);
   assert.ok(readAgentState(mailbox));
   assert.equal(readAgentStartupOutcome(mailbox)?.status, "ready");
@@ -8708,6 +8715,8 @@ test("a forked session establishes identity for its own Pi session", async () =>
   const context = fakeAgentContext(agent.entries);
   try {
     await agent.events.get("session_start")![0](undefined, context);
+    const nameEntryId = (agent.entries[3] as { id?: unknown })?.id;
+    assert.equal(typeof nameEntryId, "string");
     assert.deepEqual(agent.entries, [
       copiedIdentity,
       copiedLegacyIdentity,
@@ -8720,7 +8729,12 @@ test("a forked session establishes identity for its own Pi session", async () =>
           label: "forked-agent",
         },
       },
-      { type: "session_info", name: "agent · forked-agent" },
+      { type: "session_info", id: nameEntryId, name: "agent · forked-agent" },
+      {
+        type: "custom",
+        customType: "pi-herdsman-session-name-owner",
+        data: { sessionId: context.sessionManager.getSessionId(), nameEntryId },
+      },
     ]);
   } finally {
     agent.events.get("session_shutdown")?.[0]();

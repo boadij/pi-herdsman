@@ -761,6 +761,7 @@ test("Chief activation exposes only semantic staff tools", async () => {
       undefined,
       fakeContext(entries) as any,
     );
+    assert.equal(chief.pi.getSessionName(), "Chief");
     assert.deepEqual(chief.pi.getActiveTools(), [
       "list_staff",
       "inspect_staff",
@@ -3175,7 +3176,7 @@ test("chief activation reports unresolved mailbox state instead of owned work", 
   realFs.writeFileSync(join(mailbox, "state.json"), "not json");
   const pi = fakePi({ allTools: REGISTERED_ROLE_TOOLS });
   registerExtension!(pi.pi as never);
-  const context = fakeContext() as any;
+  const context = fakeContext(pi.entries) as any;
   context.hasUI = true;
   context.ui.notify = (message: string) => notices.push(message);
 
@@ -3196,7 +3197,25 @@ test("chief activation reports unresolved mailbox state instead of owned work", 
       ordinaryEvent.systemPromptOptions.sections.pi_herdsman_role,
       /You are an ordinary Lead/,
     );
+    assert.equal(pi.pi.getSessionName(), "Flexible Lead");
+    const appendEntry = pi.pi.appendEntry;
+    pi.pi.appendEntry = (type, data) => {
+      if (
+        type === "pi-herdsman-role" &&
+        (data as { role?: string })?.role === "chief"
+      )
+        throw new Error("Chief role write failed");
+      appendEntry(type, data);
+    };
+    try {
+      await command.handler("", context);
+      assert.match(notices.join("\n"), /Chief role write failed/);
+      assert.equal(pi.pi.getSessionName(), "Flexible Lead");
+    } finally {
+      pi.pi.appendEntry = appendEntry;
+    }
     await command.handler("", context);
+    assert.equal(pi.pi.getSessionName(), "Chief");
 
     assert.doesNotMatch(
       notices.join("\n"),
@@ -3212,6 +3231,7 @@ test("chief activation reports unresolved mailbox state instead of owned work", 
       JSON.stringify(notices),
     );
     await command.handler("leave", context);
+    assert.equal(pi.pi.getSessionName(), "Flexible Lead");
     const restoredEvent = {
       systemPrompt: "base",
       systemPromptOptions: {
@@ -3670,7 +3690,7 @@ test("lead metadata omits coordination state and follows session names", async (
   process.env.HERDR_PANE_ID = "lead-pane";
   const pi = fakePi({ sessionName: "first name" });
   registerExtension!(pi.pi as never);
-  const context = fakeContext() as any;
+  const context = fakeContext(pi.entries) as any;
   await pi.events.get("session_start")![0](undefined, context);
   await t.waitFor(() =>
     assert.ok(
@@ -3707,12 +3727,13 @@ test("lead metadata omits coordination state and follows session names", async (
 test("lead metadata waits for a session name before reporting", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
-  const pi = fakePi();
+  const pi = fakePi({ sessionName: "" });
   registerExtension!(pi.pi as never);
-  const context = fakeContext() as any;
+  const context = fakeContext(pi.entries) as any;
   context.getContextUsage = () => ({ percent: 61 });
   try {
     await pi.events.get("session_start")![0](undefined, context);
+    assert.equal(pi.pi.getSessionName(), undefined);
     await t.waitFor(() =>
       assert.ok(
         pi.calls.some(
@@ -4145,6 +4166,7 @@ test("unrestorable persisted Chief role selects the neutral charter", async () =
     registerExtension!(pi.pi as never);
     const context = fakeContext(entries) as any;
     await pi.events.get("session_start")![0](undefined, context);
+    assert.equal(pi.pi.getSessionName(), undefined);
     const promptEvent = {
       systemPrompt: "base",
       systemPromptOptions: {
@@ -4577,7 +4599,10 @@ test("replaced Lead strategy keeps its protected charter and coordination tools"
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, context);
+    const flexibleBranch = [...pi.entries];
     await pi.commandOptions.get("lead").handler("orchestrate", context);
+    assert.equal(pi.pi.getSessionName(), "Orchestrator Lead");
+    const orchestrateBranch = [...pi.entries];
     const event = {
       systemPrompt: "base",
       systemPromptOptions: {
@@ -4609,6 +4634,12 @@ test("replaced Lead strategy keeps its protected charter and coordination tools"
       /Agent capability summaries do not prove installed tools, credentials, or external authorization/,
     );
     assert.doesNotMatch(charter, /ProjectAssignment/);
+    context.sessionManager.getBranch = () => flexibleBranch;
+    await pi.events.get("session_tree")![0](undefined, context);
+    assert.equal(pi.pi.getSessionName(), "Flexible Lead");
+    context.sessionManager.getBranch = () => orchestrateBranch;
+    await pi.events.get("session_tree")![0](undefined, context);
+    assert.equal(pi.pi.getSessionName(), "Orchestrator Lead");
     assert.doesNotMatch(charter, /fresh managed project execution/);
     assert.doesNotMatch(
       charter,
@@ -5267,6 +5298,7 @@ test("managed Lead prompt keeps the managed charter with an assigned session", a
   };
   try {
     await pi.events.get("session_start")![0](undefined, context);
+    assert.equal(pi.pi.getSessionName(), `Lead · ${branch}`);
     assert.ok(pi.pi.getActiveTools().includes("codemode"));
     assert.ok(!pi.pi.getActiveTools().includes("bash"));
     const toolCall = pi.events.get("tool_call")![0] as (
@@ -6124,6 +6156,9 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, context);
+    assert.equal(pi.pi.getSessionName(), "Flexible Lead");
+    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    assert.equal(pi.pi.getSessionName(), "Orchestrator Lead");
     const promptEvent = () => ({
       systemPrompt: "base",
       systemPromptOptions: {
@@ -6137,7 +6172,25 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
       beforeRoleTransition.systemPromptOptions.sections.pi_herdsman_role,
       /You are an ordinary Lead/,
     );
-    await pi.commandOptions.get("manager").handler("", context);
+    const managerCommand = pi.commandOptions.get("manager");
+    const appendEntry = pi.pi.appendEntry;
+    pi.pi.appendEntry = (type, data) => {
+      if (
+        type === "pi-herdsman-role" &&
+        (data as { role?: string })?.role === "manager"
+      )
+        throw new Error("Manager role write failed");
+      appendEntry(type, data);
+    };
+    try {
+      await managerCommand.handler("", context);
+      assert.match(notices.join("\n"), /Manager role write failed/);
+      assert.equal(pi.pi.getSessionName(), "Orchestrator Lead");
+    } finally {
+      pi.pi.appendEntry = appendEntry;
+    }
+    await managerCommand.handler("", context);
+    assert.equal(pi.pi.getSessionName(), "Manager", notices.join("\n"));
     assert.equal(
       readLeadCoordinationState(
         supervisionRuntime(),
@@ -6277,7 +6330,25 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
     )?.description;
     assert.match(closeDescription ?? "", /abandoning unfinished assignments/);
     assert.ok(!pi.tools.some((tool) => tool.name === "close_agent"));
+    // Simulate restoring verified Manager state from a session without name history.
+    for (let i = pi.entries.length - 1; i >= 0; i--) {
+      const entry = pi.entries[i] as { type: string; customType?: string };
+      if (
+        entry.type === "session_info" ||
+        entry.customType === "pi-herdsman-session-name-owner"
+      )
+        pi.entries.splice(i, 1);
+    }
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.deepEqual(
+      pi.entries
+        .filter((entry: any) => entry.type === "session_info")
+        .map((entry: any) => entry.name),
+      ["Manager"],
+      notices.join("\n"),
+    );
     await pi.commandOptions.get("manager").handler("leave", context);
+    assert.equal(pi.pi.getSessionName(), "Orchestrator Lead");
     const restoredEvent = promptEvent();
     await invokeBeforeAgentStart(pi, restoredEvent, context);
     const restored =
@@ -6288,6 +6359,12 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
     assert.doesNotMatch(restored, /verified Manager for this Pi session/);
     assert.doesNotMatch(restored, /Supervision is event-driven/);
     assert.doesNotMatch(restored, /Custom Manager strategy/);
+
+    pi.pi.setSessionName("API");
+    await pi.commandOptions.get("manager").handler("", context);
+    assert.equal(pi.pi.getSessionName(), "API");
+    await pi.commandOptions.get("manager").handler("leave", context);
+    assert.equal(pi.pi.getSessionName(), "API");
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     realFs.rmSync(disabledHelper, { force: true });
@@ -6487,6 +6564,7 @@ test("delegating roster discovery failure does not abort managed startup", async
     const sessionStartHandlers = pi.events.get("session_start") ?? [];
     assert.equal(sessionStartHandlers.length, 2);
     await sessionStartHandlers[0](undefined, context);
+    assert.equal(pi.pi.getSessionName(), "agent · roster-failure-agent");
     assert.ok(
       entries.some(
         (entry: any) =>

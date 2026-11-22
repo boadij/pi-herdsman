@@ -12,7 +12,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join, sep } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import test from "node:test";
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import { initTheme, SessionManager } from "@earendil-works/pi-coding-agent";
 import { Box, Container } from "@earendil-works/pi-tui";
 import { prepareMessageInput } from "./core.ts";
 import type { DefinitionLayerTrace, Frontmatter } from "./agent-definitions.ts";
@@ -20,7 +20,7 @@ import {
   populateMenuFrame,
   summarizeDefinitionLayerChanges,
   collapseDisplayText,
-  nameSessionIfUnset,
+  syncAutomaticSessionName,
   displayHomePath,
   displaySkillName,
   formatElapsed,
@@ -162,49 +162,120 @@ test("menu frames preserve structural gaps and replace previous content at narro
   }
 });
 
-test("automatic session names preserve existing Pi naming decisions", () => {
-  const entries: { type: string; name?: string }[] = [];
-  const names: string[] = [];
-  const pi = {
-    setSessionName(name: string) {
-      names.push(name);
-      entries.push({ type: "session_info", name });
-    },
-  };
-  const ctx = { sessionManager: { getEntries: () => entries } };
-
-  nameSessionIfUnset(pi as never, ctx as never, "reviewer");
-  nameSessionIfUnset(pi as never, ctx as never, "different");
-  assert.deepEqual(names, ["reviewer"]);
-
-  entries.splice(0, entries.length, { type: "session_info", name: "manual" });
-  nameSessionIfUnset(pi as never, ctx as never, "automatic");
-  assert.deepEqual(names, ["reviewer"]);
-  entries.splice(0, entries.length, { type: "session_info", name: "" });
-  nameSessionIfUnset(pi as never, ctx as never, "automatic");
-  assert.deepEqual(names, ["reviewer"]);
-
-  entries.length = 0;
-  nameSessionIfUnset(pi as never, ctx as never, "  reviewer\ncontinued  ");
-  assert.deepEqual(names, ["reviewer", "reviewer continued"]);
-  entries.length = 0;
-  nameSessionIfUnset(pi as never, ctx as never, "x".repeat(100));
-  assert.equal(names[2]?.length, 80);
-  assert.equal(names[2]?.endsWith("…"), true);
-  nameSessionIfUnset(pi as never, ctx as never, " \n ");
-  assert.equal(names.length, 3);
-
-  assert.doesNotThrow(() =>
-    nameSessionIfUnset(
+test("automatic session names follow exact Pi entry and session identity", () => {
+  const manager = SessionManager.inMemory();
+  const sync = (title: string) =>
+    syncAutomaticSessionName(
       {
-        setSessionName() {
-          throw new Error("Pi unavailable");
-        },
+        setSessionName: (name: string) => manager.appendSessionInfo(name),
+        appendEntry: (type: string, data: unknown) =>
+          manager.appendCustomEntry(type, data),
       } as never,
-      { sessionManager: { getEntries: () => [] } } as never,
-      "reviewer",
-    ),
-  );
+      { sessionManager: manager } as never,
+      title,
+    );
+
+  sync(" \n ");
+  assert.equal(manager.getEntries().length, 0);
+  sync("  Flexible\nLead  ");
+  assert.equal(manager.getSessionName(), "Flexible Lead");
+  const entries = manager.getEntries();
+  assert.equal(entries.length, 2);
+  assert.equal(entries[1]?.type, "custom");
+  assert.deepEqual("data" in entries[1]! && entries[1].data, {
+    sessionId: manager.getSessionId(),
+    nameEntryId: entries[0]?.id,
+  });
+  sync("Flexible Lead");
+  assert.deepEqual(manager.getEntries(), entries);
+  sync("Manager");
+  assert.equal(manager.getSessionName(), "Manager");
+
+  manager.appendSessionInfo("Manager");
+  sync("Chief");
+  assert.equal(manager.getSessionName(), "Manager");
+  manager.appendSessionInfo("");
+  sync("Chief");
+  assert.equal(manager.getSessionName(), undefined);
+  assert.equal(manager.getEntries().at(-1)?.type, "session_info");
+
+  // Revisit the last automatically named branch. Pi's full-history clear wins.
+  manager.branch(entries[1]!.id);
+  sync("Chief");
+  assert.equal(manager.getSessionName(), undefined);
+});
+
+test("automatic name ownership survives exact-session restoration but not a native branch copy", () => {
+  const original = SessionManager.inMemory();
+  const sync = (manager: SessionManager, title: string) =>
+    syncAutomaticSessionName(
+      {
+        setSessionName: (name: string) => manager.appendSessionInfo(name),
+        appendEntry: (type: string, data: unknown) =>
+          manager.appendCustomEntry(type, data),
+      } as never,
+      { sessionManager: manager } as never,
+      title,
+    );
+  sync(original, "Manager");
+  const restored = SessionManager.inMemory(undefined, undefined, [
+    original.getHeader()!,
+    ...original.getEntries(),
+  ]);
+  assert.equal(restored.getSessionId(), original.getSessionId());
+  sync(restored, "Chief");
+  assert.equal(restored.getSessionName(), "Chief");
+
+  restored.createBranchedSession(restored.getLeafId()!);
+  assert.notEqual(restored.getSessionId(), original.getSessionId());
+  sync(restored, "Flexible Lead");
+  assert.equal(restored.getSessionName(), "Chief");
+
+  const legacy = SessionManager.inMemory();
+  legacy.appendSessionInfo("Manager");
+  sync(legacy, "Chief");
+  assert.equal(legacy.getSessionName(), "Manager");
+});
+
+test("automatic naming fails closed when Pi writes fail or are ambiguous", () => {
+  for (const failure of ["setter", "marker", "extra entry"]) {
+    const manager = SessionManager.inMemory();
+    const sync = (title: string, fail: boolean) =>
+      syncAutomaticSessionName(
+        {
+          setSessionName(name: string) {
+            if (fail && failure === "setter") throw new Error(failure);
+            manager.appendSessionInfo(name);
+            if (fail && failure === "extra entry")
+              manager.appendCustomEntry("other");
+          },
+          appendEntry(type: string, data: unknown) {
+            if (fail && failure === "marker") throw new Error(failure);
+            manager.appendCustomEntry(type, data);
+          },
+        } as never,
+        { sessionManager: manager } as never,
+        title,
+      );
+    sync("x".repeat(100), true);
+    const name = failure === "setter" ? undefined : `${"x".repeat(79)}…`;
+    assert.equal(manager.getSessionName(), name, failure);
+    assert.equal(
+      manager
+        .getEntries()
+        .some(
+          (entry) =>
+            entry.type === "custom" &&
+            entry.customType === "pi-herdsman-session-name-owner",
+        ),
+      false,
+      failure,
+    );
+    if (name) {
+      sync("Chief", false);
+      assert.equal(manager.getSessionName(), name, failure);
+    }
+  }
 });
 
 test("Manager supervision context adds bounded Git observations", () => {
