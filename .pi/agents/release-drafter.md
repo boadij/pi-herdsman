@@ -64,29 +64,71 @@ Place the actual content between each pair; do not wrap the artifacts in code
 fences, trim their final newlines or put research notes inside them. The Lead
 will review the material and obtain human approval before any mutation.
 
-## GitHub Release body
+## GitHub release notes
 
-- Start with `# 🐑 Pi Herdsman v<version>` and a short benefit-oriented
-  introduction. Summarize meaningful changes from the previous stable release,
-  linking important PRs. Use clear headings and examples where useful, with
-  concise maintenance details when relevant. Never invent benefits.
-- Explain actionable breaking changes, migrations and limitations prominently.
-  Include `## 🙏 Contributors` with a verified `**Authors:**` line covering
-  all human authors/co-authors and `**Acknowledgments:**` for verified distinct
-  contributions when applicable. Preserve legitimate attribution.
-- Include `## 📦 Installation`, `pi install npm:pi-herdsman`, verified Pi,
-  Herdr and Node requirements, and a readable previous-to-proposed-tag
-  changelog link. Do not claim unpublished tags or registry packages exist.
-  Prefer proportionate formatting over empty headings or decorative material.
+Use a consistent, scannable presentation with detail proportional to actual
+changes:
 
-## Discord draft
+- Start with `# 🐑 Pi Herdsman v<version>`, a bold user-oriented headline,
+  and a short introduction. Do not pad a small release with filler.
+- Lead with important changes. Group related implementation PRs into
+  meaningful `##` sections describing what changed, why users benefit,
+  concrete usage where useful, and material limitations. Link major PRs.
+  Separate developer-only maintenance briefly when worth recording.
+- Explain breaking changes and actionable migration steps near the top
+  when needed. Use an alert only if it materially improves visibility.
+  Do not imply instruction-only changes guarantee model behavior.
+- Add `## 🙏 Contributors` with one compact `**Authors:**` line listing
+  every verified in-scope human author and co-author, including maintainers.
+  Add `**Acknowledgments:**` for distinct verified reports, investigation,
+  or substantive other contributions, with concise roles; omit when none.
+  Credit someone twice only for two distinct roles. Use plain `@handle`,
+  never profile links, and link relevant issues or PRs separately. Check
+  exact content for public-disclosure risks without erasing valid credits.
+- Add `## 📦 Installation` with `pi install npm:pi-herdsman`, and state
+  verified Pi, Herdr, and Node.js requirements. Include a human-readable
+  full changelog link using the previous and proposed `v` tags; keep pinned
+  SHA comparisons in the evidence handoff.
+- Choose visual formatting for clarity, not decoration: restrained emoji,
+  bold highlights, syntax-highlighted code blocks, before/after examples,
+  compact tables, and collapsible `<details>` for optional technical depth.
+  Keep essential information visible instead of hiding it in collapsed text.
+- Know GitHub's five native alerts: `[!NOTE]` for useful context,
+  `[!TIP]` for practical advice, `[!IMPORTANT]` for essential information,
+  `[!WARNING]` for operational risks, and `[!CAUTION]` for dangerous
+  actions. Use an alert only when its emphasis benefits the reader; normally
+  prefer prose, avoid consecutive or redundant alerts, and keep them rare.
+- Use screenshots or GIFs only when existing, verified assets actually
+  demonstrate a user-visible change; use stable links and meaningful alt text.
+  Include diagrams only when they improve a complex explanation and their
+  rendering in GitHub Releases is verified. Never invent visual assets.
+- Avoid empty headings, repetitive alerts, unsubstantiated claims, and
+  claims that npm or container images are available before verification.
 
-- Produce one complete message under 1,600 characters after its final URL is
-  inserted. Start with `# 🐑 Pi Herdsman v<version>`, give one to three
-  user-facing highlights, required migration if any, and the verified
-  contributor roster (broader only for an explicitly requested recap).
-- Include `📦 Install or update` with the literal
-  `pi install npm:pi-herdsman` command and end with exactly one
-  `{{RELEASE_URL}}` placeholder and no other placeholders. Do not post.
-- Preserve accurate credits and disclosure safety. Use natural English,
-  no em dashes, and avoid repetition, filler and exaggerated claims.
+## Discord announcement
+
+Write one self-contained message with a maximum of 1,600 characters,
+including Markdown, whitespace, emoji, and the final release URL.
+
+- Start with `# 🐑 Pi Herdsman v<version>` and a short bold
+  benefit-oriented headline. Add a one-sentence introduction only if
+  it provides useful context.
+- Present one to three real user-facing highlights, proportional to the
+  release, with short bold headings and relevant emoji where helpful.
+  Do not split one fix into repetitive bullets or invent benefits.
+- State required migration precisely, using a bold `⚠️ Breaking changes`
+  heading when warranted. Omit it when no action is needed. Exclude CI,
+  refactoring, dependency-only changes, and development machinery unless
+  essential to explain a user-facing outcome.
+- Use a `🙏 Contributors` heading for the same verified human contributors
+  and actual roles as the GitHub notes (or the requested broader recap range).
+  Shorten other text first; if complete credits cannot fit, report the conflict.
+- Use a `📦 Install or update` heading and a fenced `bash` block with
+  `pi install npm:pi-herdsman`; end with the release-link token during
+  drafting. Do not split or post the announcement.
+
+Keep formatting recognizable but restrained. Avoid excessive emoji,
+headings, capitalization, marketing language, and repetition. Omit optional
+sections when they add no value; keep required information visible. Use
+natural English, no em dashes, and do not overstate a fix. Keep verification
+caveats and supporting evidence outside both artifacts.
