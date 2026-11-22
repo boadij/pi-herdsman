@@ -147,7 +147,7 @@ import type { ManagedAgentState } from "./mailbox.ts";
 import type { ResultBinding } from "./storage.ts";
 import {
   populateMenuFrame,
-  nameSessionIfUnset,
+  syncAutomaticSessionName,
   buildStatusRows,
   renderRunningOptions,
   formatStatusCounts,
@@ -1988,6 +1988,37 @@ export function registerLeadRuntime(
       } catch {}
     }
     return undefined;
+  };
+  const syncRootSessionName = (ctx: ExtensionContext): void => {
+    try {
+      if (
+        sessionKind?.kind !== "ordinary" ||
+        sessionKind.sessionId !== ctx.sessionManager.getSessionId() ||
+        isQuarantinedSession(ctx) ||
+        !controller.sessionActive() ||
+        controller.sessionSignal()?.aborted
+      ) {
+        return;
+      }
+
+      const role = verifiedActiveRootRole();
+      if (role === "chief") syncAutomaticSessionName(pi, ctx, "Chief");
+      else if (role === "manager") syncAutomaticSessionName(pi, ctx, "Manager");
+      else if (
+        role === "lead" &&
+        leadExecution?.valid &&
+        !leadExecution.managed
+      )
+        syncAutomaticSessionName(
+          pi,
+          ctx,
+          leadExecution.mode === "orchestrate"
+            ? "Orchestrator Lead"
+            : "Flexible Lead",
+        );
+    } catch {
+      // Optional presentation must not interrupt the caller.
+    }
   };
   const activeRootRoleForPresentation = () =>
     verifiedActiveRootRole() as "lead" | "manager" | "chief" | undefined;
@@ -3842,18 +3873,21 @@ export function registerLeadRuntime(
         ? activeLeadRole(leadRuntime) === "manager" &&
           !leadRuntime.roleSuspended
         : leadRuntime.chiefMode === "active",
-    transitionRole: (
+    transitionRole: async (
       role: "manager" | "chief",
       leave: boolean,
       ctx: ExtensionCommandContext,
-    ) =>
-      role === "manager"
+    ) => {
+      const result = await (role === "manager"
         ? leave
           ? roleTransitions.leaveManager(ctx)
           : roleTransitions.activateManager(ctx)
         : leave
           ? roleTransitions.leaveChief(ctx)
-          : roleTransitions.activateChief(ctx),
+          : roleTransitions.activateChief(ctx));
+      syncRootSessionName(ctx);
+      return result;
+    },
     runHerdr: options.commandHost.runHerdr,
     maybeFinishHerdRun: (ctx: ExtensionContext) =>
       herdRunRuntime!.maybeFinish(ctx),
@@ -4251,7 +4285,8 @@ export function registerLeadRuntime(
       return;
     }
     if (signal.aborted) return;
-    if (assignment) nameSessionIfUnset(pi, ctx, `Lead · ${assignment.branch}`);
+    if (assignment)
+      syncAutomaticSessionName(pi, ctx, `Lead · ${assignment.branch}`);
     let saved: LeadExecutionSessionState | undefined;
     try {
       saved = sessionLeadExecutionState(
@@ -4427,6 +4462,7 @@ export function registerLeadRuntime(
       }
       throw error;
     }
+    syncRootSessionName(ctx);
   };
   const reconcileBranchExecution = async (ctx: ExtensionContext) => {
     inheritedProjection = undefined;
@@ -4755,6 +4791,7 @@ export function registerLeadRuntime(
   pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
     inheritedProjection = undefined;
     await sessionStart.sessionStart(ctx);
+    syncRootSessionName(ctx);
     projectRuntime.updateRemovalStatus(ctx);
   });
   pi.on("session_info_changed", (event: any, ctx: ExtensionContext) => {
@@ -4776,14 +4813,15 @@ export function registerLeadRuntime(
   pi.on("session_compact", (_event: unknown, ctx: ExtensionContext) =>
     options.queueLeadPresentation(ctx),
   );
-  pi.on("session_tree", (_event: unknown, ctx: ExtensionContext) => {
+  pi.on("session_tree", async (_event: unknown, ctx: ExtensionContext) => {
     if (isQuarantinedSession(ctx)) {
       pi.setActiveTools([]);
       return;
     }
     inheritedProjection = undefined;
     projectRuntime.updateRemovalStatus(ctx);
-    return sessionTree.sessionTree(ctx);
+    await sessionTree.sessionTree(ctx);
+    syncRootSessionName(ctx);
   });
   pi.on("session_shutdown", (_event: unknown, ctx: ExtensionContext) => {
     inheritedProjection = undefined;
@@ -8925,7 +8963,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                 record.id !== assignment.id
               )
                 throw new Error("Project assignment changed before delivery");
-              nameSessionIfUnset(pi, ctx, `Lead · ${assignment.branch}`);
+              syncAutomaticSessionName(pi, ctx, `Lead · ${assignment.branch}`);
               resultBindings = assignment.resultBindings;
               payload = {
                 ...message,
