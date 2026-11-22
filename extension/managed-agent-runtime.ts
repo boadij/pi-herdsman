@@ -81,7 +81,7 @@ import {
 import {
   collapseDisplayText,
   createStatusWidget,
-  nameSessionIfUnset,
+  syncAutomaticSessionName,
   type FocusIntent,
 } from "./presentation.ts";
 import { randomUUID } from "node:crypto";
@@ -4311,7 +4311,7 @@ export function registerManagedAgentSessionStartHandler(
         execution.initialized = true;
         const definition = process.env.PI_HERDSMAN_AGENT_DEFINITION!;
         const label = execution.assignment.agentLabel;
-        nameSessionIfUnset(
+        syncAutomaticSessionName(
           pi,
           ctx,
           definition === label ? label : `${definition} · ${label}`,

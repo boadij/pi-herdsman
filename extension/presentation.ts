@@ -22,6 +22,7 @@ import type {
   Theme,
   ExtensionAPI,
   ExtensionContext,
+  SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
 import type { LeadExecutionMode } from "./core.ts";
@@ -403,7 +404,14 @@ export function collapseDisplayText(
     : `${characters.slice(0, Math.max(0, maxCharacters - 1)).join("")}…`;
 }
 
-export function nameSessionIfUnset(
+const SESSION_NAME_OWNER_ENTRY = "pi-herdsman-session-name-owner";
+
+type SessionNameOwner = {
+  sessionId: string;
+  nameEntryId: string;
+};
+
+export function syncAutomaticSessionName(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   title: string,
@@ -412,12 +420,48 @@ export function nameSessionIfUnset(
   if (!name) return;
 
   try {
+    const sessionId = ctx.sessionManager.getSessionId();
+    const entries = ctx.sessionManager.getEntries();
+    const entryCount = entries.length;
+    // Pi resolves the native name across the full history, including clears.
+    let owner: Extract<SessionEntry, { type: "custom" }> | undefined;
+    for (let index = entryCount - 1; index >= 0; index--) {
+      const entry = entries[index];
+      if (entry?.type === "session_info") {
+        const data = owner?.data as Partial<SessionNameOwner> | undefined;
+        if (
+          typeof entry.id !== "string" ||
+          data?.sessionId !== sessionId ||
+          data.nameEntryId !== entry.id ||
+          entry.name === name
+        ) {
+          return;
+        }
+        break;
+      }
+      // A marker can only own a name written before it.
+      if (
+        !owner &&
+        entry?.type === "custom" &&
+        entry.customType === SESSION_NAME_OWNER_ENTRY
+      ) {
+        owner = entry;
+      }
+    }
+
+    pi.setSessionName(name);
+    const written = ctx.sessionManager.getEntries().slice(entryCount);
     if (
-      !ctx.sessionManager
-        .getEntries()
-        .some((entry) => entry.type === "session_info")
+      ctx.sessionManager.getSessionId() === sessionId &&
+      written.length === 1 &&
+      written[0]?.type === "session_info" &&
+      written[0].name === name &&
+      typeof written[0].id === "string"
     ) {
-      pi.setSessionName(name);
+      pi.appendEntry(SESSION_NAME_OWNER_ENTRY, {
+        sessionId,
+        nameEntryId: written[0].id,
+      } satisfies SessionNameOwner);
     }
   } catch {
     // Session naming must never interrupt orchestration.
