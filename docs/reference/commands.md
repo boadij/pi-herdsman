@@ -270,8 +270,10 @@ Details re-resolves the selected definition when opened, so it reflects current
 overlays and body references even if the menu remained open while configuration
 changed.
 
-Model, thinking, and enabled changes apply to future assignments, not
-already-running agents or the lead Pi session. Fresh `delegate` assignments inherit the spawning controller's
+The Definitions UI shows configured or inherited launch settings, not the
+execution settings of already-running agents. Model, thinking, and enabled
+changes apply to future assignments, not already-running agents or the lead Pi
+session. Fresh `delegate` assignments inherit the spawning controller's
 current settings when fields are unset; `continue` restores the saved
 session's settings.
 
@@ -281,7 +283,10 @@ the active session's setting.
 
 ## `/herdsman` → Agents & definitions → Running agents
 
-Select a live managed agent from the shared status projection to focus its pane.
+Select a live managed agent to focus its pane. Each row shows the agent's
+reported model and thinking level where available. Model names normally show
+only the last segment of the reported ID. If distinct IDs would show the same
+name, the menu uses the full IDs, truncated if necessary.
 Pi Herdsman refreshes and verifies the exact label, pane, and session identity
 before issuing herdr's focus command. If the agent changed, no focus command
 is sent.

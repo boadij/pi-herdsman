@@ -13,6 +13,7 @@ import {
   validMaxAgentDepth,
   validStatusWidgetMaxRows,
 } from "../config.ts";
+import { buildStatusRows, renderRunningOptions } from "../presentation.ts";
 import { fakeContext, WORKSPACE } from "../support.ts";
 import { createLeadCommandRuntime } from "./commands.ts";
 import { pickOverrideModels } from "./override-model-picker.ts";
@@ -525,6 +526,108 @@ test("Settings categories and Agents & definitions retain their selections", asy
     "Coordinator profiles",
     "Stop all agents…",
   ]);
+});
+
+test("Running agents show reported settings and focus only the selected identity", async () => {
+  const agents = [
+    {
+      label: "trace-deep",
+      definition: "scout",
+      state: "blocked",
+      paneId: "pane-deep",
+      sessionId: "session-deep",
+      model: "openrouter/vendor-a/shared",
+      thinking: "high",
+    },
+    {
+      label: "map-quick",
+      definition: "scout",
+      state: "working",
+      paneId: "pane-quick",
+      sessionId: "session-quick",
+      model: "openrouter/vendor-b/shared",
+      thinking: "high",
+    },
+    {
+      label: "multiline",
+      definition: "scout",
+      state: "working",
+      paneId: "pane-multiline",
+      sessionId: "session-multiline",
+      model: "provider/fast\nmodel",
+      thinking: "low\u0007\r\neffort",
+    },
+    {
+      label: "unreported",
+      definition: "scout",
+      state: "working",
+      paneId: "pane-unreported",
+      sessionId: "session-unreported",
+    },
+  ];
+  for (const changed of [false, true]) {
+    let reads = 0;
+    const focused: string[][] = [];
+    const notices: string[] = [];
+    const runtime = createLeadCommandRuntime({
+      controller: { sessionSignal: () => undefined },
+      buildStatusRows,
+      renderRunningOptions,
+      loadStatusSnapshot: async (
+        _ctx: unknown,
+        _signal?: AbortSignal,
+        options?: { observedExecutionSettingsOnly?: boolean },
+      ) => {
+        const initial = ++reads === 1;
+        assert.deepEqual(
+          options,
+          initial ? { observedExecutionSettingsOnly: true } : undefined,
+        );
+        return {
+          agents:
+            initial || !changed
+              ? agents
+              : [
+                  { ...agents[0], sessionId: "session-replacement" },
+                  ...agents.slice(1),
+                ],
+        };
+      },
+      selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
+        assert.equal(title, "Running");
+        assert.deepEqual(
+          items.map(({ label, description }) => [label, description]),
+          [
+            [
+              "├─ scout  map-quick  ● working",
+              "openrouter/vendor-b/shared · high",
+            ],
+            ["├─ scout  multiline  ● working", "fast model · low effort"],
+            [
+              "├─ scout  trace-deep  ◐ blocked",
+              "openrouter/vendor-a/shared · high",
+            ],
+            ["└─ scout  unreported  ● working", undefined],
+          ],
+        );
+        assert.equal(Object.hasOwn(items[3], "description"), false);
+        return items[2].value;
+      },
+      runHerdr: async (_pi: unknown, _ctx: unknown, args: string[]) => {
+        focused.push(args);
+      },
+    } as any);
+    await runtime.openRunningAgentsMenu({
+      mode: "tui",
+      ui: { notify: (message: string) => notices.push(message) },
+    } as any);
+    assert.equal(reads, 2);
+    assert.deepEqual(focused, changed ? [] : [["agent", "focus", "pane-deep"]]);
+    assert.deepEqual(
+      notices,
+      changed ? ["Agent changed; reopen Running."] : [],
+    );
+  }
 });
 
 test("Agent definitions remain available when running status fails", async () => {
