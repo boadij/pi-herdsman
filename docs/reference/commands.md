@@ -253,8 +253,10 @@ without `Enabled`.
 
 Selecting any runtime profile, including Manager and Chief, opens `Details` only.
 
-When Pi provides an explicit scoped-model list, that scope is used. Otherwise
-available models are offered.
+The definition editor's `Model` selector lists available models from Pi's
+refreshed model registry, plus the locally configured model if unavailable. It
+does not use the interactive session's scoped-model list, which remains separate
+for Pi's interactive model switcher.
 
 Thinking options use the effective model's supported levels when resolvable,
 or Pi Herdsman's validated vocabulary when not.
