@@ -155,8 +155,7 @@ Group routine tests by area rather than enumerating every test file.
 - `extension/supervision.ts`: Chief, Manager, and Lead authority, leases, supervision state, and staff tool contracts.
 - `extension/support.ts`: Shared extension integration-test mocks and fixtures.
 - `extension/*.test.ts`, `extension/lead/*.test.ts`: Extension runtime, command, and integration tests.
-- `bin/*.test.ts`, `scripts/release-ship.mjs`: Guarded project-local release mutation and exact publication readback.
-- `scripts/*.test.mjs`: Peer bridge and development tooling tests.
+- `bin/*.test.ts`, `scripts/*.test.mjs`: Peer bridge and development tooling tests.
 
 ## GitHub issue creation
 

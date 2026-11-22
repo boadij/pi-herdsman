@@ -125,8 +125,6 @@ tool allowlists do not isolate shell credentials.
 
 See [the release prompt](.pi/prompts/release.md) for the authoritative
 procedure and operation-specific safeguards.
-The `ship` Agent invokes the tested `scripts/release-ship.mjs` executor only
-after the separate human grants and independent live policy checks.
 
 ## AI-assisted contributions
 
