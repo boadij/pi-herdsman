@@ -101,8 +101,8 @@ import {
   observeLocalHeaderActivity,
   type AgentControllerOptions,
   type AgentStatusSnapshotHost,
+  type AgentStatusSnapshotOptions,
   type PendingStart,
-  type Runtime,
   type ControllerScope,
   type RootDelegationPolicy,
   type RootDelegationGeneration,
@@ -3270,8 +3270,7 @@ export function registerLeadRuntime(
     ctx: ExtensionContext,
     signal = controller.sessionSignal(),
     allowTranscriptDefinitionFallback = true,
-    runtimeForLabel: (label: string) => Runtime | undefined = (label) =>
-      controller.runtimeForLabel(label),
+    statusOptions?: AgentStatusSnapshotOptions,
   ): Promise<StatusSnapshot> => {
     const isLead = roleTransitions && activeLeadRole(leadRuntime) === "lead";
     let assignmentVerified = false;
@@ -3356,14 +3355,19 @@ export function registerLeadRuntime(
     } else {
       verifiedManagedAssignment = undefined;
     }
-    const snapshot = buildAgentStatusSnapshot(view, ctx, {
-      ...options.statusSnapshotHost,
-      scope: { kind: "root" },
-      activeRootRoleForPresentation,
-      listedAgentRecord: controller.listedAgentRecord,
-      runtimeForLabel,
-      herdStartedAt: () => herdRunRuntime?.startedAt(),
-    });
+    const snapshot = buildAgentStatusSnapshot(
+      view,
+      ctx,
+      {
+        ...options.statusSnapshotHost,
+        scope: { kind: "root" },
+        activeRootRoleForPresentation,
+        listedAgentRecord: controller.listedAgentRecord,
+        runtimeForLabel: (label) => controller.runtimeForLabel(label),
+        herdStartedAt: () => herdRunRuntime?.startedAt(),
+      },
+      statusOptions,
+    );
     const execution =
       isLead && sessionKind?.kind === "managed"
         ? { kind: "managed" as const, lifecycle: managedLifecycle }
@@ -3882,8 +3886,8 @@ export function registerLeadRuntime(
         selectMenu: options.commandHost.selectMenu,
       }),
     controller,
-    loadStatusSnapshot: (ctx: ExtensionContext) =>
-      loadStatusSnapshot(ctx, controller.sessionSignal(), true),
+    loadStatusSnapshot: (ctx, _signal, statusOptions) =>
+      loadStatusSnapshot(ctx, controller.sessionSignal(), true, statusOptions),
     roleActive: (role: "manager" | "chief") =>
       role === "manager"
         ? activeLeadRole(leadRuntime) === "manager" &&
