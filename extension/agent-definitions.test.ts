@@ -1682,19 +1682,34 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
 });
 
 test("project release-drafter opts into native Code Mode without discovery", () => {
-  const root = mkdtempSync(join(tmpdir(), "herdr-release-drafter-"));
-  const projectRoot = resolve(import.meta.dirname, "..");
-  const definition = withPiAgentDir(root, () =>
-    discoverAgent("release-drafter", { projectRoot }),
+  const global = mkdtempSync(join(tmpdir(), "herdr-release-drafter-global-"));
+  const projectRoot = mkdtempSync(
+    join(tmpdir(), "herdr-release-drafter-project-"),
   );
-  assert.equal(
-    definition.projectSource,
-    join(projectRoot, ".pi", "agents", "release-drafter.md"),
-  );
-  assert.deepEqual(definition.frontmatter.tools, ["read", "bash", "codemode"]);
-  assert.deepEqual(definition.frontmatter.extensions, ["builtin:codemode"]);
-  assert.equal(definition.frontmatter.noExtensions, true);
-  assert.deepEqual(definition.frontmatter.agents, []);
+  try {
+    const path = join(projectRoot, ".pi", "agents", "release-drafter.md");
+    mkdirSync(join(projectRoot, ".pi", "agents"), { recursive: true });
+    const tracked = resolve(
+      import.meta.dirname,
+      "../.pi/agents/release-drafter.md",
+    );
+    writeFileSync(path, readFileSync(tracked));
+    const definition = withPiAgentDir(global, () =>
+      discoverAgent("release-drafter", { projectRoot }),
+    );
+    assert.equal(definition.projectSource, path);
+    assert.deepEqual(definition.frontmatter.tools, [
+      "read",
+      "bash",
+      "codemode",
+    ]);
+    assert.deepEqual(definition.frontmatter.extensions, ["builtin:codemode"]);
+    assert.equal(definition.frontmatter.noExtensions, true);
+    assert.deepEqual(definition.frontmatter.agents, []);
+  } finally {
+    rmSync(global, { recursive: true, force: true });
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
 });
 
 test("enforces read-only managed launch policies and reviewer leaf projection", () => {

@@ -55,7 +55,10 @@ Git 2.47.3 and gh 2.46.0. Do not load the upstream skill.
    Read the matching job via `gh run view --job "$job" --log -R github.com/boadij/pi-herdsman`;
    filter locally for relevant lines before emitting output. Cross-check the
    PR creator and, where applicable, the actor, commit and time of the head
-   creation/update in `issues/$pr/timeline`. The workflow uses
+   creation/update in `issues/$pr/timeline`. A matching bot-authored
+   branch-update event tying the PR and exact head SHA to the correlated
+   workflow/job is sufficient; do not require another numeric commit-entry
+   ID. The workflow uses
    `GITHUB_TOKEN` without a pinned login; the trigger actor need not be the
    PR actor. A familiar bot, branch, title or label is not proof. When recent
    logs do not establish the writer or resulting SHA, use the historical
@@ -72,8 +75,11 @@ Git 2.47.3 and gh 2.46.0. Do not load the upstream skill.
    Before drafting, require the proposed version to be strictly newer than
    that release's version: parse both stable tags as `vMAJOR.MINOR.PATCH`
    and compare their numeric components in order, not as strings. Also
-   require `git merge-base --is-ancestor "$prior_sha" "$base_sha"` to exit
-   zero for the peeled previous tag SHA and independently pinned base tip.
+   require the read-only GitHub compare API for the peeled previous tag SHA
+   (`$prior_sha`) and independently pinned base tip (`$base_sha`) to return
+   `base_commit.sha == $prior_sha` and
+   `merge_base_commit.sha == $prior_sha`. Do not fetch missing Git objects
+   or modify `FETCH_HEAD`.
    Stop without drafts if either check fails or cannot be verified.
 4. Draft from the previous stable tag's peeled SHA through the pinned base
    tip, not through the candidate head. Return one evidence record with
