@@ -55,6 +55,12 @@ Open an issue first for:
 
 This allows the proposed direction to be discussed before implementation work begins.
 
+Opening an issue starts a discussion, not an assignment to implement it. If you
+plan to work on a proposed change (or already have work underway), mention it
+in the issue. Maintainers should do the same. Check for overlapping work and
+coordinate who will implement the change before proceeding; update the issue
+if plans change.
+
 Bug fixes, documentation changes, tests, and small maintenance improvements may be submitted directly as pull requests.
 
 If an issue already exists, link it from the pull request using `Fixes #123` or `Closes #123`.
