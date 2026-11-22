@@ -1605,7 +1605,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               category: "delegation",
               label: "Delegate Agents to other directories (cwd)",
               description: config.allowAgentCwdOverride ? "On" : "Off",
-              help: "Allow ordinary Leads to select another directory using `cwd` in `delegate_agent`. Without it, Agents use the Lead's directory. Global setting; run `/reload` after changing it.",
+              help: "Allow ordinary Leads to select another directory using `cwd` in `delegate_agent`. Without it, Agents use the Lead's directory. Global setting; changes apply to subsequent model turns without `/reload`.",
             },
             {
               value: "removal-confirmation",
@@ -1662,7 +1662,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           try {
             host.updateConfig("allowAgentCwdOverride", choice === "on");
             ctx.ui.notify(
-              `Delegate Agents to other directories (cwd): ${choice === "on" ? "On" : "Off"}. Run /reload after changing it.`,
+              `Delegate Agents to other directories (cwd): ${choice === "on" ? "On" : "Off"}. Applies to subsequent delegations and model turns.`,
             );
           } catch (error) {
             ctx.ui.notify(

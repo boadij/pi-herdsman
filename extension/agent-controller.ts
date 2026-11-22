@@ -10523,56 +10523,55 @@ export function createAgentController(
       });
     }
     const agentListParameters = emptyParameters;
-    const exposeCwd =
-      controllerScope.kind === "root" && readConfig().allowAgentCwdOverride;
-    const agentDelegateParameters = Type.Object(
-      {
-        definition:
-          controllerScope.kind === "managed-agent"
-            ? {
-                ...StringEnum([...controllerScope.allowedAgentDefinitions]),
-                description: "Allowed Agent definition.",
-              }
-            : Type.String({
-                description: "Agent definition for a fresh Agent.",
-                minLength: 1,
-              }),
-        task: Type.String({
-          description: "Non-empty assignment.",
-          minLength: 1,
-        }),
-        label: Type.Optional(
-          Type.String({
-            description:
-              "Optional concise, task-specific logical Agent label (e.g. review-auth-tokens), without sensitive details. Must match ^[a-z][a-z0-9_-]{0,31}$; Herdsman chooses a definition-based label when omitted.",
-            pattern: AGENT_LABEL_PATTERN.source,
-          }),
-        ),
-        files: FILES_SCHEMA,
-        ...(exposeCwd
-          ? {
-              cwd: Type.Optional(
-                Type.String({
+    const agentDelegateParameters = (exposeCwd: boolean) =>
+      Type.Object(
+        {
+          definition:
+            controllerScope.kind === "managed-agent"
+              ? {
+                  ...StringEnum([...controllerScope.allowedAgentDefinitions]),
+                  description: "Allowed Agent definition.",
+                }
+              : Type.String({
+                  description: "Agent definition for a fresh Agent.",
                   minLength: 1,
-                  description:
-                    "Optional execution directory for this fresh Agent. Relative paths resolve against the controller cwd. Only ordinary Leads can select a different directory.",
                 }),
-              ),
-            }
-          : {}),
-        ...(controllerScope.kind === "managed-agent"
-          ? {
-              retain: Type.Optional(
-                Type.Boolean({
-                  description:
-                    "Retain supplied files as continuing requirements for your own descendants only. Project-wide requirements are controlled by the Manager.",
-                }),
-              ),
-            }
-          : {}),
-      },
-      { additionalProperties: false },
-    );
+          task: Type.String({
+            description: "Non-empty assignment.",
+            minLength: 1,
+          }),
+          label: Type.Optional(
+            Type.String({
+              description:
+                "Optional concise, task-specific logical Agent label (e.g. review-auth-tokens), without sensitive details. Must match ^[a-z][a-z0-9_-]{0,31}$; Herdsman chooses a definition-based label when omitted.",
+              pattern: AGENT_LABEL_PATTERN.source,
+            }),
+          ),
+          files: FILES_SCHEMA,
+          ...(exposeCwd
+            ? {
+                cwd: Type.Optional(
+                  Type.String({
+                    minLength: 1,
+                    description:
+                      "Optional execution directory for this fresh Agent. Relative paths resolve against the controller cwd. Only ordinary Leads can select a different directory.",
+                  }),
+                ),
+              }
+            : {}),
+          ...(controllerScope.kind === "managed-agent"
+            ? {
+                retain: Type.Optional(
+                  Type.Boolean({
+                    description:
+                      "Retain supplied files as continuing requirements for your own descendants only. Project-wide requirements are controlled by the Manager.",
+                  }),
+                ),
+              }
+            : {}),
+        },
+        { additionalProperties: false },
+      );
     const agentContinueParameters = Type.Object(
       {
         session: Type.String({
@@ -10776,35 +10775,59 @@ export function createAgentController(
         ctx: ExtensionContext,
       ) => agentTool.execute(id, { action: "list" }, signal, update, ctx),
     });
-    pi.registerTool({
-      ...agentTool,
-      name: "delegate_agent",
-      label: "delegate agent",
-      exposure: "direct",
-      description:
-        "Start one fresh bounded assignment. Choose the most focused eligible Agent definition capable of completing the full task using its effective tools. The Agent roster describes potential child capabilities, not your own callable tools. Parent and child tool permissions are independent; delegation does not grant either session the other's tools. Prefer the most focused definition; use a general-purpose definition when broader capabilities are needed or no focused definition fits.",
-      parameters: agentDelegateParameters,
-      promptSnippet: undefined,
-      promptGuidelines: [FILE_HANDOFF_GUIDANCE],
-      execute: (
-        id: string,
-        params: any,
-        signal: AbortSignal | undefined,
-        update: unknown,
-        ctx: ExtensionContext,
-      ) =>
-        agentTool.execute(
-          id,
-          { action: "delegate", ...params },
-          signal,
-          update,
-          ctx,
-        ),
-      renderCall: (a: unknown, t: any, c: any) =>
-        renderCoordinationCall("agent", "delegate", a, t, c),
-      renderResult: (r: any, o: any, t: any, c: any) =>
-        renderCoordinationResult("agent", "delegate", r, o, t, c),
-    });
+    const registerDelegate = (exposeCwd: boolean) =>
+      pi.registerTool({
+        ...agentTool,
+        name: "delegate_agent",
+        label: "delegate agent",
+        exposure: "direct",
+        description:
+          "Start one fresh bounded assignment. Choose the most focused eligible Agent definition capable of completing the full task using its effective tools. The Agent roster describes potential child capabilities, not your own callable tools. Parent and child tool permissions are independent; delegation does not grant either session the other's tools. Prefer the most focused definition; use a general-purpose definition when broader capabilities are needed or no focused definition fits.",
+        parameters: agentDelegateParameters(exposeCwd),
+        promptSnippet: undefined,
+        promptGuidelines: [FILE_HANDOFF_GUIDANCE],
+        execute: (
+          id: string,
+          params: any,
+          signal: AbortSignal | undefined,
+          update: unknown,
+          ctx: ExtensionContext,
+        ) =>
+          agentTool.execute(
+            id,
+            { action: "delegate", ...params },
+            signal,
+            update,
+            ctx,
+          ),
+        renderCall: (a: unknown, t: any, c: any) =>
+          renderCoordinationCall("agent", "delegate", a, t, c),
+        renderResult: (r: any, o: any, t: any, c: any) =>
+          renderCoordinationResult("agent", "delegate", r, o, t, c),
+      });
+
+    let advertisedCwd =
+      controllerScope.kind === "root" && readConfig().allowAgentCwdOverride;
+    registerDelegate(advertisedCwd);
+
+    if (controllerScope.kind === "root") {
+      const refreshDelegateSchema = () => {
+        const enabled = readConfig().allowAgentCwdOverride;
+        if (enabled === advertisedCwd) return;
+
+        const activeTools = pi.getActiveTools();
+        try {
+          registerDelegate(enabled);
+        } finally {
+          if (!isDeepStrictEqual(pi.getActiveTools(), activeTools))
+            pi.setActiveTools(activeTools);
+        }
+        advertisedCwd = enabled;
+      };
+
+      pi.on("before_agent_start", refreshDelegateSchema);
+      pi.on("turn_end", refreshDelegateSchema);
+    }
     pi.registerTool({
       ...agentTool,
       name: "continue_agent",

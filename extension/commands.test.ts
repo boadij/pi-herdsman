@@ -19825,7 +19825,7 @@ test("Delegation options renders the full working directory help", async () => {
     );
     assert.ok(
       settings.includes(
-        "Allow ordinary Leads to select another directory using `cwd` in `delegate_agent`. Without it, Agents use the Lead's directory. Global setting; run `/reload` after changing it.",
+        "Allow ordinary Leads to select another directory using `cwd` in `delegate_agent`. Without it, Agents use the Lead's directory. Global setting; changes apply to subsequent model turns without `/reload`.",
       ),
     );
   } finally {

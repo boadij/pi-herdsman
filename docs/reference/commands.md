@@ -88,8 +88,9 @@ Agent status or definitions to render.
 [`Delegate Agents to other directories (cwd)`](configuration.md#schema-and-defaults)
 is a global Off/On setting. It allows Leads to specify a different working
 directory using the optional `cwd` parameter in `delegate_agent`. Without it,
-Agents start in the Lead's current directory. Run `/reload` after changing it.
-Cross-directory delegation is limited to ordinary Leads. See
+Agents start in the Lead's current directory. Changes apply to subsequent
+delegations and model turns without `/reload`. Cross-directory delegation is
+limited to ordinary Leads. See
 [`Peer communication` and `Peer federation`](configuration.md#peer-communication)
 in the Configuration reference.
 

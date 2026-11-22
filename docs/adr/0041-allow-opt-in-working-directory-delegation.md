@@ -35,6 +35,14 @@ directory under [ADR 0004](0004-separate-delegation-from-continuation.md).
 The new input belongs only to fresh delegation under
 [ADR 0006](0006-use-operation-specific-semantic-tools.md).
 
+## Amendment: Schema timing
+
+[Issue #1084](https://github.com/boadij/pi-herdsman/issues/1084) supersedes the
+reload requirement only. The controller refreshes its registered tool schema
+before a new model run and at the end of a turn when the global opt-in changes.
+Runtime authorization continues to use the current global setting independently
+of the advertised schema.
+
 ## Consequences
 
 - An execution directory is not a grant of ownership, workspace authority,
