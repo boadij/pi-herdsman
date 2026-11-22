@@ -17,6 +17,7 @@ ${@:-None provided.}
    `commit_message` (explicitly `""` if empty), and complete GitHub Release
    and Discord drafts. If multiple eligible PRs exist, ask the maintainer to
    select one. Resolve missing or contradictory evidence before proceeding.
+
 2. **Review.** Use the complete drafter result without repeating its research.
    Check the release diff, provenance, version, migration, installation,
    contributors and public-disclosure safety. Preserve verified credits.
@@ -24,6 +25,7 @@ ${@:-None provided.}
    `END RELEASE BODY` and `BEGIN DISCORD DRAFT` / `END DISCORD DRAFT`
    markers without rewriting it. Discord must contain one `{{RELEASE_URL}}`,
    no other placeholders, and fit 1,600 characters with the final URL.
+
 3. **Authorize once.** Show the complete proposed release body, Discord draft,
    pinned PR refs, and exact squash API title/message. Distinguish the API
    `commit_message` from the resulting Git commit's stored message. Explain
@@ -43,6 +45,7 @@ ${@:-None provided.}
    writer confirmation are required for the normal workflow. If the candidate
    or approved content changes, get fresh approval. A confirmation is not a
    cross-host lock.
+
 4. **Ship once.** Give `ship` the actual immutable drafter result ref in
    `delegate_agent.files`, pinned candidate and provenance, review evidence,
    approved content, exact approved API fields, and distinct grants. The Agent
@@ -50,6 +53,7 @@ ${@:-None provided.}
    squash and, if needed, one body-only update. The shipping procedure below
    is its complete contract. No local Git writes, tag/release creation,
    registry operations, workflow dispatch/rerun/approval, or Discord posting.
+
 5. **Report.** Return checks, merge SHA, release URL and notes readback as
    distinct outcomes, including partial failures. Only after verified notes
    readback, replace the Discord draft's single `{{RELEASE_URL}}` with the
