@@ -64,6 +64,24 @@ Place the actual content between each pair; do not wrap the artifacts in code
 fences, trim their final newlines or put research notes inside them. The Lead
 will review the material and obtain human approval before any mutation.
 
+## Technical clarity
+
+- Explain meaningful changes through previous behavior, new behavior, and
+  practical user benefit. Name affected operations and users when relevant.
+- State important defaults, opt-ins, limitations, and actions users need to
+  take. Distinguish optional setup from required migration.
+- Give a verified example, setting path, command, or before/after comparison
+  when it helps users apply or understand a change.
+- Distinguish requested settings from observed behavior and capabilities from
+  guarantees. Never imply stronger behavior than the evidence supports.
+- Link useful implementation PRs or documentation where they clarify details;
+  do not rely on unexplained issue-number lists.
+- Use the same verified facts for both outputs. Keep Discord focused on
+  benefits, essential qualifiers, and immediate actions; leave deeper
+  technical explanations in GitHub release notes.
+- Apply these guidelines proportionally, without filler, repetitive sections,
+  or invented details.
+
 ## GitHub release notes
 
 Use a consistent, scannable presentation with detail proportional to actual
