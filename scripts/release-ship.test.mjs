@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, writeFileSync, readFileSync, chmodSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  writeFileSync,
+  readFileSync,
+  chmodSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { artifacts, prepare, request } from "./release-ship.mjs";
 
-const source = Buffer.from('BEGIN RELEASE BODY\n# 🐑 Release  \n\nEND RELEASE BODY\nBEGIN DISCORD DRAFT\nA release: {{RELEASE_URL}}\nEND DISCORD DRAFT\n');
+const source = Buffer.from(
+  "BEGIN RELEASE BODY\n# 🐑 Release  \n\nEND RELEASE BODY\nBEGIN DISCORD DRAFT\nA release: {{RELEASE_URL}}\nEND DISCORD DRAFT\n",
+);
 const body = artifacts(source).body;
 const digest = createHash("sha256").update(body).digest("hex");
 const sha = "a".repeat(40);
@@ -32,33 +40,73 @@ function withGh(code, fn) {
   chmodSync(path, 0o755);
   const previous = process.env.PATH;
   process.env.PATH = `${dir}:${previous}`;
-  try { return fn(dir); }
-  finally { process.env.PATH = previous; rmSync(dir, { recursive: true, force: true }); }
+  try {
+    return fn(dir);
+  } finally {
+    process.env.PATH = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 test("only an explicit HTTP 404 counts as absent", () => {
   for (const status of [200, 401, 403, 404, 429, 500]) {
-    withGh(`printf 'HTTP/2 ${status} response\\r\\ncontent-type: application/json\\r\\n\\r\\n{}'; exit ${status === 200 ? 0 : 1}`, () => {
-      if (status === 404) assert.deepEqual(request("repos/boadij/pi-herdsman/git/ref/tags/v0.54.0"), { status, data: null });
-      else if (status === 200) assert.equal(request("repos/boadij/pi-herdsman/git/ref/tags/v0.54.0").status, 200);
-      else assert.throws(() => request("repos/boadij/pi-herdsman/git/ref/tags/v0.54.0"), /HTTP/);
-    });
+    withGh(
+      `printf 'HTTP/2 ${status} response\\r\\ncontent-type: application/json\\r\\n\\r\\n{}'; exit ${status === 200 ? 0 : 1}`,
+      () => {
+        if (status === 404)
+          assert.deepEqual(
+            request("repos/boadij/pi-herdsman/git/ref/tags/v0.54.0"),
+            { status, data: null },
+          );
+        else if (status === 200)
+          assert.equal(
+            request("repos/boadij/pi-herdsman/git/ref/tags/v0.54.0").status,
+            200,
+          );
+        else
+          assert.throws(
+            () => request("repos/boadij/pi-herdsman/git/ref/tags/v0.54.0"),
+            /HTTP/,
+          );
+      },
+    );
   }
   withGh("echo 'connection failed' >&2; exit 1", () => {
-    assert.throws(() => request("repos/boadij/pi-herdsman/git/ref/tags/v0.54.0"), /HTTP status unavailable/);
+    assert.throws(
+      () => request("repos/boadij/pi-herdsman/git/ref/tags/v0.54.0"),
+      /HTTP status unavailable/,
+    );
   });
 });
 
 test("approved bytes, newlines and empty squash API message are preserved", () => {
   const input = prepare(record, source);
   assert.deepEqual(input.body, Buffer.from("# 🐑 Release  \n\n"));
-  assert.equal(JSON.parse(input.bodyPayload.toString()).body, input.body.toString());
+  assert.equal(
+    JSON.parse(input.bodyPayload.toString()).body,
+    input.body.toString(),
+  );
   assert.deepEqual(JSON.parse(input.merge.toString()), {
-    sha: head, merge_method: "squash", commit_title: title, commit_message: "",
+    sha: head,
+    merge_method: "squash",
+    commit_title: title,
+    commit_message: "",
   });
-  assert.throws(() => prepare({ ...record, body_sha256: "0".repeat(64) }, source), /approved bytes/);
-  assert.throws(() => prepare({ ...record, expected_stored_message: title + "\n" }, source), /projection differs/);
-  assert.throws(() => artifacts(Buffer.from(source.toString().replace("END RELEASE BODY", "END OTHER"))), /Ambiguous/);
+  assert.throws(
+    () => prepare({ ...record, body_sha256: "0".repeat(64) }, source),
+    /approved bytes/,
+  );
+  assert.throws(
+    () => prepare({ ...record, expected_stored_message: title + "\n" }, source),
+    /projection differs/,
+  );
+  assert.throws(
+    () =>
+      artifacts(
+        Buffer.from(source.toString().replace("END RELEASE BODY", "END OTHER")),
+      ),
+    /Ambiguous/,
+  );
 });
 
 test("end-to-end fake GitHub merger verifies tag and notes without extra writes", () => {
@@ -89,23 +137,60 @@ if(status>=400) process.exit(1);
   try {
     writeFileSync(join(dir, "gh"), fake);
     chmodSync(join(dir, "gh"), 0o755);
-    const inputPath = join(dir, "input.json"), resultPath = join(dir, "result.txt"), statePath = join(dir, "state.json");
+    const inputPath = join(dir, "input.json"),
+      resultPath = join(dir, "result.txt"),
+      statePath = join(dir, "state.json");
     writeFileSync(inputPath, JSON.stringify(record));
     writeFileSync(resultPath, source);
-    writeFileSync(statePath, JSON.stringify({ merged: false, body: null, patches: 0 }));
-    const run = spawnSync(process.execPath, [new URL("./release-ship.mjs", import.meta.url).pathname, inputPath, resultPath], {
-      encoding: "utf8", env: { ...process.env, GH_STATE: statePath, PATH: `${dir}:${process.env.PATH}` },
-    });
+    writeFileSync(
+      statePath,
+      JSON.stringify({ merged: false, body: null, patches: 0 }),
+    );
+    const run = spawnSync(
+      process.execPath,
+      [
+        new URL("./release-ship.mjs", import.meta.url).pathname,
+        inputPath,
+        resultPath,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GH_STATE: statePath,
+          PATH: `${dir}:${process.env.PATH}`,
+        },
+      },
+    );
     assert.equal(run.status, 0, run.stderr + "\n" + run.stdout);
     assert.equal(JSON.parse(run.stdout).stage, "verified-notes");
-    assert.equal(JSON.parse(readFileSync(statePath,"utf8")).patches, 1);
+    assert.equal(JSON.parse(readFileSync(statePath, "utf8")).patches, 1);
     for (const denied of [200, 403, 429, 500]) {
-      writeFileSync(statePath, JSON.stringify({ merged: false, body: null, patches: 0 }));
-      const refused = spawnSync(process.execPath, [new URL("./release-ship.mjs", import.meta.url).pathname, inputPath, resultPath], {
-        encoding: "utf8", env: { ...process.env, GH_STATE: statePath, GH_TAG_STATUS: String(denied), PATH: `${dir}:${process.env.PATH}` },
-      });
+      writeFileSync(
+        statePath,
+        JSON.stringify({ merged: false, body: null, patches: 0 }),
+      );
+      const refused = spawnSync(
+        process.execPath,
+        [
+          new URL("./release-ship.mjs", import.meta.url).pathname,
+          inputPath,
+          resultPath,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            GH_STATE: statePath,
+            GH_TAG_STATUS: String(denied),
+            PATH: `${dir}:${process.env.PATH}`,
+          },
+        },
+      );
       assert.notEqual(refused.status, 0, `status ${denied} must block`);
       assert.equal(JSON.parse(readFileSync(statePath, "utf8")).merged, false);
     }
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -50,6 +50,7 @@ ${@:-None provided.}
    confirms no overlapping ship attempt or release-body editor. Invocation,
    silence, ambiguity or one grant do not imply any other grant. Known
    competing writers block; coordination cannot guarantee cross-host exclusion.
+
 4. After both grants and writer confirmation, delegate `ship` one bounded
    assignment with the **actual immutable drafter result ref in `files`**.
    Provide the pinned identity/provenance, complete review evidence, the exact
@@ -73,6 +74,7 @@ ${@:-None provided.}
    Do not invoke before authorization and live preflight. The executor is not
    a consent system. Inspect its structured result. Never retry an uncertain
    write; reconcile the actual server state and stop on unverifiable outcomes.
+
 6. If a required Actions run truly needs approval, identify the exact pending
    run/attempt, event, repository, PR association and reviewed head and stop.
    Only a human operator may independently reverify and approve that run.
