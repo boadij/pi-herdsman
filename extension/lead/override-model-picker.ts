@@ -48,14 +48,25 @@ export async function pickOverrideModels(
   }).map(modelToken);
   let preserveInheritance = configured.length === 0;
   let selected = new Set(preserveInheritance ? inherited : configured);
+  const orderedIds = [
+    ...ids.filter((id) => selected.has(id)),
+    ...ids.filter((id) => !selected.has(id)),
+  ];
   const usingInheritance = () =>
     preserveInheritance && sameSelection(selected, inherited);
-  const selectionStatus = () =>
-    usingInheritance()
-      ? `Using Pi scoped models · ${selected.size} selected`
-      : selected.size
-        ? `Custom selection · ${selected.size} selected`
-        : "No custom models selected. Pi scoped models will be used.";
+  const selectionStatus = () => {
+    const inheritedSelection = usingInheritance();
+    if (!inheritedSelection && !selected.size) {
+      return "No custom models selected. Pi scoped models will be used.";
+    }
+    let unavailable = 0;
+    for (const id of selected) if (!available.has(id)) unavailable++;
+    const policy = inheritedSelection
+      ? "Using Pi scoped models"
+      : "Custom selection";
+    const count = `${selected.size - unavailable}/${available.size} selected`;
+    return `${policy} · ${count}${unavailable ? ` · ${unavailable} unavailable` : ""}`;
+  };
   const restoreInheritance = () => {
     preserveInheritance = true;
     selected = new Set(inherited);
@@ -64,16 +75,15 @@ export async function pickOverrideModels(
     const models = usingInheritance() ? [] : [...selected];
     return sameSelection(new Set(models), configured) ? undefined : models;
   };
-  const label = (id: string) => {
+  const label = (id: string, checkmark = "✓") => {
     const model = available.get(id);
-    const token = collapseDisplayText(id) ?? "(unnamed model)";
+    const token = collapseDisplayText(model?.id ?? id) ?? "(unnamed model)";
     const name = collapseDisplayText(model?.name);
-    const annotation = model
-      ? name && name !== model.id
-        ? ` (${name})`
-        : ""
-      : " (unavailable)";
-    return `${selected.has(id) ? "[x]" : "[ ]"} ${token}${annotation}`;
+    const annotation = name && name !== token ? ` (${name})` : "";
+    const provider = model
+      ? (collapseDisplayText(model.provider) ?? "unnamed provider")
+      : "unavailable";
+    return `${selected.has(id) ? checkmark : " "} ${token}${annotation} [${provider}]`;
   };
   const toggle = (id: string) => {
     if (!selected.delete(id)) selected.add(id);
@@ -84,10 +94,13 @@ export async function pickOverrideModels(
       const choice = await selectMenu(
         `${overrideModelPickerTitle} · ${selectionStatus()}`,
         [
+          {
+            value: "inherit",
+            label: `${usingInheritance() ? "✓" : " "} ${inheritLabel}`,
+          },
           { value: "save", label: "Save" },
-          { value: "inherit", label: inheritLabel },
           { value: "cancel", label: "Cancel" },
-          ...ids.map((id, index) => ({
+          ...orderedIds.map((id, index) => ({
             value: String(index),
             label: `${index + 1}. ${label(id)}`,
           })),
@@ -99,7 +112,7 @@ export async function pickOverrideModels(
         restoreInheritance();
         continue;
       }
-      const id = ids[Number(choice)];
+      const id = orderedIds[Number(choice)];
       if (id === undefined) return;
       toggle(id);
     }
@@ -137,24 +150,35 @@ export async function pickOverrideModels(
       ),
     );
 
-    let filtered = ids;
-    let index = 0;
+    let filtered = orderedIds;
+    let index = filtered.length ? 1 : 0;
+    const addRow = (current: boolean, content: string) => {
+      const row = `${current ? "→" : " "} ${content}`;
+      body.addChild({
+        render: (width) => [
+          truncateToWidth(current ? theme.fg("accent", row) : row, width),
+        ],
+        invalidate() {},
+      });
+    };
     const redraw = () => {
       body.clear();
-      const rows = [...filtered, undefined];
-      const start = Math.max(0, Math.min(index - 4, rows.length - 8));
+      const accentCheckmark = theme.fg("accent", "✓");
+      const inheritCurrent = index === 0;
+      const inheritMark = usingInheritance()
+        ? inheritCurrent
+          ? "✓"
+          : accentCheckmark
+        : " ";
+      addRow(inheritCurrent, `${inheritMark} ${inheritLabel}`);
+
+      const start = Math.max(0, Math.min(index - 4, filtered.length - 8));
+      for (const [offset, id] of filtered.slice(start, start + 8).entries()) {
+        const current = index === start + offset + 1;
+        addRow(current, label(id, current ? "✓" : accentCheckmark));
+      }
       if (!filtered.length)
         body.addChild(new Text(theme.fg("dim", "No matching models")));
-      for (const [offset, id] of rows.slice(start, start + 8).entries()) {
-        const current = index === start + offset;
-        const row = `${current ? "→" : " "} ${id === undefined ? inheritLabel : label(id)}`;
-        body.addChild({
-          render: (width) => [
-            truncateToWidth(current ? theme.fg("accent", row) : row, width),
-          ],
-          invalidate() {},
-        });
-      }
       status.setText(selectionStatus());
     };
     redraw();
@@ -169,7 +193,7 @@ export async function pickOverrideModels(
       render: (width) => frame.render(width),
       invalidate: () => frame.invalidate(),
       handleInput(data) {
-        const highlighted = filtered[index];
+        const highlighted = index === 0 ? undefined : filtered[index - 1];
         if (keys.matches(data, "app.models.save")) return done(save());
         if (keys.matches(data, "tui.select.cancel")) return done(undefined);
         if (keys.matches(data, "app.models.enableAll")) {
@@ -208,12 +232,12 @@ export async function pickOverrideModels(
           if (input.getValue() !== previous) {
             filtered = query
               ? fuzzyFilter(
-                  ids,
+                  orderedIds,
                   query,
                   (id) => `${id} ${available.get(id)?.name ?? ""}`,
                 )
-              : ids;
-            index = 0;
+              : orderedIds;
+            index = filtered.length ? 1 : 0;
           }
         }
         redraw();

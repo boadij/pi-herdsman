@@ -64,29 +64,35 @@ test("override picker filters, toggles, applies bulk shortcuts and saves or canc
               },
             );
             const display = () => component.render(120).join("\n");
-            assert.match(display(), /\[x\] missing\/model \(unavailable\)/);
+            assert.match(display(), /→ ✓ missing\/model \[unavailable\]/);
             component.handleInput("\u0001"); // Select available models, retaining unavailable selections.
-            assert.match(display(), /4 selected/);
+            assert.match(display(), /3\/3 selected · 1 unavailable/);
             component.handleInput("\u0018"); // Clear all (including unavailable).
             assert.match(
               display(),
               /No custom models selected\. Pi scoped models will be used\./,
             );
             for (const char of "Alpha") component.handleInput(char);
-            assert.match(display(), /group\/one\/first/);
-            assert.doesNotMatch(display(), /group\/one\/second/);
+            assert.match(display(), /→   first \(Alpha\) \[group\/one\]/);
+            assert.doesNotMatch(display(), /second \(Beta\)/);
             component.handleInput("\u0001"); // Select filtered.
-            assert.match(display(), /\[x\] group\/one\/first/);
+            assert.match(display(), /→ ✓ first \(Alpha\) \[group\/one\]/);
             component.handleInput("\u0018"); // Clear filtered.
-            component.handleInput("\r"); // Toggle highlighted.
+            component.handleInput("\r"); // Toggle the sole match, not inheritance.
+            assert.match(display(), /→ ✓ first/);
             component.handleInput("\u0010"); // Select entire provider despite filter.
-            assert.match(display(), /2 selected/);
+            assert.match(display(), /2\/3 selected/);
             component.handleInput("\u0010"); // Clear entire provider.
             assert.match(display(), /No custom models selected/);
             for (let i = 0; i < 5; i++) component.handleInput("\u007f");
-            component.handleInput("\u001b[B"); // Navigate to second.
-            assert.match(display(), /→ \[ \] group\/one\/second/);
+            component.handleInput("\u001b[B"); // Move past the unavailable row.
+            component.handleInput("\u001b[B");
+            assert.match(display(), /→   second \(Beta\) \[group\/one\]/);
             component.handleInput("\r");
+            assert.match(
+              display(),
+              /missing\/model \[unavailable\][\s\S]*first \(Alpha\)[\s\S]*→ ✓ second \(Beta\)/,
+            );
             component.handleInput(save ? "\u0013" : "\u001b");
             return result;
           },
@@ -103,7 +109,17 @@ test("override picker filters, toggles, applies bulk shortcuts and saves or canc
 
 for (const mode of ["tui", "rpc"]) {
   test(`override picker previews and preserves Pi scope in ${mode}`, async () => {
-    const [first, second] = overridePickerModels;
+    const [first, second, third] = overridePickerModels;
+    const catalog = [
+      third,
+      first,
+      second,
+      ...Array.from({ length: 16 }, (_, index) => ({
+        provider: "extra",
+        id: "model-" + index,
+        name: "model-" + index,
+      })),
+    ];
     const steps = {
       remove: { key: "\r", choice: "0" },
       inherit: { key: "\r", choice: "inherit" },
@@ -111,6 +127,11 @@ for (const mode of ["tui", "rpc"]) {
     };
     for (const { configured, actions, expected } of [
       { configured: [], actions: [steps.save], expected: undefined },
+      {
+        configured: ["group/one/first", "group/one/second"],
+        actions: [steps.save],
+        expected: undefined,
+      },
       {
         configured: [],
         actions: [steps.remove, steps.save],
@@ -123,10 +144,18 @@ for (const mode of ["tui", "rpc"]) {
       },
     ]) {
       const assertInherited = (display: string) => {
-        assert.match(display, /Using Pi scoped models · 2 selected/);
-        assert.match(display, /\[x\] group\/one\/first/);
-        assert.match(display, /\[x\] group\/one\/second/);
-        assert.match(display, /\[ \] other\/third/);
+        assert.match(display, /Using Pi scoped models · 2\/19 selected/);
+        assert.match(display, /✓ Use Pi scoped models/);
+      };
+      const assertSelectedFirst = (display: string) => {
+        assert.match(
+          display,
+          /✓ Use Pi scoped models[\s\S]*✓ first \(Alpha\)[\s\S]*✓ second \(Beta\)[\s\S]*third \(Gamma\)/,
+        );
+      };
+      const assertCustom = (display: string) => {
+        assert.match(display, /Custom selection/);
+        assert.doesNotMatch(display, /✓ Use Pi scoped models/);
       };
       let previous: (typeof steps)[keyof typeof steps] | undefined;
       const result = await pickOverrideModels(
@@ -135,12 +164,13 @@ for (const mode of ["tui", "rpc"]) {
           scopedModels: [{ model: first }, { model: second }],
           modelRegistry: {
             refresh: async () => {},
-            getAvailable: () => overridePickerModels,
+            getAvailable: () => catalog,
           },
           ui: {
             custom: async (factory: any) => {
               assert.equal(mode, "tui");
               const up = "\u001b[A";
+              const down = "\u001b[B";
               const clear = "\u001bOQ"; // Pi's clear action is configured to F2.
               let result: string[] | undefined;
               const component = factory(
@@ -152,6 +182,7 @@ for (const mode of ["tui", "rpc"]) {
                       name === "tui.select.confirm") ||
                     (input === steps.save.key && name === "app.models.save") ||
                     (input === up && name === "tui.select.up") ||
+                    (input === down && name === "tui.select.down") ||
                     (input === clear && name === "app.models.clearAll"),
                   getKeys: (name: string) => [name],
                 },
@@ -160,13 +191,31 @@ for (const mode of ["tui", "rpc"]) {
                 },
               );
               const display = () => component.render(120).join("\n");
-              if (!configured.length) assertInherited(display());
+              if (!configured.length) {
+                assertInherited(display());
+                assertSelectedFirst(display());
+                if (actions.length === 1) {
+                  component.handleInput(up);
+                  assert.match(display(), /→ ✓ Use Pi scoped models/);
+                  component.handleInput(down);
+                  assert.match(display(), /→ ✓ first/);
+                  for (let i = 0; i < 9; i++) component.handleInput(down);
+                  assert.match(display(), /→   model-6 \[extra\]/);
+                  assert.doesNotMatch(display(), /first \(Alpha\)/);
+                  assertInherited(display());
+                }
+              } else {
+                assertCustom(display());
+              }
               for (const action of actions) {
                 if (action === steps.inherit) {
                   component.handleInput(clear);
                   assert.match(display(), /No custom models selected/);
-                  component.handleInput(up);
-                  assert.match(display(), /→ Use Pi scoped models/);
+                  component.handleInput("z");
+                  assert.match(
+                    display(),
+                    /→   Use Pi scoped models[\s\S]*No matching models/,
+                  );
                 }
                 component.handleInput(action.key);
                 if (action === steps.inherit) assertInherited(display());
@@ -180,10 +229,17 @@ for (const mode of ["tui", "rpc"]) {
           assert.equal(mode, "rpc");
           const action = actions.shift();
           assert.ok(action);
-          if ((!previous && !configured.length) || previous === steps.inherit) {
-            assertInherited(
-              [title, ...items.map(({ label }) => label)].join("\n"),
-            );
+          assert.equal(items[0]?.value, "inherit");
+          const display = [title, ...items.map(({ label }) => label)].join(
+            "\n",
+          );
+          if (!previous && !configured.length) {
+            assertInherited(display);
+            assertSelectedFirst(display);
+          } else if (!previous) {
+            assertCustom(display);
+          } else if (previous === steps.inherit) {
+            assertInherited(display);
           }
           assert.ok(items.some(({ value }) => value === action.choice));
           previous = action;
@@ -201,10 +257,10 @@ test("Delegation settings allow editing while Off and write only when saved", as
   const notices: string[] = [];
   const choices = [
     "allowed-override-models",
-    "3",
+    "0",
     "cancel",
     "allowed-override-models",
-    "3",
+    "0",
     "save",
     "model-overrides",
     "on",
@@ -229,11 +285,11 @@ test("Delegation settings allow editing while Off and write only when saved", as
           "Custom selection · 1 selected",
         );
       }
-      if (choice === "3") {
-        assert.match(title, /1 selected/);
+      if (choice === "0") {
+        assert.match(title, /0\/3 selected · 1 unavailable/);
         assert.match(
           items.find((item) => item.value === choice)?.label,
-          /missing\/model \(unavailable\)/,
+          /^1\. ✓ missing\/model \[unavailable\]$/,
         );
       }
       if (choice === "cancel" || choice === "save") {
