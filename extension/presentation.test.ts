@@ -14,6 +14,14 @@ import { stripVTControlCharacters } from "node:util";
 import test from "node:test";
 import { initTheme, SessionManager } from "@earendil-works/pi-coding-agent";
 import { Box, Container } from "@earendil-works/pi-tui";
+import {
+  buildAgentStatusSnapshot,
+  listedAgentRecord,
+  type AgentStatusSnapshotHost,
+  type ManagedAgentSnapshotView,
+  type Runtime,
+  type VisibleManagedAgentSnapshot,
+} from "./agent-controller.ts";
 import { prepareMessageInput } from "./core.ts";
 import type { DefinitionLayerTrace, Frontmatter } from "./agent-definitions.ts";
 import {
@@ -6456,6 +6464,158 @@ test("Agent definition skills remain readable, deduplicated, and width-safe", (_
     for (const width of [40, 80, 120, 160])
       for (const line of rendered.render(width))
         assert.ok(visibleWidth(line) <= width);
+  }
+});
+
+test("Agent rosters show only verified live reports of model and thinking", () => {
+  const runtime: Runtime = {
+    label: "unreported",
+    runId: "run-unreported",
+    ownerSessionId: "owner",
+    workspaceId: "workspace",
+    paneId: "pane-unreported",
+    piSessionId: "session-unreported",
+    cwd: "/project",
+    agentDefinition: "scout",
+    herdrAgent: "unreported",
+    mailboxPath: "/unused",
+    model: "provider/cached-only",
+    thinking: "medium",
+  };
+  const snapshots = [
+    ["quick", "live", { model: "provider/fast", thinking: "off" }],
+    ["deep", "live", { model: "provider/strong", thinking: "high" }],
+    ["partial", "live", { thinking: "low", model: " " }],
+    ["unreported", "live", {}],
+    ["lost", "lost", { model: "provider/stale", thinking: "high" }],
+    ["unknown", "unknown", { model: "provider/stale", thinking: "high" }],
+  ] as const;
+  const visible = snapshots.map(
+    ([label, kind, tokens]): VisibleManagedAgentSnapshot => {
+      const state = {
+        version: 5 as const,
+        runId: `run-${label}`,
+        ownerSessionId: "owner",
+        workspaceId: "workspace",
+        paneId: `pane-${label}`,
+        piSessionId: `session-${label}`,
+        agentLabel: label,
+        cwd: "/project",
+        updatedAt: 0,
+      };
+      return {
+        state,
+        agentDefinition: "scout",
+        lifecycleState: "working",
+        listed: {
+          label,
+          state: kind === "live" ? "working" : kind,
+          agent_definition: "scout",
+          tokens,
+        },
+        presence:
+          kind === "live"
+            ? {
+                kind,
+                agent: {
+                  workspace_id: state.workspaceId,
+                  pane_id: state.paneId,
+                  cwd: state.cwd,
+                },
+              }
+            : kind === "lost"
+              ? { kind }
+              : { kind, diagnostic: "unverified identity", relatedAgents: [] },
+      };
+    },
+  );
+  const view: ManagedAgentSnapshotView = {
+    visible,
+    agents: visible,
+    mailboxes: [],
+    stateIssues: [],
+    liveAgents: [],
+    rootOwners: [],
+  };
+  const runtimeForLabel = (label: string) =>
+    label === runtime.label ? runtime : undefined;
+  const runtimeState = visible.find(
+    ({ state }) => state.agentLabel === runtime.label,
+  )!.state;
+  const scope = { kind: "root" } as const;
+  const host: AgentStatusSnapshotHost = {
+    scope,
+    listedAgentRecord: (...args) =>
+      listedAgentRecord(...args, {
+        persistedTranscriptReady: () => false,
+        cascadePlan: () => {
+          throw new Error("not eligible for stop");
+        },
+        assertCascadeSafe: () => {},
+        runtimeForLabel,
+        sameIdentity: (left, right) => left === right,
+        runtimeIdentityState: () => runtimeState,
+      }),
+    runtimeForLabel,
+    sameIdentity: (left, right) => left === right,
+    environmentIdentity: () => undefined,
+    identityFromEnvironment: () => ({}),
+    ownToolsSnapshot: () => ({}),
+  };
+  const agents = visible.map((snapshot) =>
+    host.listedAgentRecord(view, snapshot, "owner", scope, true),
+  );
+  const expected = [
+    ["provider/fast", "off"],
+    ["provider/strong", "high"],
+    [undefined, "low"],
+    [undefined, undefined],
+    [undefined, undefined],
+    [undefined, undefined],
+  ];
+  assert.deepEqual(
+    agents.map(({ model, thinking }) => [model, thinking]),
+    expected,
+  );
+  for (const record of agents.slice(3)) {
+    assert.equal(Object.hasOwn(record, "model"), false);
+    assert.equal(Object.hasOwn(record, "thinking"), false);
+  }
+
+  const ctx = {
+    sessionManager: { getSessionId: () => "owner" },
+  } as Parameters<typeof buildAgentStatusSnapshot>[1];
+  const menu = buildAgentStatusSnapshot(view, ctx, host, {
+    observedExecutionSettingsOnly: true,
+  });
+  assert.deepEqual(
+    menu.agents.map(({ model, thinking }) => [model, thinking]),
+    expected,
+  );
+  const widget = buildAgentStatusSnapshot(view, ctx, host);
+  assert.equal(widget.agents[3]?.model, runtime.model);
+  assert.equal(widget.agents[3]?.thinking, runtime.thinking);
+
+  const details = { ok: true, action: "list", agents };
+  const modelText = formatToolModelResult("list", details);
+  const expanded = renderedText(
+    renderCoordinationResult(
+      "agent",
+      "list",
+      { details },
+      { expanded: true },
+      presentationTheme,
+      {},
+    ),
+  );
+  for (const output of [modelText, expanded]) {
+    assert.match(output, /quick[^\n]*model:? provider\/fast · thinking:? off/);
+    assert.match(
+      output,
+      /deep[^\n]*model:? provider\/strong · thinking:? high/,
+    );
+    assert.match(output, /partial[^\n]*thinking:? low/);
+    assert.doesNotMatch(output, /provider\/(?:cached-only|stale)/);
   }
 });
 

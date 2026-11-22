@@ -272,10 +272,15 @@ export function rootStatusBreadcrumb(
   return [{ text: role ?? "owner/controller", ...(role ? { role } : {}) }];
 }
 
+export type AgentStatusSnapshotOptions = {
+  observedExecutionSettingsOnly?: boolean;
+};
+
 export function buildAgentStatusSnapshot(
   view: ManagedAgentSnapshotView,
   ctx: ExtensionContext,
   host: AgentStatusSnapshotHost,
+  options?: AgentStatusSnapshotOptions,
 ): StatusSnapshot {
   const ownerSessionId = ctx.sessionManager.getSessionId();
   const unresolvedMailboxState =
@@ -355,8 +360,12 @@ export function buildAgentStatusSnapshot(
         : {}),
       task: typeof task === "string" ? task : runtime?.task,
       startedAt: presentation.startedAt ?? runtime?.startedAt,
-      model: presentation.model ?? runtime?.model ?? undefined,
-      thinking: presentation.thinking ?? runtime?.thinking ?? undefined,
+      model: options?.observedExecutionSettingsOnly
+        ? agent.model
+        : (presentation.model ?? runtime?.model ?? undefined),
+      thinking: options?.observedExecutionSettingsOnly
+        ? agent.thinking
+        : (presentation.thinking ?? runtime?.thinking ?? undefined),
       contextPercent: presentation.contextPercent,
       ...(agent.stale
         ? {
@@ -4624,7 +4633,7 @@ export function listedAgentRecord(
     sameIdentity(left: ManagedAgentState, right: ManagedAgentState): boolean;
     runtimeIdentityState(runtime: Runtime): ManagedAgentState;
   },
-): Record<string, unknown> {
+): Record<string, unknown> & { model?: string; thinking?: string } {
   const { listed, state, presence, parentLabel } = snapshot;
   const direct = state.ownerSessionId === ownerSessionId;
   const transcriptAvailable = dependencies.persistedTranscriptReady(state);
@@ -4677,6 +4686,10 @@ export function listedAgentRecord(
     agent_session: _agentSession,
     ...publicAgent
   } = listed;
+  // Runtime fields can be seeded at launch or retain a previous observation.
+  // Only the verified live listing supplies execution settings here.
+  const { model, thinking } =
+    presence.kind === "live" ? parsePresentationTokens(listed.tokens) : {};
   const runtime = dependencies.runtimeForLabel(state.agentLabel);
   const cleanupError =
     runtime &&
@@ -4687,6 +4700,8 @@ export function listedAgentRecord(
     ...publicAgent,
     agent: listed.label,
     available_tools: actions.map(agentToolName),
+    ...(model ? { model } : {}),
+    ...(thinking ? { thinking } : {}),
     ...(cleanupError ? { cleanup_error: cleanupError } : {}),
     ...(parentLabel ? { parent_label: parentLabel } : {}),
   };
