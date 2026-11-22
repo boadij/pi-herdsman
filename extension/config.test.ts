@@ -159,6 +159,43 @@ test("Agent working directory override defaults off and persists only booleans",
   );
 });
 
+test("Agent model overrides default off and retain explicit model IDs", () => {
+  assert.equal(readConfig().allowAgentModelOverrides, false);
+  assert.deepEqual(readConfig().allowedAgentModels, []);
+  updateConfig("allowAgentModelOverrides", true);
+  const selection = ["extension/provider/model/variant", "unavailable/model"];
+  updateConfig("allowedAgentModels", selection);
+  assert.deepEqual(readConfig().allowedAgentModels, selection);
+  assert.equal(readConfig().allowAgentModelOverrides, true);
+
+  updateConfig("allowedAgentModels", []);
+  assert.deepEqual(readConfig().allowedAgentModels, []);
+});
+
+test("Agent model override settings reject invalid updates and file contents", () => {
+  const invalid = [
+    ["allowAgentModelOverrides", "true"],
+    ...["model", [""], [" "], [42], ["vendor/model", "vendor/model"]].map(
+      (value) => ["allowedAgentModels", value] as const,
+    ),
+  ] as const;
+  for (const [key, value] of invalid) {
+    const message = new RegExp(`Invalid Pi Herdsman config field ${key}`);
+    assert.throws(() => updateConfig(key, value as never), message);
+  }
+  updateConfig("allowAgentModelOverrides", true);
+  for (const [key, value] of invalid) {
+    realFs.writeFileSync(
+      herdsmanConfigPath(),
+      JSON.stringify({ [key]: value }),
+    );
+    assert.throws(
+      () => readConfig(),
+      new RegExp(`Invalid Pi Herdsman config field ${key}`),
+    );
+  }
+});
+
 test("status widget rows validates, persists, and resets", () => {
   assert.equal(readConfig().statusWidgetMaxRows, 8);
   for (const value of [1, 100]) {

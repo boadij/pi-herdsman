@@ -124,6 +124,88 @@ async function invokeBeforeAgentStart(
   return result;
 }
 
+async function assertLiveDelegateSchema(
+  pi: ReturnType<typeof fakePi>,
+  context: ExtensionContext,
+  scope: "empty-root" | "delegating-agent",
+) {
+  const configPath = join(PI_AGENT_ROOT, "pi-herdsman", "config.json");
+  realFs.mkdirSync(dirname(configPath), { recursive: true });
+  const latest = (name: string) =>
+    pi.tools.filter((tool) => tool.name === name).at(-1)!;
+  const continuation = latest("continue_agent");
+  const canDelegate = scope === "delegating-agent";
+  const originalTools = pi.pi.getActiveTools();
+  const states =
+    scope === "empty-root"
+      ? [
+          { cwd: false, model: false },
+          { cwd: true, model: true },
+          { cwd: true, model: true },
+          { cwd: true, model: false },
+          { cwd: true, model: true },
+          { cwd: false, model: true },
+          { cwd: false, model: false },
+        ]
+      : [false, true, true, false].map((enabled) => ({
+          cwd: enabled,
+          model: enabled,
+        }));
+  try {
+    for (const [turn, { cwd, model }] of states.entries()) {
+      const delegateActive = canDelegate && turn < 3;
+      if (canDelegate && !delegateActive)
+        pi.pi.setActiveTools(
+          pi.pi.getActiveTools().filter((name) => name !== "delegate_agent"),
+        );
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          allowAgentModelOverrides: model,
+          allowAgentCwdOverride: cwd,
+        }),
+      );
+      const previous = latest("delegate_agent");
+      const registrations = pi.tools.length;
+      const expectCwd = scope === "empty-root" && cwd;
+      const changed =
+        "model" in previous.parameters.properties !== model ||
+        "cwd" in previous.parameters.properties !== expectCwd;
+      const event = {
+        systemPrompt: "base",
+        systemPromptOptions: { sections: {}, contextFiles: [] },
+      };
+      await invokeBeforeAgentStart(pi, event, context);
+      const delegate = latest("delegate_agent");
+      assert.equal(delegate !== previous, changed);
+      assert.equal("model" in delegate.parameters.properties, model);
+      assert.equal("thinking" in delegate.parameters.properties, model);
+      assert.equal("cwd" in delegate.parameters.properties, expectCwd);
+      assert.equal(pi.tools.length, registrations + Number(changed));
+      assert.equal(
+        pi.pi.getActiveTools().includes("delegate_agent"),
+        delegateActive,
+      );
+      assert.equal(latest("continue_agent"), continuation);
+      assert.ok(!("model" in continuation.parameters.properties));
+      assert.ok(!("thinking" in continuation.parameters.properties));
+      assert.ok(!("agent_models" in event.systemPromptOptions.sections));
+      const listed = await latest("list_agents").execute(
+        "list",
+        {},
+        undefined,
+        undefined,
+        context,
+      );
+      assert.ok(listed.details.ok, JSON.stringify(listed.details));
+      assert.equal("agent_models" in listed.details, model);
+    }
+  } finally {
+    pi.pi.setActiveTools(originalTools);
+    realFs.rmSync(configPath, { force: true });
+  }
+}
+
 function assertBeforeAgentStartResult(
   result: unknown,
 ): asserts result is BeforeAgentStartEventResult | undefined {
@@ -4305,7 +4387,7 @@ test("Lead empty allowlist hides fresh delegation and the Agent roster", async (
   realFs.mkdirSync(roleDirectory, { recursive: true });
   const role = join(roleDirectory, "flexible-lead.md");
   writeFileSync(role, "---\nname: flexible-lead\nagents: []\n---\n");
-  const pi = fakePi();
+  const pi = fakePi({ autoActivateRegisteredTools: true });
   registerExtension!(pi.pi as never);
   const context = fakeContext(pi.entries) as any;
   try {
@@ -4342,6 +4424,7 @@ test("Lead empty allowlist hides fresh delegation and the Agent roster", async (
         context,
       );
     assert.match(denied.details.error.message, /not allowed/);
+    await assertLiveDelegateSchema(pi, context, "empty-root");
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     realFs.rmSync(role, { force: true });
@@ -5851,6 +5934,7 @@ test("delegating agents receive only their allowed definition roster", async () 
   const pi = fakePi({
     entries,
     activeTools: ["delegate_agent"],
+    autoActivateRegisteredTools: true,
     exec: agentControllerExecutor(controllerState),
   });
   registerExtension!(pi.pi as never);
@@ -5938,6 +6022,7 @@ test("delegating agents receive only their allowed definition roster", async () 
     listResult.details.agent_definitions,
     JSON.stringify(listResult.details),
   );
+  await assertLiveDelegateSchema(pi, context, "delegating-agent");
   const agentListTool = pi.tools.find((tool) => tool.name === "list_agents")!;
   const delegateTool = pi.tools.find((tool) => tool.name === "delegate_agent")!;
   assert.equal(

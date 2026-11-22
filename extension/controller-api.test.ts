@@ -8525,6 +8525,220 @@ test("trusted same-cwd project assignment launches with native approval", async 
   })();
 });
 
+test("task model overrides enforce live policy through physical launch", async () => {
+  const { readConfig } = await import("./config.ts");
+  const previous = readConfig();
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  const project = realFs.mkdtempSync(
+    join(tmpdir(), "pi-herdsman-model-override-"),
+  );
+  realFs.mkdirSync(join(project, ".pi", "agents"), { recursive: true });
+  realFs.writeFileSync(
+    join(project, ".pi", "agents", "model-override.md"),
+    "---\nname: model-override\nmodel: pinned\nthinking: high\nnoExtensions: true\n---\nproject",
+  );
+  const selected = { provider: "extension/provider", id: "test/model" };
+  const pinned = { provider: "second", id: "pinned", reasoning: true };
+  let available = [selected, pinned];
+  const selectedToken = "extension/provider/test/model";
+  const startArgs: string[][] = [];
+  const startup = startupExecutor(
+    "model-override",
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    undefined,
+    false,
+    (args) => startArgs.push(args),
+    project,
+    AGENT_ID,
+    true,
+    true,
+  );
+  let revokeDuringStartup = false;
+  let revoked = false;
+  let disableDuringStartup = false;
+  const tabCreateArgs: string[][] = [];
+  let switchInheritedModel = false;
+  const pi = fakePi({
+    exec: (command, args, options) => {
+      if (switchInheritedModel) {
+        context.model = selected;
+        switchInheritedModel = false;
+      }
+      if (args[0] === "tab" && args[1] === "create") {
+        tabCreateArgs.push(args);
+        if (disableDuringStartup)
+          updateConfig("allowAgentModelOverrides", false);
+        if (revokeDuringStartup) {
+          updateConfig("allowedAgentModels", ["second/pinned"]);
+          revoked = true;
+        }
+      }
+      return startup.exec(command, args, options);
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(pi.entries) as any;
+  context.cwd = project;
+  context.modelRegistry = {
+    getAvailable: () => available,
+    getAll: () => available,
+    hasConfiguredAuth: () => true,
+    getRegisteredProviderIds: () => [selected.provider],
+  };
+  context.scopedModels = [{ model: pinned }];
+  const delegate = (overrides: Record<string, string>) =>
+    agentTool(pi, "delegate").execute(
+      "id",
+      {
+        definition: "model-override",
+        task: "run the assignment",
+        ...overrides,
+      },
+      undefined,
+      undefined,
+      context,
+    );
+  const list = () =>
+    agentTool(pi, "list").execute("id", {}, undefined, undefined, context);
+  try {
+    updateConfig("allowAgentModelOverrides", false);
+    updateConfig("allowedAgentModels", []);
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.equal(Object.hasOwn((await list()).details, "agent_models"), false);
+    assert.match(
+      (await delegate({ model: selectedToken })).details.error.message,
+      /disabled/,
+    );
+
+    updateConfig("allowAgentModelOverrides", true);
+    assert.deepEqual(
+      (await list()).details.agent_models.map(
+        ({ model }: { model: string }) => model,
+      ),
+      ["second/pinned"],
+    );
+    assert.match(
+      (await delegate({ model: selectedToken })).details.error.message,
+      /not currently permitted/,
+    );
+
+    updateConfig("allowedAgentModels", [selectedToken]);
+    assert.deepEqual((await list()).details.agent_models, [
+      { model: selectedToken, thinking: ["off"] },
+    ]);
+    assert.match(
+      (await delegate({ model: selectedToken, thinking: "high" })).details.error
+        .message,
+      /not supported/,
+    );
+    available = [...available, { provider: "third", id: "pinned" }];
+    assert.match(
+      (await delegate({ thinking: "high" })).details.error.message,
+      /Cannot unambiguously resolve/,
+    );
+    available = [
+      selected,
+      pinned,
+      { provider: "extension/provider/test", id: "model-preview" },
+    ];
+    realFs.writeFileSync(
+      join(project, ".pi", "agents", "model-override.md"),
+      `---\nname: model-override\nmodel: ${selectedToken}\n---\nproject`,
+    );
+    assert.match(
+      (await delegate({ thinking: "off" })).details.error.message,
+      /Cannot unambiguously resolve/,
+    );
+
+    available = [
+      selected,
+      pinned,
+      { provider: "extension/provider/test", id: "model" },
+    ];
+    updateConfig("allowedAgentModels", []);
+    context.scopedModels = [{ model: selected }];
+    assert.deepEqual((await list()).details.agent_models, []);
+    for (const allowed of [[], [selectedToken]]) {
+      updateConfig("allowedAgentModels", allowed);
+      assert.match(
+        (await delegate({ model: selectedToken })).details.error.message,
+        /not currently permitted/,
+      );
+    }
+
+    available = [selected, pinned];
+    realFs.writeFileSync(
+      join(project, ".pi", "agents", "model-override.md"),
+      "---\nname: model-override\nnoExtensions: true\n---\nproject",
+    );
+    context.model = pinned;
+    switchInheritedModel = true;
+    const drift = await delegate({ thinking: "high" });
+    assert.equal(switchInheritedModel, false, JSON.stringify(drift.details));
+    assert.equal(drift.details.error.category, "invalid_request");
+    assert.match(drift.details.error.message, /high is not supported/);
+    assert.equal(startArgs.length, 0);
+
+    revokeDuringStartup = true;
+    const revokedResult = await delegate({ model: selectedToken });
+    assert.equal(revoked, true);
+    assert.equal(revokedResult.details.error.category, "invalid_request");
+    assert.match(
+      revokedResult.details.error.message,
+      /not currently permitted/,
+    );
+    assert.equal(startArgs.length, 0);
+    assert.equal(readAgentState(startup.mailbox), undefined);
+
+    revokeDuringStartup = false;
+    updateConfig("allowedAgentModels", [selectedToken]);
+    realFs.writeFileSync(
+      join(project, ".pi", "agents", "model-override.md"),
+      "---\nname: model-override\nmodel: SECOND/PINNED\n---\nproject",
+    );
+    disableDuringStartup = true;
+    const thinkingRevoked = await delegate({ thinking: "high" });
+    assert.match(thinkingRevoked.details.error.message, /disabled/);
+    assert.ok(
+      tabCreateArgs
+        .at(-1)
+        ?.includes(
+          `PI_HERDSMAN_EXPECTED_STARTUP_MODEL=${JSON.stringify([pinned.provider, pinned.id, "high"])}`,
+        ),
+    );
+    assert.equal(startArgs.length, 0);
+    disableDuringStartup = false;
+    updateConfig("allowAgentModelOverrides", true);
+    const started = await delegate({ model: selectedToken });
+    assert.equal(started.details.ok, true, JSON.stringify(started.details));
+    assert.equal(started.details.requested_model, selectedToken);
+    assert.equal(Object.hasOwn(started.details, "requested_thinking"), false);
+    assert.equal(Object.hasOwn(started.details, "model"), false);
+    assert.equal(startArgs.length, 1);
+    const args = startArgs[0]!;
+    assert.equal(args[args.indexOf("--model") + 1], selectedToken);
+    assert.equal(args[args.indexOf("--provider") + 1], selected.provider);
+    assert.ok(
+      tabCreateArgs
+        .at(-1)
+        ?.includes(
+          `PI_HERDSMAN_EXPECTED_STARTUP_MODEL=${JSON.stringify([selected.provider, selected.id])}`,
+        ),
+    );
+    assert.equal(args.includes("--thinking"), false);
+    assert.equal(args.includes("--no-extensions"), false);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
+    realFs.rmSync(project, { recursive: true, force: true });
+    updateConfig("allowAgentModelOverrides", previous.allowAgentModelOverrides);
+    updateConfig("allowedAgentModels", previous.allowedAgentModels);
+  }
+});
+
 test("untrusted assignments omit project approval", async () => {
   setLeadEnvironment();
   const project = realFs.mkdtempSync(

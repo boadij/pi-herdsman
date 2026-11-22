@@ -48,6 +48,8 @@ schema is:
   "statusWidgetMaxRows": 8,
   "maxAgentDepth": 2,
   "allowAgentCwdOverride": false,
+  "allowAgentModelOverrides": false,
+  "allowedAgentModels": [],
   "defaultLeadExecution": "flexible",
   "spawnPlacement": "subtree",
   "contextRetirement": true,
@@ -70,6 +72,8 @@ An absent file means these defaults:
 | `statusWidgetMaxRows`                    |                `8` | integer from 1 through 100; global-only                                       |
 | `maxAgentDepth`                          |                `2` | positive integer; global-only; maximum agent nesting depth                    |
 | `allowAgentCwdOverride`                  |              false | boolean; global-only                                                          |
+| `allowAgentModelOverrides`               |              false | boolean; global-only                                                          |
+| `allowedAgentModels`                     |               `[]` | array of unique, nonempty model IDs; global-only                              |
 | `defaultLeadExecution`                   |         `flexible` | `flexible`, `orchestrate`                                                     |
 | `spawnPlacement`                         |          `subtree` | `tab`, `subtree`, `split`                                                     |
 | `contextRetirement`                      |               true | boolean                                                                       |
@@ -194,6 +198,24 @@ Updates to an existing project settings file coordinate with Pi's settings
 lock. When `.pi/settings.json` does not exist yet, concurrent independent
 writers can still race: Pi checks for the missing file before acquiring the
 lock for its creation.
+
+### Agent model overrides
+
+`allowAgentModelOverrides` is a user-wide opt-in for task-specific
+[`model` and `thinking` choices on fresh delegation](agent.md#task-scoped-model-and-thinking).
+It is off by default. Project settings cannot enable it or change the selection.
+
+When enabled, an empty `allowedAgentModels` list follows the calling
+controller's current Pi scoped models. An unrestricted Pi scope permits all
+models currently available to that controller. An explicit nonempty list
+instead permits only its exact `provider/model` IDs, independent of Pi scope.
+Unavailable IDs stay in the list but cannot be selected for delegation. An
+empty list means inheritance, not denial of all models.
+
+Manage both settings under [Delegation options](commands.md#settings-menu).
+Changes apply to new requests without `/reload` and do not affect running
+Agents. Controllers can have different Pi scopes; Herdsman does not synchronize
+them.
 
 ### Peer communication
 

@@ -126,9 +126,15 @@ import {
 } from "./storage.ts";
 import {
   agentDefinitionEnabled,
+  VALID_THINKING_LEVELS,
   validateAgentDefinitionReferences,
   type AgentDefinition,
 } from "./agent-definitions.ts";
+import {
+  EXPECTED_STARTUP_MODEL_ENV,
+  modelToken,
+  startupAgentModelCatalog,
+} from "./agent-model-overrides.ts";
 
 const DELEGATING_AGENT_ROLE_CHARTER = `## Delegating agent role
 ${DELEGATING_AGENT_SCOPE_DESCRIPTION}`;
@@ -2897,6 +2903,7 @@ export function registerManagedAgentRuntime(
   };
   let startupDefinitionRoster:
     { sessionId: string; definitions: Record<string, unknown>[] } | undefined;
+  let startupModelCatalog: { sessionId: string; text: string } | undefined;
   const controller = delegationEnabled
     ? createAgentController(pi, {
         ...options.controllerOptions,
@@ -3061,12 +3068,13 @@ export function registerManagedAgentRuntime(
       `direct_owner: ${process.env.PI_HERDSMAN_OWNER_DISPLAY!}`,
       ...(owner ? [`direct_owner_session: ${owner.ownerSessionId}`] : []),
     ].join("\n");
+    delete event.systemPromptOptions.sections.agent_models;
     if (delegationEnabled) {
+      const sessionId = ctx.sessionManager.getSessionId();
+      if (isVerifiedSession(sessionId)) controller?.refreshDelegateSchema();
       const roster = startupDefinitionRoster;
       const availableRoster =
-        roster?.sessionId === ctx.sessionManager.getSessionId()
-          ? roster
-          : undefined;
+        roster?.sessionId === sessionId ? roster : undefined;
       event.systemPromptOptions.sections.delegating_agent_role =
         DELEGATING_AGENT_ROLE_CHARTER;
       if (availableRoster)
@@ -3074,6 +3082,13 @@ export function registerManagedAgentRuntime(
           `${JSON.stringify(availableRoster.definitions)}\n\n` +
           `This is the session-start definition snapshot. ` +
           `Use list_agents for live Agent state or to refresh Agent definitions after configuration changes.`;
+      const catalog = startupModelCatalog;
+      if (
+        catalog?.sessionId === sessionId &&
+        isVerifiedSession(sessionId) &&
+        pi.getActiveTools().includes("delegate_agent")
+      )
+        event.systemPromptOptions.sections.agent_models = catalog.text;
     }
   });
   const execution = createManagedAgentExecutionState();
@@ -3432,6 +3447,17 @@ export function registerManagedAgentRuntime(
   ): Promise<void> => {
     startupDefinitionRoster = undefined;
     if (!delegationEnabled) return;
+    startupModelCatalog = undefined;
+    try {
+      const text = startupAgentModelCatalog(ctx, readConfig());
+      if (text)
+        startupModelCatalog = {
+          sessionId: ctx.sessionManager.getSessionId(),
+          text,
+        };
+    } catch (error) {
+      options.appendError(ctx, "pi_herdsman_definition_error", error);
+    }
     try {
       startupDefinitionRoster = {
         sessionId: ctx.sessionManager.getSessionId(),
@@ -4117,6 +4143,30 @@ export function registerManagedAgentSessionStartHandler(
       if (!candidate) throw new Error("invalid agent environment");
       options.ensureAgentIdentity(ctx);
       verified = candidate;
+      const startupModelEnv = process.env[EXPECTED_STARTUP_MODEL_ENV];
+      let expectedStartupModel: [string, string, string?] | undefined;
+      if (startupModelEnv !== undefined) {
+        // Use the existing model verification failure path and outcome stage.
+        startupStage = "model_restore";
+        let pair: unknown;
+        try {
+          pair = JSON.parse(startupModelEnv);
+        } catch {
+          // Report the same failure as for a malformed pair.
+        }
+        if (
+          !Array.isArray(pair) ||
+          (pair.length !== 2 && pair.length !== 3) ||
+          typeof pair[0] !== "string" ||
+          !pair[0] ||
+          typeof pair[1] !== "string" ||
+          !pair[1] ||
+          (pair.length === 3 &&
+            !VALID_THINKING_LEVELS.some((level) => level === pair[2]))
+        )
+          throw new Error("Expected Agent startup model identity is invalid");
+        expectedStartupModel = [pair[0], pair[1], pair[2]];
+      }
       const restoreModel = process.env.PI_HERDSMAN_RESTORE_MODEL;
       if (restoreModel) {
         startupStage = "model_restore";
@@ -4302,8 +4352,32 @@ export function registerManagedAgentSessionStartHandler(
           startupStage = "controller_recovery";
           managedAgentControllerIdentity(ctx);
           await options.recoverControllerRuntimes(ctx, metadataSignal);
-          options.setControllerReady(true);
         }
+        if (expectedStartupModel) {
+          startupStage = "model_restore";
+          const [provider, id, thinking] = expectedStartupModel;
+          const actual = ctx.model;
+          const registered = ctx.modelRegistry.find(provider, id);
+          // Pi can synthesize a matching ID that is not in the catalog. Check
+          // membership as well as selection, without inspecting virtual routing.
+          if (
+            actual?.provider !== provider ||
+            actual.id !== id ||
+            registered?.provider !== provider ||
+            registered.id !== id
+          )
+            throw new Error(
+              `Expected startup model ${modelToken({ provider, id })} was not selected from the child catalog. Pi selected ${actual ? modelToken(actual) : "no model"}.`,
+            );
+          if (thinking !== undefined && ctx.thinkingLevel !== thinking)
+            throw new Error(
+              `Expected startup thinking level ${thinking}, but Pi selected ${ctx.thinkingLevel ?? "no level"}.`,
+            );
+          // This checks the initial selection only; reloads and nested launches
+          // must not inherit the startup expectation.
+          delete process.env[EXPECTED_STARTUP_MODEL_ENV];
+        }
+        if (options.delegationEnabled) options.setControllerReady(true);
         if (execution.assignment.activeRequestId)
           options.touchActivity(Date.now(), forceActivityTouch);
         if (options.delegationEnabled)
@@ -4453,7 +4527,10 @@ export function registerManagedAgentSessionStartHandler(
                     agentLabel: candidate.agentLabel,
                     paneId: candidate.paneId,
                     status: "failed",
-                    error: "Managed Agent initialization failed",
+                    error:
+                      startupStage === "model_restore"
+                        ? String(error).slice(0, 256)
+                        : "Managed Agent initialization failed",
                     stage: startupStage,
                   });
               } finally {

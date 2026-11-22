@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import {
   Theme as PiTheme,
+  resolveCliModel,
   type ExtensionContext,
   type SessionEntry,
   type Theme,
@@ -378,6 +379,7 @@ mock.module("@earendil-works/pi-coding-agent", {
         return [this.color("─".repeat(width))];
       }
     },
+    resolveCliModel,
     DEFAULT_MAX_BYTES: 50 * 1024,
     DEFAULT_MAX_LINES: 2000,
     formatSize: (n: number) => `${n} B`,

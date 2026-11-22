@@ -7389,6 +7389,106 @@ test("supervisor turns do not enter Lead herd-run tracking", async () => {
   assert.equal(settledResults, 1);
 });
 
+test("Lead keeps the startup model catalog when the live Pi scope changes", async (t) => {
+  const { readConfig, updateConfig } = await import("./config.ts");
+  const prior = readConfig();
+  setLeadEnvironment();
+  const pi = fakePi({ allTools: () => pi.tools });
+  const ctx = fakeContext(pi.entries);
+  seedSessionKind(ctx, "ordinary");
+  const first = { provider: "test", id: "first", reasoning: false };
+  const second = { provider: "test", id: "second", reasoning: true };
+  t.mock.method(ctx.modelRegistry, "getAvailable", () => [first, second]);
+  const scoped = (model: typeof first) =>
+    [{ model }] as unknown as typeof ctx.scopedModels;
+  ctx.scopedModels = scoped(first);
+  updateConfig("allowedAgentModels", []);
+  updateConfig("allowAgentModelOverrides", true);
+  try {
+    registerExtension!(pi.pi as never);
+    await pi.events.get("session_start")![0](undefined, ctx);
+    const prompt = async () => {
+      const sections: Record<string, string> = {};
+      for (const handler of pi.events.get("before_agent_start") ?? [])
+        await handler({ systemPromptOptions: { sections } }, ctx);
+      return sections.agent_models;
+    };
+    const initial = await prompt();
+    assert.match(initial!, /test\/first/);
+    assert.doesNotMatch(initial!, /test\/second/);
+
+    ctx.scopedModels = scoped(second);
+    assert.equal(await prompt(), initial);
+    const live = await registeredAgentTool(pi, "list").execute(
+      "list-model-catalog",
+      {},
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.deepEqual(
+      live.details.agent_models.map(({ model }: { model: string }) => model),
+      ["test/second"],
+    );
+    await pi.events.get("session_start")![0](undefined, ctx);
+    assert.match((await prompt())!, /test\/second/);
+
+    updateConfig("allowAgentModelOverrides", false);
+    await pi.events.get("session_start")![0](undefined, ctx);
+    assert.equal(await prompt(), undefined);
+    updateConfig("allowAgentModelOverrides", true);
+    assert.equal(await prompt(), undefined);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0](undefined, ctx);
+    updateConfig("allowAgentModelOverrides", prior.allowAgentModelOverrides);
+    updateConfig("allowedAgentModels", prior.allowedAgentModels);
+  }
+});
+
+test("Chief appends only the stable model catalog to its restricted prompt", async () => {
+  const { createLeadAgentEventRuntime } = await import("./lead-runtime.ts");
+  const { chiefSystemPrompt } = await import("./chief-prompt.ts");
+  const catalog = '[{"model":"test/start","thinking":["off"]}]';
+  let allowed = ["delegate_agent"];
+  let role: "chief" | "manager" = "chief";
+  const events = createLeadAgentEventRuntime({
+    isCurrentChief: () => role === "chief",
+    setActiveTools: () => {},
+    chiefTools: [],
+    leadInboxRuntime: { holdStartPreflight: () => {} },
+    prepareSupervisionMessage: async () => undefined,
+    drainRetirementNotices: async () => 0,
+    chiefSystemPrompt: (options: BuildSystemPromptOptions, body: string) =>
+      chiefSystemPrompt(options, body, "Chief contract", "/global"),
+    currentChiefAllowedTools: () => allowed,
+    supervisoryProfileBody: () => "Chief profile",
+    isActiveManager: () => role === "manager",
+    roleCharter: () => "Manager contract",
+    modelCatalog: () => catalog,
+  } as any);
+  const event = {
+    systemPromptOptions: {
+      sections: { preamble: "ordinary Pi prompt" } as Record<string, string>,
+      contextFiles: [
+        { path: "/project/AGENTS.md", content: "project instructions" },
+      ],
+    },
+  };
+  const ctx = fakeContext();
+  const start = () => events.beforeAgentStart(event, ctx);
+  const prompt = `Chief contract\n\nChief profile\n\n## agent_models\n\n${catalog}`;
+  assert.equal((await start())?.systemPrompt, prompt);
+  assert.equal((await start())?.systemPrompt, prompt);
+  allowed = [];
+  assert.equal(
+    (await start())?.systemPrompt,
+    "Chief contract\n\nChief profile",
+  );
+  role = "manager";
+  assert.equal(await start(), undefined);
+  assert.equal(event.systemPromptOptions.sections.agent_models, catalog);
+});
+
 test("suspended and unverified sessions do not receive Lead execution sections", async () => {
   const { createLeadAgentEventRuntime } = await import("./lead-runtime.ts");
   for (const state of [

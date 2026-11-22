@@ -15,6 +15,261 @@ import {
 } from "../config.ts";
 import { fakeContext, WORKSPACE } from "../support.ts";
 import { createLeadCommandRuntime } from "./commands.ts";
+import { pickOverrideModels } from "./override-model-picker.ts";
+
+const overridePickerModels = [
+  { provider: "group/one", id: "first", name: "Alpha" },
+  { provider: "group/one", id: "second", name: "Beta" },
+  { provider: "other", id: "third", name: "Gamma" },
+];
+
+test("override picker filters, toggles, applies bulk shortcuts and saves or cancels", async () => {
+  const configured = ["missing/model"];
+  for (const save of [true, false]) {
+    let refreshes = 0;
+    const keyData: Record<string, string> = {
+      "tui.select.up": "\u001b[A",
+      "tui.select.down": "\u001b[B",
+      "tui.select.confirm": "\r",
+      "tui.select.cancel": "\u001b",
+      "app.models.enableAll": "\u0001",
+      "app.models.clearAll": "\u0018",
+      "app.models.toggleProvider": "\u0010",
+      "app.models.save": "\u0013",
+    };
+    const result = await pickOverrideModels(
+      {
+        mode: "tui",
+        scopedModels: [],
+        modelRegistry: {
+          refresh: async () => {
+            refreshes++;
+          },
+          getAvailable: () => overridePickerModels,
+        },
+        ui: {
+          custom: async (factory: any) => {
+            let result: string[] | undefined;
+            const component = factory(
+              { requestRender() {} },
+              { fg: (_color: string, text: string) => text },
+              {
+                matches: (input: string, name: string) =>
+                  input === keyData[name],
+                getKeys: (name: string) => [name],
+              },
+              (value: string[] | undefined) => {
+                result = value;
+              },
+            );
+            const display = () => component.render(120).join("\n");
+            assert.match(display(), /\[x\] missing\/model \(unavailable\)/);
+            component.handleInput("\u0001"); // Select available models, retaining unavailable selections.
+            assert.match(display(), /4 selected/);
+            component.handleInput("\u0018"); // Clear all (including unavailable).
+            assert.match(
+              display(),
+              /No custom models selected\. Pi scoped models will be used\./,
+            );
+            for (const char of "Alpha") component.handleInput(char);
+            assert.match(display(), /group\/one\/first/);
+            assert.doesNotMatch(display(), /group\/one\/second/);
+            component.handleInput("\u0001"); // Select filtered.
+            assert.match(display(), /\[x\] group\/one\/first/);
+            component.handleInput("\u0018"); // Clear filtered.
+            component.handleInput("\r"); // Toggle highlighted.
+            component.handleInput("\u0010"); // Select entire provider despite filter.
+            assert.match(display(), /2 selected/);
+            component.handleInput("\u0010"); // Clear entire provider.
+            assert.match(display(), /No custom models selected/);
+            for (let i = 0; i < 5; i++) component.handleInput("\u007f");
+            component.handleInput("\u001b[B"); // Navigate to second.
+            assert.match(display(), /→ \[ \] group\/one\/second/);
+            component.handleInput("\r");
+            component.handleInput(save ? "\u0013" : "\u001b");
+            return result;
+          },
+        },
+      } as any,
+      configured,
+      async () => assert.fail("unexpected fallback"),
+    );
+    assert.deepEqual(result, save ? ["group/one/second"] : undefined);
+    assert.deepEqual(configured, ["missing/model"]);
+    assert.equal(refreshes, 1);
+  }
+});
+
+for (const mode of ["tui", "rpc"]) {
+  test(`override picker previews and preserves Pi scope in ${mode}`, async () => {
+    const [first, second] = overridePickerModels;
+    const steps = {
+      remove: { key: "\r", choice: "0" },
+      inherit: { key: "\r", choice: "inherit" },
+      save: { key: "\u0013", choice: "save" },
+    };
+    for (const { configured, actions, expected } of [
+      { configured: [], actions: [steps.save], expected: undefined },
+      {
+        configured: [],
+        actions: [steps.remove, steps.save],
+        expected: ["group/one/second"],
+      },
+      {
+        configured: ["other/third"],
+        actions: [steps.inherit, steps.save],
+        expected: [],
+      },
+    ]) {
+      const assertInherited = (display: string) => {
+        assert.match(display, /Using Pi scoped models · 2 selected/);
+        assert.match(display, /\[x\] group\/one\/first/);
+        assert.match(display, /\[x\] group\/one\/second/);
+        assert.match(display, /\[ \] other\/third/);
+      };
+      let previous: (typeof steps)[keyof typeof steps] | undefined;
+      const result = await pickOverrideModels(
+        {
+          mode,
+          scopedModels: [{ model: first }, { model: second }],
+          modelRegistry: {
+            refresh: async () => {},
+            getAvailable: () => overridePickerModels,
+          },
+          ui: {
+            custom: async (factory: any) => {
+              assert.equal(mode, "tui");
+              const up = "\u001b[A";
+              const clear = "\u001bOQ"; // Pi's clear action is configured to F2.
+              let result: string[] | undefined;
+              const component = factory(
+                { requestRender() {} },
+                { fg: (_color: string, text: string) => text },
+                {
+                  matches: (input: string, name: string) =>
+                    (input === steps.remove.key &&
+                      name === "tui.select.confirm") ||
+                    (input === steps.save.key && name === "app.models.save") ||
+                    (input === up && name === "tui.select.up") ||
+                    (input === clear && name === "app.models.clearAll"),
+                  getKeys: (name: string) => [name],
+                },
+                (value: string[] | undefined) => {
+                  result = value;
+                },
+              );
+              const display = () => component.render(120).join("\n");
+              if (!configured.length) assertInherited(display());
+              for (const action of actions) {
+                if (action === steps.inherit) {
+                  component.handleInput(clear);
+                  assert.match(display(), /No custom models selected/);
+                  component.handleInput(up);
+                  assert.match(display(), /→ Use Pi scoped models/);
+                }
+                component.handleInput(action.key);
+                if (action === steps.inherit) assertInherited(display());
+              }
+              return result;
+            },
+          },
+        } as any,
+        configured,
+        async (title, items) => {
+          assert.equal(mode, "rpc");
+          const action = actions.shift();
+          assert.ok(action);
+          if ((!previous && !configured.length) || previous === steps.inherit) {
+            assertInherited(
+              [title, ...items.map(({ label }) => label)].join("\n"),
+            );
+          }
+          assert.ok(items.some(({ value }) => value === action.choice));
+          previous = action;
+          return action.choice;
+        },
+      );
+      assert.deepEqual(result, expected);
+    }
+  });
+}
+
+test("Delegation settings allow editing while Off and write only when saved", async () => {
+  const config = { ...DEFAULT_CONFIG, allowedAgentModels: ["missing/model"] };
+  const writes: unknown[][] = [];
+  const notices: string[] = [];
+  const choices = [
+    "allowed-override-models",
+    "3",
+    "cancel",
+    "allowed-override-models",
+    "3",
+    "save",
+    "model-overrides",
+    "on",
+    undefined,
+  ];
+  const runtime = createLeadCommandRuntime({
+    readConfig: () => config,
+    updateConfig: (key: string, value: boolean | string[]) => {
+      writes.push([key, value]);
+      if (typeof value === "boolean") config.allowAgentModelOverrides = value;
+      else config.allowedAgentModels = value;
+    },
+    selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
+      const choice = choices.shift();
+      if (choice === "allowed-override-models") {
+        assert.equal(
+          items.find((item) => item.value === "model-overrides")?.description,
+          "Off",
+        );
+        assert.equal(
+          items.find((item) => item.value === choice)?.description,
+          "Custom selection · 1 selected",
+        );
+      }
+      if (choice === "3") {
+        assert.match(title, /1 selected/);
+        assert.match(
+          items.find((item) => item.value === choice)?.label,
+          /missing\/model \(unavailable\)/,
+        );
+      }
+      if (choice === "cancel" || choice === "save") {
+        assert.match(title, /Pi scoped models will be used/);
+        assert.deepEqual(writes, []);
+      }
+      if (choice === "model-overrides") {
+        assert.equal(
+          items.find((item) => item.value === "allowed-override-models")
+            ?.description,
+          "Using Pi scoped models",
+        );
+      }
+      return choice;
+    },
+  } as any);
+  await runtime.openSettingsCategory(
+    {
+      mode: "rpc",
+      scopedModels: [],
+      isProjectTrusted: () => false,
+      modelRegistry: {
+        refresh: async () => {},
+        getAvailable: () => overridePickerModels,
+      },
+      ui: { notify: (message: string) => notices.push(message) },
+    } as any,
+    "delegation",
+  );
+  assert.deepEqual(writes, [
+    ["allowedAgentModels", []],
+    ["allowAgentModelOverrides", true],
+  ]);
+  assert.deepEqual(notices, [
+    "Agent model overrides: On. Applies to subsequent delegations and model turns.",
+  ]);
+});
 
 test("status widget rows Settings validates choices and reports persistence errors", async () => {
   for (const scenario of [
@@ -759,6 +1014,12 @@ test("Settings categories expose canonical rows, values and contextual help", as
       [
         ["max-agent-depth", "Agent nesting limit", "2 levels"],
         ["cwd-override", "Delegate Agents to other directories (cwd)", "Off"],
+        ["model-overrides", "Agent model overrides", "Off"],
+        [
+          "allowed-override-models",
+          "Allowed override models",
+          "Using Pi scoped models",
+        ],
       ],
     ],
     [
@@ -891,7 +1152,12 @@ test("Delegate Agents to other directories (cwd) shows the current choice and pe
       if (title === "Delegation options") {
         assert.deepEqual(
           items.map((item) => item.value),
-          ["max-agent-depth", "cwd-override"],
+          [
+            "max-agent-depth",
+            "cwd-override",
+            "model-overrides",
+            "allowed-override-models",
+          ],
         );
         assert.equal(
           selected,
