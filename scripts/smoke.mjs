@@ -3640,7 +3640,10 @@ async function createIsolation() {
       mkdir(join(paths.piAgent, "extensions"), { recursive: true }),
       mkdir(paths.piSessions, { recursive: true }),
     ]);
-    await writeFile(paths.herdrConfig, "[experimental]\nallow_nested = true\n");
+    await writeFile(
+      paths.herdrConfig,
+      "onboarding = false\n[ui.sound]\nenabled = false\n[experimental]\nallow_nested = true\n",
+    );
     return paths;
   } catch (error) {
     await rm(root, { recursive: true, force: true });

@@ -1076,7 +1076,7 @@ try {
     exec(side, [
       "sh",
       "-c",
-      `mkdir -p ${base}/.pi/agent/extensions ${base}/.pi/agent/agents ${base}/.pi/agent/coordinators ${base}/.pi/agent/pi-herdsman/runtime ${base}/sessions ${base}/workspace ${base}/xdg-config ${base}/xdg-state ${base}/.ssh && cp -a /home/herdsman/.ssh/. ${base}/.ssh/ && chown -R herdsman:herdsman ${base} && chmod 0700 ${base}/.ssh && usermod -d ${base} herdsman && printf '[experimental]\\nallow_nested = true\\n' > ${base}/herdr.toml`,
+      `mkdir -p ${base}/.pi/agent/extensions ${base}/.pi/agent/agents ${base}/.pi/agent/coordinators ${base}/.pi/agent/pi-herdsman/runtime ${base}/sessions ${base}/workspace ${base}/xdg-config ${base}/xdg-state ${base}/.ssh && cp -a /home/herdsman/.ssh/. ${base}/.ssh/ && chown -R herdsman:herdsman ${base} && chmod 0700 ${base}/.ssh && usermod -d ${base} herdsman && printf 'onboarding = false\\n[ui.sound]\\nenabled = false\\n[experimental]\\nallow_nested = true\\n' > ${base}/herdr.toml`,
     ]);
     const sshWrapper = join(root, `ssh-${side}`);
     writeFileSync(
