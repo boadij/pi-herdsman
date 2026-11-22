@@ -10745,7 +10745,10 @@ export function createAgentController(
       });
     }
     const agentListParameters = emptyParameters;
-    const agentDelegateParameters = (exposeCwd: boolean, exposeModelOverrides: boolean) =>
+    const agentDelegateParameters = (
+      exposeCwd: boolean,
+      exposeModelOverrides: boolean,
+    ) =>
       Type.Object(
         {
           definition:
@@ -11009,7 +11012,10 @@ export function createAgentController(
         ctx: ExtensionContext,
       ) => agentTool.execute(id, { action: "list" }, signal, update, ctx),
     });
-    const registerDelegate = (exposeCwd: boolean, exposeModelOverrides: boolean) =>
+    const registerDelegate = (
+      exposeCwd: boolean,
+      exposeModelOverrides: boolean,
+    ) =>
       pi.registerTool({
         ...agentTool,
         name: "delegate_agent",

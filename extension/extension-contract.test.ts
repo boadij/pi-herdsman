@@ -136,8 +136,23 @@ async function assertLiveDelegateSchema(
   const continuation = latest("continue_agent");
   const canDelegate = scope === "delegating-agent";
   const originalTools = pi.pi.getActiveTools();
+  const states =
+    scope === "empty-root"
+      ? [
+          { cwd: false, model: false },
+          { cwd: true, model: true },
+          { cwd: true, model: true },
+          { cwd: true, model: false },
+          { cwd: true, model: true },
+          { cwd: false, model: true },
+          { cwd: false, model: false },
+        ]
+      : [false, true, true, false].map((enabled) => ({
+          cwd: enabled,
+          model: enabled,
+        }));
   try {
-    for (const [turn, enabled] of [false, true, true, false].entries()) {
+    for (const [turn, { cwd, model }] of states.entries()) {
       const delegateActive = canDelegate && turn < 3;
       if (canDelegate && !delegateActive)
         pi.pi.setActiveTools(
@@ -146,15 +161,15 @@ async function assertLiveDelegateSchema(
       writeFileSync(
         configPath,
         JSON.stringify({
-          allowAgentModelOverrides: enabled,
-          allowAgentCwdOverride: enabled,
+          allowAgentModelOverrides: model,
+          allowAgentCwdOverride: cwd,
         }),
       );
       const previous = latest("delegate_agent");
       const registrations = pi.tools.length;
-      const expectCwd = scope === "empty-root" && enabled;
+      const expectCwd = scope === "empty-root" && cwd;
       const changed =
-        "model" in previous.parameters.properties !== enabled ||
+        "model" in previous.parameters.properties !== model ||
         "cwd" in previous.parameters.properties !== expectCwd;
       const event = {
         systemPrompt: "base",
@@ -163,8 +178,8 @@ async function assertLiveDelegateSchema(
       await invokeBeforeAgentStart(pi, event, context);
       const delegate = latest("delegate_agent");
       assert.equal(delegate !== previous, changed);
-      assert.equal("model" in delegate.parameters.properties, enabled);
-      assert.equal("thinking" in delegate.parameters.properties, enabled);
+      assert.equal("model" in delegate.parameters.properties, model);
+      assert.equal("thinking" in delegate.parameters.properties, model);
       assert.equal("cwd" in delegate.parameters.properties, expectCwd);
       assert.equal(pi.tools.length, registrations + Number(changed));
       assert.equal(
@@ -183,7 +198,7 @@ async function assertLiveDelegateSchema(
         context,
       );
       assert.ok(listed.details.ok, JSON.stringify(listed.details));
-      assert.equal("agent_models" in listed.details, enabled);
+      assert.equal("agent_models" in listed.details, model);
     }
   } finally {
     pi.pi.setActiveTools(originalTools);
