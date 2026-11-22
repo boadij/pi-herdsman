@@ -1625,7 +1625,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               description: config.allowedAgentModels.length
                 ? `Custom selection · ${config.allowedAgentModels.length} selected`
                 : "Using Pi scoped models",
-              help: "Choose allowed models independently of Pi scope. Clear all custom choices to use Pi scoped models.",
+              help: "Preview inherited Pi scoped models or save a custom selection. Use Pi scoped models to restore inheritance.",
             },
             {
               value: "removal-confirmation",

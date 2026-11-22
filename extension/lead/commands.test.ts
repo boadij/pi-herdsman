@@ -40,6 +40,7 @@ test("override picker filters, toggles, applies bulk shortcuts and saves or canc
     const result = await pickOverrideModels(
       {
         mode: "tui",
+        scopedModels: [],
         modelRegistry: {
           refresh: async () => {
             refreshes++;
@@ -99,6 +100,100 @@ test("override picker filters, toggles, applies bulk shortcuts and saves or canc
   }
 });
 
+for (const mode of ["tui", "rpc"]) {
+  test(`override picker previews and preserves Pi scope in ${mode}`, async () => {
+    const [first, second] = overridePickerModels;
+    const steps = {
+      remove: { key: "\r", choice: "0" },
+      inherit: { key: "\r", choice: "inherit" },
+      save: { key: "\u0013", choice: "save" },
+    };
+    for (const { configured, actions, expected } of [
+      { configured: [], actions: [steps.save], expected: undefined },
+      {
+        configured: [],
+        actions: [steps.remove, steps.save],
+        expected: ["group/one/second"],
+      },
+      {
+        configured: ["other/third"],
+        actions: [steps.inherit, steps.save],
+        expected: [],
+      },
+    ]) {
+      const assertInherited = (display: string) => {
+        assert.match(display, /Using Pi scoped models · 2 selected/);
+        assert.match(display, /\[x\] group\/one\/first/);
+        assert.match(display, /\[x\] group\/one\/second/);
+        assert.match(display, /\[ \] other\/third/);
+      };
+      let previous: (typeof steps)[keyof typeof steps] | undefined;
+      const result = await pickOverrideModels(
+        {
+          mode,
+          scopedModels: [{ model: first }, { model: second }],
+          modelRegistry: {
+            refresh: async () => {},
+            getAvailable: () => overridePickerModels,
+          },
+          ui: {
+            custom: async (factory: any) => {
+              assert.equal(mode, "tui");
+              const up = "\u001b[A";
+              const clear = "\u001bOQ"; // Pi's clear action is configured to F2.
+              let result: string[] | undefined;
+              const component = factory(
+                { requestRender() {} },
+                { fg: (_color: string, text: string) => text },
+                {
+                  matches: (input: string, name: string) =>
+                    (input === steps.remove.key &&
+                      name === "tui.select.confirm") ||
+                    (input === steps.save.key && name === "app.models.save") ||
+                    (input === up && name === "tui.select.up") ||
+                    (input === clear && name === "app.models.clearAll"),
+                  getKeys: (name: string) => [name],
+                },
+                (value: string[] | undefined) => {
+                  result = value;
+                },
+              );
+              const display = () => component.render(120).join("\n");
+              if (!configured.length) assertInherited(display());
+              for (const action of actions) {
+                if (action === steps.inherit) {
+                  component.handleInput(clear);
+                  assert.match(display(), /No custom models selected/);
+                  component.handleInput(up);
+                  assert.match(display(), /→ Use Pi scoped models/);
+                }
+                component.handleInput(action.key);
+                if (action === steps.inherit) assertInherited(display());
+              }
+              return result;
+            },
+          },
+        } as any,
+        configured,
+        async (title, items) => {
+          assert.equal(mode, "rpc");
+          const action = actions.shift();
+          assert.ok(action);
+          if ((!previous && !configured.length) || previous === steps.inherit) {
+            assertInherited(
+              [title, ...items.map(({ label }) => label)].join("\n"),
+            );
+          }
+          assert.ok(items.some(({ value }) => value === action.choice));
+          previous = action;
+          return action.choice;
+        },
+      );
+      assert.deepEqual(result, expected);
+    }
+  });
+}
+
 test("Delegation settings allow editing while Off and write only when saved", async () => {
   const config = { ...DEFAULT_CONFIG, allowedAgentModels: ["missing/model"] };
   const writes: unknown[][] = [];
@@ -157,6 +252,7 @@ test("Delegation settings allow editing while Off and write only when saved", as
   await runtime.openSettingsCategory(
     {
       mode: "rpc",
+      scopedModels: [],
       isProjectTrusted: () => false,
       modelRegistry: {
         refresh: async () => {},

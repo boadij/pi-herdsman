@@ -3785,8 +3785,6 @@ function validateAgentThinkingOverride(
           candidate.id !== inherited.id
         )
           return;
-      } else if (modelToken(candidate) !== token && candidate.id !== token) {
-        return;
       }
       // An exact token can still lose to Pi's longest-prefix/fuzzy resolution.
       // The CLI resolver only reads these two methods of its runtime.

@@ -8694,7 +8694,10 @@ test("task model overrides enforce live policy through physical launch", async (
 
     revokeDuringStartup = false;
     updateConfig("allowedAgentModels", [selectedToken]);
-    context.model = pinned;
+    realFs.writeFileSync(
+      join(project, ".pi", "agents", "model-override.md"),
+      "---\nname: model-override\nmodel: SECOND/PINNED\n---\nproject",
+    );
     disableDuringStartup = true;
     const thinkingRevoked = await delegate({ thinking: "high" });
     assert.match(thinkingRevoked.details.error.message, /disabled/);
