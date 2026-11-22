@@ -16,9 +16,11 @@ import {
   createCodemodeExtension,
   DefaultResourceLoader,
   ModelRuntime,
+  resolveCliModel,
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { EXPECTED_STARTUP_MODEL_ENV } from "./agent-model-overrides.ts";
 import type { AskRecord, RequestRecord, ManagedAgentState } from "./mailbox.ts";
 import { claimProcessLock, tryClaimAssignmentLock } from "./lock.ts";
 import {
@@ -2022,6 +2024,46 @@ test("managed pump retries a request after acknowledgement persistence fails", a
   } finally {
     support.failNextMailboxWrite = false;
     agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("delegating Agent retains the model catalog for its verified session", async (t) => {
+  const mailbox = setAgentEnvironment("catalog-parent", ["child"]);
+  const prior = readConfig();
+  const agent = fakePi({ autoActivateRegisteredTools: true });
+  const context = fakeContext(agent.entries);
+  const model = { provider: "test", id: "startup", reasoning: false };
+  t.mock.method(context.modelRegistry, "getAvailable", () => [model]);
+  updateConfig("allowedAgentModels", []);
+  updateConfig("allowAgentModelOverrides", true);
+  try {
+    registerExtension!(agent.pi as never);
+    const prompt = async (ctx = context) => {
+      const sections: Record<string, string> = {};
+      for (const handler of agent.events.get("before_agent_start") ?? [])
+        await handler({ systemPromptOptions: { sections } }, ctx);
+      return sections.agent_models;
+    };
+    assert.equal(await prompt(), undefined);
+    await agent.events.get("session_start")![0](undefined, context);
+    await new Promise((resolve) => setImmediate(resolve));
+    const initial = await prompt();
+    assert.match(initial!, /test\/startup/);
+    updateConfig("allowedAgentModels", ["test/unavailable"]);
+    assert.equal(await prompt(), initial);
+    const differentSession = {
+      ...context,
+      sessionManager: {
+        ...context.sessionManager,
+        getSessionId: () => randomUUID(),
+      },
+    };
+    assert.equal(await prompt(differentSession), undefined);
+  } finally {
+    await agent.events.get("session_shutdown")?.[0](undefined, context);
+    updateConfig("allowAgentModelOverrides", prior.allowAgentModelOverrides);
+    updateConfig("allowedAgentModels", prior.allowedAgentModels);
     resetAgentMailbox(mailbox);
   }
 });
@@ -8587,6 +8629,118 @@ test("failed startup outcome publication preserves the original initialization f
       recursive: true,
       force: true,
     });
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("startup model verification rejects child catalog drift and permits virtual selection", async () => {
+  const provider = "extension/provider";
+  const id = "fast/model";
+  const previous = process.env[EXPECTED_STARTUP_MODEL_ENV];
+  for (const [catalogId, selectedId, thinking, failure] of [
+    ["fast/model-preview", "fast/model-preview", undefined, /child catalog/u],
+    ["other", id, undefined, /child catalog/u],
+    [id, id, "high", /thinking level high, but Pi selected off/u],
+    [id, id, "off", undefined],
+    [id, id, undefined, undefined],
+  ] as const) {
+    const mailbox = setAgentEnvironment("expected-model-agent");
+    const agent = fakePi();
+    registerExtension!(agent.pi as never);
+    const context = fakeAgentContext(agent.entries) as any;
+    const entry = { provider, id: catalogId, api: "pi-virtual" };
+    const modelRuntime = {
+      getModels: () => [entry],
+      hasConfiguredAuth: () => true,
+    } as unknown as Parameters<typeof resolveCliModel>[0]["modelRuntime"];
+    context.model = resolveCliModel({
+      cliProvider: provider,
+      cliModel: `${provider}/${id}`,
+      modelRuntime,
+    }).model;
+    assert.equal(context.model?.id, selectedId);
+    context.modelRegistry = {
+      find: (p: string, m: string) =>
+        p === provider && m === catalogId ? entry : undefined,
+    };
+    context.thinkingLevel = "off";
+    process.env[EXPECTED_STARTUP_MODEL_ENV] = JSON.stringify(
+      thinking === undefined ? [provider, id] : [provider, id, thinking],
+    );
+    try {
+      await agent.events.get("session_start")![0](undefined, context);
+      const outcome = readAgentStartupOutcome(mailbox);
+      if (!failure) {
+        assert.equal(outcome?.status, "ready");
+        assert.equal(context.model, entry);
+        assert.equal(process.env[EXPECTED_STARTUP_MODEL_ENV], undefined);
+      } else {
+        assert.equal(outcome?.status, "failed");
+        assert.equal(outcome.stage, "model_restore");
+        assert.match(outcome.error, failure);
+        assert.equal(
+          agent.calls.some((args) => args[0] === "send_user_message"),
+          false,
+        );
+      }
+    } finally {
+      if (previous === undefined)
+        delete process.env[EXPECTED_STARTUP_MODEL_ENV];
+      else process.env[EXPECTED_STARTUP_MODEL_ENV] = previous;
+      await agent.events.get("session_shutdown")?.[0]();
+      resetAgentMailbox(mailbox);
+    }
+  }
+});
+
+test("deferred bootstrap model change is rejected before request pumping", async () => {
+  const label = "bootstrap-model-change";
+  const mailbox = setAgentEnvironment(label);
+  const agent = fakePi();
+  registerExtension!(agent.pi as never);
+  const context = fakeAgentContext(agent.entries) as any;
+  const selected = { provider: "provider", id: "expected" };
+  context.model = selected;
+  context.modelRegistry = { find: () => selected };
+  agent.pi.events.on("pi-herdsman:managed-agent-bootstrap", (value: any) => {
+    if (value.phase !== "initialize") return;
+    value.accept(async () => {
+      context.model = { ...selected, id: "changed" };
+    });
+  });
+  const { writeAgentBootstrap } = await import("./mailbox.ts");
+  const state = managedState(label);
+  writeAgentBootstrap(mailbox, {
+    version: 5,
+    build: HERDSMAN_BUILD,
+    runId: state.runId,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: WORKSPACE,
+    agentLabel: label,
+    childSessionId: context.sessionManager.getSessionId(),
+    participants: [{ id: "test/model", payload: "opaque" }],
+  });
+  const previous = process.env[EXPECTED_STARTUP_MODEL_ENV];
+  process.env[EXPECTED_STARTUP_MODEL_ENV] = JSON.stringify([
+    selected.provider,
+    selected.id,
+  ]);
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    assert.equal(readAgentStartupOutcome(mailbox), undefined);
+    await agent.events.get("resources_discover")![0](undefined, context);
+    const outcome = readAgentStartupOutcome(mailbox);
+    assert.equal(outcome?.status, "failed");
+    assert.equal(outcome.stage, "model_restore");
+    assert.match(outcome.error, /Pi selected provider\/changed/u);
+    assert.equal(
+      agent.calls.some((args) => args[0] === "send_user_message"),
+      false,
+    );
+  } finally {
+    if (previous === undefined) delete process.env[EXPECTED_STARTUP_MODEL_ENV];
+    else process.env[EXPECTED_STARTUP_MODEL_ENV] = previous;
+    await agent.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
   }
 });

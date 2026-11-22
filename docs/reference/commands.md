@@ -82,6 +82,8 @@ Agent status or definitions to render.
 | `Interface`              | `Status widget lines`                        |
 | `Delegation options`     | `Agent nesting limit`                        |
 | `Delegation options`     | `Delegate Agents to other directories (cwd)` |
+| `Delegation options`     | `Agent model overrides`                      |
+| `Delegation options`     | `Allowed override models`                    |
 | `Communication`          | `Peer communication`                         |
 | `Communication`          | `Peer federation`                            |
 
@@ -93,6 +95,32 @@ delegations and model turns without `/reload`. Cross-directory delegation is
 limited to ordinary Leads. See
 [`Peer communication` and `Peer federation`](configuration.md#peer-communication)
 in the Configuration reference.
+
+[`Agent model overrides`](configuration.md#agent-model-overrides) is a global
+Off/On setting for fresh delegation. It defaults to Off and does not require
+`/reload`. Use `Allowed override models` to prepare a custom selection even
+while overrides are Off. When inheriting, the picker checks the currently
+available models eligible for overrides under this session's Pi scope. An
+unrestricted Pi scope does not narrow that list. Saving without changing that
+selection preserves inheritance. Unavailable configured models are shown so
+they can be removed.
+
+| Input      | Action                                          |
+| ---------- | ----------------------------------------------- |
+| Type       | Filter by provider, ID, or name                 |
+| Arrow keys | Move the highlight                              |
+| Enter      | Toggle a model or select `Use Pi scoped models` |
+| Ctrl+A     | Select all models, or all filtered models       |
+| Ctrl+X     | Uncheck all models, or the filtered models      |
+| Ctrl+P     | Toggle all models for the highlighted provider  |
+| Ctrl+S     | Save                                            |
+| Esc        | Cancel without changing settings                |
+
+Saving an empty custom selection restores inheritance from the calling
+controller's Pi scoped models; it does not block all models. To explicitly
+restore inheritance, choose `Use Pi scoped models` in the picker or fallback
+selector, then save. The fallback selector also lets you toggle models one at
+a time and save or cancel.
 
 The default Lead mode applies only when a future ordinary Lead session has no
 persisted execution choice; changing it does not change the current session.

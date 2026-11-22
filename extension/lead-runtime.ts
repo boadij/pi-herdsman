@@ -1246,6 +1246,7 @@ export function createLeadSessionStartRuntime(host: {
   diagnostic(): void;
   autoActivateManager(ctx: ExtensionContext): boolean;
   clearDefinitionRoster(): void;
+  snapshotModelCatalog?(ctx: ExtensionContext): void;
   clearChiefStartPreflight(): void;
   roleTransitions: LeadRoleTransitionRuntime;
   isRoot(): boolean;
@@ -1339,6 +1340,11 @@ export function createLeadSessionStartRuntime(host: {
         host.quarantineNativeAgentRestore?.(ctx);
         host.setLeadExecutionPending(false);
         return;
+      }
+      try {
+        host.snapshotModelCatalog?.(ctx);
+      } catch (error) {
+        host.appendDefinitionError(ctx, error);
       }
       if (isRoot()) host.leadStatusRuntime.prime(ctx);
       let skipLeadExecutionProfileResolution = false;
@@ -1636,6 +1642,7 @@ export function createLeadAgentEventRuntime(host: {
   >;
   definitionRoster():
     { sessionId: string; definitions: Record<string, unknown>[] } | undefined;
+  modelCatalog?(ctx: ExtensionContext): string | undefined;
   isRoleSuspended(): boolean;
   consumeChiefStartPreflight(ctx: ExtensionContext): void;
   herdRun: Pick<
@@ -1657,22 +1664,27 @@ export function createLeadAgentEventRuntime(host: {
       ctx: ExtensionContext,
     ): Promise<{ systemPrompt: string } | undefined> {
       if (host.isCurrentChief(ctx)) {
-        host.setActiveTools(
-          host.currentChiefAllowedTools(ctx) ?? host.chiefTools,
-        );
+        const allowedTools =
+          host.currentChiefAllowedTools(ctx) ?? host.chiefTools;
+        host.setActiveTools(allowedTools);
+        const catalog = allowedTools.includes("delegate_agent")
+          ? host.modelCatalog?.(ctx)
+          : undefined;
         host.leadInboxRuntime.holdStartPreflight(ctx);
         const message = await host.prepareSupervisionMessage(ctx);
         if (message) host.sendMessage(message);
         return {
-          systemPrompt: host.chiefSystemPrompt(
-            event.systemPromptOptions,
-            host.supervisoryProfileBody(ctx, "chief"),
-          ),
+          systemPrompt:
+            host.chiefSystemPrompt(
+              event.systemPromptOptions,
+              host.supervisoryProfileBody(ctx, "chief"),
+            ) + (catalog ? `\n\n## agent_models\n\n${catalog}` : ""),
         };
       }
       event.systemPromptOptions ??= {};
       const sections = (event.systemPromptOptions.sections ??= {});
       sections.pi_herdsman_role = host.roleCharter(ctx);
+      delete sections.agent_models;
       if (host.isActiveManager()) {
         delete sections.pi_herdsman_lead_execution;
         delete sections.agent_definitions;
@@ -1686,6 +1698,8 @@ export function createLeadAgentEventRuntime(host: {
           throw error;
         }
         sections.pi_herdsman_role = host.roleCharter(ctx);
+        const catalog = host.modelCatalog?.(ctx);
+        if (catalog) sections.agent_models = catalog;
         return;
       }
       try {
@@ -1713,6 +1727,8 @@ export function createLeadAgentEventRuntime(host: {
           `This is the session-start definition snapshot. ` +
           `Use list_agents for live Agent state or to refresh Agent definitions after configuration changes.`;
       else delete sections.agent_definitions;
+      const catalog = activeLead ? host.modelCatalog?.(ctx) : undefined;
+      if (catalog) sections.agent_models = catalog;
       return;
     },
     agentStart(ctx: ExtensionContext): void {
@@ -4728,8 +4744,10 @@ export function registerLeadRuntime(
     return agentNotifications + inboxMessages;
   });
   pi.on("before_agent_start", (event: any, ctx: ExtensionContext) => {
-    if (!isQuarantinedSession(ctx))
+    if (!isQuarantinedSession(ctx)) {
+      controller.refreshDelegateSchema();
       return agentEvents.beforeAgentStart(event, ctx);
+    }
     pi.setActiveTools([]);
     event.systemPrompt = `${event.systemPrompt}\n\nThis session belongs to a managed Agent restored without its authorized launch context. Execution is disabled. Return to its original Lead and use Herdsman's recovery controls to reconcile the assignment.`;
     return event;
@@ -4801,6 +4819,7 @@ export function registerLeadRuntime(
   });
   pi.on("turn_end", async (event: any, ctx: ExtensionContext) => {
     if (isQuarantinedSession(ctx)) return;
+    controller.refreshDelegateSchema();
     if (
       activeLeadRole(leadRuntime) === "lead" ||
       herdRunRuntime!.hasActiveTurn()

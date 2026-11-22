@@ -6849,6 +6849,41 @@ test("steer result reports queued non-preemptive delivery", () => {
   }
 });
 
+test("model-facing Agent results show current choices and label requests as unobserved", () => {
+  const entries = [{ model: "provider/model/id", thinking: ["off", "low"] }];
+  const catalog = formatToolModelResult("list", {
+    ok: true,
+    agent_models: entries,
+  });
+  assert.match(
+    catalog,
+    /agent_models \(current override choices; the session-start catalog may be stale\):/,
+  );
+  assert.ok(catalog.includes(JSON.stringify(entries)));
+  assert.match(
+    formatToolModelResult("list", { ok: true, agent_models: [] }),
+    /agent_models[^\n]*\n\[\]$/,
+  );
+  assert.doesNotMatch(
+    formatToolModelResult("list", { ok: true }),
+    /agent_models/,
+  );
+
+  const requested = {
+    ok: true,
+    requested_model: entries[0]!.model,
+    requested_thinking: "low",
+  };
+  assert.match(
+    formatToolModelResult("delegate", requested),
+    /^Requested model: provider\/model\/id\nRequested thinking: low$/m,
+  );
+  assert.doesNotMatch(
+    formatToolModelResult("continue", requested),
+    /Requested/,
+  );
+});
+
 test("successful control results contain factual assignment evidence", (_t) => {
   const receipt = formatToolModelResult("delegate", {
     ok: true,

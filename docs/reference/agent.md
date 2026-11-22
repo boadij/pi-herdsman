@@ -121,6 +121,34 @@ managed Agent. Retention validates assignment authority and evidence and fails
 explicitly rather than falling back to ordinary delegation; if retention is
 persisted but delivery fails, the result reports that partial outcome.
 
+### Task-scoped model and thinking
+
+When [Agent model overrides](configuration.md#agent-model-overrides) are
+enabled, any controller already authorized to delegate can include `model`,
+`thinking`, or both on a fresh `delegate_agent` request. The fields are
+omitted from the tool schema when disabled and rejected if supplied. The
+schema updates on subsequent model turns without `/reload`.
+
+| Request         | Model                         | Thinking                                                                               |
+| --------------- | ----------------------------- | -------------------------------------------------------------------------------------- |
+| Neither         | Definition or inherited model | Definition or inherited level                                                          |
+| `model` only    | Requested model               | Pi chooses for that model; the definition and inherited thinking levels are not passed |
+| `thinking` only | Definition or inherited model | Requested level                                                                        |
+| Both            | Requested model               | Requested level                                                                        |
+
+If supplying `model`, use an exact `provider/model` ID from the current
+[`list_agents` catalog](#list_agents). An explicit thinking level must be
+supported by the effective model. A thinking-only request does not require
+that model to be in the override catalog, but fails if the model cannot be
+resolved unambiguously. If the definition's model is ambiguous, use an exact
+permitted `provider/model` ID. Herdsman checks the opt-in and any requested
+model again before launching the child.
+
+The delegation result reports explicitly requested choices, not confirmation
+of the Agent's runtime settings. Use the Agent's reported model and thinking
+once its runtime metadata is available. Overrides do not change definitions
+or grant additional delegation authority.
+
 ## Managed-agent bootstrap extension contract
 
 Extensions that are already loaded in both the delegating controller and a
@@ -192,9 +220,10 @@ liveness.
 }
 ```
 
-Call `continue_agent` with `session`, `task`, and optional `files`. The session
-selector accepts a semantic result reference, exact saved session path, or full
-UUID. A semantic reference resolves only a completed result directly owned by
+Call `continue_agent` with `session`, `task`, and optional `files`. It does
+not accept task-scoped `model` or `thinking` overrides. The session selector
+accepts a semantic result reference, exact saved session path, or full UUID.
+A semantic reference resolves only a completed result directly owned by
 the caller on its active Pi branch; readable or forwarded result evidence does
 not grant continuation authority. It selects the saved session that produced
 that result, not an earlier checkpoint. Exact paths and UUIDs remain available
@@ -260,6 +289,13 @@ prominent for a later `continue_agent` call.
 
 No selectors or other fields are accepted. A successful result includes the
 effective `agent_definitions` roster and visible agent records.
+
+When Agent model overrides are enabled, the result also includes
+`agent_models`: entries with the exact `model` ID and its supported `thinking`
+levels. Only currently available, permitted models are listed. An eligible
+controller may also see an advisory session-start catalog. That snapshot stays fixed even if settings or Pi scope
+change; use `list_agents` to get the current choices. The launch checks remain
+authoritative.
 
 `agent_definitions` is an enabled-only runtime capability summary, not a
 configuration-management interface. Each entry identifies the effective

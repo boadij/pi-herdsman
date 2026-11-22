@@ -478,6 +478,13 @@ thinking fields inherit the spawning controller for fresh delegation, while
 continuation restores the saved session's settings. Contextual help updates for
 the selected row.
 
+Definition settings are reusable defaults. When
+[task-scoped model overrides](../reference/agent.md#task-scoped-model-and-thinking)
+are enabled, an authorized delegator can choose a model or thinking level for
+one fresh assignment without editing or duplicating the definition. Leave the
+fields out of the delegation request to use the usual definition and
+inheritance behavior.
+
 For continuation, an omitted model uses the saved Pi session's selection, not
 the current caller's model. The resumed Agent verifies that Pi restored the
 saved model before it accepts work; ambiguous history, an unavailable model,
