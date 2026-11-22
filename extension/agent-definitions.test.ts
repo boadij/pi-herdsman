@@ -1697,7 +1697,11 @@ test("project release-drafter opts into native Code Mode without discovery", () 
       discoverAgent("release-drafter", { projectRoot }),
     );
     assert.equal(definition.projectSource, path);
-    assert.deepEqual(definition.frontmatter.tools, ["read", "bash", "codemode"]);
+    assert.deepEqual(definition.frontmatter.tools, [
+      "read",
+      "bash",
+      "codemode",
+    ]);
     assert.deepEqual(definition.frontmatter.extensions, ["builtin:codemode"]);
     assert.equal(definition.frontmatter.noExtensions, true);
     assert.deepEqual(definition.frontmatter.agents, []);
