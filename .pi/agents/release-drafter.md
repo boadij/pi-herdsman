@@ -108,6 +108,15 @@ Git 2.47.3 and gh 2.46.0. Do not load the upstream skill.
 
 ## Release workflow handoff
 
+For the /release preflight, **propose** the exact GitHub squash API
+`commit_title` and `commit_message` (explicitly `""` when empty), and
+separately give the expected stored Git commit message, including its
+known terminal-newline convention. Ground the proposal in the PR and prior
+release metadata; these are future API inputs, not values to verify before
+merging. The Lead reviews them, the maintainer approves them, and `ship`
+checks the resulting stored commit. Never block solely because the future
+squash commit does not yet exist.
+
 Research once and return BOTH complete Markdown artifacts between separate,
 standalone marker pairs:
 
