@@ -124,10 +124,11 @@ delegate.
 `allowAgentCwdOverride` is a user-wide opt-in for the optional
 [`delegate_agent` working-directory override](agent.md#delegate_agent).
 Change it under `/herdsman` → `Settings` → `Delegation options` →
-`Delegate Agents to other directories (cwd)`, then run `/reload` to refresh the
-tool schema.
-Disabling it takes effect for launches using an explicit `cwd` without
-waiting for a reload. Project settings cannot enable it.
+`Delegate Agents to other directories (cwd)`. Running sessions reread the
+setting before a new model run and at the end of each turn, so changes made in
+another session are picked up at the same boundaries without `/reload`.
+Disabling the setting rejects launches using an explicit `cwd` even if a model
+request still advertised it. Project settings cannot enable it.
 
 `defaultLeadExecution` selects the initial profile only for a future ordinary
 Lead session that has no persisted execution choice. Its values select

@@ -8,8 +8,10 @@ import { parseControlMarker } from "./mailbox.ts";
 import { ownedAssignmentChildren } from "./agent-controller.ts";
 import {
   controlMarker,
+  fakeAgentContext,
   fakeContext,
   fakePi,
+  invokeEventHandlers,
   leadExec,
   managedState,
   recoveryIdentity,
@@ -284,74 +286,110 @@ test("current error codes replace the legacy label and busy codes", async () => 
   }
 });
 
-test("cwd is exposed only on fresh root delegation with the global opt-in", async () => {
+test("fresh root delegation refreshes cwd at safe turn boundaries", async () => {
   const { readConfig, updateConfig } = await import("./config.ts");
   const previous = readConfig().allowAgentCwdOverride;
   const assignment = { definition: "scout", task: "work" };
   const assignmentWithCwd = { ...assignment, cwd: "." };
-  const parameters = (pi: ReturnType<typeof fakePi>, name: string) =>
-    pi.tools.find((tool) => tool.name === name)!.parameters;
+  const first = fakePi({ autoActivateRegisteredTools: true });
+  const second = fakePi();
+  const delegate = (pi: ReturnType<typeof fakePi>) =>
+    pi.tools.filter((tool) => tool.name === "delegate_agent").at(-1)!;
+  const trigger = (
+    pi: ReturnType<typeof fakePi>,
+    boundary: "before_agent_start" | "turn_end",
+  ) =>
+    invokeEventHandlers(pi, boundary)(
+      { systemPrompt: "base", systemPromptOptions: { sections: {} } },
+      fakeContext(),
+    );
+  const rejectCwd = async (
+    tool: ReturnType<typeof delegate>,
+    ctx = fakeContext(),
+  ) => {
+    const result = await tool.execute(
+      "cwd-blocked",
+      assignmentWithCwd,
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.equal(result.details.error.category, "invalid_request");
+    assert.match(result.details.error.message, /override is unavailable/);
+  };
 
   try {
     setLeadEnvironment();
     updateConfig("allowAgentCwdOverride", false);
-    const disabled = fakePi();
-    registerExtension!(disabled.pi as never);
+    registerExtension!(first.pi as never);
+    registerExtension!(second.pi as never);
+    const initialRegistrations = first.tools.length;
     assert.equal(
-      Value.Check(parameters(disabled, "delegate_agent"), assignmentWithCwd),
+      Value.Check(delegate(first).parameters, assignmentWithCwd),
       false,
     );
-    const blocked = await disabled.tools
-      .find((tool) => tool.name === "delegate_agent")!
-      .execute(
-        "cwd-disabled",
-        assignmentWithCwd,
-        undefined,
-        undefined,
-        fakeContext(),
-      );
-    assert.equal(blocked.details.error.category, "invalid_request");
-    assert.match(blocked.details.error.message, /override is unavailable/);
-    disabled.events.get("session_shutdown")?.[0]();
+    assert.equal(
+      Value.Check(delegate(second).parameters, assignmentWithCwd),
+      false,
+    );
 
+    first.pi.setActiveTools(["read"]);
     updateConfig("allowAgentCwdOverride", true);
-    const enabled = fakePi();
-    registerExtension!(enabled.pi as never);
+    await trigger(first, "before_agent_start");
+    assert.deepEqual(first.pi.getActiveTools(), ["read"]);
+    assert.equal(first.tools.length, initialRegistrations + 1);
+    const stale = delegate(first);
+    assert.equal(Value.Check(stale.parameters, assignment), true);
+    assert.equal(Value.Check(stale.parameters, assignmentWithCwd), true);
+
+    await trigger(first, "before_agent_start");
+    await trigger(first, "turn_end");
+    assert.equal(first.tools.length, initialRegistrations + 1);
+    await trigger(second, "turn_end");
     assert.equal(
-      Value.Check(parameters(enabled, "delegate_agent"), assignment),
+      Value.Check(delegate(second).parameters, assignmentWithCwd),
       true,
     );
+
+    const continuation = first.tools.find(
+      (tool) => tool.name === "continue_agent",
+    )!;
     assert.equal(
-      Value.Check(parameters(enabled, "delegate_agent"), assignmentWithCwd),
-      true,
-    );
-    assert.equal(
-      Value.Check(parameters(enabled, "continue_agent"), {
+      Value.Check(continuation.parameters, {
         session: "saved",
         task: "work",
         cwd: ".",
       }),
       false,
     );
-    enabled.events.get("session_shutdown")?.[0]();
 
+    updateConfig("allowAgentCwdOverride", false);
+    await rejectCwd(stale);
+    await trigger(first, "turn_end");
+    assert.equal(first.tools.length, initialRegistrations + 2);
+    assert.equal(
+      Value.Check(delegate(first).parameters, assignmentWithCwd),
+      false,
+    );
+
+    updateConfig("allowAgentCwdOverride", true);
     const mailbox = setAgentEnvironment("cwd-nested", ["scout"]);
     const nested = fakePi();
     try {
       registerExtension!(nested.pi as never);
-      assert.equal(
-        Value.Check(parameters(nested, "delegate_agent"), assignment),
-        true,
-      );
-      assert.equal(
-        Value.Check(parameters(nested, "delegate_agent"), assignmentWithCwd),
-        false,
-      );
+      const tool = delegate(nested);
+      assert.equal(Value.Check(tool.parameters, assignment), true);
+      assert.equal(Value.Check(tool.parameters, assignmentWithCwd), false);
+      const ctx = fakeAgentContext(nested.entries);
+      await invokeEventHandlers(nested, "session_start")(undefined, ctx);
+      await rejectCwd(tool, ctx);
     } finally {
       nested.events.get("session_shutdown")?.[0]();
       resetAgentMailbox(mailbox);
     }
   } finally {
+    first.events.get("session_shutdown")?.[0]();
+    second.events.get("session_shutdown")?.[0]();
     updateConfig("allowAgentCwdOverride", previous);
   }
 });
