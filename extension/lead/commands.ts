@@ -10,6 +10,10 @@ import {
 } from "@earendil-works/pi-ai";
 import type { SelectItem } from "@earendil-works/pi-tui";
 import {
+  overrideModelPickerTitle,
+  pickOverrideModels,
+} from "./override-model-picker.ts";
+import {
   DEFAULT_CONFIG,
   DEFAULT_MAX_AGENT_DEPTH,
   DEFAULT_STATUS_WIDGET_MAX_ROWS,
@@ -1608,6 +1612,22 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               help: "Allow ordinary Leads to select another directory using `cwd` in `delegate_agent`. Without it, Agents use the Lead's directory. Global setting; changes apply to subsequent model turns without `/reload`.",
             },
             {
+              value: "model-overrides",
+              category: "delegation",
+              label: "Agent model overrides",
+              description: config.allowAgentModelOverrides ? "On" : "Off",
+              help: "Allow authorized owners to choose a model or thinking level for one fresh Agent assignment.",
+            },
+            {
+              value: "allowed-override-models",
+              category: "delegation",
+              label: overrideModelPickerTitle,
+              description: config.allowedAgentModels.length
+                ? `Custom selection · ${config.allowedAgentModels.length} selected`
+                : "Using Pi scoped models",
+              help: "Choose allowed models independently of Pi scope. Clear all custom choices to use Pi scoped models.",
+            },
+            {
               value: "removal-confirmation",
               category: "manager",
               label: "Confirm worktree removal",
@@ -1639,6 +1659,53 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         selectedSetting = selected;
         if (selected === "agent-layout") {
           await this.openPlacementMenu(ctx);
+        } else if (selected === "model-overrides") {
+          const current = config.allowAgentModelOverrides ? "on" : "off";
+          const choice = await host.selectMenu(
+            ctx,
+            "Agent model overrides",
+            markCurrent(
+              [
+                { value: "off", label: "Off" },
+                { value: "on", label: "On" },
+              ],
+              current,
+            ),
+            current,
+          );
+          if (
+            (choice !== "on" && choice !== "off") ||
+            choice === current ||
+            ctx.signal?.aborted
+          )
+            continue;
+          try {
+            host.updateConfig("allowAgentModelOverrides", choice === "on");
+            ctx.ui.notify(
+              `Agent model overrides: ${choice === "on" ? "On" : "Off"}. Applies to subsequent delegations and model turns.`,
+            );
+          } catch (error) {
+            ctx.ui.notify(
+              `Could not update “Agent model overrides”: ${String(error)}`,
+              "error",
+            );
+          }
+        } else if (selected === "allowed-override-models") {
+          try {
+            const models = await pickOverrideModels(
+              ctx,
+              config.allowedAgentModels,
+              (title, items) => host.selectMenu(ctx, title, items),
+            );
+            if (models !== undefined && !ctx.signal?.aborted) {
+              host.updateConfig("allowedAgentModels", models);
+            }
+          } catch (error) {
+            ctx.ui.notify(
+              `Could not update “${overrideModelPickerTitle}”: ${String(error)}`,
+              "error",
+            );
+          }
         } else if (selected === "cwd-override") {
           const current = config.allowAgentCwdOverride ? "on" : "off";
           const choice = await host.selectMenu(

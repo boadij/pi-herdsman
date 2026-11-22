@@ -68,6 +68,7 @@ import {
   VALID_THINKING_LEVELS,
   type AgentDefinition,
 } from "./agent-definitions.ts";
+import { startupAgentModelCatalog } from "./agent-model-overrides.ts";
 import {
   captureStartupDiagnostic,
   herdrSessionSnapshot,
@@ -1149,6 +1150,7 @@ function registerExtensionImpl(
   );
   let startupDefinitionRoster:
     { sessionId: string; definitions: Record<string, unknown>[] } | undefined;
+  let startupModelCatalog: { sessionId: string; text: string } | undefined;
   let leadRuntime!: LeadRuntimeState;
   let leadToolState!: ReturnType<typeof createLeadToolState>;
   const activeRole = (): SessionRole => activeLeadRole(leadRuntime);
@@ -1511,6 +1513,11 @@ function registerExtensionImpl(
           ctx,
         ),
       definitionRoster: () => startupDefinitionRoster,
+      modelCatalog: (ctx: ExtensionContext) =>
+        startupModelCatalog?.sessionId === ctx.sessionManager.getSessionId() &&
+        pi.getActiveTools().includes("delegate_agent")
+          ? startupModelCatalog.text
+          : undefined,
       isRoleSuspended: () => leadRuntime.roleSuspended,
     };
     const initialStatusBreadcrumb =
@@ -2358,6 +2365,7 @@ function registerExtensionImpl(
       const shutdownOptions = {
         clearStartupDefinitionRoster: () => {
           startupDefinitionRoster = undefined;
+          startupModelCatalog = undefined;
         },
         isLead: () => activeRole() === "lead" && !leadRuntime.roleSuspended,
       };
@@ -2392,6 +2400,15 @@ function registerExtensionImpl(
           readEffectiveConfig(ctx).autoActivateManager,
         clearDefinitionRoster: () => {
           startupDefinitionRoster = undefined;
+        },
+        snapshotModelCatalog: (ctx: ExtensionContext) => {
+          startupModelCatalog = undefined;
+          const text = startupAgentModelCatalog(ctx, readConfig());
+          if (text)
+            startupModelCatalog = {
+              sessionId: ctx.sessionManager.getSessionId(),
+              text,
+            };
         },
         setDefinitionRoster: (roster: typeof startupDefinitionRoster) => {
           startupDefinitionRoster = roster;

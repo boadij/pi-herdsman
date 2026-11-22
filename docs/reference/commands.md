@@ -82,6 +82,8 @@ Agent status or definitions to render.
 | `Interface`              | `Status widget lines`                        |
 | `Delegation options`     | `Agent nesting limit`                        |
 | `Delegation options`     | `Delegate Agents to other directories (cwd)` |
+| `Delegation options`     | `Agent model overrides`                      |
+| `Delegation options`     | `Allowed override models`                    |
 | `Communication`          | `Peer communication`                         |
 | `Communication`          | `Peer federation`                            |
 
@@ -93,6 +95,28 @@ delegations and model turns without `/reload`. Cross-directory delegation is
 limited to ordinary Leads. See
 [`Peer communication` and `Peer federation`](configuration.md#peer-communication)
 in the Configuration reference.
+
+[`Agent model overrides`](configuration.md#agent-model-overrides) is a global
+Off/On setting for fresh delegation. It defaults to Off and does not require
+`/reload`. Use `Allowed override models` to prepare a custom selection even
+while overrides are Off. The picker shows the selected count and whether it
+uses Pi scoped models or a custom selection. Unavailable configured models
+are shown so they can be removed.
+
+| Input      | Action                                                  |
+| ---------- | ------------------------------------------------------- |
+| Type       | Filter by provider, ID, or name                         |
+| Arrow keys | Move the highlight                                      |
+| Enter      | Toggle the highlighted model                            |
+| Ctrl+A     | Select all models, or all filtered models               |
+| Ctrl+X     | Clear all custom selections, or the filtered selections |
+| Ctrl+P     | Toggle all models for the highlighted provider          |
+| Ctrl+S     | Save                                                    |
+| Esc        | Cancel without changing settings                        |
+
+Saving an empty custom selection restores inheritance from the calling
+controller's Pi scoped models. Where the custom picker is unavailable, the
+fallback selector lets you toggle models one at a time and then save or cancel.
 
 The default Lead mode applies only when a future ordinary Lead session has no
 persisted execution choice; changing it does not change the current session.

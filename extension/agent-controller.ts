@@ -10,10 +10,15 @@ import {
   buildSessionProjection,
   CURRENT_SESSION_VERSION,
   parseSessionEntries,
+  resolveCliModel,
   SessionManager,
   truncateTail,
 } from "@earendil-works/pi-coding-agent";
-import { contentText } from "@earendil-works/pi-ai";
+import {
+  contentText,
+  getSupportedThinkingLevels,
+  type ThinkingLevel,
+} from "@earendil-works/pi-ai";
 import {
   accessSync,
   constants,
@@ -173,10 +178,17 @@ import {
   projectAgentDefinition,
   resolveChildModel,
   configuredModel,
+  VALID_THINKING_LEVELS,
   validateAgentDefinitionReferences,
   writePrivatePromptSnapshots,
   type AgentDefinition,
 } from "./agent-definitions.ts";
+import {
+  agentModelCatalog,
+  allowedOverrideModels,
+  EXPECTED_STARTUP_MODEL_ENV,
+  modelToken,
+} from "./agent-model-overrides.ts";
 
 const delegationLockPath = (workspaceId: string, sessionId: string) =>
   join(
@@ -894,8 +906,6 @@ function formatHealthAttentionDuration(ms: number): string {
 const AGENT_LABEL_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 const validAgentLabel = (value: unknown): value is string =>
   typeof value === "string" && AGENT_LABEL_PATTERN.test(value);
-const modelToken = (model: { provider: string; id: string }): string =>
-  `${model.provider}/${model.id}`;
 const messageLimits = async () => {
   const config = readConfig();
   return {
@@ -3691,6 +3701,8 @@ export type Params =
       label?: string;
       task: string;
       cwd?: string;
+      model?: string;
+      thinking?: ThinkingLevel;
       files?: string[];
       retain?: boolean;
       retentionPersisted?: boolean;
@@ -3702,6 +3714,122 @@ export type Params =
   | { action: "stop"; agent: string }
   | { action: "inspect"; agent: string }
   | { action: "transcript"; agent: string };
+
+function validateAgentModelOverridePolicy(
+  ctx: ExtensionContext,
+  requested: Pick<
+    Extract<Params, { action: "delegate" }>,
+    "model" | "thinking"
+  >,
+) {
+  const config = readConfig();
+  if (!config.allowAgentModelOverrides)
+    fail(
+      "invalid_request",
+      "Agent model and thinking overrides are disabled",
+      "delegate",
+      {
+        nextAction:
+          "Omit both overrides or enable Agent model overrides in Herdsman Settings.",
+      },
+    );
+  if (!Object.hasOwn(requested, "model")) return;
+  const selected = allowedOverrideModels(ctx, config).find(
+    (model) => modelToken(model) === requested.model,
+  );
+  if (!selected)
+    fail(
+      "invalid_request",
+      "Requested model is not currently permitted or available",
+      "delegate",
+      {
+        nextAction:
+          "Use list_agents to find an exact permitted model ID, or omit the model override.",
+      },
+    );
+  return selected;
+}
+
+function validateAgentThinkingOverride(
+  ctx: ExtensionContext,
+  requestedThinking: ThinkingLevel | undefined,
+  configured: string | undefined,
+  explicitModel: ReturnType<typeof validateAgentModelOverridePolicy>,
+  inherited: ExtensionContext["model"],
+) {
+  if (
+    !requestedThinking ||
+    !VALID_THINKING_LEVELS.some((level) => level === requestedThinking)
+  )
+    fail("invalid_request", "Unrecognized thinking level", "delegate", {
+      nextAction: `Choose a valid thinking level: ${VALID_THINKING_LEVELS.join(", ")}.`,
+    });
+  const model =
+    explicitModel ??
+    (() => {
+      const token =
+        configured ?? (inherited ? modelToken(inherited) : undefined);
+      if (token === undefined) return;
+      const models = ctx.modelRegistry.getAll();
+      const lowerToken = token.toLowerCase();
+      const candidates = models.filter(
+        (model) =>
+          modelToken(model).toLowerCase() === lowerToken ||
+          model.id.toLowerCase() === lowerToken,
+      );
+      const candidate = candidates.length === 1 ? candidates[0] : undefined;
+      if (!candidate || !ctx.modelRegistry.hasConfiguredAuth(candidate)) return;
+      if (configured === undefined) {
+        if (
+          candidate.provider !== inherited?.provider ||
+          candidate.id !== inherited.id
+        )
+          return;
+      } else if (modelToken(candidate) !== token && candidate.id !== token) {
+        return;
+      }
+      // An exact token can still lose to Pi's longest-prefix/fuzzy resolution.
+      // The CLI resolver only reads these two methods of its runtime.
+      const modelRuntime = {
+        getModels: () => models,
+        hasConfiguredAuth: (provider: string) => {
+          const model = models.find(
+            (candidate) => candidate.provider === provider,
+          );
+          return (
+            model !== undefined && ctx.modelRegistry.hasConfiguredAuth(model)
+          );
+        },
+      } as unknown as Parameters<typeof resolveCliModel>[0]["modelRuntime"];
+      const resolved = resolveCliModel({
+        cliModel: token,
+        cliThinking: requestedThinking,
+        modelRuntime,
+      });
+      if (resolved.model === candidate) return candidate;
+    })();
+  if (!model)
+    fail(
+      "invalid_request",
+      "Cannot unambiguously resolve the model for a thinking override",
+      "delegate",
+      {
+        nextAction:
+          "Specify an exact permitted provider/model ID or omit the thinking override.",
+      },
+    );
+  const supported = getSupportedThinkingLevels(model);
+  if (!supported.includes(requestedThinking))
+    fail(
+      "invalid_request",
+      `Thinking level ${requestedThinking} is not supported by ${modelToken(model)}`,
+      "delegate",
+      {
+        nextAction: `Choose a supported thinking level: ${supported.join(", ")}.`,
+      },
+    );
+  return model;
+}
 
 export function validateAssignmentRequest(params: Params): void {
   if (params.action !== "delegate" && params.action !== "continue") return;
@@ -6126,16 +6254,19 @@ export function createAgentController(
         unresolved,
       ),
     );
+    const definitions = scope
+      ? visibleAgentCapabilities(
+          await options.agentDefinitions(context),
+          scope,
+          options.rootDelegationPolicy?.() ?? new Set<string>(),
+        )
+      : [];
+    const models = scope ? agentModelCatalog(context, readConfig()) : undefined;
     return {
       ok: true,
       agents: [...agents, ...unknown],
-      agent_definitions: scope
-        ? visibleAgentCapabilities(
-            await options.agentDefinitions(context),
-            scope,
-            options.rootDelegationPolicy?.() ?? new Set<string>(),
-          )
-        : [],
+      agent_definitions: definitions,
+      ...(models === undefined ? {} : { agent_models: models }),
     };
   };
   const closeAction = async (
@@ -8431,6 +8562,22 @@ export function createAgentController(
         }
       };
       assertRootDelegationAllowed();
+      const overrides =
+        p.action === "delegate" &&
+        (Object.hasOwn(p, "model") || Object.hasOwn(p, "thinking"))
+          ? p
+          : undefined;
+      if (overrides) {
+        const selected = validateAgentModelOverridePolicy(ctx, overrides);
+        if (Object.hasOwn(overrides, "thinking"))
+          validateAgentThinkingOverride(
+            ctx,
+            overrides.thinking,
+            configuredModel(definition.frontmatter),
+            selected,
+            ctx.model,
+          );
+      }
       validateAssignmentCwd(
         definition,
         agentCwd,
@@ -9566,12 +9713,26 @@ export function createAgentController(
               id.toLowerCase(),
             ),
           );
+          const configured = configuredModel(effectiveDefinition.frontmatter);
+          // Use the same snapshot for thinking validation and the ordinary
+          // inherited-model launch arguments after asynchronous preparation.
+          const inheritedModel = resumed ? undefined : ctx.model;
+          const assignmentModel =
+            overrides && validateAgentModelOverridePolicy(ctx, overrides);
           const childModel = resolveChildModel({
-            configured: configuredModel(effectiveDefinition.frontmatter),
-            inherited:
-              !resumed && ctx.model
-                ? { provider: ctx.model.provider, token: modelToken(ctx.model) }
-                : undefined,
+            assignment: assignmentModel
+              ? {
+                  provider: assignmentModel.provider,
+                  token: modelToken(assignmentModel),
+                }
+              : undefined,
+            configured,
+            inherited: inheritedModel
+              ? {
+                  provider: inheritedModel.provider,
+                  token: modelToken(inheritedModel),
+                }
+              : undefined,
             saved: resumed?.savedModel,
             savedUnresolved: resumed?.savedModelUnresolved,
             isForeignProvider: (providerId) =>
@@ -9579,6 +9740,40 @@ export function createAgentController(
             isKnownModel: (provider, id) =>
               ctx.modelRegistry.find(provider, id) !== undefined,
           });
+          let expectedStartupModel = assignmentModel;
+          if (overrides && Object.hasOwn(overrides, "thinking")) {
+            const selected = validateAgentThinkingOverride(
+              ctx,
+              overrides.thinking,
+              configured,
+              assignmentModel,
+              inheritedModel,
+            );
+            expectedStartupModel = selected;
+            if (
+              effectiveDefinition.frontmatter.noExtensions &&
+              !childModel.extensionDiscovery &&
+              registeredProviderIds.has(selected.provider.toLowerCase())
+            )
+              fail(
+                "invalid_request",
+                "The unchanged model requires extension discovery disabled by the Agent definition",
+                "delegate",
+                {
+                  nextAction:
+                    "Specify an exact permitted model ID or omit the thinking override.",
+                },
+              );
+          }
+          if (expectedStartupModel) {
+            const { provider, id } = expectedStartupModel;
+            const expected = [provider, id];
+            if (overrides?.thinking !== undefined)
+              expected.push(overrides.thinking);
+            env.push(
+              `${EXPECTED_STARTUP_MODEL_ENV}=${JSON.stringify(expected)}`,
+            );
+          }
           if (
             (resumed?.savedModel || resumed?.savedModelUnresolved) &&
             !configuredModel(effectiveDefinition.frontmatter)
@@ -9598,6 +9793,9 @@ export function createAgentController(
                 : undefined,
             ...(!resumed ? { inheritedThinking: pi.getThinkingLevel() } : {}),
             modelDecision: childModel,
+            assignmentThinking:
+              overrides?.thinking ??
+              (overrides?.model === undefined ? undefined : null),
           });
           // Role/profile preflight may have changed while this assignment was prepared.
           assertRootDelegationAllowed();
@@ -9661,8 +9859,25 @@ export function createAgentController(
               "delegate",
             );
           const assertLaunchAuthorized = (launchCwd: string) => {
+            const recheckModelPolicy = () => {
+              if (!overrides) return;
+              const current = validateAgentModelOverridePolicy(ctx, overrides);
+              if (
+                current &&
+                (current.provider !== assignmentModel?.provider ||
+                  current.id !== assignmentModel.id)
+              )
+                fail(
+                  "invalid_request",
+                  "Requested model changed during preparation; retry delegation",
+                  "delegate",
+                );
+            };
             const legacy = checkLaunchAuthority(launchCwd);
-            if (!legacy.size) return;
+            if (!legacy.size) {
+              recheckModelPolicy();
+              return;
+            }
             return (async () => {
               // Probe only exact legacy session cwd candidates containing the target,
               // once per checkout, not every repository or branch in authority.
@@ -9716,13 +9931,14 @@ export function createAgentController(
                 if (repo !== undefined && repositories.has(repo))
                   rejectAssignedCheckout();
               }
+              recheckModelPolicy();
             })();
           };
           started = await startHerdrAgent(pi, ctx, {
             label,
             runId,
             cwd: agentCwd,
-            ...(verifiedCwd ? { assertLaunchAuthorized } : {}),
+            ...(verifiedCwd || overrides ? { assertLaunchAuthorized } : {}),
             extensionPath: options.extensionPath,
             placement,
             ...(placementRevalidator ? { placementRevalidator } : {}),
@@ -10253,6 +10469,12 @@ export function createAgentController(
             agent: label,
             definition: agentDefinition,
             ...(p.action === "delegate" ? { cwd: runtime.cwd } : {}),
+            ...(overrides?.model === undefined
+              ? {}
+              : { requested_model: overrides.model }),
+            ...(overrides?.thinking === undefined
+              ? {}
+              : { requested_thinking: overrides.thinking }),
             owner_session_id: runtime.ownerSessionId,
             pane_id: runtime.paneId,
             session_id: runtime.piSessionId,
@@ -10442,6 +10664,8 @@ export function createAgentController(
     );
   };
 
+  let refreshDelegateSchema = () => {};
+
   const registerTools = (
     onAssignmentStarted?: (ctx: ExtensionContext) => void,
   ): void => {
@@ -10523,7 +10747,7 @@ export function createAgentController(
       });
     }
     const agentListParameters = emptyParameters;
-    const agentDelegateParameters = (exposeCwd: boolean) =>
+    const agentDelegateParameters = (exposeCwd: boolean, exposeModelOverrides: boolean) =>
       Type.Object(
         {
           definition:
@@ -10548,6 +10772,18 @@ export function createAgentController(
             }),
           ),
           files: FILES_SCHEMA,
+          ...(exposeModelOverrides
+            ? {
+                model: Type.Optional(
+                  Type.String({
+                    minLength: 1,
+                    description:
+                      "Exact permitted provider/model ID for this assignment.",
+                  }),
+                ),
+                thinking: Type.Optional(StringEnum([...VALID_THINKING_LEVELS])),
+              }
+            : {}),
           ...(exposeCwd
             ? {
                 cwd: Type.Optional(
@@ -10616,7 +10852,7 @@ export function createAgentController(
         AGENT_UNRESOLVED_GUIDANCE,
       ],
       description:
-        "List current owned Agent state and refresh the Agent-definition roster. Do not use for progress polling.",
+        "List current owned Agent state and refresh the Agent-definition roster. When Agent model overrides are enabled, agent_models shows current choices. Do not use for progress polling.",
       executionMode: agentExecutionMode,
       parameters: agentListParameters,
       execute: async (
@@ -10775,7 +11011,7 @@ export function createAgentController(
         ctx: ExtensionContext,
       ) => agentTool.execute(id, { action: "list" }, signal, update, ctx),
     });
-    const registerDelegate = (exposeCwd: boolean) =>
+    const registerDelegate = (exposeCwd: boolean, exposeModelOverrides: boolean) =>
       pi.registerTool({
         ...agentTool,
         name: "delegate_agent",
@@ -10783,7 +11019,7 @@ export function createAgentController(
         exposure: "direct",
         description:
           "Start one fresh bounded assignment. Choose the most focused eligible Agent definition capable of completing the full task using its effective tools. The Agent roster describes potential child capabilities, not your own callable tools. Parent and child tool permissions are independent; delegation does not grant either session the other's tools. Prefer the most focused definition; use a general-purpose definition when broader capabilities are needed or no focused definition fits.",
-        parameters: agentDelegateParameters(exposeCwd),
+        parameters: agentDelegateParameters(exposeCwd, exposeModelOverrides),
         promptSnippet: undefined,
         promptGuidelines: [FILE_HANDOFF_GUIDANCE],
         execute: (
@@ -10805,29 +11041,30 @@ export function createAgentController(
         renderResult: (r: any, o: any, t: any, c: any) =>
           renderCoordinationResult("agent", "delegate", r, o, t, c),
       });
-
-    let advertisedCwd =
-      controllerScope.kind === "root" && readConfig().allowAgentCwdOverride;
-    registerDelegate(advertisedCwd);
-
-    if (controllerScope.kind === "root") {
-      const refreshDelegateSchema = () => {
-        const enabled = readConfig().allowAgentCwdOverride;
-        if (enabled === advertisedCwd) return;
-
-        const activeTools = pi.getActiveTools();
-        try {
-          registerDelegate(enabled);
-        } finally {
-          if (!isDeepStrictEqual(pi.getActiveTools(), activeTools))
-            pi.setActiveTools(activeTools);
-        }
-        advertisedCwd = enabled;
+    const readDelegateGates = () => {
+      const config = readConfig();
+      return {
+        cwd: controllerScope.kind === "root" && config.allowAgentCwdOverride,
+        model: config.allowAgentModelOverrides,
       };
+    };
+    let advertisedGates = readDelegateGates();
+    registerDelegate(advertisedGates.cwd, advertisedGates.model);
 
-      pi.on("before_agent_start", refreshDelegateSchema);
-      pi.on("turn_end", refreshDelegateSchema);
-    }
+    refreshDelegateSchema = () => {
+      const gates = readDelegateGates();
+      if (isDeepStrictEqual(gates, advertisedGates)) return;
+
+      // Replacing a schema must not change the current role's active tools.
+      const activeTools = pi.getActiveTools();
+      try {
+        registerDelegate(gates.cwd, gates.model);
+      } finally {
+        if (!isDeepStrictEqual(pi.getActiveTools(), activeTools))
+          pi.setActiveTools(activeTools);
+      }
+      advertisedGates = gates;
+    };
     pi.registerTool({
       ...agentTool,
       name: "continue_agent",
@@ -12095,6 +12332,7 @@ export function createAgentController(
       attentionReminders.clear();
     },
     registerTools,
+    refreshDelegateSchema: () => refreshDelegateSchema(),
     resetAssignmentGuidance,
     action,
     reusableLeadTab,

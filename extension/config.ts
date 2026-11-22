@@ -43,6 +43,8 @@ export type HerdsmanConfig = {
   peerFederationEnabled: boolean;
   autoActivateManager: boolean;
   allowAgentCwdOverride: boolean;
+  allowAgentModelOverrides: boolean;
+  allowedAgentModels: string[];
   managerGitBootstrapWithoutConfirmation: boolean;
   inlineAttachmentLimitBytes: number;
   mailboxPayloadLimitBytes: number;
@@ -69,6 +71,8 @@ export const DEFAULT_CONFIG: HerdsmanConfig = {
   peerFederationEnabled: true,
   autoActivateManager: false,
   allowAgentCwdOverride: false,
+  allowAgentModelOverrides: false,
+  allowedAgentModels: [],
   managerGitBootstrapWithoutConfirmation: false,
   inlineAttachmentLimitBytes: DEFAULT_BYTE_LIMIT,
   mailboxPayloadLimitBytes: DEFAULT_BYTE_LIMIT,
@@ -116,6 +120,8 @@ const CONFIG_KEYS = new Set<ConfigKey>([
   "peerFederationEnabled",
   "autoActivateManager",
   "allowAgentCwdOverride",
+  "allowAgentModelOverrides",
+  "allowedAgentModels",
   "managerGitBootstrapWithoutConfirmation",
   "inlineAttachmentLimitBytes",
   "mailboxPayloadLimitBytes",
@@ -123,6 +129,14 @@ const CONFIG_KEYS = new Set<ConfigKey>([
   "managerMergeEnabled",
   "managerMergeOverrides",
 ]);
+
+function validAllowedAgentModels(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    [...value].every((model) => typeof model === "string" && !!model.trim()) &&
+    new Set(value).size === value.length
+  );
+}
 
 function validRepoIdentity(value: unknown): value is string {
   return (
@@ -218,6 +232,18 @@ function parseRawConfig(content: string): Partial<HerdsmanConfig> {
     if (typeof record.allowAgentCwdOverride !== "boolean")
       throw new Error("Invalid Pi Herdsman config field allowAgentCwdOverride");
     result.allowAgentCwdOverride = record.allowAgentCwdOverride;
+  }
+  if ("allowAgentModelOverrides" in record) {
+    if (typeof record.allowAgentModelOverrides !== "boolean")
+      throw new Error(
+        "Invalid Pi Herdsman config field allowAgentModelOverrides",
+      );
+    result.allowAgentModelOverrides = record.allowAgentModelOverrides;
+  }
+  if ("allowedAgentModels" in record) {
+    if (!validAllowedAgentModels(record.allowedAgentModels))
+      throw new Error("Invalid Pi Herdsman config field allowedAgentModels");
+    result.allowedAgentModels = record.allowedAgentModels;
   }
   if ("managerGitBootstrapWithoutConfirmation" in record) {
     if (typeof record.managerGitBootstrapWithoutConfirmation !== "boolean")
@@ -641,6 +667,12 @@ export function updateConfig<K extends ConfigKey>(
         throw new Error(
           "Invalid Pi Herdsman config field allowAgentCwdOverride",
         );
+      if (key === "allowAgentModelOverrides" && typeof value !== "boolean")
+        throw new Error(
+          "Invalid Pi Herdsman config field allowAgentModelOverrides",
+        );
+      if (key === "allowedAgentModels" && !validAllowedAgentModels(value))
+        throw new Error("Invalid Pi Herdsman config field allowedAgentModels");
       if (
         key === "managerGitBootstrapWithoutConfirmation" &&
         typeof value !== "boolean"
@@ -671,6 +703,8 @@ export function updateConfig<K extends ConfigKey>(
         key !== "contextRetirement" &&
         key !== "autoActivateManager" &&
         key !== "allowAgentCwdOverride" &&
+        key !== "allowAgentModelOverrides" &&
+        key !== "allowedAgentModels" &&
         key !== "peerCommunicationEnabled" &&
         key !== "peerFederationEnabled" &&
         key !== "managerGitBootstrapWithoutConfirmation" &&

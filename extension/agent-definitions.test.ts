@@ -15,6 +15,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
+import { resolveCliModel } from "@earendil-works/pi-coding-agent";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
 import {
@@ -3860,6 +3861,66 @@ const noForeignProviders = () => false;
 const inheritedModel = (provider: string, token: string) => ({
   provider,
   token,
+});
+
+test("assignment thinking takes precedence or defers to Pi for a model-only override", () => {
+  const definition = {
+    name: "scout",
+    path: "/agents/scout.md",
+    frontmatter: {
+      name: "scout",
+      model: "vendor/default",
+      thinking: "high",
+      noExtensions: true,
+    },
+    body: "",
+  };
+  const selected = { provider: "extension/provider", id: "model/variant" };
+  const overrideModel = `${selected.provider}/${selected.id}`;
+  const modelDecision = resolveChildModel({
+    assignment: { provider: selected.provider, token: overrideModel },
+    isForeignProvider: (provider) => provider === selected.provider,
+  });
+  const modelRuntime = {
+    // A longer provider prefix must not redirect Pi away from the exact pair.
+    getModels: () => [
+      selected,
+      { provider: "extension/provider/model", id: "other" },
+    ],
+    hasConfiguredAuth: () => true,
+  } as unknown as Parameters<typeof resolveCliModel>[0]["modelRuntime"];
+  const cases = [
+    { model: false, thinking: undefined, expected: "high" },
+    { model: true, thinking: null, expected: undefined },
+    { model: false, thinking: "off", expected: "off" },
+    { model: true, thinking: "low", expected: "low" },
+  ] as const;
+  for (const { model, thinking, expected } of cases) {
+    const args = agentLaunchArgs(definition, {
+      inheritedThinking: "medium",
+      assignmentThinking: thinking,
+      modelDecision: model ? modelDecision : undefined,
+    });
+    assert.equal(
+      args[args.indexOf("--model") + 1],
+      model ? overrideModel : "vendor/default",
+    );
+    if (model) {
+      const result = resolveCliModel({
+        cliProvider: args[args.indexOf("--provider") + 1],
+        cliModel: args[args.indexOf("--model") + 1],
+        modelRuntime,
+      });
+      assert.equal(result.model, selected);
+    }
+    const thinkingIndex = args.indexOf("--thinking");
+    if (expected === undefined) assert.equal(thinkingIndex, -1);
+    else {
+      assert.notEqual(thinkingIndex, -1);
+      assert.equal(args[thinkingIndex + 1], expected);
+    }
+    assert.equal(args.includes("--no-extensions"), !model);
+  }
 });
 
 test("a child with no requested model passes no --model at all", () => {

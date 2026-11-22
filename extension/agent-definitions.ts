@@ -1481,9 +1481,16 @@ export type ChildModelDecision =
    * registered by an extension, in which case the child must not be launched
    * with `--no-extensions` or it cannot resolve the model it was given.
    */
-  | { kind: "use"; model: string; extensionDiscovery: boolean };
+  | {
+      kind: "use";
+      model: string;
+      provider?: string;
+      extensionDiscovery: boolean;
+    };
 
 export function resolveChildModel(input: {
+  /** Exact model selected and validated for this assignment's overrides. */
+  assignment?: { provider: string; token: string };
   /** Model pinned by the agent definition's frontmatter, passed to Pi as given. */
   configured?: string;
   /** The spawning controller's model; Pi already resolved its provider. */
@@ -1496,6 +1503,14 @@ export function resolveChildModel(input: {
   isForeignProvider: (providerId: string) => boolean;
   isKnownModel?: (providerId: string, modelId: string) => boolean;
 }): ChildModelDecision {
+  if (input.assignment) {
+    return {
+      kind: "use",
+      model: input.assignment.token,
+      provider: input.assignment.provider,
+      extensionDiscovery: input.isForeignProvider(input.assignment.provider),
+    };
+  }
   if (input.configured !== undefined && input.configured.trim() !== "") {
     const model = input.configured;
     let extensionDiscovery = false;
@@ -1766,6 +1781,8 @@ export type AgentLaunchOptions = {
   approveProject?: boolean;
   inheritedModel?: string;
   inheritedThinking?: string;
+  /** Explicit assignment level, or null to let Pi choose the model default. */
+  assignmentThinking?: string | null;
   requiredTools?: readonly string[];
   /**
    * Pre-computed model decision for this child. When omitted, the requested
@@ -1814,8 +1831,18 @@ export function agentLaunchArgs(
           model: requestedModel,
           extensionDiscovery: false,
         });
-  if (decision.kind === "use") args.push("--model", decision.model);
-  const thinking = configuredThinking(agent) ?? inheritedThinking;
+  if (decision.kind === "use") {
+    // Constrain Pi's resolver without reimplementing its prefix or fuzzy lookup.
+    if (decision.provider !== undefined)
+      args.push("--provider", decision.provider);
+    args.push("--model", decision.model);
+  }
+  const thinking =
+    options.assignmentThinking === null
+      ? undefined
+      : (options.assignmentThinking ??
+        configuredThinking(agent) ??
+        inheritedThinking);
   if (thinking !== undefined) {
     args.push("--thinking", thinking);
   }

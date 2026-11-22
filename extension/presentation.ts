@@ -3343,11 +3343,24 @@ export function formatToolModelResult(
       ...(definitions.length
         ? ["Agent definitions:", ...formatAgentDefinitions(definitions)]
         : []),
+      ...(Array.isArray(v.agent_models)
+        ? [
+            "",
+            "agent_models (current override choices; the session-start catalog may be stale):",
+            JSON.stringify(v.agent_models),
+          ]
+        : []),
     ].join("\n");
   }
   return [
     `${action[0].toUpperCase()}${action.slice(1)} agent ${value(v.agent) || "unknown"}${definition ? ` (${definition})` : ""}.`,
     ...(action === "delegate" && value(v.cwd) ? [`Cwd: ${v.cwd}`] : []),
+    ...(action === "delegate" && value(v.requested_model)
+      ? [`Requested model: ${v.requested_model}`]
+      : []),
+    ...(action === "delegate" && value(v.requested_thinking)
+      ? [`Requested thinking: ${v.requested_thinking}`]
+      : []),
     ...(value(v.session_id) ? [`Session: ${v.session_id}`] : []),
     ...(value(v.request_id) ? [`Request: ${v.request_id}`] : []),
     ...(value(v.assignment_request_id)
@@ -3923,6 +3936,11 @@ function expandedResultLines(
     ["workspace", details.workspace_id],
     ["captured", details.captured_at],
   ];
+  if (tool === "agent" && action === "delegate")
+    fields.push(
+      ["requested model", details.requested_model],
+      ["requested thinking", details.requested_thinking],
+    );
   if (tool === "agent" && action === "reply")
     fields.push(["ask", details.ask_id ?? details.askId ?? args.askId]);
   for (const [label, field] of fields)
