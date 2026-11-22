@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.53.0](https://github.com/boadij/pi-herdsman/compare/v0.52.1...v0.53.0) (2026-11-22)
+
+
+### Features
+
+* **agent:** allow task-scoped model and thinking overrides ([#1088](https://github.com/boadij/pi-herdsman/issues/1088)) ([033393b](https://github.com/boadij/pi-herdsman/commit/033393b1a7e7d887f81ddf7f8d4d671628b9cf5d))
+* **agent:** expose effective model and thinking in Agent rosters ([#1095](https://github.com/boadij/pi-herdsman/issues/1095)) ([d65f629](https://github.com/boadij/pi-herdsman/commit/d65f629cb9c4e21db142dfede9929f6e65c6dc71))
+* **delegation:** refresh cwd schema without reload ([#1089](https://github.com/boadij/pi-herdsman/issues/1089)) ([5b8193c](https://github.com/boadij/pi-herdsman/commit/5b8193c326a71b120c04f5c8a0615e951977d638))
+* **session:** name ordinary and supervisory Pi sessions ([#1090](https://github.com/boadij/pi-herdsman/issues/1090)) ([25d3b3b](https://github.com/boadij/pi-herdsman/commit/25d3b3b9713e220bd5b66b724e6d630e38b80872))
+* **skills:** provide intrinsic session-scoped skill loading ([#1082](https://github.com/boadij/pi-herdsman/issues/1082)) ([35f432f](https://github.com/boadij/pi-herdsman/commit/35f432f800bc2e39ba0fe9e02d5ca98d5254e933))
+
+
+### Fixes
+
+* **agent:** initialize model catalog when enabled mid-session ([#1097](https://github.com/boadij/pi-herdsman/issues/1097)) ([681fd17](https://github.com/boadij/pi-herdsman/commit/681fd174c117030502e0293d0f58b1fac00fe55d))
+* **release:** verify approved squash payload and streamline preflight ([#1086](https://github.com/boadij/pi-herdsman/issues/1086)) ([858d0bc](https://github.com/boadij/pi-herdsman/commit/858d0bc507e52c91cd908816a13c9990323ef664))
+* **ui:** clarify override model picker selections ([#1096](https://github.com/boadij/pi-herdsman/issues/1096)) ([7584f18](https://github.com/boadij/pi-herdsman/commit/7584f1843371569bbfd9a675cc75f1c2b52f2ed1))
+
+
+### Documentation
+
+* clarify feature implementation coordination ([#1094](https://github.com/boadij/pi-herdsman/issues/1094)) ([775de09](https://github.com/boadij/pi-herdsman/commit/775de09441af732b62ed05c50a9f34da1ecf4a75))
+* **definitions:** correct model selector scoped-model description ([#1093](https://github.com/boadij/pi-herdsman/issues/1093)) ([13a840d](https://github.com/boadij/pi-herdsman/commit/13a840d3dcab8fef071e9dc58d3bab3f548ff90f))
+
+
+### Tests
+
+* **smoke:** disable Herdr onboarding and sounds by default ([#1098](https://github.com/boadij/pi-herdsman/issues/1098)) ([c1f046c](https://github.com/boadij/pi-herdsman/commit/c1f046ca4ee63eb9672657727e068095df6e33e6))
+
 ## [0.52.1](https://github.com/boadij/pi-herdsman/compare/v0.52.0...v0.52.1) (2026-11-21)
 
 
