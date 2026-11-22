@@ -3346,7 +3346,7 @@ export function formatToolModelResult(
       ...(Array.isArray(v.agent_models)
         ? [
             "",
-            "agent_models (current override choices; the session-start catalog may be stale):",
+            "agent_models (current override choices; the session catalog may be stale):",
             JSON.stringify(v.agent_models),
           ]
         : []),

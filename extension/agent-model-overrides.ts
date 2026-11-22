@@ -40,7 +40,7 @@ export function allowedOverrideModels(
   });
 }
 
-export function startupAgentModelCatalog(
+export function sessionAgentModelCatalog(
   ctx: ModelCatalogContext,
   config: HerdsmanConfig,
 ): string | undefined {
@@ -48,7 +48,7 @@ export function startupAgentModelCatalog(
   if (!catalog) return undefined;
   return (
     `${JSON.stringify(catalog)}\n\n` +
-    "This is the session-start model catalog. Use list_agents for current choices."
+    "This is a fixed session model catalog snapshot. Use list_agents for current choices."
   );
 }
 

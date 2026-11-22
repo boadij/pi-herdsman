@@ -133,7 +133,7 @@ import {
 import {
   EXPECTED_STARTUP_MODEL_ENV,
   modelToken,
-  startupAgentModelCatalog,
+  sessionAgentModelCatalog,
 } from "./agent-model-overrides.ts";
 
 const DELEGATING_AGENT_ROLE_CHARTER = `## Delegating agent role
@@ -2903,7 +2903,7 @@ export function registerManagedAgentRuntime(
   };
   let startupDefinitionRoster:
     { sessionId: string; definitions: Record<string, unknown>[] } | undefined;
-  let startupModelCatalog: { sessionId: string; text: string } | undefined;
+  let modelCatalogSnapshot: { sessionId: string; text: string } | undefined;
   const controller = delegationEnabled
     ? createAgentController(pi, {
         ...options.controllerOptions,
@@ -3071,7 +3071,8 @@ export function registerManagedAgentRuntime(
     delete event.systemPromptOptions.sections.agent_models;
     if (delegationEnabled) {
       const sessionId = ctx.sessionManager.getSessionId();
-      if (isVerifiedSession(sessionId)) controller?.refreshDelegateSchema();
+      const verified = isVerifiedSession(sessionId);
+      if (verified) controller?.refreshDelegateSchema();
       const roster = startupDefinitionRoster;
       const availableRoster =
         roster?.sessionId === sessionId ? roster : undefined;
@@ -3082,13 +3083,23 @@ export function registerManagedAgentRuntime(
           `${JSON.stringify(availableRoster.definitions)}\n\n` +
           `This is the session-start definition snapshot. ` +
           `Use list_agents for live Agent state or to refresh Agent definitions after configuration changes.`;
-      const catalog = startupModelCatalog;
-      if (
-        catalog?.sessionId === sessionId &&
-        isVerifiedSession(sessionId) &&
-        pi.getActiveTools().includes("delegate_agent")
-      )
-        event.systemPromptOptions.sections.agent_models = catalog.text;
+      if (verified && pi.getActiveTools().includes("delegate_agent")) {
+        try {
+          const config = readConfig();
+          if (config.allowAgentModelOverrides) {
+            if (modelCatalogSnapshot?.sessionId !== sessionId) {
+              const text = sessionAgentModelCatalog(ctx, config);
+              if (text !== undefined)
+                modelCatalogSnapshot = { sessionId, text };
+            }
+            if (modelCatalogSnapshot?.sessionId === sessionId)
+              event.systemPromptOptions.sections.agent_models =
+                modelCatalogSnapshot.text;
+          }
+        } catch (error) {
+          options.appendError(ctx, "pi_herdsman_definition_error", error);
+        }
+      }
     }
   });
   const execution = createManagedAgentExecutionState();
@@ -3447,11 +3458,11 @@ export function registerManagedAgentRuntime(
   ): Promise<void> => {
     startupDefinitionRoster = undefined;
     if (!delegationEnabled) return;
-    startupModelCatalog = undefined;
+    modelCatalogSnapshot = undefined;
     try {
-      const text = startupAgentModelCatalog(ctx, readConfig());
+      const text = sessionAgentModelCatalog(ctx, readConfig());
       if (text)
-        startupModelCatalog = {
+        modelCatalogSnapshot = {
           sessionId: ctx.sessionManager.getSessionId(),
           text,
         };
