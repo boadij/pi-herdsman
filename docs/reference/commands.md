@@ -291,6 +291,22 @@ mode` while active. `Chief coordination` offers the corresponding Chief actions.
 use the same commands as `/manager` and `/chief`; they do not add role
 eligibility or authority rules.
 
+## Native Pi session names
+
+Ordinary Lead sessions are automatically named **Flexible Lead** or
+**Orchestrator Lead** according to the effective profile. Verified active
+Managers and Chiefs use **Manager** and **Chief**. Herdsman updates names it
+owns after successful profile and role changes, including when restoring
+session state or reconciling it after tree navigation.
+
+A name set with Pi's `/name <name>` takes precedence, even when it matches the
+automatic name. Herdsman also preserves an explicit clear recorded in Pi's
+session history. A native fork or clone does not inherit automatic naming
+ownership: any name decision Pi copies into the new history is preserved.
+Assigned Leads and managed Agents keep their existing naming conventions.
+
+A native name replaces Pi's first-message preview in the session selector.
+
 ## Project Manager and Chief
 
 By default, a session starts as a Lead. A Lead in an ordinary Git primary Herdr
