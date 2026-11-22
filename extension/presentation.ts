@@ -3278,9 +3278,13 @@ export function formatToolModelResult(
       const identity = value(agent.agent) || "unknown";
       const definition = value(agent.agent_definition);
       const status = value(agent.state) || "unknown";
+      const model = collapseDisplayText(value(agent.model));
+      const thinking = collapseDisplayText(value(agent.thinking));
       const controls = [
         ...(definition ? [`definition ${definition}`] : []),
         status,
+        ...(model ? [`model ${model}`] : []),
+        ...(thinking ? [`thinking ${thinking}`] : []),
         ...(fallback ? ["non-actionable"] : []),
         ...(!fallback && Array.isArray(agent.available_tools)
           ? [
@@ -3803,9 +3807,13 @@ function agentHierarchy(details: Record<string, unknown>): string[] {
       : "";
     const parent = value(agent.parent_label);
     const session = value(agent.pi_session_id) || value(agent.pi_session_path);
+    const model = collapseDisplayText(value(agent.model));
+    const thinking = collapseDisplayText(value(agent.thinking));
     const controls = [
       state,
       ...(definition ? [`definition: ${definition}`] : []),
+      ...(model ? [`model: ${model}`] : []),
+      ...(thinking ? [`thinking: ${thinking}`] : []),
       ...(actions ? [`can: ${actions}`] : []),
       ...(agent.stale === true
         ? [

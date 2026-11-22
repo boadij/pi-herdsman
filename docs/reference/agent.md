@@ -327,10 +327,17 @@ Each actionable live agent record includes:
 | `workspace_id`, `pane_id`, `tab_id`, `tab_label`                | Herdr identity evidence.                                                                                                                                                                                        |
 | `cwd`, `pi_session_id`, `pi_session_path`                       | Agent location and Pi session evidence.                                                                                                                                                                         |
 | `owner_session_id`                                              | Exact direct owner Pi session.                                                                                                                                                                                  |
+| `model`, `thinking`                                             | Last reported Pi runtime model ID and thinking level, each optional.                                                                                                                                            |
 | `agent_definition`                                              | Effective definition name.                                                                                                                                                                                      |
 | `active_request_id`, `last_activity_at`, `stale`, `inactive_ms` | Assignment and advisory activity evidence.                                                                                                                                                                      |
 | `parent_label`                                                  | Durable parent assignment when the parent is visible.                                                                                                                                                           |
 | `cleanup_error`, `result_error`, `diagnostic`, `tokens`         | Bounded recovery and presentation evidence when present.                                                                                                                                                        |
+
+`model` and `thinking` describe the last settings Pi reported for a verified
+live Agent, not its configured defaults or requested overrides. Each field
+is omitted when its observation is unavailable, which can occur during
+startup or recovery. Reporting does not depend on whether Agent model overrides
+are enabled; `agent_models` is the separate catalog of permitted choices.
 
 `available_tools` is authoritative model guidance for the current snapshot.
 Do not infer eligibility from `state`.

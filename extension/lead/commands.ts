@@ -44,6 +44,7 @@ import {
   type SpawnPlacement,
 } from "../core.ts";
 import {
+  collapseDisplayText,
   compactModelToken,
   managedExecutionLabel,
   summarizeDefinitionLayerChanges,
@@ -197,6 +198,7 @@ type LeadCommandHost = {
   loadStatusSnapshot(
     ctx: ExtensionContext,
     signal?: AbortSignal,
+    options?: { observedExecutionSettingsOnly?: boolean },
   ): Promise<StatusSnapshot>;
   roleActive(role: "manager" | "chief"): boolean;
   transitionRole(
@@ -1255,13 +1257,13 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
     },
     async openRunningAgentsMenu(ctx: ExtensionCommandContext): Promise<void> {
       const signal = host.controller.sessionSignal();
-      const snapshot = await host.loadStatusSnapshot(ctx, signal);
-      const rows = host.buildStatusRows(
-        snapshot.agents.filter(
-          (agent) => agent.state !== "lost" && agent.state !== "unknown",
-        ),
-        { now: Date.now() },
+      const snapshot = await host.loadStatusSnapshot(ctx, signal, {
+        observedExecutionSettingsOnly: true,
+      });
+      const agents = snapshot.agents.filter(
+        (agent) => agent.state !== "lost" && agent.state !== "unknown",
       );
+      const rows = host.buildStatusRows(agents, { now: Date.now() });
       if (!rows.length) {
         ctx.ui.notify(
           "No running Agents. Ask Pi to delegate using an available definition.",
@@ -1273,16 +1275,39 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         ctx.ui.notify("Running list is ambiguous; reopen Running.", "warning");
         return;
       }
+      const fullModelsByLabel = new Map(
+        agents.map(({ label, model }) => [label, model]),
+      );
+      const fullModelsByCompactName = new Map<string, Set<string>>();
+      for (const row of rows) {
+        const compact = collapseDisplayText(row.model);
+        const full = fullModelsByLabel.get(row.label);
+        if (!compact || !full) continue;
+        const models =
+          fullModelsByCompactName.get(compact) ?? new Set<string>();
+        models.add(full);
+        fullModelsByCompactName.set(compact, models);
+      }
       const selected = await host.selectMenu(
         ctx,
         "Running",
-        options.map((label, index) => ({
-          value: String(index),
-          label,
-          help: rows[index]?.task
-            ? `Task: ${rows[index]!.task}`
-            : "Focus this managed Agent.",
-        })),
+        options.map((label, index) => {
+          const row = rows[index]!;
+          const compact = collapseDisplayText(row.model);
+          const model =
+            !compact || (fullModelsByCompactName.get(compact)?.size ?? 0) > 1
+              ? collapseDisplayText(fullModelsByLabel.get(row.label))
+              : compact;
+          const description = [model, collapseDisplayText(row.thinking)]
+            .filter(Boolean)
+            .join(" · ");
+          return {
+            value: String(index),
+            label,
+            ...(description ? { description } : {}),
+            help: row.task ? `Task: ${row.task}` : "Focus this managed Agent.",
+          };
+        }),
       );
       if (selected === undefined) return;
       const selectedIndex = Number(selected);
