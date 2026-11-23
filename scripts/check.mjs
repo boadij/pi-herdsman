@@ -306,85 +306,30 @@ ConvertTo-Json -InputObject @{ rows = @($rows.ToArray()); truncated = $truncated
   };
 }
 
-async function snapshotWindowsTestWorkersBeforeTermination(
-  pid,
+async function settleWindowsWorkerSnapshot(
+  snapshotPromise,
   closePromise,
-  snapshot,
+  cancelSnapshot,
 ) {
-  const controller = new AbortController();
   let timeoutId;
-  let capture;
-  try {
-    capture = snapshot(pid, controller.signal);
-  } catch (error) {
-    capture = Promise.reject(error);
+  const result = await Promise.race([
+    snapshotPromise.then(
+      (diagnostic) => ({ diagnostic }),
+      () => ({ diagnostic: "check: Windows timeout snapshot unavailable" }),
+    ),
+    closePromise.then(() => ({ unavailable: "runner exited" })),
+    new Promise((resolvePromise) => {
+      timeoutId = setTimeout(
+        () => resolvePromise({ unavailable: "capture deadline" }),
+        WORKER_SNAPSHOT_TIMEOUT_MS,
+      );
+    }),
+  ]).finally(() => clearTimeout(timeoutId));
+  if ("unavailable" in result) {
+    cancelSnapshot();
+    return `check: Windows timeout snapshot unavailable (${result.unavailable})`;
   }
-  const snapshotValue =
-    capture && typeof capture === "object" && "promise" in capture
-      ? capture.promise
-      : capture;
-  const snapshotPromise = Promise.resolve()
-    .then(() => snapshotValue)
-    .then(
-      (workerDiagnostic) => ({ workerDiagnostic }),
-      () => ({
-        workerDiagnostic: "check: Windows timeout snapshot unavailable",
-      }),
-    );
-  try {
-    const result = await Promise.race([
-      snapshotPromise.then((snapshotResult) => ({
-        kind: "snapshot",
-        workerDiagnostic: snapshotResult.workerDiagnostic,
-      })),
-      closePromise.then(() => ({
-        kind: "runner-exited",
-        workerDiagnostic:
-          "check: Windows timeout snapshot unavailable (runner exited)",
-      })),
-      new Promise((resolvePromise) => {
-        timeoutId = setTimeout(
-          () =>
-            resolvePromise({
-              kind: "capture-timeout",
-              workerDiagnostic:
-                "check: Windows timeout snapshot unavailable (capture deadline)",
-            }),
-          WORKER_SNAPSHOT_TIMEOUT_MS,
-        );
-      }),
-    ]);
-    let workerDiagnostic = result.workerDiagnostic;
-    if (result.kind !== "snapshot") {
-      controller.abort();
-      if (
-        capture &&
-        typeof capture === "object" &&
-        "cancelAndWait" in capture &&
-        typeof capture.cancelAndWait === "function"
-      ) {
-        let cancelTimeoutId;
-        const stopped = await Promise.race([
-          Promise.resolve()
-            .then(() => capture.cancelAndWait())
-            .then(Boolean, () => false),
-          new Promise((resolvePromise) => {
-            cancelTimeoutId = setTimeout(
-              () => resolvePromise(false),
-              SNAPSHOT_CANCEL_TIMEOUT_MS,
-            );
-          }),
-        ]).finally(() => clearTimeout(cancelTimeoutId));
-        if (!stopped)
-          workerDiagnostic =
-            "check: Windows timeout snapshot unavailable (capture stop unconfirmed)";
-      }
-    }
-    return workerDiagnostic;
-  } finally {
-    clearTimeout(timeoutId);
-    controller.abort();
-  }
+  return result.diagnostic;
 }
 
 function isAlreadyGoneTaskkillError(error) {
@@ -535,8 +480,7 @@ export async function runTestRunner(
 
   const finishClosed = async (close) => {
     clearTimeout(snapshotTimer);
-    if (closeCapture)
-      await Promise.race([closeCapture, sleep(SNAPSHOT_CANCEL_TIMEOUT_MS)]);
+    await closeCapture;
     // ponytail: post-parent Windows descendant accounting needs a Job Object;
     // timeout-tree cleanup is attempted, but a Job Object is not implemented.
     const treeRemains = isWindows
@@ -608,13 +552,17 @@ export async function runTestRunner(
               typeof diagnostic === "string"
                 ? diagnostic
                 : "check: Windows timeout snapshot unavailable";
-            if (!runnerClosed)
-              (diagnosticOptions.emit ?? console.log)(
-                `check: Windows worker snapshot phase=pre-deadline elapsed=${Date.now() - startedAt}ms\n${safeDiagnostic}`,
-              );
+            if (runnerClosed)
+              return "check: Windows timeout snapshot unavailable (runner exited)";
+            (diagnosticOptions.emit ?? console.log)(
+              `check: Windows worker snapshot phase=pre-deadline elapsed=${Date.now() - startedAt}ms\n${safeDiagnostic}`,
+            );
             return safeDiagnostic;
           },
-          () => undefined,
+          () =>
+            runnerClosed
+              ? "check: Windows timeout snapshot unavailable (runner exited)"
+              : "check: Windows timeout snapshot unavailable",
         );
         proactiveSnapshot.controller = controller;
         proactiveSnapshot.capture = capture;
@@ -625,46 +573,47 @@ export async function runTestRunner(
   }
   let runnerClosed = false;
   let closeCapture;
+  const cancelSnapshot = () => {
+    if (!proactiveSnapshot) return;
+    proactiveSnapshot.controller.abort();
+    if (closeCapture || !proactiveSnapshot.capture?.cancelAndWait) return;
+
+    let timer;
+    closeCapture = Promise.race([
+      Promise.resolve()
+        .then(() => proactiveSnapshot.capture.cancelAndWait())
+        .then(Boolean, () => false),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(false), SNAPSHOT_CANCEL_TIMEOUT_MS);
+      }),
+    ]).finally(() => clearTimeout(timer));
+  };
   closePromise.then(() => {
     runnerClosed = true;
     clearTimeout(snapshotTimer);
-    if (proactiveSnapshot) {
-      proactiveSnapshot.controller.abort();
-      if (proactiveSnapshot.capture?.cancelAndWait) {
-        closeCapture = Promise.resolve()
-          .then(() => proactiveSnapshot.capture.cancelAndWait())
-          .catch(() => false);
-      }
-    }
+    cancelSnapshot();
   });
   const finishTimedOut = async () => {
     clearTimeout(snapshotTimer);
-    const workerDiagnostic = proactiveSnapshot
-      ? await snapshotWindowsTestWorkersBeforeTermination(
-          pid,
-          closePromise,
-          () => ({
-            promise: proactiveSnapshot,
-            cancelAndWait: proactiveSnapshot.capture?.cancelAndWait,
-          }),
-        )
-      : snapshot
-        ? await snapshotWindowsTestWorkersBeforeTermination(
-            pid,
-            closePromise,
-            snapshot,
-          )
-        : undefined;
     const cleanup = await terminateProcessTree(pid);
+    let workerDiagnostic = proactiveSnapshot
+      ? await settleWindowsWorkerSnapshot(
+          proactiveSnapshot,
+          closePromise,
+          cancelSnapshot,
+        )
+      : undefined;
     const close = await awaitClose(closePromise);
+    // Closure may have cancelled the capture even if its diagnostic settled.
+    const captureStopUnconfirmed = (await closeCapture) === false;
+    if (captureStopUnconfirmed)
+      workerDiagnostic =
+        "check: Windows timeout snapshot unavailable (capture stop unconfirmed)";
     const cleanupComplete =
       cleanup.cleanupError === undefined &&
       (isWindows ? cleanup.runnerGone : cleanup.treeGone) &&
-      !workerDiagnostic?.endsWith("(capture stop unconfirmed)") &&
+      !captureStopUnconfirmed &&
       close !== undefined;
-    const captureStopUnconfirmed = workerDiagnostic?.endsWith(
-      "(capture stop unconfirmed)",
-    );
     return {
       ok: false,
       kind: cleanupComplete ? "suite-timeout" : "suite-timeout-cleanup-failed",
@@ -738,14 +687,16 @@ if (
   if (!result.ok) {
     if (result.workerDiagnostic) console.error(result.workerDiagnostic);
     console.error(result.diagnostic);
-    if (result.kind === "suite-timeout-cleanup-failed")
-      console.error(
-        result.cleanupError
-          ? `check: process tree ${result.pid} cleanup failed: ${result.cleanupError}`
-          : (isWindows ? result.runnerGone : result.treeGone)
-            ? "check: timed-out test runner did not close"
-            : `check: process tree ${result.pid} could not be reaped`,
-      );
+    if (result.kind === "suite-timeout-cleanup-failed") {
+      if (result.cleanupError)
+        console.error(
+          `check: process tree ${result.pid} cleanup failed: ${result.cleanupError}`,
+        );
+      else if (!(isWindows ? result.runnerGone : result.treeGone))
+        console.error(`check: process tree ${result.pid} could not be reaped`);
+      else if (result.close === undefined)
+        console.error("check: timed-out test runner did not close");
+    }
     process.exitCode = 1;
   }
 }
