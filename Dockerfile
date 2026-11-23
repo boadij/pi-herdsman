@@ -5,14 +5,14 @@ ARG MISE_VERSION=2026.11.12
 
 FROM ${NODE_IMAGE} AS package
 
-ARG PI_WEB_ACCESS_VERSION=0.47.0
-
 WORKDIR /src
 
 COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY . .
+
+ARG PI_WEB_ACCESS_VERSION=0.47.0
 
 RUN npm run build \
  && npm run package:audit \
@@ -48,7 +48,6 @@ FROM ghcr.io/jdx/mise:${MISE_VERSION} AS mise
 FROM ${NODE_IMAGE}
 
 ARG TARGETARCH
-ARG MISE_VERSION
 
 ENV LANG=C.UTF-8 \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
@@ -110,7 +109,6 @@ if [ "$(id -un)" = herdsman ]; then
 fi
 EOF
 
-COPY --from=mise /usr/local/bin/mise /usr/local/bin/mise
 COPY --from=package /runtime.json /tmp/runtime.json
 
 RUN set -eu; \
@@ -156,7 +154,6 @@ RUN set -eu; \
     herdr_version="$(node -p 'require("/tmp/runtime.json").herdr.version')"; \
     curl -fsSL "https://raw.githubusercontent.com/earendil-works/pi/v${pi_version}/LICENSE" -o /usr/share/doc/pi-herdsman/third-party/pi-LICENSE; \
     curl -fsSL "https://raw.githubusercontent.com/herdrdev/herdr/v${herdr_version}/LICENSE" -o /usr/share/doc/pi-herdsman/third-party/herdr-LICENSE; \
-    curl -fsSL "https://raw.githubusercontent.com/jdx/mise/v${MISE_VERSION}/LICENSE" -o /usr/share/doc/pi-herdsman/third-party/mise-LICENSE; \
     rm -f /tmp/runtime.json
 
 COPY --from=package /package /opt/pi-herdsman
@@ -172,6 +169,11 @@ COPY docker/sshd_config /etc/ssh/sshd_config
 
 RUN chmod 0755 /usr/local/bin/container-entrypoint \
  && chmod 0600 /etc/ssh/sshd_config
+
+COPY --from=mise /usr/local/bin/mise /usr/local/bin/mise
+ARG MISE_VERSION
+RUN curl -fsSL "https://raw.githubusercontent.com/jdx/mise/v${MISE_VERSION}/LICENSE" \
+    -o /usr/share/doc/pi-herdsman/third-party/mise-LICENSE
 
 WORKDIR /home/herdsman
 
