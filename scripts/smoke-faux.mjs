@@ -354,7 +354,11 @@ function coreDecision(context) {
     );
     if (implementerResult) {
       const systemPrompt = getCurrentSystemPrompt(context.messages);
-      if (!/<pi_herdsman_role>\s*## Lead role(?:\r?\n|$)/.test(systemPrompt))
+      if (
+        !/<pi_herdsman_role>\s*(?:Pi Herdsman runtime: v[^\s]+ · [a-f0-9]{12}\r?\n\s*)?## Lead role(?:\r?\n|$)/u.test(
+          systemPrompt,
+        )
+      )
         throw new Error(
           "Lead role context missing or incorrect after Agent result",
         );
