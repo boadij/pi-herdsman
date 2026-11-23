@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.54.0](https://github.com/boadij/pi-herdsman/compare/v0.53.0...v0.54.0) (2026-11-23)
+
+
+### Features
+
+* **runtime:** expose loaded Herdsman build identity ([#1106](https://github.com/boadij/pi-herdsman/issues/1106)) ([b6f96dd](https://github.com/boadij/pi-herdsman/commit/b6f96dda1e391bcff6fabaef3eac591dd2c5a8e0))
+
+
+### Fixes
+
+* **ci:** start timeout cleanup before Windows diagnostics ([#1107](https://github.com/boadij/pi-herdsman/issues/1107)) ([6df852a](https://github.com/boadij/pi-herdsman/commit/6df852afd313663da04fbf7d2536d9ae23631fc5))
+* **manager:** clarify replies to Chief ([#1105](https://github.com/boadij/pi-herdsman/issues/1105)) ([4437e11](https://github.com/boadij/pi-herdsman/commit/4437e116299711d79c9904b5b2772997b19f2eaa))
+* **manager:** limit auto-activation to fresh sessions ([#1103](https://github.com/boadij/pi-herdsman/issues/1103)) ([4ad3c96](https://github.com/boadij/pi-herdsman/commit/4ad3c96e73af807cd8be95d21e1c7d3b290c1491))
+
+
+### Performance
+
+* **docker:** reuse cached layers between releases ([#1101](https://github.com/boadij/pi-herdsman/issues/1101)) ([575f0c2](https://github.com/boadij/pi-herdsman/commit/575f0c2fe2bfea2a1dbb47d983fb795e175140a0))
+
+
+### Refactoring
+
+* **release:** simplify guarded release workflow ([#1099](https://github.com/boadij/pi-herdsman/issues/1099)) ([be2d4d1](https://github.com/boadij/pi-herdsman/commit/be2d4d1e91c66de1546b59c8f526c72390e9a2cf))
+
+
+### Other Changes
+
+* **deps:** update dependency oxlint to v1.95.0 ([#1108](https://github.com/boadij/pi-herdsman/issues/1108)) ([e1a7209](https://github.com/boadij/pi-herdsman/commit/e1a7209310cc0ef553024192fd412cabd564510a))
+
 ## [0.53.0](https://github.com/boadij/pi-herdsman/compare/v0.52.1...v0.53.0) (2026-11-22)
 
 
