@@ -883,6 +883,7 @@ export function fakeContext(
       getSessionId: () => LEAD_SESSION_ID,
       getSessionFile: () => "/tmp/root.jsonl",
       getSessionName: () => undefined,
+      getHeader: () => null,
       getEntries: () => entries as SessionEntry[],
       getBranch: () => branch as SessionEntry[],
     } as unknown as ExtensionContext["sessionManager"],

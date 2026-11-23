@@ -37,11 +37,17 @@ Start Pi in the primary workspace of the Herdr worktree group and run:
 /manager
 ```
 
-Optionally, enable `Start Manager automatically` in `/agents` to have a session with no
-persisted role intent attempt the existing Manager startup path when it starts
-in the project's primary workspace. The preference does not persist Manager
-intent; explicit session roles take precedence, and an ineligible or contended
-attempt remains an ordinary Lead.
+Optionally, enable `Start Manager automatically` in `/agents` to let new
+eligible sessions in the project's primary workspace attempt Manager startup.
+An ineligible or contended attempt remains an ordinary Lead. Resuming,
+reopening, reloading, or forking an existing Lead does not auto-promote it.
+Explicitly saved roles still restore through the usual checks. Auto-activation
+does not save Manager intent, so reopening an automatically activated session
+does not restore Manager unless that role was explicitly saved.
+
+At CLI startup, Herdsman treats a session with only initialization metadata and
+no conversation history, Herdsman session identity, or fork parent as new for
+this setting.
 
 The current Lead must be eligible for Manager mode and must not still own
 unresolved Agent work. Only one live Manager can hold authority for a project

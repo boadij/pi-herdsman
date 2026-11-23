@@ -14,7 +14,11 @@ import { createServer } from "node:net";
 import { basename, dirname, join, resolve, toNamespacedPath } from "node:path";
 import { tmpdir } from "node:os";
 import { test, type TestContext } from "node:test";
-import { initTheme, ProjectTrustStore } from "@earendil-works/pi-coding-agent";
+import {
+  initTheme,
+  ProjectTrustStore,
+  type SessionStartEvent,
+} from "@earendil-works/pi-coding-agent";
 import packageMetadata from "../package.json" with { type: "json" };
 
 import { Value } from "typebox/value";
@@ -4686,7 +4690,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     const collisionNotices: string[] = [];
     ctx2.ui.notify = (message: string) => collisionNotices.push(message);
     identitySessionId = secondSessionId;
-    await second.events.get("session_start")![0](undefined, ctx2);
+    await second.events.get("session_start")![0](
+      { type: "session_start", reason: "startup" },
+      ctx2,
+    );
     assert.deepEqual(second.pi.getActiveTools(), [
       "read",
       ...leadToolsWithSkill,
@@ -5544,7 +5551,11 @@ test("Manager's lightweight redraw requests rendering without refreshing supervi
   assert.ok(renderRequests > rendersBeforeRedraw);
 });
 
-test("Manager auto-start activates after identity and coordination verification without persisting role intent", async () => {
+async function checkManagerAutoStart(
+  reason: SessionStartEvent["reason"] | undefined,
+  history: "metadata" | "identity" | "conversation" | "parent",
+  expectManager: boolean,
+) {
   setLeadEnvironment();
   updateConfig("autoActivateManager", false);
   const projectCwd = realFs.mkdtempSync(
@@ -5577,9 +5588,27 @@ test("Manager auto-start activates after identity and coordination verification 
     },
   };
   let healthyLeadCoordinationBeforeIdentityCheck = false;
+  const historyEntries = {
+    metadata: [
+      { type: "model_change", provider: "test", modelId: "test-model" },
+      { type: "thinking_level_change", thinkingLevel: "low" },
+    ],
+    identity: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-session-kind",
+        data: { version: 1, sessionId, kind: "ordinary" },
+      },
+    ],
+    conversation: [
+      { type: "message", message: { role: "user", content: "Hello" } },
+    ],
+    parent: [],
+  };
   const pi = fakeRepositoryChiefPi({
     activeTools: ["read"],
     entries: [
+      ...historyEntries[history],
       {
         type: "custom",
         customType: "pi-herdsman-lead-state",
@@ -5625,16 +5654,26 @@ test("Manager auto-start activates after identity and coordination verification 
     const context = fakeContext(pi.entries) as any;
     context.cwd = projectCwd;
     context.sessionManager.getSessionId = () => sessionId;
-    await pi.events.get("session_start")![0](undefined, context);
-    assert.equal(healthyLeadCoordinationBeforeIdentityCheck, true);
-    assert.deepEqual(pi.pi.getActiveTools(), managerTools);
+    if (history === "parent")
+      context.sessionManager.getHeader = () => ({
+        parentSession: "/tmp/parent.jsonl",
+      });
+    await pi.events.get("session_start")![0](
+      reason === undefined ? undefined : { type: "session_start", reason },
+      context,
+    );
+    assert.equal(healthyLeadCoordinationBeforeIdentityCheck, expectManager);
+    assert.deepEqual(
+      pi.pi.getActiveTools(),
+      expectManager ? managerTools : ["read", ...leadToolsWithSkill],
+    );
     assert.equal(
       readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.workspaceId,
-      WORKSPACE,
+      expectManager ? WORKSPACE : undefined,
     );
     assert.equal(
       readLeadCoordinationState(supervisionRuntime(), sessionId)?.role,
-      "manager",
+      expectManager ? "manager" : "lead",
     );
     assert.equal(
       pi.entries.some(
@@ -5653,7 +5692,37 @@ test("Manager auto-start activates after identity and coordination verification 
     delete process.env.HERDR_PANE_ID;
     setLeadEnvironment();
   }
-});
+}
+
+for (const [name, reason, history, expectManager] of [
+  [
+    "fresh startup tolerates Pi metadata and does not persist Manager intent",
+    "startup",
+    "metadata",
+    true,
+  ],
+  ["fresh new session activates", "new", "metadata", true],
+  ["resume preserves an existing roleless Lead", "resume", "identity", false],
+  [
+    "CLI startup preserves an existing roleless Lead",
+    "startup",
+    "identity",
+    false,
+  ],
+  [
+    "CLI startup preserves a session with conversation history",
+    "startup",
+    "conversation",
+    false,
+  ],
+  ["CLI startup does not promote a native fork", "startup", "parent", false],
+  ["reload does not promote a Lead", "reload", "metadata", false],
+  ["fork does not promote a Lead", "fork", "metadata", false],
+  ["missing reason does not promote a Lead", undefined, "metadata", false],
+] as const) {
+  test(`Manager auto-start: ${name}`, () =>
+    checkManagerAutoStart(reason, history, expectManager));
+}
 
 test("Manager auto-start does not bootstrap a non-Git workspace", async () => {
   setLeadEnvironment();
@@ -5687,7 +5756,10 @@ test("Manager auto-start does not bootstrap a non-Git workspace", async () => {
     return true;
   };
   try {
-    await pi.events.get("session_start")![0](undefined, context);
+    await pi.events.get("session_start")![0](
+      { type: "session_start", reason: "startup" },
+      context,
+    );
     assert.deepEqual(gitCalls, []);
     assert.equal(confirmations, 0);
     assert.equal(realFs.existsSync(join(projectCwd, ".git")), false);
@@ -6943,7 +7015,10 @@ test("Manager auto-start rejects mismatched Herdr identity and releases its leas
     const context = fakeContext(pi.entries) as any;
     context.cwd = projectCwd;
     context.sessionManager.getSessionId = () => sessionId;
-    await pi.events.get("session_start")![0](undefined, context);
+    await pi.events.get("session_start")![0](
+      { type: "session_start", reason: "startup" },
+      context,
+    );
     assert.equal(coordinationRestoredBeforeIdentityCheck, true);
     assert.deepEqual(pi.pi.getActiveTools(), ["read", ...leadToolsWithSkill]);
     assert.equal(
@@ -7041,7 +7116,10 @@ test("Manager auto-start suspends and invalidates Lead when identity cleanup rel
     const context = fakeContext(pi.entries) as any;
     context.cwd = projectCwd;
     context.sessionManager.getSessionId = () => sessionId;
-    await pi.events.get("session_start")![0](undefined, context);
+    await pi.events.get("session_start")![0](
+      { type: "session_start", reason: "startup" },
+      context,
+    );
     assert.deepEqual(pi.pi.getActiveTools(), ["read"]);
     assert.equal(readLeadCoordinationState(runtime, sessionId), undefined);
     assert.equal(
@@ -7148,7 +7226,7 @@ test("malformed Lead coordination blocks Manager auto-start", async () => {
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](
-      undefined,
+      { type: "session_start", reason: "startup" },
       fakeContext(pi.entries) as any,
     );
     assert.deepEqual(pi.pi.getActiveTools(), ["read"]);
