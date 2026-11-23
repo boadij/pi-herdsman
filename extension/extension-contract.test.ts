@@ -6380,6 +6380,14 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
     assert.match(prompt, /verified Manager for this Pi session/);
     assert.match(
       prompt,
+      /When replying to Chief or sending material upward coordination, use message_supervisor directly/,
+    );
+    assert.match(
+      prompt,
+      /Chief is not a peer; do not use list_peers or message_peer to contact Chief/,
+    );
+    assert.match(
+      prompt,
       /For a new objective requiring independent project-assignment ownership, use delegate_work when authorized/,
     );
     assert.match(
