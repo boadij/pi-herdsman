@@ -56,8 +56,12 @@ evidence. Use `list_staff` when a fresh complete roster is materially needed.
 {}
 ```
 
-Returns a fresh direct-report projection and fresh `available_tools`. For
-Manager, `work` lists durable project assignments by their original branch
+Returns a fresh direct-report projection and fresh `available_tools`.
+`self.build` identifies the caller's loaded Herdsman build with its `version`
+and full `sha256` fingerprint. Each active Herdsman role also receives its own
+loaded version and short fingerprint in its system prompt.
+
+For Manager, `work` lists durable project assignments by their original branch
 handle with derived status and a bounded task summary. Status is `active`,
 `paused`, `unknown`, or `conflict`; active work may include the live Lead's
 separate `runtime_state`. When exposed, the checked-out branch is observed
@@ -76,7 +80,11 @@ live Lead actions.
 When a live staff session is independently identified but its validated
 Herdsman build differs from the local build, `list_staff` includes an
 observation with `compatibility: "incompatible"`, its validated build, and an
-empty `available_tools` list. Such rows are not eligible for staff actions.
+empty `available_tools` list. Nested incompatible Leads likewise retain their
+`build` when available; the automatic supervision snapshot shows the short
+fingerprint and version. Nested observations without build evidence remain
+incompatible without a reported build. Build observations never grant
+coordination authority, and incompatible rows are not eligible for staff actions.
 The result warns that the affected Pi session must reload a matching
 Herdsman build. The warning clears after a successful fresh observation
 verifies matching builds; uncertain identity or conflicting build evidence

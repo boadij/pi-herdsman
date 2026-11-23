@@ -3,6 +3,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { basename } from "node:path";
+import { formatRuntimeBuild, type RuntimeBuild } from "../compatibility.ts";
 import {
   getSupportedThinkingLevels,
   type Api,
@@ -46,6 +47,7 @@ import {
 import {
   collapseDisplayText,
   compactModelToken,
+  formatRuntimeBuildDetails,
   managedExecutionLabel,
   summarizeDefinitionLayerChanges,
   type StatusSnapshot,
@@ -70,7 +72,8 @@ type LeadCommandHost = {
   formatSessionUsage: typeof import("../presentation.ts").formatSessionUsage;
   runHerdr: typeof import("../herdr.ts").runHerdr;
   presentStopSummary(summary: string): void;
-  version: string;
+  build: RuntimeBuild;
+  extensionPath: string;
   selectMenu(
     ctx: ExtensionContext,
     title: string,
@@ -2371,7 +2374,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           selectedSection = "agents";
         const selected = await host.selectMenu(
           ctx,
-          `Pi Herdsman · v${host.version}`,
+          `Pi Herdsman · ${formatRuntimeBuild(host.build)}`,
           [
             ...(showLeadMode
               ? [
@@ -2512,11 +2515,15 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
     ): Promise<void> {
       if (!ctx.hasUI) return;
       const usage =
-        "Usage: /herdsman [stats | definitions | placement [tab|subtree|split] | stop]";
+        "Usage: /herdsman [version | stats | definitions | placement [tab|subtree|split] | stop]";
       const placementUsage = "Usage: /herdsman placement [tab|subtree|split]";
       const args = rawArgs.trim() ? rawArgs.trim().split(/\s+/u) : [];
       try {
         if (!args.length) return void (await this.openHerdsmanMenu(ctx));
+        if (args[0] === "version" && args.length === 1)
+          return void ctx.ui.notify(
+            formatRuntimeBuildDetails(host.build, host.extensionPath),
+          );
         if (args[0] === "stats" && args.length === 1)
           return void (await this.showSessionStats(ctx));
         if (args[0] === "definitions" && args.length === 1)

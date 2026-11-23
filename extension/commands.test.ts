@@ -19,10 +19,9 @@ import {
   ProjectTrustStore,
   type SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
-import packageMetadata from "../package.json" with { type: "json" };
 
 import { Value } from "typebox/value";
-import { sameRuntimeBuild } from "./compatibility.ts";
+import { formatRuntimeBuild, sameRuntimeBuild } from "./compatibility.ts";
 import type { ManagedAgentState } from "./mailbox.ts";
 import {
   acquireProcessLock,
@@ -4633,7 +4632,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     const roster = await first.tools
       .find((tool) => tool.name === "list_staff")!
       .execute("list", {}, undefined, undefined, ctx1);
-    assert.equal(roster.details.self.role, "manager");
+    assert.deepEqual(roster.details.self, {
+      role: "manager",
+      build: HERDSMAN_BUILD,
+    });
     assert.deepEqual(roster.details.reports, []);
     const leadPeerSession = `lead-${randomUUID()}`;
     const peerLease = acquireProcessLock(
@@ -12563,7 +12565,10 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
         true,
         "the partial observation is a successful fresh list result",
       );
-      assert.equal(listed.details.self.role, "chief");
+      assert.deepEqual(listed.details.self, {
+        role: "chief",
+        build: HERDSMAN_BUILD,
+      });
       assert.equal(listed.details.reports.length, 2);
       assert.equal(listed.details.reports[0].role, "manager");
       assert.equal(
@@ -12586,6 +12591,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
         (lead: any) => lead.compatibility === "incompatible",
       );
       assert.equal(nestedIncompatible.compatibility, "incompatible");
+      assert.deepEqual(nestedIncompatible.build, OTHER_HERDSMAN_BUILD);
       assert.deepEqual(nestedIncompatible.available_tools, []);
       assert.equal("agentCounts" in nestedIncompatible, false);
       assert.deepEqual(listed.details.reports[0].lead_counts, {
@@ -16045,6 +16051,7 @@ test("Herdsman and agents share command handling and grammar", async () => {
   assert.equal(command.handler, herdsman.handler);
   assert.equal(command.getArgumentCompletions, herdsman.getArgumentCompletions);
   assert.deepEqual(herdsman.getArgumentCompletions(""), [
+    { value: "version", label: "version" },
     { value: "stats", label: "stats" },
     { value: "definitions", label: "definitions" },
     { value: "placement", label: "placement" },
@@ -16091,14 +16098,19 @@ test("Herdsman and agents share command handling and grammar", async () => {
     });
   context.ui.notify = (message: string) => notices.push(message);
   await command.handler("", context);
-  await command.handler("agents extra", context);
+  await command.handler("version extra", context);
   await herdsman.handler("placement invalid", context);
   await herdsman.handler("anything", context);
   assert.deepEqual(notices, [
-    "Usage: /herdsman [stats | definitions | placement [tab|subtree|split] | stop]",
+    "Usage: /herdsman [version | stats | definitions | placement [tab|subtree|split] | stop]",
     "Usage: /herdsman placement [tab|subtree|split]",
-    "Usage: /herdsman [stats | definitions | placement [tab|subtree|split] | stop]",
+    "Usage: /herdsman [version | stats | definitions | placement [tab|subtree|split] | stop]",
   ]);
+  await command.handler(" version ", context);
+  assert.equal(
+    notices.at(-1)?.split("\n").slice(0, 2).join("\n"),
+    `Pi Herdsman ${formatRuntimeBuild(HERDSMAN_BUILD)}\nSHA-256: ${HERDSMAN_BUILD.sha256}`,
+  );
 });
 
 test("/agents placement subtree writes flat config outside project settings", async () => {
@@ -19493,7 +19505,10 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
   };
   await command.handler("", context);
   await pi.commandOptions.get("agents").handler("", context);
-  assert.equal(prompts[0]?.label, `Pi Herdsman · v${packageMetadata.version}`);
+  assert.equal(
+    prompts[0]?.label,
+    `Pi Herdsman · ${formatRuntimeBuild(HERDSMAN_BUILD)}`,
+  );
   assert.deepEqual(prompts[0]?.options, [
     "Lead mode  flexible",
     "Agents & definitions",
@@ -19654,7 +19669,7 @@ test("Herdsman TUI selectors use stable values and current preselection", async 
     await pi.commandOptions.get("herdsman").handler("", context);
     assert.ok(
       renders[0]?.some((line) =>
-        line.includes(`Pi Herdsman · v${packageMetadata.version}`),
+        line.includes(`Pi Herdsman · ${formatRuntimeBuild(HERDSMAN_BUILD)}`),
       ),
     );
     for (const lines of renders) {
@@ -20792,10 +20807,10 @@ test("Running excludes lost and unknown durable generations", async () => {
     assert.deepEqual(
       prompts.map(({ label }) => label),
       [
-        `Pi Herdsman · v${packageMetadata.version}`,
+        `Pi Herdsman · ${formatRuntimeBuild(HERDSMAN_BUILD)}`,
         "Agents & definitions",
         "Agents & definitions",
-        `Pi Herdsman · v${packageMetadata.version}`,
+        `Pi Herdsman · ${formatRuntimeBuild(HERDSMAN_BUILD)}`,
       ],
     );
     assert.ok(notices.some((message) => message.includes("No running Agents")));

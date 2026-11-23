@@ -3,19 +3,18 @@
 [Documentation index](../README.md)
 
 `/herdsman` is the canonical human discovery and control command. `/agents` is
-an alias retained for users familiar with the previous entry point; it accepts
-the same arguments and runs the same behavior.
+an equivalent alias.
 
 It is separate from the structured model-facing Agent tools.
 
 Management menus require a lead Pi session with UI. Outside Herdr, both
-commands remain available as setup diagnostics that include the running Pi
-Herdsman package version.
+commands still show setup guidance with no arguments and accept `version`.
 
 ## Usage
 
 ```text
 /herdsman
+/herdsman version
 /herdsman stats
 /herdsman definitions
 /herdsman placement [tab|subtree|split]
@@ -35,9 +34,10 @@ Herdsman package version.
 For the Herdsman commands above, replacing `/herdsman` with `/agents` is
 equivalent. The role commands are separate from these aliases.
 
-`/herdsman` opens the native Pi menu titled with the running Pi Herdsman package
-version. Ordinary Leads see six destinations: `Lead mode`, `Agents & definitions`,
-`Project management`, `Chief coordination`, `Settings`, and `Usage & costs`.
+`/herdsman` opens the native Pi menu titled with the loaded Pi Herdsman version
+and the first 12 characters of its SHA-256 fingerprint. Ordinary Leads see six
+destinations: `Lead mode`, `Agents & definitions`, `Project management`,
+`Chief coordination`, `Settings`, and `Usage & costs`.
 Managed Leads, Managers, and Chiefs see the same menu without `Lead mode` (five
 destinations). Active role state is secondary row metadata; the TUI updates
 contextual help for the selected row.
@@ -136,6 +136,14 @@ permission requires interactive confirmation.
 and `Coordination messages`. The Settings row shows exact sizes; detailed
 selectors also show rough token equivalents using four UTF-8 bytes per token.
 The enforced limits are bytes, not tokens.
+
+## `/herdsman version`
+
+`/herdsman version` (or `/agents version`) shows the version, short fingerprint,
+full SHA-256 fingerprint, and path of the extension loaded by this Pi process.
+It also works outside Herdr with an interactive UI. The fingerprint identifies
+the extension file at load time, not a Git commit or a newer artifact installed
+since then.
 
 ## `/herdsman stats`
 
