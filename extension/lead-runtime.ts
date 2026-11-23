@@ -14,6 +14,7 @@ import type {
   BuildSystemPromptOptions,
   ExtensionAPI,
   ExtensionContext,
+  SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 import { getSelectListTheme } from "@earendil-works/pi-coding-agent";
 import {
@@ -1311,7 +1312,27 @@ export function createLeadSessionStartRuntime(host: {
 }) {
   const isRoot = () => host.isRoot();
   return {
-    async sessionStart(ctx: ExtensionContext): Promise<void> {
+    async sessionStart(
+      ctx: ExtensionContext,
+      reason?: SessionStartEvent["reason"],
+    ): Promise<void> {
+      // Check history before startup can append session identity.
+      const freshSession =
+        reason === "new" ||
+        (reason === "startup" &&
+          !ctx.sessionManager.getHeader()?.parentSession &&
+          !ctx.sessionManager
+            .getEntries()
+            .some(
+              (entry) =>
+                (entry.type === "custom" &&
+                  entry.customType === "pi-herdsman-session-kind") ||
+                entry.type === "message" ||
+                entry.type === "custom_message" ||
+                entry.type === "compaction" ||
+                entry.type === "branch_summary" ||
+                entry.type === "context_edit",
+            ));
       host.diagnostic();
       host.controller.abortSession();
       host.leadInboxRuntime.beginSession();
@@ -1393,7 +1414,7 @@ export function createLeadSessionStartRuntime(host: {
         skipLeadExecutionProfileResolution = persistedRole === "chief";
         host.roleTransitions.reconcileRoleTools();
         let optionalManager = false;
-        if (!hasPersistedRole && !malformedRole) {
+        if (freshSession && !hasPersistedRole && !malformedRole) {
           try {
             optionalManager = host.autoActivateManager(ctx);
           } catch (error) {
@@ -4810,9 +4831,9 @@ export function registerLeadRuntime(
     }
     return agentEvents.toolCall(event, ctx);
   });
-  pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
+  pi.on("session_start", async (event, ctx) => {
     inheritedProjection = undefined;
-    await sessionStart.sessionStart(ctx);
+    await sessionStart.sessionStart(ctx, event?.reason);
     syncRootSessionName(ctx);
     projectRuntime.updateRemovalStatus(ctx);
   });
