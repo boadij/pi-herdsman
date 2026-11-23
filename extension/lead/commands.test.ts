@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import packageMetadata from "../../package.json" with { type: "json" };
+import { join } from "node:path";
+import { runtimeBuild } from "../compatibility.ts";
 import {
   claimDelegationLock,
   visibleAgentSnapshots,
@@ -14,7 +15,13 @@ import {
   validStatusWidgetMaxRows,
 } from "../config.ts";
 import { buildStatusRows, renderRunningOptions } from "../presentation.ts";
-import { fakeContext, WORKSPACE } from "../support.ts";
+import {
+  fakeContext,
+  HERDSMAN_BUILD,
+  realFs,
+  testTmpRoot,
+  WORKSPACE,
+} from "../support.ts";
 import { createLeadCommandRuntime } from "./commands.ts";
 import { pickOverrideModels } from "./override-model-picker.ts";
 
@@ -482,7 +489,8 @@ test("Herdsman root renders when status and definition metadata fail", async () 
     let calls = 0;
     let discoveryCalls = 0;
     const runtime = createLeadCommandRuntime({
-      version: packageMetadata.version,
+      build: HERDSMAN_BUILD,
+      extensionPath: "/example/index.js",
       loadStatusSnapshot: async () => {
         discoveryCalls++;
         throw new Error("status unavailable");
@@ -499,11 +507,15 @@ test("Herdsman root renders when status and definition metadata fail", async () 
       roleActive: (role: string) => role === scenario.role,
       selectMenu: async (
         _ctx: unknown,
-        _title: string,
+        title: string,
         items: any[],
         selected: string,
       ) => {
         calls++;
+        assert.equal(
+          title,
+          `Pi Herdsman · v${HERDSMAN_BUILD.version} · ${HERDSMAN_BUILD.sha256.slice(0, 12)}`,
+        );
         assert.deepEqual(
           items.map(({ label }) => label),
           [
@@ -536,6 +548,24 @@ test("Herdsman root renders when status and definition metadata fail", async () 
     assert.equal(discoveryCalls, 0);
     assert.deepEqual(notices, []);
   }
+});
+
+test("version reports the captured build after the extension file changes", async () => {
+  const extensionPath = join(testTmpRoot, "replacement-extension.js");
+  realFs.writeFileSync(extensionPath, "// originally loaded");
+  const build = runtimeBuild("1.2.3", extensionPath);
+  const runtime = createLeadCommandRuntime({ build, extensionPath } as any);
+  realFs.writeFileSync(extensionPath, "// replacement");
+
+  const notices: string[] = [];
+  await runtime.runHerdsmanCommand("version", {
+    hasUI: true,
+    ui: { notify: (message: string) => notices.push(message) },
+  } as any);
+  assert.deepEqual(notices, [
+    `Pi Herdsman v1.2.3 · ${build.sha256.slice(0, 12)}\n` +
+      `SHA-256: ${build.sha256}\nLoaded extension: ${extensionPath}`,
+  ]);
 });
 
 test("Settings categories and Agents & definitions retain their selections", async () => {
@@ -996,7 +1026,8 @@ test("Herdsman role menus dispatch shared role commands", async () => {
       let rootSelection = true;
       let roleSelection = true;
       const host = {
-        version: packageMetadata.version,
+        build: HERDSMAN_BUILD,
+        extensionPath: "/example/index.js",
         isLead: () => !scenario.active,
         leadExecutionPresentation: () => ({
           managed: false,

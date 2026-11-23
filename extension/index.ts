@@ -219,6 +219,7 @@ import {
   renderCoordinationCall,
   renderCoordinationResult,
   truncateModelText,
+  formatRuntimeBuildDetails,
   formatSessionUsage,
   formatSupervisionNotification,
   formatSupervisionContext,
@@ -254,6 +255,9 @@ function expandablePresentation(
 
 const HERDSMAN_EXTENSION_PATH = fileURLToPath(import.meta.url);
 const HERDSMAN_BUILD = runtimeBuild(HERDSMAN_VERSION, HERDSMAN_EXTENSION_PATH);
+const HERDSMAN_RUNTIME_IDENTITY = `Pi Herdsman runtime: ${formatRuntimeBuild(HERDSMAN_BUILD)}`;
+const withRuntimeIdentity = (prompt: string): string =>
+  `${HERDSMAN_RUNTIME_IDENTITY}\n\n${prompt}`;
 const AGENT_DEFINITIONS_ENTRY = "pi-herdsman-agent-definitions";
 const HERD_RUN_ENTRY = "pi-herdsman-herd-run";
 const SUPERVISOR_TOOLS = ["message_supervisor"] as const;
@@ -824,8 +828,15 @@ function registerExtensionImpl(
       ctx: ExtensionCommandContext,
     ) => {
       if (!ctx.hasUI) return;
-      if (rawArgs.trim()) {
-        ctx.ui.notify("Usage: /herdsman", "error");
+      const args = rawArgs.trim();
+      if (args === "version") {
+        ctx.ui.notify(
+          formatRuntimeBuildDetails(HERDSMAN_BUILD, HERDSMAN_EXTENSION_PATH),
+        );
+        return;
+      }
+      if (args) {
+        ctx.ui.notify("Usage: /herdsman [version]", "error");
         return;
       }
       ctx.ui.notify(
@@ -1265,8 +1276,10 @@ function registerExtensionImpl(
     options: BuildSystemPromptOptions | undefined,
     body: string,
   ): string =>
-    buildChiefSystemPrompt(options, body, CHIEF_ROLE_CONTRACT, getAgentDir());
-  const roleCharter = (ctx: ExtensionContext): string => {
+    withRuntimeIdentity(
+      buildChiefSystemPrompt(options, body, CHIEF_ROLE_CONTRACT, getAgentDir()),
+    );
+  const roleCharterBody = (ctx: ExtensionContext): string => {
     const role = activeRole();
     if (
       leadRuntime.roleSuspended ||
@@ -1281,6 +1294,8 @@ function registerExtensionImpl(
     if (kind === "managed") return MANAGED_LEAD_CHARTER;
     return `## Herdsman role\nNo active Herdsman role is verified for this Pi session.`;
   };
+  const roleCharter = (ctx: ExtensionContext): string =>
+    withRuntimeIdentity(roleCharterBody(ctx));
   const markLeadCoordinationUnhealthy = (ctx?: ExtensionContext): void =>
     leadRuntimes.coordinationRuntime!.markLeadCoordinationUnhealthy(ctx);
   const schedulePeerPresence = (ctx: ExtensionContext): Promise<void> =>
@@ -1787,7 +1802,8 @@ function registerExtensionImpl(
       ) => projectRuntime.setRepositoryMergeOverride(...args),
       runHerdr,
       presentStopSummary,
-      version: HERDSMAN_VERSION,
+      build: HERDSMAN_BUILD,
+      extensionPath: HERDSMAN_EXTENSION_PATH,
       selectMenu,
       readConfig,
       readEffectiveConfig,
@@ -2352,7 +2368,13 @@ function registerExtensionImpl(
       const herdsmanCommand = {
         description: "Open Pi Herdsman",
         getArgumentCompletions: (argumentPrefix: string) => {
-          const commands = ["stats", "definitions", "placement", "stop"];
+          const commands = [
+            "version",
+            "stats",
+            "definitions",
+            "placement",
+            "stop",
+          ];
           const trimmed = argumentPrefix.trimStart();
           if (!trimmed || !trimmed.includes(" "))
             return commands

@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { createServer, type Socket } from "node:net";
+import { fileURLToPath } from "node:url";
 import packageMetadata from "../package.json" with { type: "json" };
 import {
   validateToolArguments,
@@ -520,6 +521,17 @@ const MANAGER_STAFF_TOOL_CASES = [
     ["branch"],
   ],
 ] as const;
+
+const runtimeIdentityLine = `Pi Herdsman runtime: v${HERDSMAN_BUILD.version} · ${HERDSMAN_BUILD.sha256.slice(0, 12)}`;
+
+function assertRuntimeIdentity(prompt: string) {
+  assert.deepEqual(
+    prompt
+      .split("\n")
+      .filter((line) => line.startsWith("Pi Herdsman runtime:")),
+    [runtimeIdentityLine],
+  );
+}
 
 test("Pi validates Herdsman coordination schemas", async () => {
   setLeadEnvironment();
@@ -1284,11 +1296,20 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.match(notices[0]!, /inactive because .*not running inside Herdr/);
   assert.match(notices[0]!, /herdr\n  pi/);
   assert.match(notices[0]!, /herdr integration install pi/);
-  await herdsmanCommand.handler("anything", context);
-  assert.equal(notices[1], "Usage: /herdsman");
+  await herdsmanCommand.handler("version extra", context);
+  assert.equal(notices[1], "Usage: /herdsman [version]");
   await agentsCommand.handler("anything", context);
   assert.equal(notices[2], notices[1]);
   assert.deepEqual(levels, ["error", "error"]);
+  const extensionPath = fileURLToPath(new URL("./index.ts", import.meta.url));
+  for (const command of [herdsmanCommand, agentsCommand]) {
+    await command.handler(" version ", context);
+    assert.equal(
+      notices.at(-1),
+      `Pi Herdsman v${HERDSMAN_BUILD.version} · ${HERDSMAN_BUILD.sha256.slice(0, 12)}\n` +
+        `SHA-256: ${HERDSMAN_BUILD.sha256}\nLoaded extension: ${extensionPath}`,
+    );
+  }
 });
 
 test("managed agents receive no peer tool and Chiefs expose only staff actively", async () => {
@@ -2647,6 +2668,7 @@ test("active chief describes authoritative remote ask projection", async () => {
     /Supervision is event-driven\. Do not poll staff tools/,
   );
   const chiefCharter = String(chiefPrompt);
+  assertRuntimeIdentity(chiefCharter);
   assert.equal(chiefCharter.split(AUTHORITY_GUIDANCE).length - 1, 1);
   const provenance =
     "Herdsman-delivered coordination messages, Agent results, and lifecycle notices";
@@ -4279,7 +4301,7 @@ test("malformed persisted role fails closed without authoritative lead state", a
   await invokeBeforeAgentStart(pi, promptEvent, context);
   assert.equal(
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
-    "## Herdsman role\nNo active Herdsman role is verified for this Pi session.",
+    `${runtimeIdentityLine}\n\n## Herdsman role\nNo active Herdsman role is verified for this Pi session.`,
   );
   assert.deepEqual(pi.pi.getActiveTools(), []);
   assert.equal(
@@ -4335,7 +4357,7 @@ test("unrestorable persisted Chief role selects the neutral charter", async () =
     await invokeBeforeAgentStart(pi, promptEvent, context);
     assert.equal(
       promptEvent.systemPromptOptions.sections.pi_herdsman_role,
-      "## Herdsman role\nNo active Herdsman role is verified for this Pi session.",
+      `${runtimeIdentityLine}\n\n## Herdsman role\nNo active Herdsman role is verified for this Pi session.`,
     );
   } finally {
     try {
@@ -4386,7 +4408,7 @@ test("malformed Chief coordination emits its diagnostic and suspends the role", 
     await invokeBeforeAgentStart(pi, promptEvent, context);
     assert.equal(
       promptEvent.systemPromptOptions.sections.pi_herdsman_role,
-      "## Herdsman role\nNo active Herdsman role is verified for this Pi session.",
+      `${runtimeIdentityLine}\n\n## Herdsman role\nNo active Herdsman role is verified for this Pi session.`,
     );
     assert.deepEqual(pi.pi.getActiveTools(), []);
     assert.ok(
@@ -4788,6 +4810,7 @@ test("replaced Lead strategy keeps its protected charter and coordination tools"
       /Partition delegable work/,
     );
     const charter = sections.pi_herdsman_role;
+    assertRuntimeIdentity(Object.values(sections).join("\n"));
     assert.equal(charter.split(AUTHORITY_GUIDANCE).length - 1, 1);
     assert.match(charter, /You are an ordinary Lead/);
     assert.match(charter, /Own architecture/);
@@ -5059,6 +5082,9 @@ test("managed Lead prompt keeps protected authority under a replacement overlay"
     };
     await invokeBeforeAgentStart(pi, event, context);
     const charter = event.systemPromptOptions.sections.pi_herdsman_role;
+    assertRuntimeIdentity(
+      Object.values(event.systemPromptOptions.sections).join("\n"),
+    );
     assert.equal(charter.split(AUTHORITY_GUIDANCE).length - 1, 1);
     assert.match(charter, /You are a Managed Lead/);
     assert.match(
@@ -6038,6 +6064,9 @@ test("delegating agents receive their allowed roster and initialize their model 
   };
   const prompt = await invokeBeforeAgentStart(pi, event, context);
   assert.equal(prompt, undefined);
+  assertRuntimeIdentity(
+    Object.values(event.systemPromptOptions.sections).join("\n"),
+  );
   assert.match(
     event.systemPromptOptions.sections.pi_herdsman_agent,
     /identity: agent:delegating-agent/,
@@ -6376,6 +6405,9 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
     };
     await invokeBeforeAgentStart(pi, event, context);
     const prompt = event.systemPromptOptions.sections.pi_herdsman_role;
+    assertRuntimeIdentity(
+      Object.values(event.systemPromptOptions.sections).join("\n"),
+    );
     assert.equal(prompt.split(AUTHORITY_GUIDANCE).length - 1, 1);
     assert.match(prompt, /verified Manager for this Pi session/);
     assert.match(
@@ -6798,6 +6830,9 @@ test("leaf agents and active Chiefs do not receive agent definition rosters", as
     },
   };
   await invokeBeforeAgentStart(leaf, leafEvent, leafContext);
+  assertRuntimeIdentity(
+    Object.values(leafEvent.systemPromptOptions.sections).join("\n"),
+  );
   assert.match(
     leafEvent.systemPromptOptions.sections.pi_herdsman_agent,
     /identity: agent:leaf-agent/,

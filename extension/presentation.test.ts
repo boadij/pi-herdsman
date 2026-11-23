@@ -8811,7 +8811,7 @@ test("incompatible Lead nested under a Manager remains focusable", () => {
     },
     { status: "fresh" },
   );
-  assert.match(context, /Old Lead · incompatible \(build mismatch\)/);
+  assert.match(context, /Old Lead · incompatible \(build mismatch\)$/m);
   assert.doesNotMatch(context, /old-lead|Old Lead.*target/);
   assert.doesNotMatch(context, /Old Lead.*agents=0/);
   assert.match(context, /lead_counts \(compatible reports\):/);
@@ -8838,6 +8838,7 @@ test("supervision context counts nested incompatible observations", () => {
               displayName: "Old Lead",
               runtimeState: "idle",
               compatibility: "incompatible",
+              build: { version: "0.31.1", sha256: "b".repeat(64) },
             },
           ],
           availableActions: ["inspect"],
@@ -8850,6 +8851,11 @@ test("supervision context counts nested incompatible observations", () => {
   );
 
   assert.match(context, /incompatible_staff_observations: 1/);
+  assert.match(
+    context,
+    /Old Lead · incompatible \(build mismatch\) · build=v0\.31\.1 · b{12}$/m,
+  );
+  assert.doesNotMatch(context, /local_build|b{64}/);
 });
 
 test("Manager widget reports incompatible child totals beyond the displayed cap", () => {

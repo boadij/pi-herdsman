@@ -5131,6 +5131,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         action: "list",
         self: {
           role: activeRole(),
+          build: HERDSMAN_BUILD,
         },
         ...(managerSnapshot
           ? {
@@ -5199,6 +5200,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                             ...(lead.compatibility === "incompatible"
                               ? {
                                   compatibility: "incompatible",
+                                  ...(lead.build ? { build: lead.build } : {}),
                                   available_tools: [],
                                 }
                               : {}),

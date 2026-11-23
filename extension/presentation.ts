@@ -55,7 +55,7 @@ import type {
   SupervisedManager,
   WorkspaceProvenance,
 } from "./supervision.ts";
-import { formatRuntimeBuild } from "./compatibility.ts";
+import { formatRuntimeBuild, type RuntimeBuild } from "./compatibility.ts";
 import { herdsmanTempRoot, resultPath, resultRef } from "./storage.ts";
 
 type CustomMessageInput = Parameters<
@@ -302,6 +302,17 @@ export type ManagedLeadUsageDisplay = {
   usage: UsageDisplayTotals;
   sessions: number;
 };
+
+export function formatRuntimeBuildDetails(
+  build: RuntimeBuild,
+  extensionPath: string,
+): string {
+  return [
+    `Pi Herdsman ${formatRuntimeBuild(build)}`,
+    `SHA-256: ${build.sha256}`,
+    `Loaded extension: ${extensionPath}`,
+  ].join("\n");
+}
 
 export function formatSessionUsage(
   current: UsageDisplayTotals,
@@ -2119,6 +2130,7 @@ export function formatSupervisionContext(
       for (const child of lead.leads.slice(0, 32))
         lines.push(
           `    ${supervisionValue(child.display_name)} · ${child.compatibility === "incompatible" ? "incompatible (build mismatch)" : supervisionValue(child.runtime_state)}` +
+            `${child.compatibility === "incompatible" && child.build ? ` · build=${supervisionValue(formatRuntimeBuild(child.build))}` : ""}` +
             `${child.agent_counts ? ` · agents=${child.agent_counts.total}` : ""}`,
         );
     }

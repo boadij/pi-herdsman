@@ -3064,6 +3064,7 @@ export function registerManagedAgentRuntime(
     const label = process.env.PI_HERDSMAN_LABEL!;
     const owner = execution.initialized ? execution.assignment : undefined;
     event.systemPromptOptions.sections.pi_herdsman_agent = [
+      `Pi Herdsman runtime: ${formatRuntimeBuild(options.build)}`,
       `identity: ${displayIdentity(definition, label)}`,
       `direct_owner: ${process.env.PI_HERDSMAN_OWNER_DISPLAY!}`,
       ...(owner ? [`direct_owner_session: ${owner.ownerSessionId}`] : []),
