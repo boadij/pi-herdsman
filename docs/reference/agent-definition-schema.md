@@ -325,9 +325,13 @@ skills exist, the loader is hidden and cannot load a skill.
 The loader accepts the exact name of a skill Pi resolved for the current
 session and allows the model to invoke. In Chief sessions, the loader is
 limited to user-scoped skills. `noSkills: true` disables automatic discovery,
-not explicit `skills` selections. The loader is callable directly by the
-model, not from Code Mode, and loading a skill does not expand execution
-permissions or grant general filesystem access.
+not explicit `skills` selections. The loader supports direct invocation and
+native Pi Code Mode; its presentation follows Pi's configured Code Mode mode.
+Skill discovery and loading remain subject to the same session eligibility,
+role scope, and tool authorization regardless of invocation mechanism. For
+example, a Code Mode script can load an eligible skill with
+`text(await tools.load_skill({ name: "gh" }));`. Loading a skill does not
+expand execution permissions or grant general filesystem access.
 
 No `tools` entry is needed: `tools: []` and `noTools: true` restrict ordinary
 tools without disabling skill access. A definition cannot remove the loader
