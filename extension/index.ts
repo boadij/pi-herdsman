@@ -1285,6 +1285,7 @@ function registerExtensionImpl(
       () => pi.getAllTools(),
       ownedToolNames,
       LEAD_COORDINATION_TOOLS,
+      SUPERVISOR_TOOLS,
     );
   }
   const ownedTools = () => leadToolState.ownedTools;
@@ -2508,6 +2509,7 @@ function registerExtensionImpl(
         leadToolState,
         ownedToolNames,
         leadCoordinationToolNames: LEAD_COORDINATION_TOOLS,
+        supervisorToolNames: SUPERVISOR_TOOLS,
         onLeadRuntimeReady: (
           runtime: LeadRuntimeState,
           tools: typeof leadToolState,

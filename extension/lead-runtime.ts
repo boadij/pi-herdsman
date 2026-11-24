@@ -410,6 +410,7 @@ type LeadRuntimeOptions = {
   leadToolState?: ReturnType<typeof createLeadToolState>;
   ownedToolNames: readonly string[];
   leadCoordinationToolNames: readonly string[];
+  supervisorToolNames: readonly string[];
   onLeadRuntimeReady?(
     runtime: LeadRuntimeState,
     tools: ReturnType<typeof createLeadToolState>,
@@ -834,8 +835,15 @@ export function createLeadToolState(
   getAllTools: () => readonly { name: string }[],
   ownedNames: readonly string[],
   leadCoordinationNames: readonly string[],
+  supervisorToolNames: readonly string[] = [],
 ) {
   const ownedTools = new Set(ownedNames);
+  // Supervisor tools are registered capabilities, not mandatory tools for
+  // every Lead projection. Turn preparation selects the one current route.
+  const supervisorTools = new Set(supervisorToolNames);
+  const requiredCoordinationTools = leadCoordinationNames.filter(
+    (name) => !supervisorTools.has(name),
+  );
   let leadTools: string[] | undefined;
   const registeredToolNames = () =>
     new Set(getAllTools().map((tool) => tool.name));
@@ -898,12 +906,20 @@ export function createLeadToolState(
     normalizeBaseTools,
     appendRegisteredTools,
     normalizeLeadTools: (tools: readonly string[]) =>
-      appendRegisteredTools(normalizeBaseTools(tools), leadCoordinationNames),
+      appendRegisteredTools(
+        normalizeBaseTools(tools).filter((name) => !supervisorTools.has(name)),
+        requiredCoordinationTools,
+      ),
     projectRoleTools,
     projectLeadTools: (
       baseline: readonly string[],
       definition: AgentDefinition,
-    ) => projectRoleTools(baseline, definition, leadCoordinationNames),
+    ) =>
+      projectRoleTools(
+        baseline.filter((name) => !supervisorTools.has(name)),
+        definition,
+        requiredCoordinationTools,
+      ),
     getLeadTools: () => leadTools,
     setLeadTools: (tools: string[] | undefined) => {
       leadTools = tools ? normalizeBaseTools(tools) : undefined;
@@ -1881,6 +1897,7 @@ export function registerLeadRuntime(
       () => pi.getAllTools(),
       options.ownedToolNames,
       options.leadCoordinationToolNames,
+      options.supervisorToolNames,
     );
   options.leadRuntime = leadRuntime;
   options.leadToolState = leadToolState;
@@ -2205,8 +2222,11 @@ export function registerLeadRuntime(
         : leadToolState.appendRegisteredTools([], required);
     const tools = projected.filter(
       (name) =>
-        !(AGENT_COORDINATION_TOOLS as readonly string[]).includes(name) ||
-        permitted.has(name),
+        (role === "manager"
+          ? name !== "message_manager"
+          : name !== "message_manager" && name !== "message_chief") &&
+        (!(AGENT_COORDINATION_TOOLS as readonly string[]).includes(name) ||
+          permitted.has(name)),
     );
     for (const name of permitted) if (!tools.includes(name)) tools.push(name);
     return tools;
@@ -2784,8 +2804,11 @@ export function registerLeadRuntime(
         definition.frontmatter.noTools === true ? [] : baseline;
       return restrict(
         leadToolState.appendRegisteredTools(
-          leadToolState.projectLeadTools(managedBaseline, definition),
-          ["read_evidence"],
+          leadToolState.appendRegisteredTools(
+            leadToolState.projectLeadTools(managedBaseline, definition),
+            ["read_evidence"],
+          ),
+          ["message_manager"],
         ),
       );
     }
@@ -2798,6 +2821,16 @@ export function registerLeadRuntime(
     return restrict(
       leadToolState.projectLeadTools(baseline, leadExecution.definition),
     );
+  };
+  const executionToolsWithSelectedSupervisor = (): string[] => {
+    const tools = executionTools();
+    const active = new Set(pi.getActiveTools());
+    const selected = options.supervisorToolNames.filter((name) =>
+      active.has(name),
+    );
+    if (selected.length === 1 && !tools.includes(selected[0]!))
+      tools.push(selected[0]!);
+    return tools;
   };
   const activationGuard = (
     _sessionId: string,
@@ -4639,13 +4672,13 @@ export function registerLeadRuntime(
           !leadExecution?.valid ||
           !leadExecution.managed
         )
-          return executionTools();
+          return executionToolsWithSelectedSupervisor();
         const policy = leadExecution.definition.frontmatter;
         return configuredToolPolicy(leadExecution.definition, []).mode ===
           "explicit" ||
           (policy.excludeTools?.length ?? 0) > 0 ||
           policy.noTools === true
-          ? executionTools()
+          ? executionToolsWithSelectedSupervisor()
           : undefined;
       }
       if (
@@ -4655,11 +4688,11 @@ export function registerLeadRuntime(
         leadExecution.managed
       )
         return undefined;
-      if (!leadExecution.valid) return executionTools();
+      if (!leadExecution.valid) return executionToolsWithSelectedSupervisor();
       const policy = leadExecution.definition.frontmatter;
       return configuredToolPolicy(leadExecution.definition, []).mode ===
         "explicit" || (policy.excludeTools?.length ?? 0) > 0
-        ? executionTools()
+        ? executionToolsWithSelectedSupervisor()
         : undefined;
     },
     executionPrompt: () =>

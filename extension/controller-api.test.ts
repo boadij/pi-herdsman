@@ -13025,8 +13025,6 @@ test("registered lead exposes only explicit live controls", async () => {
     "stop_agent",
     "inspect_agent",
     "read_agent_transcript",
-    "message_manager",
-    "message_chief",
     "list_peers",
     "message_peer",
     "load_skill",

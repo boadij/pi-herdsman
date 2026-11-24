@@ -4675,6 +4675,11 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
   for (const handler of pi.events.get("message_start") ?? [])
     await handler({ message: assignmentMessage }, context);
   await assertManagedLeadRole(pi, context);
+  for (const handler of pi.events.get("before_agent_start") ?? [])
+    await handler(
+      { systemPromptOptions: { sections: {}, contextFiles: [] } },
+      context,
+    );
   assert.ok(pi.tools.some((tool) => tool.name === "read_evidence"));
   assert.ok(pi.pi.getActiveTools().includes("read_evidence"));
   assert.ok(pi.pi.getActiveTools().includes("message_manager"));

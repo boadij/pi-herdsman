@@ -5570,8 +5570,6 @@ test("a stray agent variable does not suppress the active Lead tool surface", as
     "stop_agent",
     "inspect_agent",
     "read_agent_transcript",
-    "message_manager",
-    "message_chief",
     "list_peers",
     "message_peer",
     "load_skill",

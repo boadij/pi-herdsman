@@ -1134,8 +1134,6 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
       "reply_agent",
       "steer_agent",
       "read_agent_transcript",
-      "message_chief",
-      "message_manager",
       "list_peers",
       "message_peer",
     ].sort(),
@@ -4973,11 +4971,7 @@ test("replaced Lead strategy keeps its protected charter and coordination tools"
       charter,
       /a supervisor message does not transfer it to the child/,
     );
-    for (const name of [
-      "delegate_agent",
-      "continue_agent",
-      "message_manager",
-    ]) {
+    for (const name of ["delegate_agent", "continue_agent"]) {
       assert.ok(pi.pi.getActiveTools().includes(name), name);
       const tool = pi.tools.find((candidate) => candidate.name === name)!;
       assert.match(
@@ -4996,6 +4990,19 @@ test("replaced Lead strategy keeps its protected charter and coordination tools"
         /For dependent work, include relevant completed-Agent result refs/,
       );
     }
+    assert.ok(
+      pi.pi
+        .getActiveTools()
+        .filter((name) => ["message_manager", "message_chief"].includes(name))
+        .length <= 1,
+    );
+    const supervisorTool = pi.tools.find(
+      (candidate) => candidate.name === "message_manager",
+    )!;
+    assert.match(
+      supervisorTool.promptGuidelines.join(" "),
+      /unless the recipient already inherits the same evidence version as required evidence\. Forward changed versions explicitly\./,
+    );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     realFs.rmSync(overlay, { force: true });
@@ -6052,7 +6059,7 @@ test("pending retirement survives branch switch in the exact assigned checkout",
         .filter(
           (name) => name === "message_manager" || name === "message_chief",
         ),
-      ["message_manager"],
+      [],
     );
     assert.match(prompt, /You are a Managed Lead/);
     const supervisorTool = pi.tools.find(

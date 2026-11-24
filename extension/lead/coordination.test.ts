@@ -346,17 +346,17 @@ test("supervisor message authority and transitions", async (t) => {
               manager = { leaseId: randomUUID() };
               leadRuntime.managerLease.descriptor = manager;
             }
+            if (scenario === "recipient-changed" && supervisorCalls === 2)
+              currentRecipient = {
+                leaseId: randomUUID(),
+                piSessionId: randomUUID(),
+              };
             return currentRecipient;
           },
           workspaceId: () => "workspace",
           resolveEffectiveSupervisor: async () => {
             if (role === "manager") return { kind: "none" as const };
             const resolvedChief = chief;
-            if (scenario === "recipient-changed")
-              currentRecipient = {
-                leaseId: randomUUID(),
-                piSessionId: randomUUID(),
-              };
             return { kind: "chief" as const, chief: resolvedChief };
           },
           currentManager: async () => manager,

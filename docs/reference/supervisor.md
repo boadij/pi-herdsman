@@ -15,6 +15,11 @@ Herdsman resolves and revalidates the actual recipient at execution.
 | Manager                                                        | `message_chief`   | Direct message to the verified Chief                      |
 | Chief, unsupervised Lead, or Managed Agent                     | Neither           | No upward supervisor tool                                 |
 
+Managed Leads have `message_manager` only while their exact project
+assignment is verified; unavailable, retired, or otherwise unverified Managed
+Leads receive neither upward tool and retain only exact-owner recovery
+capabilities.
+
 An assigned Lead never bypasses Manager, including when no Manager process is
 active. Ordinary Leads contact only their currently verified direct
 supervisor. If authority changes after a tool was selected, the stale call
