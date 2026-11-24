@@ -2,54 +2,42 @@
 
 [Documentation index](../README.md) · [Coordination](../concepts/coordination.md)
 
-`message_supervisor` is the coordination operation for Leads and Managers. An
-assigned project Lead contacts its Manager through project messaging. An
-ordinary Lead in a verified project worktree group contacts its active project
-Manager; otherwise it contacts Chief when available. A Manager contacts Chief.
-Managed Agents use `notify_owner` for nonblocking material information and
-`await_owner` when they cannot continue without their exact owner's answer.
+The recipient-specific upward tools are `message_manager` and
+`message_chief`. The tool name identifies the verified recipient role; the
+caller supplies only a message and optional evidence files, never a target.
+Herdsman resolves and revalidates the actual recipient at execution.
 
-An ordinary Lead without a verified supervisor continues independently. An
-assigned Lead's Manager role remains its authority even when no Manager process
-is active. Messages are nonblocking coordination and do not alter project
-assignment state.
+| Sender                                                         | Available tool    | Delivery                                                  |
+| -------------------------------------------------------------- | ----------------- | --------------------------------------------------------- |
+| Assigned Managed Lead                                          | `message_manager` | Durable project message, retained across Manager turnover |
+| Ordinary Lead with active project Manager                      | `message_manager` | Direct message to the verified Manager                    |
+| Ordinary Lead without an eligible Manager, supervised by Chief | `message_chief`   | Direct message to the verified Chief                      |
+| Manager                                                        | `message_chief`   | Direct message to the verified Chief                      |
+| Chief, unsupervised Lead, or Managed Agent                     | Neither           | No upward supervisor tool                                 |
 
-Direct-supervisor delivery validates the current authority. Ambiguous or
-incomplete authority fails closed instead of silently routing around an
-intermediate Manager. A managed Lead's message validates its current project
-assignment. An unavailable or retired Managed Lead never falls back to Chief
-or ordinary direct supervision; previously queued information retains its own
-validated delivery contract.
+An assigned Lead never bypasses Manager, including when no Manager process is
+active. Ordinary Leads contact only their currently verified direct
+supervisor. If authority changes after a tool was selected, the stale call
+fails rather than being redirected. A Managed Agent uses `notify_owner` for
+nonblocking material information and `await_owner` when it cannot continue
+without its exact owner's answer; its owner is not an upward supervisor.
 
-## `message_supervisor`
-
-Available to Leads and Managers.
+Both tools use the same input:
 
 ```json
 {
-  "message": "The API contract has a compatibility risk that needs Manager attention.",
+  "message": "The API contract has a compatibility risk that needs attention.",
   "files": ["result:reviewer#1"]
 }
 ```
 
-`message_supervisor` is asynchronous and nonblocking. Use it for material
-information the direct supervisor needs, such as a timely question,
-clarification, blocker, warning, scope conflict, risk, decision request, or
-important evidence. Continue independently safe work while a reply is pending.
-Defer only steps that genuinely require the response; when no actionable work
-remains, end the turn and rely on normal message delivery rather than polling.
-For an assigned project Lead, this explicit message is labeled separately from
-the automatic completed-result or settled-herd handoff; the label does not
-change assignment lifecycle or review state.
-
-For an assigned project Lead, information that can wait for the normal automatic
-completed-result handoff should go there instead. Do not message solely to
-duplicate that result. Ordinary Leads and Managers have no automatic result
-handoff to Chief. Separate messages and results are not deduplicated.
-
-An ordinary Lead without a verified active project Manager or Chief should
-continue independently until a supervisor is available. Manually continuing the exact assigned Pi session
-does not release management; `managed-lead` is launch policy, not authority.
+Messages are asynchronous and nonblocking. Use them for material information
+the recipient needs, such as a timely question, clarification, blocker,
+warning, scope conflict, risk, decision request, or important evidence.
+Continue independently safe work while a reply is pending. Do not duplicate
+information that can wait for an automatic result handoff. Assigned Leads'
+automatic completed-result and settled-herd delivery remains separate from
+explicit project messages; it does not carry file attachments.
 
 Messages are bounded by configured per-file and complete-message budgets.
 `files` accepts ordinary paths, reusable direct Agent refs, and canonical
@@ -58,14 +46,10 @@ full or the handoff fails; the physical 8 KiB coordination-record limit does
 not truncate the recipient's message. Hidden semantic-result bindings remain
 available for the recipient to forward.
 
-## Delivery
-
-Direct-supervisor messages are queued for the exact current recipient and
-validated against current authority before delivery. A Manager message to an
-ordinary Lead uses Pi's cooperative steering lane whether the Lead is active or
-idle. Steering does not abort the current operation or interrupt an in-flight
-tool call. Ordinary Leads can reply explicitly with `message_supervisor`; a
-triggered turn does not guarantee a reply.
+Direct messages are queued for the exact current recipient and validated
+against current authority before delivery. Manager messages to ordinary Leads
+continue to use the existing cooperative steering lane; upward messaging does
+not change transport, persistence, retries, or delivery semantics.
 
 ## See also
 

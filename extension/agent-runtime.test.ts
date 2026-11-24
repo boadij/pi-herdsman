@@ -5570,7 +5570,8 @@ test("a stray agent variable does not suppress the active Lead tool surface", as
     "stop_agent",
     "inspect_agent",
     "read_agent_transcript",
-    "message_supervisor",
+    "message_manager",
+    "message_chief",
     "list_peers",
     "message_peer",
     "load_skill",
@@ -10165,8 +10166,8 @@ test("relative Lead policy denies only terminal removals and protected owned too
     isActiveManager: () => false,
     currentLeadRelativePolicy: () => ({
       excluded: ["write", "secret_*"],
-      owned: new Set(["delegate_agent", "message_supervisor"]),
-      allowedOwned: new Set(["message_supervisor"]),
+      owned: new Set(["delegate_agent", "message_manager"]),
+      allowedOwned: new Set(["message_manager"]),
     }),
     currentLeadAllowedTools: () => undefined,
   } as any);
@@ -10177,7 +10178,7 @@ test("relative Lead policy denies only terminal removals and protected owned too
   );
   assert.equal(events.toolCall({ toolName: "codemode" }, ctx), undefined);
   assert.equal(
-    events.toolCall({ toolName: "message_supervisor" }, ctx),
+    events.toolCall({ toolName: "message_manager" }, ctx),
     undefined,
   );
   assert.ok(events.toolCall({ toolName: "write" }, ctx)?.block);

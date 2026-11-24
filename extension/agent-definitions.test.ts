@@ -106,7 +106,7 @@ test("bundled definition bodies do not prescribe coordination APIs", () => {
     ...AGENT_COORDINATION_TOOLS,
     "await_owner",
     "notify_owner",
-    "message_supervisor",
+    "message_manager",
     "list_peers",
     "message_peer",
     "list_staff",
@@ -1076,7 +1076,7 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   assert.equal(bundled.frontmatter.noSkills, true);
   const requiredTools = [
     ...AGENT_COORDINATION_TOOLS,
-    "message_supervisor",
+    "message_manager",
     "list_peers",
     "message_peer",
   ];
@@ -2055,17 +2055,17 @@ test("preserves role-required tools through native allowlists and exclusions", (
     path: "/managed-role.md",
     frontmatter: {
       tools: ["read"],
-      excludeTools: ["message_supervisor", "write"],
+      excludeTools: ["message_manager", "write"],
     },
     body: "",
   };
   const args = agentLaunchArgs(definition, {
-    requiredTools: ["message_supervisor", "list_peers"],
+    requiredTools: ["message_manager", "list_peers"],
   });
   const tools = args.indexOf("--tools");
   assert.deepEqual(args[tools + 1].split(","), [
     "read",
-    "message_supervisor",
+    "message_manager",
     "list_peers",
     "load_skill",
     "mcp__",
@@ -2078,11 +2078,11 @@ test("preserves role-required tools through native allowlists and exclusions", (
       ...definition,
       frontmatter: { noTools: true, tools: [] },
     },
-    { requiredTools: ["message_supervisor"] },
+    { requiredTools: ["message_manager"] },
   );
   assert.equal(closed.includes("--no-tools"), true);
   const required = closed.indexOf("--tools");
-  assert.equal(closed[required + 1], "message_supervisor,load_skill,mcp__");
+  assert.equal(closed[required + 1], "message_manager,load_skill,mcp__");
 });
 
 test("composes all definition layers with provenance and whole-array replacement", () => {
@@ -4366,7 +4366,7 @@ test("relative tool policy preserves Pi selection while terminal removals remain
     body: "",
     frontmatter: { tools: ["-bash", "+codemode", "-write", "+write"] },
   };
-  const policy = configuredToolPolicy(definition, ["message_supervisor"]);
+  const policy = configuredToolPolicy(definition, ["message_manager"]);
   assert.equal(policy.mode, "relative");
   assert.deepEqual(policy.excluded, ["bash"]);
   assert.equal(toolPolicyAllowsName(policy, new Set(), "read"), true);
@@ -4380,21 +4380,18 @@ test("relative tool policy preserves Pi selection while terminal removals remain
     true,
   );
   const args = agentLaunchArgs(definition, {
-    requiredTools: ["message_supervisor"],
+    requiredTools: ["message_manager"],
   });
   assert.deepEqual(
     args.slice(args.indexOf("--tools"), args.indexOf("--tools") + 2),
-    [
-      "--tools",
-      "-bash,+codemode,-write,+write,+message_supervisor,+load_skill",
-    ],
+    ["--tools", "-bash,+codemode,-write,+write,+message_manager,+load_skill"],
   );
   assert.equal(args[args.indexOf("--exclude-tools") + 1], "bash");
   assert.throws(
     () =>
       configuredToolPolicy(
-        { ...definition, frontmatter: { tools: ["-message_supervisor"] } },
-        ["message_supervisor"],
+        { ...definition, frontmatter: { tools: ["-message_manager"] } },
+        ["message_manager"],
       ),
     /cannot remove required tool/,
   );

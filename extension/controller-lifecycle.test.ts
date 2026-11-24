@@ -4586,7 +4586,7 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
   );
   const pi = fakePi({
     entries,
-    allTools: [{ name: "read_evidence" }, { name: "message_supervisor" }],
+    allTools: [{ name: "read_evidence" }, { name: "message_manager" }],
     exec: async (command, args) => {
       if (
         command === "herdr" &&
@@ -4677,7 +4677,7 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
   await assertManagedLeadRole(pi, context);
   assert.ok(pi.tools.some((tool) => tool.name === "read_evidence"));
   assert.ok(pi.pi.getActiveTools().includes("read_evidence"));
-  assert.ok(pi.pi.getActiveTools().includes("message_supervisor"));
+  assert.ok(pi.pi.getActiveTools().includes("message_manager"));
 
   entries.push(
     {
@@ -4797,7 +4797,7 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     "successful exact scope verification restores Managed Lead tools",
   );
   assert.ok(
-    pi.pi.getActiveTools().includes("message_supervisor"),
+    pi.pi.getActiveTools().includes("message_manager"),
     "successful exact scope verification restores supervisor tools",
   );
 

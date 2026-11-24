@@ -3758,7 +3758,7 @@ export async function leadSupervisorState(
     >;
     currentManager(ctx: ExtensionContext): Promise<unknown | undefined>;
   },
-): Promise<string> {
+): Promise<{ content: string; destination?: "manager" | "chief" }> {
   try {
     const workspaceId = host.workspaceId();
     if (!workspaceId) throw new Error("Lead workspace is unavailable");
@@ -3770,19 +3770,38 @@ export async function leadSupervisorState(
     if (supervisor.kind === "assigned") {
       try {
         if (await host.currentManager(ctx))
-          return `<supervisor_state>\nsupervisor: manager\navailability: available\nproject_messages: retained across Manager turnover\n</supervisor_state>`;
+          return {
+            content: `<supervisor_state>\nsupervisor: manager\navailability: available\nproject_messages: retained across Manager turnover\n</supervisor_state>`,
+            destination: "manager",
+          };
       } catch {
-        return `<supervisor_state>\nsupervisor: manager\navailability: unknown\nproject_messages: retained for the Manager role\n</supervisor_state>`;
+        return {
+          content: `<supervisor_state>\nsupervisor: manager\navailability: unknown\nproject_messages: retained for the Manager role\n</supervisor_state>`,
+          destination: "manager",
+        };
       }
-      return `<supervisor_state>\nsupervisor: manager\navailability: unavailable\nproject_messages: retained for the Manager role\n</supervisor_state>`;
+      return {
+        content: `<supervisor_state>\nsupervisor: manager\navailability: unavailable\nproject_messages: retained for the Manager role\n</supervisor_state>`,
+        destination: "manager",
+      };
     }
     if (supervisor.kind === "manager")
-      return `<supervisor_state>\nsupervisor: manager\navailability: available\n</supervisor_state>`;
+      return {
+        content: `<supervisor_state>\nsupervisor: manager\navailability: available\n</supervisor_state>`,
+        destination: "manager",
+      };
     if (supervisor.kind === "chief")
-      return `<supervisor_state>\nsupervisor: chief\navailability: available\n</supervisor_state>`;
-    return `<supervisor_state>\nsupervisor: none\navailability: unavailable\nguidance: continue independently; do not use message_supervisor until a supervisor is available\n</supervisor_state>`;
+      return {
+        content: `<supervisor_state>\nsupervisor: chief\navailability: available\n</supervisor_state>`,
+        destination: "chief",
+      };
+    return {
+      content: `<supervisor_state>\nsupervisor: none\navailability: unavailable\nguidance: continue independently\n</supervisor_state>`,
+    };
   } catch {
-    return `<supervisor_state>\nsupervisor: unverified\navailability: unknown\nguidance: continue independently; do not use message_supervisor until a supervisor is verified\n</supervisor_state>`;
+    return {
+      content: `<supervisor_state>\nsupervisor: unverified\navailability: unknown\nguidance: continue independently\n</supervisor_state>`,
+    };
   }
 }
 

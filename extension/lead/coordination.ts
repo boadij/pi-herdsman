@@ -709,7 +709,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       throw new Error("Lead coordination state changed; retry the action");
   };
 
-  const leadSupervisorState = (ctx: ExtensionContext): Promise<string> =>
+  const leadSupervisorState = (ctx: ExtensionContext) =>
     resolveLeadSupervisorState(ctx, {
       workspaceId,
       resolveEffectiveSupervisor,
@@ -1197,12 +1197,15 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       : undefined;
   };
   const prepareLeadSupervisorStateMessage = async (ctx: ExtensionContext) => {
-    const content = await leadSupervisorState(ctx);
-    return supervisorStateMessage(
-      supervisorStateType,
-      content,
-      latestCustomMessageText(ctx, supervisorStateType),
-    );
+    const view = await leadSupervisorState(ctx);
+    return {
+      destination: view.destination,
+      message: supervisorStateMessage(
+        supervisorStateType,
+        view.content,
+        latestCustomMessageText(ctx, supervisorStateType),
+      ),
+    };
   };
   type PeerOperation =
     | { action: "list"; internal?: boolean }
@@ -1284,6 +1287,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     }
   };
   const executeSupervisorMessage = async (
+    destination: "manager" | "chief",
     _id: string,
     raw: unknown,
     signal: AbortSignal | undefined,
@@ -1297,7 +1301,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       new OperationError({
         category,
         message,
-        operation: "message_supervisor",
+        operation: `message_${destination}`,
         rollbackOccurred: false,
         retryAttempted: false,
       });
@@ -1356,11 +1360,43 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             "Managed project assignment is unavailable",
           );
       }
+      let actualDestination: "manager" | "chief" | undefined;
+      let expectedSupervisor:
+        { piSessionId: string; leaseId: string } | undefined;
+      if (assignment) actualDestination = "manager";
+      else if (activeRole() === "manager") actualDestination = "chief";
+      else {
+        const currentWorkspaceId = workspaceId();
+        if (currentWorkspaceId) {
+          let supervisor;
+          try {
+            supervisor = await resolveEffectiveSupervisor(
+              ctx,
+              sessionId,
+              currentWorkspaceId,
+            );
+          } catch (error) {
+            throw boundaryError(error);
+          }
+          if (supervisor.kind === "manager") {
+            actualDestination = "manager";
+            expectedSupervisor = supervisor.manager;
+          } else if (supervisor.kind === "chief") {
+            actualDestination = "chief";
+            expectedSupervisor = supervisor.chief;
+          }
+        }
+      }
+      if (actualDestination !== destination)
+        throw structuredError(
+          "invalid_request",
+          "Supervisor relationship changed; retry with the current tool",
+        );
       if (assignment) {
         const files = resolveMessageFiles(
           ctx,
           params.files,
-          "message_supervisor",
+          `message_${destination}`,
         );
         let published: ProjectMessage | undefined;
         try {
@@ -1369,7 +1405,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             assignment,
             params.message,
             files,
-            "message_supervisor",
+            `message_${destination}`,
             undefined,
             "supervisor_message",
             signal,
@@ -1398,6 +1434,15 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           "target_not_found",
           "No active supervisor is available",
         );
+      if (
+        expectedSupervisor &&
+        (chief.piSessionId !== expectedSupervisor.piSessionId ||
+          chief.leaseId !== expectedSupervisor.leaseId)
+      )
+        throw structuredError(
+          "invalid_request",
+          "Supervisor relationship changed; retry with the current tool",
+        );
       const kind =
         activeRole() === "manager" ? "manager_message" : "lead_message";
       const expectedManagerLeaseId =
@@ -1421,11 +1466,11 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         resolveMessageFiles(
           ctx,
           params.files,
-          "message_supervisor",
+          `message_${destination}`,
           evidenceScope?.retained,
           evidenceScope?.roots,
         ),
-        "message_supervisor",
+        `message_${destination}`,
         "Message",
         (candidate, resultBindings) => ({
           version: 2,
@@ -1467,7 +1512,10 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           recordId,
           createdAt,
           undefined,
-          { piSessionId: chief.piSessionId, leaseId: chief.leaseId },
+          expectedSupervisor ?? {
+            piSessionId: chief.piSessionId,
+            leaseId: chief.leaseId,
+          },
           prepared.resultBindings,
           evidenceScope?.verify,
           senderEnvironment ?? null,
@@ -1520,7 +1568,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       content: [
         {
           type: "text",
-          text: `Message queued for supervisor (${record.id}).`,
+          text: `Message queued for ${destination} (${record.id}).`,
         },
       ],
       details: { id: record.id },

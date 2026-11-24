@@ -164,7 +164,7 @@ Manager can use `message_staff` or `resume_work` with `retain: true`; the
 message text and files then become required evidence for that assignment. The Manager alone controls
 its requirements; sibling Lead assignments do not automatically share evidence.
 Leads delegate corrections with recipient-specific
-`files` and send continuing findings through `message_supervisor.files` for
+`files` and send continuing findings through `message_manager.files` for
 Manager evaluation. On supported operations, omitted or false `retain` keeps
 files limited to that handoff. Retention
 requires verified assignment authority and eligible evidence, and failure is
@@ -247,7 +247,7 @@ summarizes outcome, validation, and important unresolved points. These nontermin
 close project work: assignments remain open through
 review and requested corrections. Routine information that can wait should go
 through the automatic result handoff. A managed Lead may use nonblocking
-`message_supervisor` for a timely question, clarification, warning, or other
+`message_manager` for a timely question, clarification, warning, or other
 information the Manager needs before that boundary. Continue independently
 safe work while a reply is pending. Defer only steps that genuinely require the
 response; when no actionable work remains, end the turn and rely on normal
@@ -265,7 +265,7 @@ result reference is resolvable when the branch contains its direct Agent
 completion or an explicitly imported binding; already-supplied canonical result
 references may also be passed through. If the Manager needs an artifact for
 review or onward delegation, the Lead explicitly transfers it through
-`message_supervisor.files`.
+`message_manager.files`.
 
 Only a Lead turn with a verified current Pi `completed` outcome contributes a
 successful response; text alone does not prove completion. On a model execution
@@ -278,7 +278,7 @@ reported as unresolved unless a later Lead execution completes successfully.
 Cancellation is reported separately as a factual, nonterminal message without
 partial assistant output.
 
-Manager-bound Lead messages are labeled by source: explicit `message_supervisor`
+Manager-bound Lead messages are labeled by source: explicit `message_manager`
 messages, completed direct responses, settled herd runs, execution failures, and
 cancellations have distinct headings. These labels describe the message only;
 they do not imply assignment acceptance, review readiness, integration, or

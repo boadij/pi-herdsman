@@ -3414,7 +3414,7 @@ export function formatToolModelResult(
     ...descendantWarning,
   ].join("\n");
 }
-type CoordinationTool = "agent" | "supervisor" | "peer" | "staff";
+type CoordinationTool = "agent" | "manager" | "chief" | "peer" | "staff";
 
 function humanText(theme: any, color: string, text: string): string {
   return theme?.fg ? theme.fg(color, text) : text;
@@ -3574,7 +3574,7 @@ function coordinationHeader(
           ? verb === "list"
             ? "list peers"
             : "message peer"
-          : `${verb} supervisor`;
+          : `${verb} ${tool}`;
   return `${humanText(theme, "toolTitle", theme.bold(title))}${target ? `  ${humanText(theme, "accent", target)}` : ""}`;
 }
 
@@ -3914,8 +3914,8 @@ function expandedResultLines(
               ? "remove worktree"
               : action === "delegate" || action === "continue"
                 ? `${display} started`
-                : tool === "supervisor"
-                  ? "sent to supervisor"
+                : tool === "manager" || tool === "chief"
+                  ? `sent to ${tool}`
                   : action === "steer"
                     ? "steering queued"
                     : action === "interrupt"
@@ -4415,9 +4415,9 @@ export function renderCoordinationResult(
       0,
     );
   }
-  if (tool === "supervisor") {
+  if (tool === "manager" || tool === "chief") {
     return new WidthSafeText(
-      statusLine(theme, "success", "✓", "sent to supervisor"),
+      statusLine(theme, "success", "✓", `sent to ${tool}`),
       0,
       0,
     );

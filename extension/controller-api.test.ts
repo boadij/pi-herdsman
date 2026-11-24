@@ -494,7 +494,7 @@ test(
       idle = false;
       assert.match(statusWidget!.render(160)[0], /^● lead · managed/);
       const supervisorTool = pi.tools.find(
-        (tool) => tool.name === "message_supervisor",
+        (tool) => tool.name === "message_manager",
       )!;
       const projectMessagesBeforeProbe = listProjectMessages(
         runtime,
@@ -731,7 +731,7 @@ test(
         assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
       );
       const tool = pi.tools.find(
-        (candidate) => candidate.name === "message_supervisor",
+        (candidate) => candidate.name === "message_manager",
       )!;
       const send = (message: string) =>
         tool.execute("message", { message }, undefined, undefined, ctx);
@@ -1401,7 +1401,7 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
   }
 });
 
-test("message_supervisor tool cancellation prevents project publication while waiting for its lock", async () => {
+test("message_manager tool cancellation prevents project publication while waiting for its lock", async () => {
   setLeadEnvironment();
   process.env.HERDR_SOCKET_PATH = join(
     tmpdir(),
@@ -1524,7 +1524,7 @@ test("message_supervisor tool cancellation prevents project publication while wa
   try {
     await pi.events.get("session_start")![0](undefined, ctx);
     const tool = pi.tools.find(
-      (candidate) => candidate.name === "message_supervisor",
+      (candidate) => candidate.name === "message_manager",
     )!;
     const publication = tool.execute(
       "message",
@@ -1726,7 +1726,7 @@ test("project Lead observes Manager availability across turnover without exposin
       /project_messages: retained for the Manager role/,
     );
     const savedWhileUnknown = await pi.tools
-      .find((tool) => tool.name === "message_supervisor")!
+      .find((tool) => tool.name === "message_manager")!
       .execute(
         "message",
         { message: "RETAINED_WITH_UNVERIFIED_MANAGER" },
@@ -1761,7 +1761,7 @@ test("project Lead observes Manager availability across turnover without exposin
       /project_messages: retained for the Manager role/,
     );
     const saved = await pi.tools
-      .find((tool) => tool.name === "message_supervisor")!
+      .find((tool) => tool.name === "message_manager")!
       .execute(
         "message",
         { message: "RETAINED_WITHOUT_MANAGER" },
@@ -1815,7 +1815,7 @@ test("project Lead observes Manager availability across turnover without exposin
     };
     replaceDuringPublication = true;
     const changedAssignment = await pi.tools
-      .find((tool) => tool.name === "message_supervisor")!
+      .find((tool) => tool.name === "message_manager")!
       .execute(
         "message",
         { message: "ASSIGNMENT_CHANGED_BEFORE_PUBLICATION" },
@@ -1844,7 +1844,7 @@ test("project Lead observes Manager availability across turnover without exposin
     writeFileSync(assignmentPath, "{ malformed assignment");
     try {
       const lookupFailure = await pi.tools
-        .find((tool) => tool.name === "message_supervisor")!
+        .find((tool) => tool.name === "message_manager")!
         .execute(
           "message",
           { message: "LOOKUP_FAILURE" },
@@ -1870,7 +1870,7 @@ test("project Lead observes Manager availability across turnover without exposin
     writeFileSync(messagesDirectory, "block directory creation");
     try {
       const publicationFailure = await pi.tools
-        .find((tool) => tool.name === "message_supervisor")!
+        .find((tool) => tool.name === "message_manager")!
         .execute(
           "message",
           { message: "PUBLICATION_FAILURE" },
@@ -2010,8 +2010,16 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
       );
     const chiefStateResult = await observe();
     assertNoSystemPromptMessage(chiefStateResult);
+    assert.deepEqual(
+      pi.pi
+        .getActiveTools()
+        .filter(
+          (name) => name === "message_manager" || name === "message_chief",
+        ),
+      ["message_chief"],
+    );
     const supervisorMessage = pi.tools.find(
-      (tool) => tool.name === "message_supervisor",
+      (tool) => tool.name === "message_chief",
     )!;
     const blankMessage = await supervisorMessage.execute(
       "message",
@@ -2069,7 +2077,7 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
       workspaceId: WORKSPACE,
     });
     const result = await pi.tools
-      .find((tool) => tool.name === "message_supervisor")!
+      .find((tool) => tool.name === "message_chief")!
       .execute(
         "message",
         { message: "UNASSIGNED_DIRECT_TO_CHIEF" },
@@ -2091,10 +2099,18 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
     chiefDiscoveryFailure = true;
     assertNoSystemPromptMessage(await observe());
     const unverifiedChief = branch.at(-1);
+    assert.deepEqual(
+      pi.pi
+        .getActiveTools()
+        .filter(
+          (name) => name === "message_manager" || name === "message_chief",
+        ),
+      [],
+    );
     assert.match(unverifiedChief.content, /supervisor: unverified/);
     assert.match(unverifiedChief.content, /availability: unknown/);
     const discoveryFailure = await pi.tools
-      .find((tool) => tool.name === "message_supervisor")!
+      .find((tool) => tool.name === "message_manager")!
       .execute(
         "message",
         { message: "UNVERIFIED_CHIEF_MUST_REJECT" },
@@ -2121,18 +2137,17 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
       ).length,
       1,
     );
-    await assert.rejects(
-      pi.tools
-        .find((tool) => tool.name === "message_supervisor")!
-        .execute(
-          "message",
-          { message: "UNVERIFIED_DESCRIPTOR_MUST_REJECT" },
-          undefined,
-          undefined,
-          ctx,
-        ),
-      /Unable to verify Chief descriptor/,
-    );
+    const rejected = await pi.tools
+      .find((tool) => tool.name === "message_chief")!
+      .execute(
+        "message",
+        { message: "UNVERIFIED_DESCRIPTOR_MUST_REJECT" },
+        undefined,
+        undefined,
+        ctx,
+      );
+    assert.equal(rejected.isError, true);
+    assert.equal(rejected.details.error.category, "internal_failure");
     chief.release();
     assertNoSystemPromptMessage(await observe());
     const noSupervisor = branch.at(-1);
@@ -2148,9 +2163,9 @@ test("unassigned Lead routes message supervisors directly to Chief", async () =>
     assert.equal(noSupervisorResult.isError, true);
     assert.match(
       noSupervisorResult.content[0].text,
-      /No active supervisor is available/,
+      /Supervisor relationship changed; retry with the current tool/,
     );
-    assert.equal(noSupervisorResult.details.error.category, "target_not_found");
+    assert.equal(noSupervisorResult.details.error.category, "invalid_request");
     observationFailure = true;
     assertNoSystemPromptMessage(await observe());
     const unverified = branch.at(-1);
@@ -2205,7 +2220,7 @@ test("unhealthy Lead coordination rejects supervisor messages", async () => {
     await pi.events.get("session_start")![0](undefined, ctx);
 
     const supervisorMessage = pi.tools.find(
-      (tool) => tool.name === "message_supervisor",
+      (tool) => tool.name === "message_chief",
     )!;
     const unavailable = await supervisorMessage.execute(
       "message",
@@ -2314,7 +2329,7 @@ test("legacy Lead pendingAsk state is normalized and does not block messaging", 
     );
 
     const result = await pi.tools
-      .find((tool) => tool.name === "message_supervisor")!
+      .find((tool) => tool.name === "message_chief")!
       .execute(
         "message",
         { message: "LEGACY_STATE_MESSAGE_OK" },
@@ -2427,7 +2442,7 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
     );
     await pi.commandOptions.get("chief").handler("", ctx);
     const chiefRoleRejected = await pi.tools
-      .find((tool) => tool.name === "message_supervisor")!
+      .find((tool) => tool.name === "message_manager")!
       .execute(
         "message",
         { message: "CHIEF_ROLE_MUST_REJECT" },
@@ -2999,7 +3014,7 @@ for (const reachable of [true, false]) {
           const planPath = join(tmpdir(), `project-plan-${randomUUID()}.md`);
           realFs.writeFileSync(planPath, plan);
           const result = await lead.tools
-            .find((tool) => tool.name === "message_supervisor")!
+            .find((tool) => tool.name === "message_manager")!
             .execute(
               "message",
               { message: "Review the attached plan.", files: [planPath] },
@@ -3033,7 +3048,7 @@ for (const reachable of [true, false]) {
           const originalCwd = leadCtx.cwd;
           leadCtx.cwd = join(tmpdir(), `${leadId}-other-checkout`);
           const denied = await lead.tools
-            .find((tool) => tool.name === "message_supervisor")!
+            .find((tool) => tool.name === "message_manager")!
             .execute(
               "message",
               { message: "WRONG_CHECKOUT_MUST_NOT_BE_AUTHORIZED" },
@@ -3063,7 +3078,7 @@ for (const reachable of [true, false]) {
             entries: [],
           });
           const rejectUnmatchedSession = await lead.tools
-            .find((tool) => tool.name === "message_supervisor")!
+            .find((tool) => tool.name === "message_manager")!
             .execute(
               "message",
               { message: "WRONG_SESSION_MUST_NOT_BE_AUTHORIZED" },
@@ -3088,7 +3103,7 @@ for (const reachable of [true, false]) {
           });
           reportedGitCommonDir = checkoutPath;
           const rejectUnmatchedRepository = await lead.tools
-            .find((tool) => tool.name === "message_supervisor")!
+            .find((tool) => tool.name === "message_manager")!
             .execute(
               "message",
               { message: "WRONG_REPOSITORY_MUST_NOT_BE_AUTHORIZED" },
@@ -3650,7 +3665,7 @@ for (const scenario of [
         assert.equal(realFs.existsSync(sessionPath), true);
       }
       const saved = await pi.tools
-        .find((tool) => tool.name === "message_supervisor")!
+        .find((tool) => tool.name === "message_manager")!
         .execute(
           "message",
           { message: "Ready for review" },
@@ -13010,7 +13025,8 @@ test("registered lead exposes only explicit live controls", async () => {
     "stop_agent",
     "inspect_agent",
     "read_agent_transcript",
-    "message_supervisor",
+    "message_manager",
+    "message_chief",
     "list_peers",
     "message_peer",
     "load_skill",

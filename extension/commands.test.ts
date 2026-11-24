@@ -687,18 +687,20 @@ const leadTools = [
   "stop_agent",
   "inspect_agent",
   "read_agent_transcript",
-  "message_supervisor",
+  "message_manager",
+  "message_chief",
   "list_peers",
   "message_peer",
 ];
 const leadToolsWithSkill = [...leadTools, "load_skill"];
 const leadToolsWithoutAgents = [
-  "message_supervisor",
+  "message_manager",
+  "message_chief",
   "list_peers",
   "message_peer",
 ];
 const managerTools = [
-  "message_supervisor",
+  "message_chief",
   "list_peers",
   "message_peer",
   "list_staff",
@@ -774,11 +776,12 @@ test("Lead execution state is strict and profile tools preserve only Lead capabi
         "bash",
         "grep",
         "delegate_agent",
-        "message_supervisor",
+        "message_manager",
+        "message_chief",
         "list_staff",
       ].map((name) => ({ name })),
     ["delegate_agent", "list_staff"],
-    ["delegate_agent", "message_supervisor"],
+    ["delegate_agent", "message_manager"],
   );
   const baseline = ["read", "bash", "grep"];
   const projection = state.projectLeadTools(baseline, {
@@ -791,7 +794,7 @@ test("Lead execution state is strict and profile tools preserve only Lead capabi
     },
     body: "",
   });
-  assert.deepEqual(projection, ["delegate_agent", "message_supervisor"]);
+  assert.deepEqual(projection, ["delegate_agent", "message_manager"]);
   assert.deepEqual(
     state.projectLeadTools(baseline, {
       name: "orchestrator-lead",
@@ -799,7 +802,7 @@ test("Lead execution state is strict and profile tools preserve only Lead capabi
       frontmatter: { name: "orchestrator-lead", tools: [] },
       body: "",
     }),
-    ["delegate_agent", "message_supervisor"],
+    ["delegate_agent", "message_manager"],
   );
   assert.deepEqual(
     state.projectLeadTools(baseline, {
@@ -812,7 +815,7 @@ test("Lead execution state is strict and profile tools preserve only Lead capabi
       },
       body: "",
     }),
-    ["bash", "delegate_agent", "message_supervisor"],
+    ["bash", "delegate_agent", "message_manager"],
   );
   assert.deepEqual(
     state.projectLeadTools(baseline, {
@@ -821,7 +824,7 @@ test("Lead execution state is strict and profile tools preserve only Lead capabi
       frontmatter: { name: "flexible-lead" },
       body: "",
     }),
-    [...baseline, "delegate_agent", "message_supervisor"],
+    [...baseline, "delegate_agent", "message_manager"],
   );
   const flexibleWithCodeMode = {
     name: "flexible-lead",
@@ -831,7 +834,7 @@ test("Lead execution state is strict and profile tools preserve only Lead capabi
   };
   assert.deepEqual(
     state.projectLeadTools(baseline, flexibleWithCodeMode),
-    [...baseline, "delegate_agent", "message_supervisor"],
+    [...baseline, "delegate_agent", "message_manager"],
     "unregistered CodeMode must not change the inherited tool selection",
   );
   const withCodeMode = createLeadToolState(
@@ -842,14 +845,15 @@ test("Lead execution state is strict and profile tools preserve only Lead capabi
         "grep",
         "codemode",
         "delegate_agent",
-        "message_supervisor",
+        "message_manager",
+        "message_chief",
       ].map((name) => ({ name })),
     ["delegate_agent"],
-    ["delegate_agent", "message_supervisor"],
+    ["delegate_agent", "message_manager"],
   );
   assert.deepEqual(
     withCodeMode.projectLeadTools(baseline, flexibleWithCodeMode),
-    [...baseline, "codemode", "delegate_agent", "message_supervisor"],
+    [...baseline, "codemode", "delegate_agent", "message_manager"],
   );
 });
 
@@ -1173,7 +1177,8 @@ test("known managed identity remains unavailable and recovery-only when startup 
         [
           "list_staff",
           "message_peer",
-          "message_supervisor",
+          "message_manager",
+          "message_chief",
           "delegate_agent",
           "continue_agent",
         ].includes(tool),
@@ -1263,7 +1268,7 @@ test("managed pending execution projects only exact-owner recovery tools", async
         [
           "delegate_agent",
           "continue_agent",
-          "message_supervisor",
+          "message_manager",
           "list_peers",
           "message_peer",
         ].includes(name),
@@ -1595,10 +1600,11 @@ test("live Flexible tool changes survive order-preserving projection while exclu
     assert.deepEqual(pi.toolSelections.at(-1), requested);
     assert.deepEqual(new Set(pi.pi.getActiveTools()), new Set(requested));
     assert.notDeepEqual(pi.pi.getActiveTools(), requested);
-    assert.deepEqual(
-      pi.pi.getActiveTools().slice(0, 3),
-      leadToolsWithoutAgents,
-    );
+    assert.deepEqual(pi.pi.getActiveTools().slice(0, 3), [
+      "message_manager",
+      "message_chief",
+      "list_peers",
+    ]);
     assert.equal(pi.pi.getActiveTools().includes("inactive"), false);
     pi.pi.setActiveTools([
       ...pi.pi.getActiveTools(),
@@ -2639,7 +2645,7 @@ test("Chief discovers and exchanges messages with a non-Git ordinary Lead", asyn
       ),
     );
     const reply = await leadPi.tools
-      .find((tool) => tool.name === "message_supervisor")!
+      .find((tool) => tool.name === "message_chief")!
       .execute(
         "message",
         { message: "Lead-to-Chief non-Git reply" },
@@ -4137,7 +4143,7 @@ function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
           "stop_agent",
           "inspect_agent",
           "read_agent_transcript",
-          "message_supervisor",
+          "message_manager",
           "list_peers",
           "message_peer",
           "list_staff",
@@ -10466,7 +10472,7 @@ async function managerDelegateAssignmentTest(
       assert.equal(args.includes("--no-tools"), false);
       assert.deepEqual(args[toolsIndex + 1]!.split(","), [
         "codemode",
-        ...leadTools,
+        ...leadTools.filter((name) => name !== "message_chief"),
         "load_skill",
         "mcp__",
       ]);
@@ -10645,7 +10651,7 @@ async function managerDelegateAssignmentTest(
       await initializeLeadRuntime();
       lockPhase = "lead-publish";
       const messageTool = lead.tools.find(
-        (tool: any) => tool.name === "message_supervisor",
+        (tool: any) => tool.name === "message_manager",
       )!;
       leadPublication = messageTool
         .execute(
@@ -10745,7 +10751,7 @@ async function managerDelegateAssignmentTest(
         try {
           await initializeLeadRuntime();
           const messageTool = lead.tools.find(
-            (tool: any) => tool.name === "message_supervisor",
+            (tool: any) => tool.name === "message_manager",
           )!;
           leadPublication = messageTool
             .execute(
@@ -11722,7 +11728,7 @@ async function managerDelegateAssignmentTest(
         assert.equal(tabLabels.get("child-tab"), "Managed Lead"),
       );
       const messageTool: unknown = lead.tools.find(
-        (tool: unknown) => isRecord(tool) && tool.name === "message_supervisor",
+        (tool: unknown) => isRecord(tool) && tool.name === "message_manager",
       );
       assert.ok(
         isRecord(messageTool) && typeof messageTool.execute === "function",
@@ -13168,9 +13174,10 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     );
     assert.equal(managerScope.workspaceIds.includes(leadWorkspace), false);
     const staleTopologyQueriesBeforeUplink = leadWorkspaceTopologyQueries;
+    omitLeadFromManagerTopology = false;
     useLeadIdentity();
     const uplink = await lead.tools
-      .find((tool) => tool.name === "message_supervisor")!
+      .find((tool) => tool.name === "message_manager")!
       .execute(
         "message",
         { message: "Ordinary Lead to Manager" },
@@ -13178,32 +13185,20 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
         undefined,
         leadCtx,
       );
+    assert.equal(uplink.isError, true);
+    assert.equal(uplink.details.error.category, "internal_failure");
+    assert.match(uplink.content[0].text, /project topology changed/);
     assert.equal("chiefSessionId" in uplink.details, false);
-    useManagerIdentity();
-    managerCtx.isIdle = () => true;
-    await t.waitFor(() =>
-      assert.ok(
-        manager!.sentMessageCalls.some(
-          ({ message }: any) =>
-            message?.customType === "pi-herdsman-lead_message" &&
-            message?.details?.id === uplink.details.id &&
-            message?.details?.fromSessionId === leadSession &&
-            message?.details?.toSessionId === LEAD_SESSION_ID,
-        ),
+    assert.deepEqual(
+      manager!.sentMessageCalls.filter(
+        ({ message }: any) => message?.details?.fromSessionId === leadSession,
       ),
-    );
-    const incoming = manager.sentMessageCalls.find(
-      ({ message }: any) => message?.details?.id === uplink.details.id,
-    )!.message as any;
-    assert.ok(
-      incoming.content.startsWith(
-        `From Lead ${coordinatorTarget("lead", leadSession)}: `,
-      ),
+      [],
     );
     assert.equal(
-      leadWorkspaceTopologyQueries,
-      staleTopologyQueriesBeforeUplink,
-      "delivery does not query the stale Lead workspace topology",
+      leadWorkspaceTopologyQueries > staleTopologyQueriesBeforeUplink,
+      true,
+      "destination validation uses current Lead workspace topology",
     );
     useLeadIdentity();
     await assert.rejects(
@@ -13402,7 +13397,7 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     managerCtx.isIdle = () => false;
     useLeadIdentity();
     const changedIdentityUplink = await lead.tools
-      .find((tool) => tool.name === "message_supervisor")!
+      .find((tool) => tool.name === "message_manager")!
       .execute(
         "message",
         { message: "Reject if the live Lead identity changes during lookup" },
@@ -13411,11 +13406,15 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
         leadCtx,
       );
     useManagerIdentity();
-    changeLeadCwdAfterLocalScope = true;
     managerCtx.isIdle = () => true;
-    await t.waitFor(() => assert.ok(leadCwdMutationQueries > 0));
+    assert.equal(changedIdentityUplink.isError, true);
+    assert.equal(
+      changedIdentityUplink.details.error.category,
+      "internal_failure",
+    );
+    assert.equal(leadCwdMutationQueries, 0);
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(leadAgent.cwd, repoA);
+    assert.equal(leadAgent.cwd, "/tmp");
     assert.equal(
       manager.sentMessageCalls.some(
         ({ message }: any) =>
@@ -13487,17 +13486,20 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
       queuedBefore,
     );
     useLeadIdentity();
-    await assert.rejects(
-      lead.tools
-        .find((tool) => tool.name === "message_supervisor")!
-        .execute(
-          "message",
-          { message: "Do not guess between Managers" },
-          undefined,
-          undefined,
-          leadCtx,
-        ),
-      /Manager supervisor is ambiguous/,
+    const ambiguousUplink = await lead.tools
+      .find((tool) => tool.name === "message_manager")!
+      .execute(
+        "message",
+        { message: "Do not guess between Managers" },
+        undefined,
+        undefined,
+        leadCtx,
+      );
+    assert.equal(ambiguousUplink.isError, true);
+    assert.equal(ambiguousUplink.details.error.category, "internal_failure");
+    assert.match(
+      ambiguousUplink.content[0].text,
+      /Manager supervisor is ambiguous|project topology changed/,
     );
     assert.equal(
       listCoordinationMessagePaths(supervisionRuntime(), LEAD_SESSION_ID)
@@ -13994,7 +13996,7 @@ test("a Lead without a Manager routes upward to Chief and keeps peer presence", 
     {
       message: {
         role: "assistant",
-        content: [{ type: "toolCall", name: "message_supervisor" }],
+        content: [{ type: "toolCall", name: "message_chief" }],
       },
     },
   ]) as any;
@@ -14016,7 +14018,7 @@ test("a Lead without a Manager routes upward to Chief and keeps peer presence", 
     const initial = readPeerLeadRecord(peerRuntime(), sessionId);
     assert.ok(initial);
 
-    const chief = pi.tools.find((tool) => tool.name === "message_supervisor");
+    const chief = pi.tools.find((tool) => tool.name === "message_chief");
     assert.ok(chief);
     const result = await chief.execute(
       "message",
@@ -14025,7 +14027,7 @@ test("a Lead without a Manager routes upward to Chief and keeps peer presence", 
       undefined,
       context,
     );
-    assert.match(result.content[0].text, /Message queued for supervisor/);
+    assert.match(result.content[0].text, /Message queued for chief/);
     assert.equal(
       listCoordinationMessagePaths(supervisionRuntime(), chiefId).length,
       1,
@@ -14181,7 +14183,7 @@ test("Chief message persistence failure can recover without withdrawing peer pre
     {
       message: {
         role: "assistant",
-        content: [{ type: "toolCall", name: "message_supervisor" }],
+        content: [{ type: "toolCall", name: "message_chief" }],
       },
     },
   ]) as any;
@@ -14212,7 +14214,7 @@ test("Chief message persistence failure can recover without withdrawing peer pre
     );
     writeFileSync(obstruction, "block Chief inbox creation");
 
-    const chief = pi.tools.find((tool) => tool.name === "message_supervisor");
+    const chief = pi.tools.find((tool) => tool.name === "message_chief");
     assert.ok(chief);
     await assert.rejects(
       chief.execute(
@@ -14236,7 +14238,7 @@ test("Chief message persistence failure can recover without withdrawing peer pre
       undefined,
       context,
     );
-    assert.match(result.content[0].text, /Message queued for supervisor/);
+    assert.match(result.content[0].text, /Message queued for chief/);
     assert.equal(listCoordinationMessagePaths(runtime, chiefId).length, 1);
     assert.equal(
       readPeerLeadRecord(peerRuntime(), sessionId)?.claim.id,
@@ -15950,7 +15952,8 @@ test("lead session-start retries an exact baseline after restoration fails", asy
     "stop_agent",
     "inspect_agent",
     "read_agent_transcript",
-    "message_supervisor",
+    "message_manager",
+    "message_chief",
     "list_peers",
     "message_peer",
     "load_skill",
@@ -16034,7 +16037,8 @@ test("lead session-start continues when chief lease release fails", async () => 
         "stop_agent",
         "inspect_agent",
         "read_agent_transcript",
-        "message_supervisor",
+        "message_manager",
+        "message_chief",
         "list_peers",
         "message_peer",
       ],
@@ -16059,7 +16063,8 @@ test("lead session-start continues when chief lease release fails", async () => 
     "stop_agent",
     "inspect_agent",
     "read_agent_transcript",
-    "message_supervisor",
+    "message_manager",
+    "message_chief",
     "list_peers",
     "message_peer",
     "load_skill",
@@ -16260,7 +16265,7 @@ test("Chief profile drives the turn-start tools, prompt, and tool-call guard", a
     assert.ok(pi.pi.getActiveTools().includes("list_staff"));
     for (const name of ["list_agents", "reply_agent", "stop_agent"])
       assert.ok(pi.pi.getActiveTools().includes(name), name);
-    for (const name of ["message_supervisor", "list_peers", "message_peer"])
+    for (const name of ["message_manager", "list_peers", "message_peer"])
       assert.ok(!pi.pi.getActiveTools().includes(name), name);
     assert.ok(!pi.pi.getActiveTools().includes("delegate_work"));
     assert.equal(
@@ -16290,7 +16295,7 @@ test("Chief profile drives the turn-start tools, prompt, and tool-call guard", a
         reason: "Tool is unavailable in the active Chief profile.",
       },
     );
-    for (const name of ["message_supervisor", "list_peers", "message_peer"])
+    for (const name of ["message_manager", "list_peers", "message_peer"])
       assert.deepEqual(
         await pi.events.get("tool_call")![0](
           { toolName: name, input: {} },
@@ -18768,7 +18773,8 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
     "stop_agent",
     "inspect_agent",
     "read_agent_transcript",
-    "message_supervisor",
+    "message_manager",
+    "message_chief",
     "list_peers",
     "message_peer",
   ];
@@ -18847,7 +18853,7 @@ test("ordinary branch tool state wins over an older lead checkpoint", async () =
           "stop_agent",
           "inspect_agent",
           "read_agent_transcript",
-          "message_supervisor",
+          "message_manager",
           "list_peers",
           "message_peer",
         ],
@@ -18866,7 +18872,8 @@ test("ordinary branch tool state wins over an older lead checkpoint", async () =
     "stop_agent",
     "inspect_agent",
     "read_agent_transcript",
-    "message_supervisor",
+    "message_manager",
+    "message_chief",
     "list_peers",
     "message_peer",
   ];
@@ -19307,7 +19314,8 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
           "stop_agent",
           "inspect_agent",
           "read_agent_transcript",
-          "message_supervisor",
+          "message_manager",
+          "message_chief",
           "list_peers",
           "message_peer",
         ],
@@ -19350,7 +19358,8 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
     "stop_agent",
     "inspect_agent",
     "read_agent_transcript",
-    "message_supervisor",
+    "message_manager",
+    "message_chief",
     "list_peers",
     "message_peer",
     "load_skill",
@@ -19400,7 +19409,8 @@ test("persisted chief collision is suspended and has no lead authority", async (
           "stop_agent",
           "inspect_agent",
           "read_agent_transcript",
-          "message_supervisor",
+          "message_manager",
+          "message_chief",
         ],
       },
     },
@@ -19431,7 +19441,8 @@ test("persisted chief collision is suspended and has no lead authority", async (
         "stop_agent",
         "inspect_agent",
         "read_agent_transcript",
-        "message_supervisor",
+        "message_manager",
+        "message_chief",
       ],
     });
     registerExtension!(pi.pi as never);
@@ -19487,7 +19498,7 @@ test("persisted chief collision is suspended and has no lead authority", async (
     assert.ok(pi.pi.getActiveTools().includes("read"));
     for (const name of ["list_agents", "reply_agent", "stop_agent"])
       assert.ok(pi.pi.getActiveTools().includes(name), name);
-    for (const name of ["message_supervisor", "list_peers", "message_peer"])
+    for (const name of ["message_manager", "list_peers", "message_peer"])
       assert.ok(!pi.pi.getActiveTools().includes(name), name);
     assert.ok(pi.pi.getActiveTools().includes("delegate_agent"));
     const restoredAssignment = await agentTool(pi, "delegate").execute(

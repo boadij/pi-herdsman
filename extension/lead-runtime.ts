@@ -1656,11 +1656,15 @@ export function createLeadAgentEventRuntime(host: {
   ): string;
   isActiveLead(): boolean;
   executionPrompt(): string | undefined;
-  prepareLeadSupervisorStateMessage(
-    ctx: ExtensionContext,
-  ): Promise<
-    { customType: string; content: string; display: boolean } | undefined
+  prepareLeadSupervisorStateMessage(ctx: ExtensionContext): Promise<
+    | {
+        destination?: "manager" | "chief";
+        message:
+          { customType: string; content: string; display: boolean } | undefined;
+      }
+    | undefined
   >;
+  selectSupervisorTool?(destination?: "manager" | "chief"): void;
   definitionRoster():
     { sessionId: string; definitions: Record<string, unknown>[] } | undefined;
   modelCatalog?(ctx: ExtensionContext): string | undefined;
@@ -1734,10 +1738,19 @@ export function createLeadAgentEventRuntime(host: {
         throw error;
       }
       const activeLead = host.isActiveLead() && !host.isRoleSuspended();
-      const supervisorStateMessage = activeLead
+      const sessionId = ctx.sessionManager.getSessionId();
+      const supervisorState = activeLead
         ? await host.prepareLeadSupervisorStateMessage(ctx)
         : undefined;
-      if (supervisorStateMessage) host.sendMessage(supervisorStateMessage);
+      if (
+        activeLead &&
+        host.isActiveLead() &&
+        !host.isRoleSuspended() &&
+        ctx.sessionManager.getSessionId() === sessionId
+      ) {
+        host.selectSupervisorTool?.(supervisorState?.destination);
+        if (supervisorState?.message) host.sendMessage(supervisorState.message);
+      } else host.selectSupervisorTool?.();
       const roster = activeLead ? host.definitionRoster() : undefined;
       const prompt = activeLead ? host.executionPrompt() : undefined;
       if (prompt) sections.pi_herdsman_lead_execution = prompt;
@@ -3809,7 +3822,9 @@ export function registerLeadRuntime(
     HERDSMAN_BUILD: options.build,
     HERDSMAN_EXTENSION_PATH: projectHost.extensionPath,
     SessionManager: projectHost.SessionManager,
-    leadCoordinationTools: options.leadCoordinationToolNames,
+    leadCoordinationTools: options.leadCoordinationToolNames.filter(
+      (name) => name !== "message_chief",
+    ),
     stopProjectLead: (
       ...args: Parameters<LeadProjectHost["stopProjectLead"]>
     ): ReturnType<LeadProjectHost["stopProjectLead"]> =>
@@ -9993,7 +10008,7 @@ export function createLeadRoleTransitions(
     assignment: ProjectAssignment,
     message: string,
     files: readonly MessageFileInput[] = [],
-    operation = "message_supervisor",
+    operation = "herd_run",
     reportId?: string,
     kind?: ProjectMessage["kind"],
     signal?: AbortSignal,
