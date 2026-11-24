@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { join } from "node:path";
-import { runtimeBuild } from "../compatibility.ts";
 import {
   claimDelegationLock,
   visibleAgentSnapshots,
@@ -15,13 +13,7 @@ import {
   validStatusWidgetMaxRows,
 } from "../config.ts";
 import { buildStatusRows, renderRunningOptions } from "../presentation.ts";
-import {
-  fakeContext,
-  HERDSMAN_BUILD,
-  realFs,
-  testTmpRoot,
-  WORKSPACE,
-} from "../support.ts";
+import { fakeContext, HERDSMAN_BUILD, WORKSPACE } from "../support.ts";
 import { createLeadCommandRuntime } from "./commands.ts";
 import { pickOverrideModels } from "./override-model-picker.ts";
 
@@ -540,7 +532,7 @@ test("Herdsman root renders when status and definition metadata fail", async () 
         return undefined;
       },
     } as any);
-    await runtime.runHerdsmanCommand("", {
+    await runtime.openHerdsmanMenu({
       hasUI: true,
       ui: { notify: (message: string) => notices.push(message) },
     } as any);
@@ -548,24 +540,6 @@ test("Herdsman root renders when status and definition metadata fail", async () 
     assert.equal(discoveryCalls, 0);
     assert.deepEqual(notices, []);
   }
-});
-
-test("version reports the captured build after the extension file changes", async () => {
-  const extensionPath = join(testTmpRoot, "replacement-extension.js");
-  realFs.writeFileSync(extensionPath, "// originally loaded");
-  const build = runtimeBuild("1.2.3", extensionPath);
-  const runtime = createLeadCommandRuntime({ build, extensionPath } as any);
-  realFs.writeFileSync(extensionPath, "// replacement");
-
-  const notices: string[] = [];
-  await runtime.runHerdsmanCommand("version", {
-    hasUI: true,
-    ui: { notify: (message: string) => notices.push(message) },
-  } as any);
-  assert.deepEqual(notices, [
-    `Pi Herdsman v1.2.3 · ${build.sha256.slice(0, 12)}\n` +
-      `SHA-256: ${build.sha256}\nLoaded extension: ${extensionPath}`,
-  ]);
 });
 
 test("Settings categories and Agents & definitions retain their selections", async () => {
@@ -1056,7 +1030,7 @@ test("Herdsman role menus dispatch shared role commands", async () => {
       } as any;
       const runtime = createLeadCommandRuntime(host);
       const notices: string[] = [];
-      await runtime.runHerdsmanCommand("", {
+      await runtime.openHerdsmanMenu({
         hasUI: true,
         ui: { notify: (message: string) => notices.push(message) },
       } as any);
@@ -1117,7 +1091,7 @@ test("role overview bypasses the idle-gated refresh and invalid commands do noth
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
-        runtime.runRoleCommand(role, "", ctx),
+        runtime.runRoleCommand(role, "open", ctx),
         new Promise<never>((_, reject) => {
           timer = setTimeout(
             () => reject(new Error("overview waited for idle")),
@@ -1138,17 +1112,10 @@ test("role overview bypasses the idle-gated refresh and invalid commands do noth
     assert.deepEqual(notices.splice(0), [["refreshed", undefined]]);
     active = false;
     await runtime.runRoleCommand(role, "refresh", ctx);
-    for (const args of ["unknown", "refresh extra", "leave extra"]) {
-      await runtime.runRoleCommand(role, args, ctx);
-    }
     assert.equal(transitions, 1);
     assert.equal(overviews, 1);
     assert.deepEqual(notices, [
-      [`/${role} refresh requires active ${role} mode`, "error"],
-      ...Array.from({ length: 3 }, () => [
-        `Usage: /${role} [refresh|leave]`,
-        "error",
-      ]),
+      [`/${role}-refresh requires active ${role} mode`, "error"],
     ]);
   }
 });

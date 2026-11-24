@@ -7003,7 +7003,7 @@ test("active-stop preflights startup and verifies interactive stop cleanup", asy
     /listed: listed\.value\.agents\?\.length \?\? 0,\s*owned: owned\.length,\s*delegation: root \? rootDelegationDiagnostics\(root\.contents\) : null/,
   );
   const stopInput = markerIndex(
-    /submitPaneCommand\(ctx,\s*ctx\.rootPaneId,\s*"\/agents stop"\)/,
+    /submitPaneCommand\(ctx,\s*ctx\.rootPaneId,\s*"\/herdsman-stop"\)/,
   );
   const confirmation = markerIndex(/"active-stop-confirmation"/);
   const confirmEnter = markerIndex(
@@ -10297,13 +10297,13 @@ test("pane commands use one atomic pane run", async () => {
     sessionName: "pi-herdsman-smoke-test",
   };
   const calls: string[][] = [];
-  for (const command of ["/manager leave", "/chief"])
+  for (const command of ["/manager-leave", "/chief"])
     await submitPaneCommand(ctx, "w1:p2", command, async (file, args) => {
       calls.push(args);
       return { stdout: "", stderr: "", pid: 123 };
     });
   assert.deepEqual(calls, [
-    ["pane", "run", "w1:p2", "/manager leave"],
+    ["pane", "run", "w1:p2", "/manager-leave"],
     ["pane", "run", "w1:p2", "/chief"],
   ]);
 });

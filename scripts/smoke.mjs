@@ -5473,7 +5473,7 @@ async function runManagerHandoffSmoke(ctx) {
   const initialLeadPid = assignment.initialLeadPid;
   const initialBytes = await readFile(assignmentPath, "utf8");
   const previousLease = JSON.parse(await readFile(managerPath, "utf8")).leaseId;
-  await submitPaneCommand(ctx, ctx.rootPaneId, "/manager leave");
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/manager-leave");
   await waitForEvidence(
     ctx,
     "manager-handoff-manager-absent",
@@ -9278,7 +9278,7 @@ async function runManagerRecoverySmoke(ctx) {
   // stop/resume assertion must exercise recovery under the replacement lease.
   const preResumeLease = await managerLease();
   markStage(ctx, "resume-manager-turnover-leave");
-  await submitPaneCommand(ctx, ctx.rootPaneId, "/manager leave");
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/manager-leave");
   await waitFor(
     "resume-manager-left",
     async () => {
@@ -9436,7 +9436,7 @@ async function runManagerRecoverySmoke(ctx) {
     );
 
     markStage(ctx, "manager-removal-cancel");
-    await submitPaneCommand(ctx, ctx.rootPaneId, "/manager remove");
+    await submitPaneCommand(ctx, ctx.rootPaneId, "/manager-remove");
     await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
     await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "down"]);
     await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
@@ -9495,7 +9495,7 @@ async function runManagerRecoverySmoke(ctx) {
         { timeoutMs: 15_000, stallMs: MODEL_STALL_MS },
       );
       markStage(ctx, "manager-removal-approval-ui");
-      await submitPaneCommand(ctx, ctx.rootPaneId, "/manager remove");
+      await submitPaneCommand(ctx, ctx.rootPaneId, "/manager-remove");
       await nestedPaneInput(ctx, [
         "pane",
         "send-keys",
@@ -9562,16 +9562,18 @@ async function runManagerRecoverySmoke(ctx) {
     await submitPaneCommand(
       ctx,
       ctx.rootPaneId,
-      "/manager remove-preapproval off",
+      "/manager-removal-confirmation required",
     );
     await waitForEvidence(
       ctx,
-      "manager-removal-preauthorization-disabled",
+      "manager-removal-preauthorization-required",
       async () => {
         const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
         return {
-          done: text.includes("this repository is Off"),
-          progress: { disabled: text.includes("this repository is Off") },
+          done: text.includes("Worktree removal approval: Required"),
+          progress: {
+            required: text.includes("Worktree removal approval: Required"),
+          },
           evidence: text.slice(-1000),
         };
       },
@@ -9620,7 +9622,7 @@ async function runManagerRecoverySmoke(ctx) {
     assert.equal(cleanPending.message.details.branch, branch);
     assert.equal(typeof cleanPending.message.details.request_id, "string");
     markStage(ctx, "manager-removal-clean-pending-approval");
-    await submitPaneCommand(ctx, ctx.rootPaneId, "/manager remove");
+    await submitPaneCommand(ctx, ctx.rootPaneId, "/manager-remove");
     await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
     await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
     await waitForEvidence(
@@ -9663,7 +9665,7 @@ async function runManagerRecoverySmoke(ctx) {
         );
         const checkoutRemoved =
           matchingOwnedWorktrees.length === 0 && !checkoutPathPresent;
-        // /manager remove reports through the UI; it does not emit another
+        // /manager-remove reports through the UI; it does not emit another
         // remove_worktree tool result after the approval dialog.
         const successMessage =
           visible.includes(`removed checkout for ${branch}`) ||
@@ -9864,7 +9866,7 @@ async function runManagerRecoverySmoke(ctx) {
   ctx.managerRecovery.resumedPid = resumedPid;
   const previousLease = await managerLease();
   markStage(ctx, "manager-turnover-leave");
-  await submitPaneCommand(ctx, ctx.rootPaneId, "/manager leave");
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/manager-leave");
   await waitFor(
     "manager-left",
     async () => {
@@ -10212,7 +10214,7 @@ async function runManagerRecoverySmoke(ctx) {
   assert.equal((await matchingWorktrees()).length, 0);
   await assert.rejects(lstat(assignmentPath), { code: "ENOENT" });
   markStage(ctx, "manager-leave-command-submission");
-  await submitPaneCommand(ctx, ctx.rootPaneId, "/manager leave");
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/manager-leave");
   markStage(ctx, "manager-leave-output-wait");
   await nestedCommand(ctx, [
     "pane",
@@ -10487,7 +10489,7 @@ async function runActiveStopSmoke(ctx) {
     Object.values(identity).every(Boolean),
     "active-stop initial generation identity incomplete",
   );
-  await submitPaneCommand(ctx, ctx.rootPaneId, "/agents stop");
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/herdsman-stop");
   const confirmation = await waitForEvidence(
     ctx,
     "active-stop-confirmation",
@@ -11478,7 +11480,7 @@ async function runSupervisorAgentSmoke(ctx) {
     { timeoutMs: 60_000, stallMs: 30_000 },
   );
   assert.ok(delivered);
-  await submitPaneCommand(ctx, ctx.rootPaneId, "/chief leave");
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/chief-leave");
   await nestedCommand(ctx, [
     "pane",
     "wait-output",

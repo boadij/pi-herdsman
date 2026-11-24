@@ -115,7 +115,7 @@ this skill does not define a second schema or management API.
      explicit overlays can select other registered ordinary tools. The saved
      ordinary Lead tool baseline is restored when Manager mode ends. Chief
      accepts global overrides only. Inspect effective definition layers,
-     validate edits, and use `/manager refresh` or `/chief refresh` for the
+     validate edits, and use `/manager-refresh` or `/chief-refresh` for the
      active role.
 
 4. Validate through Herdsman's existing definition engine where available.

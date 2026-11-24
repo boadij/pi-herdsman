@@ -458,13 +458,13 @@ assignment merely to increase concurrency.
 
 In a lead session with UI:
 
-### `/herdsman` and `/agents`
+### Herdsman menu and native command discovery
 
 Open `/herdsman` in ordinary Lead, Managed Lead, Manager, and Chief sessions.
 Verify ordinary Leads see six destinations: `Lead mode`, `Agents & definitions`,
 `Project management`, `Chief coordination`, `Settings`, and `Usage & costs`.
 The other roles see five destinations without `Lead mode`; verify `Agents &
-definitions` remains available in each. Verify `/agents` opens the same menu,
+definitions` remains available in each. Verify `/herdsman` opens the same menu,
 active role state is secondary metadata, and selected-row contextual help updates
 in the TUI. `Agents & definitions` groups running agents, definitions, Coordinator
 profiles, and stop-all. Verify `Settings` has `Sessions & agents`, `Manager &
@@ -476,7 +476,7 @@ effective value, and wrapped help. Open a numeric selector and verify that the
 current choice remains marked when moving the cursor. For disposable settings,
 verify `Use default` removes an override even if it already equals the default. `Lead mode` shows the current ordinary mode and opens the
 `flexible` / `orchestrate` selector. `/lead` opens that selector directly, while
-`/lead flexible` and `/lead orchestrate` select directly through that control.
+`/lead-flexible` and `/lead-orchestrate` select directly through that control.
 For a Managed Lead, `/lead` shows managed with `managed-lead` help and no ordinary
 mode choices. Verify Managed Leads cannot select ordinary modes or activate
 Manager/Chief.
@@ -495,14 +495,20 @@ Manager automatically` show the effective scope and that `Message and file
 limits` shows byte sizes without token estimates on the category row.
 
 Navigate to Project management and Chief coordination from the menus. Confirm their
-Start, Overview, Refresh profile, and Leave actions use the existing `/manager` and `/chief`
-role behavior. With an active Manager, verify pending-removal review is available. Before
+Start, Overview, Refresh profile, and Leave actions use the existing role
+behavior. In Pi's command palette, verify `/flex` discovers `/lead-flexible`,
+`/orch` discovers `/lead-orchestrate`, `/leave` discovers both role leave
+commands, `/stats` discovers `/herdsman-stats`, and `/manager` discovers its
+related actions. Enter executes a selected fixed action; Tab completes a command
+before its arguments. Verify `/manager-remove` Enter opens pending-removal
+review while Tab permits assigned-branch completion. Cancel the confirmation
+for `/herdsman-stop` and verify no agent stops. With an active Manager, verify pending-removal review is available. Before
 activating Manager, verify repository settings are available for a verified
 repository. Using disposable settings, check native grant
 confirmation and cancellation for removal and integration permissions, including
 inheritance; verify cancellation leaves policy unchanged.
 
-### `/herdsman definitions`
+### `/herdsman-definitions`
 
 Verify the native `Agents & Coordinators` menu shows:
 
@@ -521,7 +527,7 @@ All five reserved Coordinator profiles remain non-Agent. The Lead, Manager, and
 Chief runtime profiles have Details only; `managed-lead` has Model, Thinking,
 and Details, but no Enabled action. Runtime-profile definitions reject
 launch-only fields such as model, thinking, extensions, skills, and context
-inheritance. `/manager refresh` or `/chief refresh` refreshes the active profile
+inheritance. `/manager-refresh` or `/chief-refresh` refreshes the active profile
 after the current turn becomes idle.
 
 Structured `list_agents` should still retain exact deterministic metadata.
@@ -538,12 +544,12 @@ removes only the selected source's field, fresh definition delegations inherit t
 spawning controller's current value, continuations restore the saved session's
 value, and running agents are not mutated.
 
-### `/herdsman placement`
+### `/herdsman-placement`
 
 Open the native selector, change to the alternate value, verify, then restore
 the original value.
 
-### `/herdsman stop`
+### `/herdsman-stop`
 
 With disposable owned agents, verify the owned tree closes while an unrelated
 herdr agent remains untouched.
@@ -629,7 +635,7 @@ Automated live scenario results are separate and do not replace these checks.
 | Lead/Chief messages show bounded direction-aware model-visible sender and target identity                                                                                           | NOT RUN |
 | Queued inbox records are ordered by `createdAt`, then ID                                                                                                                            | NOT RUN |
 | Resume with a free or occupied lease                                                                                                                                                | NOT RUN |
-| Confirm `/chief leave` without mutating supervised leads                                                                                                                            | NOT RUN |
+| Confirm `/chief-leave` without mutating supervised leads                                                                                                                            | NOT RUN |
 | Suspended Chief retains no Herdsman authority tools                                                                                                                                 | NOT RUN |
 | Descendant `working`, `settling`, and `blocked` states remain exact; counts report `active`, `blocked`, and `total`                                                                 | NOT RUN |
 | Chief rows separate `!` attention from lifecycle: `●` working, `◐` blocked, `?` unknown, and `◉` delegated active descendants                                                       | NOT RUN |

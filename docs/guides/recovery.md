@@ -195,7 +195,7 @@ Herdsman never redelegates or continues it automatically. Moved,
 conflicting, or incomplete evidence is `unknown`, not `lost`, and remains
 fail-closed.
 After a verified clean Agent stop, the direct owner may explicitly continue the exact
-saved session. A verified `/agents stop` can also preserve a versioned receipt
+saved session. A verified `/herdsman-stop` can also preserve a versioned receipt
 in the owner's history for that explicit continuation. Stop never auto-restarts
 work. Continuation starts a new generation and does not replay the abandoned
 assignment; an idle restored Pi conversation alone remains `unknown` until its
@@ -301,7 +301,7 @@ Stopping a delegating agent cascades through its owned agents first. If an
 agent cannot be proved or stopped safely, the delegating agent remains rather
 than being destructively guessed away.
 
-For lead-only human emergency cleanup, `/agents stop` operates on the proven
+For lead-only human emergency cleanup, `/herdsman-stop` operates on the proven
 owned tree and reports discarded active work or durable pending results. It is
 not the normal model orchestration interface.
 

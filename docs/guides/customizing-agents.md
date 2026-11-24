@@ -144,7 +144,7 @@ Manager accepts trusted project overlays at `<project>/.pi/coordinators/manager.
 and global overlays at `<agentDir>/coordinators/manager.md`.
 Chief accepts only global overlays because it
 is workspace-neutral; a project-local `chief.md` is an error. Both resolve
-when the role activates or is restored. `/manager refresh` or `/chief refresh`
+when the role activates or is restored. `/manager-refresh` or `/chief-refresh`
 validates and refreshes the active profile after the current turn becomes idle;
 a failed refresh keeps the previous effective profile. A `bodyMode: replace` overlay replaces customizable
 role guidance only. Runtime-owned authority and role contracts remain active.
@@ -473,7 +473,7 @@ references, herdr does not resolve them relative to the definition file.
 Lead Pi sessions with UI can use:
 
 ```text
-/agents definitions
+/herdsman-definitions
 ```
 
 The native `Agents & Coordinators` menu opens an `Agents` or `Coordinators`
@@ -529,5 +529,5 @@ session.
 ## See also
 
 - [Agent-definition schema](../reference/agent-definition-schema.md)
-- [`/agents` commands](../reference/commands.md)
+- [`/herdsman` commands](../reference/commands.md)
 - [Agent definitions](agent-definitions.md)

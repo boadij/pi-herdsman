@@ -2497,7 +2497,7 @@ test("worktree removal requests show confirmation instructions without physical 
           content: [
             {
               type: "text",
-              text: "No worktree was removed. Use /manager remove feat/example or /manager → Project → Remove worktree….",
+              text: "No worktree was removed. Use /manager-remove feat/example or /manager → Project → Remove worktree….",
             },
           ],
           details: {
@@ -2512,7 +2512,7 @@ test("worktree removal requests show confirmation instructions without physical 
       ),
     );
     assert.match(output, /Confirmation required/);
-    assert.match(output, /\/manager remove feat\/example/);
+    assert.match(output, /\/manager-remove feat\/example/);
     assert.doesNotMatch(output, /✗|checkout:|assignment:|unknown|failed/);
     if (expanded) assert.match(output, /Project → Remove worktree/);
   }

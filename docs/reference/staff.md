@@ -291,7 +291,7 @@ active Manager's exact current assignment and matching linked checkout and
 checks clean state and occupants. Without preauthorization, a valid request
 returns promptly with `confirmation_required: true`, `pending: true`, and
 `ok: false`, plus a correlated `request_id`. No removal, execution shutdown, or
-operation lock occurs. Review it with `/manager remove`; unanswered requests do
+operation lock occurs. Review it with `/manager-remove`; unanswered requests do
 not block coordination. Pi keeps the request on the active session branch, so
 it remains reviewable after reloading that same session. A persistent native
 status indicator points to the review command. A human preauthorization for

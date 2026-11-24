@@ -172,7 +172,7 @@ enabled: false
 ---
 ```
 
-The `/agents definitions` UI keeps disabled rows and shows their disabled
+The `/herdsman-definitions` UI keeps disabled rows and shows their disabled
 status so the source can be re-enabled. Disabled definitions are omitted from
 the runtime `agent_definitions` capability summary for Leads and delegating
 agents. A definition that requires a disabled or otherwise unavailable child
@@ -448,7 +448,7 @@ For exact expansion, deduplication, and caller-file precedence, see
 A lead Pi session can use:
 
 ```text
-/agents definitions
+/herdsman-definitions
 ```
 
 or the model can use:
@@ -509,5 +509,5 @@ See [Customizing bundled agents](customizing-agents.md).
 ## See also
 
 - [Agent-definition schema](../reference/agent-definition-schema.md)
-- [`/agents` commands](../reference/commands.md)
+- [`/herdsman` commands](../reference/commands.md)
 - [Configuration](../reference/configuration.md)

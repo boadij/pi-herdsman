@@ -153,7 +153,7 @@ When implementation and prose disagree:
 
 Particularly verify runtime implementation for Agent ownership operations,
 `await_owner`, `notify_owner`, staff and project operations, supervisor and ask operations, peer
-operations, `/agents`, `/manager`, `/chief`, states,
+operations, `/herdsman`, `/manager`, `/chief`, states,
 definition composition, project work, recovery, and presentation behavior.
 
 Use `package.json` for supported Pi versions and package resources.

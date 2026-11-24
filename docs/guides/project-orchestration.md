@@ -37,7 +37,7 @@ Start Pi in the primary workspace of the Herdr worktree group and run:
 /manager
 ```
 
-Optionally, enable `Start Manager automatically` in `/agents` to let new
+Optionally, enable `Start Manager automatically` in `/herdsman` to let new
 eligible sessions in the project's primary workspace attempt Manager startup.
 An ineligible or contended attempt remains an ordinary Lead. Resuming,
 reopening, reloading, or forking an existing Lead does not auto-promote it.
@@ -127,7 +127,7 @@ Lead receives only the fresh Manager instruction without restart.
 
 For paused legacy assignments without usable checkout provenance, an active
 Manager can choose `Forget orphaned assignment…` in the overview or run
-`/manager forget <branch>`. This explicitly relinquishes Manager authority; it
+`/manager-forget <branch>`. This explicitly relinquishes Manager authority; it
 does not delete a checkout, stop execution, or alter Agent ownership. Fresh
 Git/Herdr observations, no matching branch checkout, no known live target
 execution, and exact confirmation are required. The confirmation explains that
@@ -367,13 +367,13 @@ process-level model, extensions, skills, or filesystem environment. Choose a
 separate checkout or process independently when needed; avoid overlapping writers.
 
 For an explicitly requested checkout removal, an active Manager can use
-`/manager remove <branch>` or the `remove_worktree` staff tool. Normally the
+`/manager-remove <branch>` or the `remove_worktree` staff tool. Normally the
 tool records a pending request and returns immediately; review it with
-`/manager remove` or **Project management > Pending removal requests**. The request remains on the active Pi session branch across
+`/manager-remove` or **Project management > Pending removal requests**. The request remains on the active Pi session branch across
 reload and appears in native Pi status; it is intent, not deletion authority.
-The exact bare `/manager remove` opens review, while `/manager remove ` starts
+The exact bare `/manager-remove` opens review, while `/manager-remove ` starts
 branch completion. Removal asks for typed `remove` unless this exact repository
-has been preauthorized by a human with `/manager removal-confirmation skip` or **Settings > Manager & repositories > Confirm worktree removal**. A new grant requires native confirmation. Repository integration permissions are configured separately under **Settings >
+has been preauthorized by a human with `/manager-removal-confirmation skip` or **Settings > Manager & repositories > Confirm worktree removal**. A new grant requires native confirmation. Repository integration permissions are configured separately under **Settings >
 Manager & repositories > Merge accepted branches** and show their effective
 source. Both settings are available without activating Manager when repository
 identity is verified.
@@ -389,7 +389,7 @@ branch and Pi conversation are preserved.
 Run:
 
 ```text
-/manager leave
+/manager-leave
 ```
 
 Leaving Manager mode preserves project assignments. Current Herdr topology is

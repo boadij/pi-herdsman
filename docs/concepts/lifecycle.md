@@ -227,7 +227,7 @@ After normal mailbox cleanup, scoped continuation is allowed only when the
 saved assignment evidence matches its terminal result, or verified closure
 evidence matches the accepted request, exact session, and exact owner on the
 active Pi branch, and the project remains currently authorized. A clean
-`stop_agent` or `/agents stop` may preserve a versioned owner-history receipt for
+`stop_agent` or `/herdsman-stop` may preserve a versioned owner-history receipt for
 explicit exact-session continuation. Stop never automatically restarts an
 Agent. Closing or stopping abandons unfinished work; continuation starts a new
 generation from the saved conversation and does not replay that work.

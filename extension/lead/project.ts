@@ -1130,7 +1130,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     ctx.ui.setStatus(
       "pi-herdsman-removal",
       count
-        ? `${count} worktree removal approval${count === 1 ? "" : "s"} pending · /manager remove`
+        ? `${count} worktree removal approval${count === 1 ? "" : "s"} pending · /manager-remove`
         : undefined,
     );
   };
@@ -5004,14 +5004,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       updateRemovalStatus(ctx);
       if (request === pending)
         ctx.ui.notify(
-          `Worktree removal of ${pending.branch} awaits approval. Review with /manager remove.`,
+          `Worktree removal of ${pending.branch} awaits approval. Review with /manager-remove.`,
           "info",
         );
       return {
         content: [
           {
             type: "text" as const,
-            text: `Removal of ${params.branch} awaits human approval (request ${request.id}). Review it with /manager remove.`,
+            text: `Removal of ${params.branch} awaits human approval (request ${request.id}). Review it with /manager-remove.`,
           },
         ],
         details: {
