@@ -92,6 +92,17 @@ const rules = [
   ],
   ["API token", /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/u],
 ];
+const documentedContainerHomePathExamples = new Map([
+  [
+    "docs/guides/container-deployment.md",
+    [
+      "persistent `/home/herdsman/.ssh` directory",
+      "docker compose exec herdsman cat /home/herdsman/.ssh/id_ed25519.pub",
+      "as under `/home/herdsman`. From",
+      "| `/home/herdsman`        |",
+    ],
+  ],
+]);
 
 for (const entry of files) {
   const path = normalize(entry.path);
@@ -103,7 +114,18 @@ for (const entry of files) {
   const absolute = resolve(root, path);
   const data = readFileSync(absolute);
   if (data.includes(0)) continue;
-  const text = data.toString("utf8");
+  let text = data.toString("utf8");
+  if (path === "docs/guides/container-deployment.md") {
+    const documentedExamples = documentedContainerHomePathExamples.get(path);
+    if (homedir() === "/home/herdsman" && documentedExamples)
+      for (const example of documentedExamples) {
+        if (!text.includes(example))
+          throw new Error(
+            `missing documented container path example: ${example}`,
+          );
+        text = text.replace(example, example.replaceAll("/home/herdsman", ""));
+      }
+  }
   for (const [name, rule] of rules) {
     const matched =
       typeof rule === "string" ? text.includes(rule) : rule.test(text);

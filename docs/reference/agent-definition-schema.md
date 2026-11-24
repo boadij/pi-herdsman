@@ -196,7 +196,7 @@ the selected policy. Manager overlays can be trusted-project or
 global; Chief accepts global overlays only because Chief is workspace-neutral.
 A project-local `chief` definition is rejected with guidance to configure it
 globally instead. Manager and Chief profiles resolve when activated or restored,
-and `/manager refresh` or `/chief refresh` refreshes the active profile after
+and `/manager-refresh` or `/chief-refresh` refreshes the active profile after
 the current turn becomes idle. Invalid
 configuration blocks explicit activation; an invalid profile during verified
 role restoration retains authority but restricts tools to mandatory role tools
@@ -273,7 +273,7 @@ model override takes precedence over the saved selection. With no saved model,
 there is no saved-model comparison to perform.
 
 `enabled` controls Agent-definition availability. A disabled definition remains
-visible in the `/agents definitions` UI so it can be enabled again, but it is
+visible in the `/herdsman-definitions` UI so it can be enabled again, but it is
 omitted from the runtime `agent_definitions` capability summary. A definition
 that requires a disabled or otherwise unavailable child is also omitted from
 that summary. `delegate` and `continue` reject disabled definitions. An already
@@ -609,7 +609,7 @@ enabled: false
 ---
 ```
 
-The `/agents definitions` menu exposes the same enable and disable operations.
+The `/herdsman-definitions` menu exposes the same enable and disable operations.
 Removing the `enabled` line inherits the bundled value; when no source declares
 the field, the effective value is `true`.
 

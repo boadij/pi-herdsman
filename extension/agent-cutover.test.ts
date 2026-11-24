@@ -82,7 +82,9 @@ test("multiplexed coordination tool aliases are absent", async () => {
     pi.tools.some((tool) => tool.name === "worker"),
     false,
   );
-  assert.equal(pi.commands.includes("agents"), true);
+  assert.equal(pi.commands.includes("agents"), false);
+  assert.equal(pi.commands.includes("herdsman"), true);
+  assert.equal(pi.commands.includes("herdsman-version"), true);
   assert.equal(pi.commands.includes("workers"), false);
   assert.equal(
     pi.entryRenderers.some(
@@ -107,11 +109,11 @@ test("multiplexed coordination tool aliases are absent", async () => {
   const context = fakeContext([]) as any;
   context.hasUI = true;
   context.ui.notify = (message: string) => notices.push(message);
-  const command = pi.commandOptions.get("agents");
-  await command.handler("agents", context);
-  assert.deepEqual(notices, [
-    "Usage: /herdsman [version | stats | definitions | placement [tab|subtree|split] | stop]",
-  ]);
+  assert.equal(pi.commands.includes("agents"), false);
+  assert.equal(pi.commands.includes("herdsman"), true);
+  const command = pi.commandOptions.get("herdsman");
+  await command.handler("stats", context);
+  assert.deepEqual(notices, ["Usage: /herdsman"]);
   pi.events.get("session_shutdown")?.[0]();
 });
 

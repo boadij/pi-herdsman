@@ -322,7 +322,7 @@ You are the verified Manager for this Pi session. Supervise eligible Leads in yo
 ${AUTHORITY_GUIDANCE}
 ${INTERNAL_MESSAGE_PROVENANCE_GUIDANCE}
 When replying to Chief or sending material upward coordination, use message_supervisor directly. Chief is not a peer; do not use list_peers or message_peer to contact Chief.
-Project execution belongs to assigned Leads and their Agent trees. Recovery of a Lead's directly owned Agents belongs to that Lead. Coordinate the existing project assignment through the Lead. Do not reconstruct child-Agent ownership or repeatedly request unavailable historical identities. If the Lead reports a verified blocker, resolve only the project-level decision or external action required; otherwise allow the Lead to continue independently authorized work. Coordination messages and reports are nonterminal and do not establish completion. Use remove_worktree only for an explicitly requested checkout-removal action; never infer removal from completion, review, or inactivity. Unless this repository has been explicitly preauthorized by a human, the tool registers a pending approval and returns promptly. Direct the user to /manager remove to review it, then continue unrelated coordination. Do not repeat or poll a pending request; its result is not evidence of removal.
+Project execution belongs to assigned Leads and their Agent trees. Recovery of a Lead's directly owned Agents belongs to that Lead. Coordinate the existing project assignment through the Lead. Do not reconstruct child-Agent ownership or repeatedly request unavailable historical identities. If the Lead reports a verified blocker, resolve only the project-level decision or external action required; otherwise allow the Lead to continue independently authorized work. Coordination messages and reports are nonterminal and do not establish completion. Use remove_worktree only for an explicitly requested checkout-removal action; never infer removal from completion, review, or inactivity. Unless this repository has been explicitly preauthorized by a human, the tool registers a pending approval and returns promptly. Direct the user to /manager-remove to review it, then continue unrelated coordination. Do not repeat or poll a pending request; its result is not evidence of removal.
 Subject to existing writer and authority safeguards, overlapping assignments
 or unanswered coordination messages do not themselves block project work.
 Independent assignments remain independent by default. Potential overlap,
@@ -634,6 +634,42 @@ function registerExtensionImpl(
   pi: ExtensionAPI,
   lockHooks?: TestProjectAssignmentLockHooks,
 ): void {
+  const registerNoArgs = (
+    name: string,
+    description: string,
+    action: (ctx: ExtensionCommandContext) => Promise<void> | void,
+    uiOnly = false,
+  ) => {
+    pi.registerCommand(name, {
+      description,
+      handler: async (rawArgs, ctx) => {
+        if (uiOnly && !ctx.hasUI) return;
+        if (rawArgs.trim()) {
+          ctx.ui.notify(`Usage: /${name}`, "error");
+          return;
+        }
+        await action(ctx);
+      },
+    });
+  };
+  const runHerdsmanAction = async (
+    ctx: ExtensionCommandContext,
+    action: () => Promise<void> | void,
+  ) => {
+    if (!ctx.hasUI) return;
+    try {
+      await action();
+    } catch (error) {
+      ctx.ui.notify(String(error), "error");
+    }
+  };
+  const completeValues = (values: readonly string[], prefix: string) => {
+    const input = prefix.trim();
+    if (/\s/u.test(input)) return [];
+    return values
+      .filter((value) => value.startsWith(input))
+      .map((value) => ({ value, label: value }));
+  };
   let leadRuntimes!: ReturnType<typeof registerLeadRuntime>;
   let leadStatusRuntime: ReturnType<
     typeof registerLeadRuntime
@@ -821,37 +857,29 @@ function registerExtensionImpl(
         renderAgentAttentionMessage(message, { ...options, expanded }, theme),
       ),
   );
+  const showHerdsmanVersion = (ctx: ExtensionCommandContext) => {
+    ctx.ui.notify(
+      formatRuntimeBuildDetails(HERDSMAN_BUILD, HERDSMAN_EXTENSION_PATH),
+    );
+  };
   const processRole = role();
   if (processRole === "unmanaged") {
-    const setupHandler = async (
-      rawArgs: string,
-      ctx: ExtensionCommandContext,
-    ) => {
-      if (!ctx.hasUI) return;
-      const args = rawArgs.trim();
-      if (args === "version") {
+    registerNoArgs(
+      "herdsman",
+      "Set up Pi Herdsman",
+      (ctx) => {
         ctx.ui.notify(
-          formatRuntimeBuildDetails(HERDSMAN_BUILD, HERDSMAN_EXTENSION_PATH),
+          `Pi Herdsman v${HERDSMAN_VERSION} is inactive because this Pi session is not running inside Herdr.\n\nStart Herdr in this project, then run Pi in a Herdr pane:\n  herdr\n  pi\n\nIf needed, install the Pi integration once:\n  herdr integration install pi`,
         );
-        return;
-      }
-      if (args) {
-        ctx.ui.notify("Usage: /herdsman [version]", "error");
-        return;
-      }
-      ctx.ui.notify(
-        `Pi Herdsman v${HERDSMAN_VERSION} is inactive because this Pi session is not running inside Herdr.\n\nStart Herdr in this project, then run Pi in a Herdr pane:\n  herdr\n  pi\n\nIf needed, install the Pi integration once:\n  herdr integration install pi`,
-      );
-    };
-    const setupCommand = {
-      description: "Set up Pi Herdsman",
-      handler: setupHandler,
-    };
-    pi.registerCommand("herdsman", setupCommand);
-    pi.registerCommand("agents", {
-      ...setupCommand,
-      description: "Alias for /herdsman",
-    });
+      },
+      true,
+    );
+    registerNoArgs(
+      "herdsman-version",
+      "Show loaded Herdsman version and fingerprint",
+      showHerdsmanVersion,
+      true,
+    );
     return;
   }
   const controllerScope: ControllerScope | undefined =
@@ -1878,157 +1906,198 @@ function registerExtensionImpl(
       formatSessionUsage,
     };
     if (controllerScope.kind === "root") {
-      pi.registerCommand("lead", {
-        description: "Choose the ordinary Lead execution profile",
-        getArgumentCompletions: (prefix: string) =>
-          (["flexible", "orchestrate"] as const)
-            .filter((value) => value.startsWith(prefix.trim()))
-            .map((value) => ({ value, label: value })),
-        handler: async (rawArgs: string, ctx: ExtensionCommandContext) => {
-          await leadCommandRuntime.runLeadExecutionCommand(rawArgs, ctx);
+      const completeAssignedBranches = (prefix: string) => {
+        const lease = leadRuntime.managerLease;
+        if (!lease) return [];
+        try {
+          const branches = listProjectAssignments(
+            supervisionRuntime(),
+            lease.descriptor.repoKey,
+          ).map(({ branch }) => branch);
+          return completeValues(branches, prefix);
+        } catch {
+          return [];
+        }
+      };
+      registerNoArgs("lead", "Choose Lead execution profile", (ctx) =>
+        leadCommandRuntime.openExecutionMenu(ctx),
+      );
+      registerNoArgs(
+        "lead-flexible",
+        "Select or refresh Flexible Lead profile",
+        (ctx) => leadCommandRuntime.setLeadMode("flexible", ctx),
+      );
+      registerNoArgs(
+        "lead-orchestrate",
+        "Select or refresh Orchestrator Lead profile",
+        (ctx) => leadCommandRuntime.setLeadMode("orchestrate", ctx),
+      );
+      registerNoArgs(
+        "herdsman",
+        "Open Pi Herdsman",
+        (ctx) =>
+          runHerdsmanAction(ctx, () =>
+            leadCommandRuntime.openHerdsmanMenu(ctx),
+          ),
+        true,
+      );
+      registerNoArgs(
+        "herdsman-version",
+        "Show loaded Herdsman version and fingerprint",
+        showHerdsmanVersion,
+        true,
+      );
+      registerNoArgs(
+        "herdsman-stats",
+        "Show session usage and costs",
+        (ctx) =>
+          runHerdsmanAction(ctx, () =>
+            leadCommandRuntime.showSessionStats(ctx),
+          ),
+        true,
+      );
+      registerNoArgs(
+        "herdsman-definitions",
+        "Open agent and coordinator definitions",
+        (ctx) =>
+          runHerdsmanAction(ctx, () =>
+            leadCommandRuntime.openDefinitionsMenu(ctx),
+          ),
+        true,
+      );
+      registerNoArgs(
+        "herdsman-stop",
+        "Emergency stop owned Agent tree",
+        (ctx) =>
+          runHerdsmanAction(ctx, () =>
+            leadCommandRuntime.confirmAndStopAll(ctx),
+          ),
+        true,
+      );
+      pi.registerCommand("herdsman-placement", {
+        description: "Configure agent terminal layout",
+        getArgumentCompletions: (prefix) =>
+          completeValues(["tab", "subtree", "split"], prefix),
+        handler: async (rawArgs, ctx) => {
+          if (!ctx.hasUI) return;
+          const placement = rawArgs.trim();
+          if (!placement) {
+            await runHerdsmanAction(ctx, () =>
+              leadCommandRuntime.openPlacementMenu(ctx),
+            );
+            return;
+          }
+          if (!isSpawnPlacement(placement)) {
+            ctx.ui.notify(
+              "Usage: /herdsman-placement [tab|subtree|split]",
+              "error",
+            );
+            return;
+          }
+          await runHerdsmanAction(ctx, () =>
+            leadCommandRuntime.setPlacement(placement, ctx),
+          );
         },
       });
-      if (process.env.HERDR_PANE_ID)
-        pi.registerCommand("manager", {
+      if (process.env.HERDR_PANE_ID) {
+        for (const role of ["manager", "chief"] as const) {
+          const label = role === "manager" ? "Manager" : "Chief";
+          registerNoArgs(
+            role,
+            `Activate ${label} mode or open overview`,
+            (ctx) => leadCommandRuntime.runRoleCommand(role, "open", ctx),
+          );
+          registerNoArgs(
+            `${role}-refresh`,
+            `Refresh active ${label} profile`,
+            (ctx) => leadCommandRuntime.runRoleCommand(role, "refresh", ctx),
+          );
+          registerNoArgs(`${role}-leave`, `Leave ${label} mode`, (ctx) =>
+            leadCommandRuntime.runRoleCommand(role, "leave", ctx),
+          );
+        }
+        pi.registerCommand("manager-remove", {
           description:
-            "Activate Manager mode, open its overview, refresh its profile, or manage worktrees",
-          getArgumentCompletions: (prefix: string) => {
-            const actions = [
-              "refresh",
-              "leave",
-              "remove",
-              "forget",
-              "removal-confirmation",
-            ];
-            const input = prefix.trimStart();
-            const [command, branchPrefix] = input.split(/\s+/u);
-            if (!command)
-              return actions.map((value) => ({
-                value,
-                label: value,
-              }));
-            if (command === "removal-confirmation")
-              return input.includes(" ") &&
-                input.trim().split(/\s+/u).length <= 2
-                ? ["required", "skip"]
-                    .filter((value) => value.startsWith(branchPrefix ?? ""))
-                    .map((value) => ({
-                      value: `removal-confirmation ${value}`,
-                      label: value,
-                    }))
-                : null;
-            if (command !== "remove" && command !== "forget")
-              return input.includes(" ")
-                ? null
-                : actions
-                    .filter((value) => value.startsWith(command))
-                    .map((value) => ({ value, label: value }));
-            if (input === "remove") return [];
-            if (input.trim().split(/\s+/u).length > 2) return null;
-            const lease = leadRuntime.managerLease;
-            if (!lease) return [];
-            try {
-              return listProjectAssignments(
-                supervisionRuntime(),
-                lease.descriptor.repoKey,
-              )
-                .map(({ branch }) => branch)
-                .filter((branch) => branch.startsWith(branchPrefix ?? ""))
-                .map((branch) => ({
-                  value: `${command} ${branch}`,
-                  label: branch,
-                }));
-            } catch {
-              return [];
-            }
-          },
-          handler: async (rawArgs: string, ctx: ExtensionCommandContext) => {
+            "Review pending removal requests or remove assigned worktree",
+          getArgumentCompletions: completeAssignedBranches,
+          handler: async (rawArgs, ctx) => {
             const args = rawArgs.trim().split(/\s+/u).filter(Boolean);
-            if (args[0] === "removal-confirmation") {
-              if (args.length === 1) {
-                const policy =
-                  await projectRuntime.getRemovalPreauthorization(ctx);
-                ctx.ui.notify(
-                  `Worktree removal approval: ${policy.enabled ? "Skipped" : "Required"} for ${policy.repoKey}.`,
-                  "info",
-                );
-                return;
-              }
-              if (
-                args.length !== 2 ||
-                !["required", "skip"].includes(args[1]!)
-              ) {
-                ctx.ui.notify(
-                  "Usage: /manager removal-confirmation [required|skip]",
-                  "error",
-                );
-                return;
-              }
-              const enabled = args[1] === "skip";
-              const stored = await projectRuntime.setRemovalPreauthorization(
-                enabled,
-                ctx,
-              );
-              ctx.ui.notify(
-                stored
-                  ? `Worktree removal approval: ${enabled ? "Skipped" : "Required"}.`
-                  : "Worktree removal approval setting unchanged.",
-                stored ? "info" : "warning",
-              );
+            if (!args.length) {
+              await reviewPendingRemoval(ctx);
               return;
             }
-            if (args[0] === "remove") {
-              if (args.length === 1) {
-                await reviewPendingRemoval(ctx);
-                return;
-              }
-              if (args.length !== 2) {
-                ctx.ui.notify("Usage: /manager remove <branch>", "error");
-                return;
-              }
-              const result = await projectRuntime.removeWorktree(args[1]!, ctx);
-              ctx.ui.notify(
-                result.content[0]?.text ?? `Removal of ${args[1]} finished.`,
-                result.details.ok ||
-                  ("cancelled" in result.details && result.details.cancelled)
-                  ? "info"
-                  : "warning",
-              );
+            if (args.length !== 1) {
+              ctx.ui.notify("Usage: /manager-remove [branch]", "error");
               return;
             }
-            if (args[0] === "forget") {
-              if (args.length !== 2) {
-                ctx.ui.notify("Usage: /manager forget <branch>", "error");
-                return;
-              }
-              const result = await projectRuntime.forgetLegacyProjectAssignment(
-                args[1]!,
-                ctx,
-              );
-              ctx.ui.notify(
-                result.content[0]?.text ?? `Forget of ${args[1]} finished.`,
-                result.details.ok ||
-                  ("cancelled" in result.details && result.details.cancelled)
-                  ? "info"
-                  : "warning",
-              );
-              return;
-            }
-            await leadCommandRuntime.runRoleCommand("manager", rawArgs, ctx);
+            const result = await projectRuntime.removeWorktree(args[0]!, ctx);
+            ctx.ui.notify(
+              result.content[0]?.text ?? `Removal of ${args[0]} finished.`,
+              result.details.ok ||
+                ("cancelled" in result.details && result.details.cancelled)
+                ? "info"
+                : "warning",
+            );
           },
         });
-      if (process.env.HERDR_PANE_ID)
-        pi.registerCommand("chief", {
-          description:
-            "Activate Chief mode, open its overview, or refresh its profile",
-          getArgumentCompletions: (prefix: string) =>
-            ["refresh", "leave"]
-              .filter((value) => value.startsWith(prefix.trim()))
-              .map((value) => ({ value, label: value })),
-          handler: async (rawArgs: string, ctx: ExtensionCommandContext) => {
-            await leadCommandRuntime.runRoleCommand("chief", rawArgs, ctx);
+        pi.registerCommand("manager-forget", {
+          description: "Forget orphaned project assignment",
+          getArgumentCompletions: completeAssignedBranches,
+          handler: async (rawArgs, ctx) => {
+            const args = rawArgs.trim().split(/\s+/u).filter(Boolean);
+            if (args.length !== 1) {
+              ctx.ui.notify("Usage: /manager-forget <branch>", "error");
+              return;
+            }
+            const result = await projectRuntime.forgetLegacyProjectAssignment(
+              args[0]!,
+              ctx,
+            );
+            ctx.ui.notify(
+              result.content[0]?.text ?? `Forget of ${args[0]} finished.`,
+              result.details.ok ||
+                ("cancelled" in result.details && result.details.cancelled)
+                ? "info"
+                : "warning",
+            );
           },
         });
+        pi.registerCommand("manager-removal-confirmation", {
+          description: "Inspect or change worktree removal approval policy",
+          getArgumentCompletions: (prefix) =>
+            completeValues(["required", "skip"], prefix),
+          handler: async (rawArgs, ctx) => {
+            const args = rawArgs.trim().split(/\s+/u).filter(Boolean);
+            if (!args.length) {
+              const policy =
+                await projectRuntime.getRemovalPreauthorization(ctx);
+              ctx.ui.notify(
+                `Worktree removal approval: ${policy.enabled ? "Skipped" : "Required"} for ${policy.repoKey}.`,
+                "info",
+              );
+              return;
+            }
+            if (args.length !== 1 || !["required", "skip"].includes(args[0]!)) {
+              ctx.ui.notify(
+                "Usage: /manager-removal-confirmation [required|skip]",
+                "error",
+              );
+              return;
+            }
+            const enabled = args[0] === "skip";
+            const stored = await projectRuntime.setRemovalPreauthorization(
+              enabled,
+              ctx,
+            );
+            ctx.ui.notify(
+              stored
+                ? `Worktree removal approval: ${enabled ? "Skipped" : "Required"}.`
+                : "Worktree removal approval setting unchanged.",
+              stored ? "info" : "warning",
+            );
+          },
+        });
+      }
       supervisorTool = {
         name: "message_supervisor",
         label: "message supervisor",
@@ -2365,37 +2434,6 @@ function registerExtensionImpl(
             renderCoordinationResult("staff", "stop", r, o, t, c),
         });
       }
-      const herdsmanCommand = {
-        description: "Open Pi Herdsman",
-        getArgumentCompletions: (argumentPrefix: string) => {
-          const commands = [
-            "version",
-            "stats",
-            "definitions",
-            "placement",
-            "stop",
-          ];
-          const trimmed = argumentPrefix.trimStart();
-          if (!trimmed || !trimmed.includes(" "))
-            return commands
-              .filter((command) => command.startsWith(trimmed))
-              .map((value) => ({ value, label: value }));
-          const parts = trimmed.trim().split(/\s+/u);
-          if (parts[0] !== "placement" || parts.length > 2) return null;
-          const prefix = parts[1] ?? "";
-          return ["tab", "subtree", "split"]
-            .filter((value) => value.startsWith(prefix))
-            .map((value) => ({ value: `placement ${value}`, label: value }));
-        },
-        handler: async (rawArgs: string, ctx: ExtensionCommandContext) => {
-          await leadCommandRuntime.runHerdsmanCommand(rawArgs, ctx);
-        },
-      };
-      pi.registerCommand("herdsman", herdsmanCommand);
-      pi.registerCommand("agents", {
-        ...herdsmanCommand,
-        description: "Alias for /herdsman",
-      });
     }
     if (processRole === "lead") {
       const shutdownOptions = {

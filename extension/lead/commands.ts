@@ -47,7 +47,6 @@ import {
 import {
   collapseDisplayText,
   compactModelToken,
-  formatRuntimeBuildDetails,
   managedExecutionLabel,
   summarizeDefinitionLayerChanges,
   type StatusSnapshot,
@@ -73,7 +72,6 @@ type LeadCommandHost = {
   runHerdr: typeof import("../herdr.ts").runHerdr;
   presentStopSummary(summary: string): void;
   build: RuntimeBuild;
-  extensionPath: string;
   selectMenu(
     ctx: ExtensionContext,
     title: string,
@@ -189,7 +187,6 @@ type LeadCommandHost = {
     label: string,
   ): Promise<string | undefined>;
   updateMessageLimit(key: string, value: number | undefined): void;
-  isSpawnPlacement(value: string): boolean;
   isLead(): boolean;
   buildStatusRows: typeof buildStatusRows;
   renderRunningOptions: typeof renderRunningOptions;
@@ -2469,7 +2466,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         if (!selected) return;
         selectedAction = selected;
         if (selected === "overview" || selected === "start")
-          await this.runRoleCommand(role, "", ctx);
+          await this.runRoleCommand(role, "open", ctx);
         else if (selected === "pending-removals")
           await host.reviewPendingRemoval(ctx);
         else if (selected === "refresh")
@@ -2480,26 +2477,17 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
     },
     async runRoleCommand(
       role: "manager" | "chief",
-      rawArgs: string,
+      action: "open" | "refresh" | "leave",
       ctx: ExtensionCommandContext,
     ): Promise<void> {
-      const args = rawArgs.trim().split(/\s+/u).filter(Boolean);
-      const action = args[0];
-      if (
-        args.length > 1 ||
-        (action && action !== "refresh" && action !== "leave")
-      ) {
-        ctx.ui.notify(`Usage: /${role} [refresh|leave]`, "error");
-        return;
-      }
       try {
-        if (!action && host.roleActive(role)) {
+        if (action === "open" && host.roleActive(role)) {
           await host.openSupervisionOverview(ctx);
           return;
         }
         if (action === "refresh" && !host.roleActive(role)) {
           ctx.ui.notify(
-            `/${role} refresh requires active ${role} mode`,
+            `/${role}-refresh requires active ${role} mode`,
             "error",
           );
           return;
@@ -2509,59 +2497,22 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
       }
     },
-    async runHerdsmanCommand(
-      rawArgs: string,
+    async setPlacement(
+      placement: SpawnPlacement,
       ctx: ExtensionCommandContext,
     ): Promise<void> {
-      if (!ctx.hasUI) return;
-      const usage =
-        "Usage: /herdsman [version | stats | definitions | placement [tab|subtree|split] | stop]";
-      const placementUsage = "Usage: /herdsman placement [tab|subtree|split]";
-      const args = rawArgs.trim() ? rawArgs.trim().split(/\s+/u) : [];
-      try {
-        if (!args.length) return void (await this.openHerdsmanMenu(ctx));
-        if (args[0] === "version" && args.length === 1)
-          return void ctx.ui.notify(
-            formatRuntimeBuildDetails(host.build, host.extensionPath),
-          );
-        if (args[0] === "stats" && args.length === 1)
-          return void (await this.showSessionStats(ctx));
-        if (args[0] === "definitions" && args.length === 1)
-          return void (await this.openDefinitionsMenu(ctx));
-        if (args[0] === "placement") {
-          if (args.length > 2 || (args[1] && !host.isSpawnPlacement(args[1])))
-            return void ctx.ui.notify(placementUsage, "error");
-          if (args.length === 1)
-            return void (await this.openPlacementMenu(ctx));
-          host.updateConfig("spawnPlacement", args[1]);
-          const verified = await host.placementSettings(ctx);
-          if (verified.effective !== args[1])
-            throw new Error(
-              `Agent placement did not become effective: ${verified.effective}`,
-            );
-          return void ctx.ui.notify(`placement: ${verified.effective}`);
-        }
-        if (args[0] === "stop" && args.length === 1)
-          return void (await this.confirmAndStopAll(ctx));
-        ctx.ui.notify(usage, "error");
-      } catch (error) {
-        ctx.ui.notify(String(error), "error");
-      }
+      host.updateConfig("spawnPlacement", placement);
+      const verified = await host.placementSettings(ctx);
+      if (verified.effective !== placement)
+        throw new Error(
+          `Agent placement did not become effective: ${verified.effective}`,
+        );
+      ctx.ui.notify(`placement: ${verified.effective}`);
     },
-    async runLeadExecutionCommand(
-      rawArgs: string,
+    async setLeadMode(
+      mode: LeadExecutionMode,
       ctx: ExtensionCommandContext,
     ): Promise<void> {
-      const args = rawArgs.trim().split(/\s+/u).filter(Boolean);
-      const mode = args[0];
-      if (
-        args.length > 1 ||
-        (mode !== undefined && !isLeadExecutionMode(mode))
-      ) {
-        ctx.ui.notify("Usage: /lead [flexible|orchestrate]", "error");
-        return;
-      }
-      if (mode === undefined) return void (await this.openExecutionMenu(ctx));
       try {
         await host.setLeadExecutionMode(ctx, mode);
         ctx.ui.notify(`Lead execution: ${mode}`);

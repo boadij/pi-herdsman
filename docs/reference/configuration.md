@@ -292,5 +292,5 @@ it needs.
 
 ## See also
 
-- [`/agents` commands](commands.md)
+- [`/herdsman` commands](commands.md)
 - [Getting started](../getting-started.md)

@@ -1095,11 +1095,24 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   const leadContext = fakeContext() as any;
   await lead.events.get("session_start")![0](undefined, leadContext);
   assert.deepEqual(lead.commands.sort(), [
-    "agents",
     "chief",
+    "chief-leave",
+    "chief-refresh",
     "herdsman",
+    "herdsman-definitions",
+    "herdsman-placement",
+    "herdsman-stats",
+    "herdsman-stop",
+    "herdsman-version",
     "lead",
+    "lead-flexible",
+    "lead-orchestrate",
     "manager",
+    "manager-forget",
+    "manager-leave",
+    "manager-refresh",
+    "manager-removal-confirmation",
+    "manager-remove",
   ]);
   assert.deepEqual(
     lead.pi.getActiveTools().sort(),
@@ -1267,20 +1280,18 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   delete process.env.HERDR_PANE_ID;
   const unmanaged = fakePi();
   registerExtension!(unmanaged.pi as never);
-  assert.deepEqual(unmanaged.commands, ["herdsman", "agents"]);
+  assert.deepEqual(unmanaged.commands.sort(), ["herdsman", "herdsman-version"]);
   assert.deepEqual(unmanaged.tools, []);
   assert.equal(unmanaged.events.size, 0);
   const notices: string[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
   context.ui.notify = (message: string) => notices.push(message);
-  const agentsCommand = unmanaged.commandOptions.get("agents");
   const herdsmanCommand = unmanaged.commandOptions.get("herdsman");
-  assert.ok(agentsCommand);
+  const versionCommand = unmanaged.commandOptions.get("herdsman-version");
   assert.ok(herdsmanCommand);
-  assert.equal(agentsCommand.description, "Alias for /herdsman");
+  assert.ok(versionCommand);
   assert.equal(herdsmanCommand.description, "Set up Pi Herdsman");
-  assert.equal(agentsCommand.handler, herdsmanCommand.handler);
   const levels: string[] = [];
   context.ui.notify = (message: string, level?: string) => {
     notices.push(message);
@@ -1296,20 +1307,119 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.match(notices[0]!, /inactive because .*not running inside Herdr/);
   assert.match(notices[0]!, /herdr\n  pi/);
   assert.match(notices[0]!, /herdr integration install pi/);
-  await herdsmanCommand.handler("version extra", context);
-  assert.equal(notices[1], "Usage: /herdsman [version]");
-  await agentsCommand.handler("anything", context);
-  assert.equal(notices[2], notices[1]);
-  assert.deepEqual(levels, ["error", "error"]);
+  await herdsmanCommand.handler("extra", context);
+  assert.equal(notices[1], "Usage: /herdsman");
+  assert.deepEqual(levels, ["error"]);
   const extensionPath = fileURLToPath(new URL("./index.ts", import.meta.url));
-  for (const command of [herdsmanCommand, agentsCommand]) {
-    await command.handler(" version ", context);
+  await versionCommand.handler("", context);
+  assert.equal(
+    notices.at(-1),
+    `Pi Herdsman v${HERDSMAN_BUILD.version} · ${HERDSMAN_BUILD.sha256.slice(0, 12)}\n` +
+      `SHA-256: ${HERDSMAN_BUILD.sha256}\nLoaded extension: ${extensionPath}`,
+  );
+  await versionCommand.handler("version", context);
+  assert.equal(notices.at(-1), "Usage: /herdsman-version");
+});
+
+test("flat command handlers reject obsolete syntax and preserve argument completion boundaries", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "flat-command-pane";
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  const notices: [string, string | undefined][] = [];
+  context.ui.notify = (message: string, level?: string) =>
+    notices.push([message, level]);
+  const invalid: [string, string][] = [
+    ["lead-flexible", "orchestrate"],
+    ["manager", "leave"],
+    ["manager-leave", "extra"],
+    ["manager-remove", "branch extra"],
+    ["manager-forget", ""],
+    ["manager-forget", "branch extra"],
+    ["manager-removal-confirmation", "off"],
+    ["manager-removal-confirmation", "required skip"],
+    ["herdsman-placement", "invalid"],
+    ["herdsman-placement", "tab split"],
+    ["herdsman-stop", "extra"],
+    ["herdsman", "stats"],
+  ];
+  for (const [name, args] of invalid)
+    await pi.commandOptions.get(name)!.handler(args, context);
+  assert.equal(notices.length, invalid.length);
+  assert.ok(
+    notices.every(
+      ([message, level]) => message.startsWith("Usage: /") && level === "error",
+    ),
+  );
+  const beforeWhitespace = notices.length;
+  await pi.commandOptions.get("lead-flexible")!.handler("  ", context);
+  await pi.commandOptions.get("manager-leave")!.handler("  ", context);
+  await pi.commandOptions.get("herdsman-placement")!.handler("  ", context);
+  assert.equal(
+    notices
+      .slice(beforeWhitespace)
+      .some(([message]) => message.startsWith("Usage: /")),
+    false,
+  );
+  for (const name of [
+    "lead",
+    "lead-flexible",
+    "lead-orchestrate",
+    "manager",
+    "manager-refresh",
+    "manager-leave",
+    "chief",
+    "chief-refresh",
+    "chief-leave",
+    "herdsman",
+    "herdsman-version",
+    "herdsman-stats",
+    "herdsman-definitions",
+    "herdsman-stop",
+  ])
     assert.equal(
-      notices.at(-1),
-      `Pi Herdsman v${HERDSMAN_BUILD.version} · ${HERDSMAN_BUILD.sha256.slice(0, 12)}\n` +
-        `SHA-256: ${HERDSMAN_BUILD.sha256}\nLoaded extension: ${extensionPath}`,
+      pi.commandOptions.get(name)?.getArgumentCompletions,
+      undefined,
+      name,
     );
-  }
+  assert.deepEqual(
+    pi.commandOptions.get("herdsman-placement")!.getArgumentCompletions!(""),
+    [
+      { value: "tab", label: "tab" },
+      { value: "subtree", label: "subtree" },
+      { value: "split", label: "split" },
+    ],
+  );
+  assert.deepEqual(
+    pi.commandOptions.get("manager-removal-confirmation")!
+      .getArgumentCompletions!(""),
+    [
+      { value: "required", label: "required" },
+      { value: "skip", label: "skip" },
+    ],
+  );
+  assert.deepEqual(
+    pi.commandOptions.get("manager-remove")!.getArgumentCompletions!(""),
+    [],
+    "completion without Manager authority is empty",
+  );
+  assert.deepEqual(
+    pi.commandOptions.get("manager-remove")!.getArgumentCompletions!(
+      "branch extra",
+    ),
+    [],
+  );
+  assert.deepEqual(
+    pi.commandOptions.get("manager-forget")!.getArgumentCompletions!(
+      "branch extra",
+    ),
+    [],
+  );
+  await pi.events.get("session_shutdown")?.[0]();
+  delete process.env.HERDR_PANE_ID;
+  setLeadEnvironment();
 });
 
 test("managed agents receive no peer tool and Chiefs expose only staff actively", async () => {
@@ -3410,7 +3520,7 @@ test("chief activation reports unresolved mailbox state instead of owned work", 
       ["list_staff", "inspect_staff", "read_staff_transcript", "message_staff"],
       JSON.stringify(notices),
     );
-    await command.handler("leave", context);
+    await pi.commandOptions.get("chief-leave").handler("", context);
     assert.equal(pi.pi.getSessionName(), "Flexible Lead");
     const restoredEvent = {
       systemPrompt: "base",
@@ -4788,7 +4898,7 @@ test("replaced Lead strategy keeps its protected charter and coordination tools"
   try {
     await pi.events.get("session_start")![0](undefined, context);
     const flexibleBranch = [...pi.entries];
-    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    await pi.commandOptions.get("lead-orchestrate").handler("", context);
     assert.equal(pi.pi.getSessionName(), "Orchestrator Lead");
     const orchestrateBranch = [...pi.entries];
     const event = {
@@ -6354,7 +6464,7 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
   try {
     await pi.events.get("session_start")![0](undefined, context);
     assert.equal(pi.pi.getSessionName(), "Flexible Lead");
-    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    await pi.commandOptions.get("lead-orchestrate").handler("", context);
     assert.equal(pi.pi.getSessionName(), "Orchestrator Lead");
     const promptEvent = () => ({
       systemPrompt: "base",
@@ -6555,7 +6665,7 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
       ["Manager"],
       notices.join("\n"),
     );
-    await pi.commandOptions.get("manager").handler("leave", context);
+    await pi.commandOptions.get("manager-leave").handler("", context);
     assert.equal(pi.pi.getSessionName(), "Orchestrator Lead");
     const restoredEvent = promptEvent();
     await invokeBeforeAgentStart(pi, restoredEvent, context);
@@ -6571,7 +6681,7 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
     pi.pi.setSessionName("API");
     await pi.commandOptions.get("manager").handler("", context);
     assert.equal(pi.pi.getSessionName(), "API");
-    await pi.commandOptions.get("manager").handler("leave", context);
+    await pi.commandOptions.get("manager-leave").handler("", context);
     assert.equal(pi.pi.getSessionName(), "API");
   } finally {
     await pi.events.get("session_shutdown")?.[0]();

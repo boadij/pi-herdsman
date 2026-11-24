@@ -8110,7 +8110,7 @@ test("project agent discovery is gated by Pi project trust", async () => {
     );
     pi = fakePi();
     registerExtension!(pi.pi as never);
-    const command = pi.commandOptions.get("agents");
+    const command = pi.commandOptions.get("herdsman-definitions");
     const context = fakeContext() as any;
     context.cwd = project;
     context.hasUI = true;
@@ -8125,7 +8125,7 @@ test("project agent discovery is gated by Pi project trust", async () => {
           : undefined;
       return undefined;
     };
-    await command.handler("definitions", context);
+    await command.handler("", context);
     assert.equal(
       selections.at(-2)?.some((value) => value.includes("project-only")),
       true,
@@ -8142,7 +8142,7 @@ test("project agent discovery is gated by Pi project trust", async () => {
       join(PI_AGENTS_DIR, "scout.md"),
       "---\nname: scout\nmodel: global/model\n---\nglobal",
     );
-    await command.handler("definitions", context);
+    await command.handler("", context);
     const options = selections.at(-2) ?? [];
     assert.ok(
       options.some(
@@ -8163,7 +8163,7 @@ test("project agent discovery is gated by Pi project trust", async () => {
     );
     realFs.rmSync(join(PI_AGENTS_DIR, "project-only.md"), { force: true });
     context.isProjectTrusted = () => false;
-    await command.handler("definitions", context);
+    await command.handler("", context);
     assert.equal(
       selections.at(-2)?.some((value) => value.includes("project-only")),
       false,
@@ -8793,7 +8793,7 @@ test("project-only Definitions edits update the project source", async () => {
   realFs.writeFileSync(projectPath, original);
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman-definitions");
   const context = fakeContext() as any;
   context.cwd = project;
   context.hasUI = true;
@@ -8823,7 +8823,7 @@ test("project-only Definitions edits update the project source", async () => {
     }
   };
   try {
-    await command.handler("definitions", context);
+    await command.handler("", context);
     assert.match(
       realFs.readFileSync(projectPath, "utf8"),
       /^model: provider\/edited-model$/m,
@@ -12544,7 +12544,8 @@ test("registered agent validates duplicate agents and selectors before lifecycle
     duplicate.tools.some((candidate) => candidate.name === "subagent"),
     false,
   );
-  assert.equal(duplicate.commandOptions.has("agents"), true);
+  assert.equal(duplicate.commandOptions.has("agents"), false);
+  assert.equal(duplicate.commandOptions.has("herdsman"), true);
   assert.equal(duplicate.commandOptions.has("subagents"), false);
   const context = fakeContext();
   const duplicateResult = await tool.execute(

@@ -2,37 +2,48 @@
 
 [Documentation index](../README.md)
 
-`/herdsman` is the canonical human discovery and control command. `/agents` is
-an equivalent alias.
+`/herdsman` is the recommended human discovery and control command. Individual
+fixed actions are registered independently, so Pi's native fuzzy command
+palette can discover them without selecting a namespace first. This is separate
+from the structured model-facing Agent tools.
 
-It is separate from the structured model-facing Agent tools.
-
-Management menus require a lead Pi session with UI. Outside Herdr, both
-commands still show setup guidance with no arguments and accept `version`.
+Outside Herdr, `/herdsman` shows setup guidance and `/herdsman-version` reports
+the loaded extension build. Management menus require a root-controller Pi
+session with UI.
 
 ## Usage
 
 ```text
 /herdsman
-/herdsman version
-/herdsman stats
-/herdsman definitions
-/herdsman placement [tab|subtree|split]
-/herdsman stop
-/lead [flexible|orchestrate]
+/herdsman-version
+/herdsman-stats
+/herdsman-definitions
+/herdsman-placement [tab|subtree|split]
+/herdsman-stop
+/lead
+/lead-flexible
+/lead-orchestrate
 /manager
-/manager refresh
-/manager leave
-/manager remove [<branch>]
-/manager removal-confirmation [required|skip]
-/manager forget <branch>
+/manager-refresh
+/manager-leave
+/manager-remove [<branch>]
+/manager-removal-confirmation [required|skip]
+/manager-forget <branch>
 /chief
-/chief refresh
-/chief leave
+/chief-refresh
+/chief-leave
 ```
 
-For the Herdsman commands above, replacing `/herdsman` with `/agents` is
-equivalent. The role commands are separate from these aliases.
+Type `/flex` to discover `/lead-flexible`. Type `/leave` to discover Manager
+and Chief leave commands. Type `/manager` to discover Manager-related actions,
+or `/stats` to discover `/herdsman-stats`. Press Enter to execute a selected
+command; use Tab to complete a command before supplying arguments.
+
+This flat palette is an expert-access path, not a replacement for progressive
+discovery. New users should start with `/herdsman`.
+
+The former `/agents` alias and space-separated subcommand dispatch are not
+registered; fixed actions use hyphenated command names.
 
 `/herdsman` opens the native Pi menu titled with the loaded Pi Herdsman version
 and the first 12 characters of its SHA-256 fingerprint. Ordinary Leads see six
@@ -54,10 +65,10 @@ Selecting it opens the same selector as `/lead`. For a dedicated Managed Lead,
 `/lead` instead shows `managed`, `managed · unavailable`, or `managed · retired`
 according to verified assignment evidence, and offers no ordinary mode choices.
 
-`/lead` directly opens the Lead mode selector. `/lead flexible` and `/lead orchestrate`
+`/lead` directly opens the Lead mode selector. `/lead-flexible` and `/lead-orchestrate`
 select that mode directly; repeating the current mode explicitly refreshes its
 effective definition. Ordinary mode changes are persisted for the current
-session. Managed Leads reject `/lead flexible` and `/lead orchestrate`, and
+session. Managed Leads reject `/lead-flexible` and `/lead-orchestrate`, and
 cannot activate Manager or Chief, including after retirement. Use native Pi
 `/fork` or `/clone` for a new ordinary session with copied history, not a
 separate Git checkout or fresh process configuration. In Manager or Chief mode, `/lead` changes the
@@ -137,15 +148,15 @@ and `Coordination messages`. The Settings row shows exact sizes; detailed
 selectors also show rough token equivalents using four UTF-8 bytes per token.
 The enforced limits are bytes, not tokens.
 
-## `/herdsman version`
+## `/herdsman-version`
 
-`/herdsman version` (or `/agents version`) shows the version, short fingerprint,
+`/herdsman-version` shows the version, short fingerprint,
 full SHA-256 fingerprint, and path of the extension loaded by this Pi process.
 It also works outside Herdr with an interactive UI. The fingerprint identifies
 the extension file at load time, not a Git commit or a newer artifact installed
 since then.
 
-## `/herdsman stats`
+## `/herdsman-stats`
 
 Shows accumulated Pi-native token usage and cost for the current Pi session plus
 transitively owned managed-Agent Pi sessions whose exact persisted identity can
@@ -174,7 +185,7 @@ Lead's Agent tree. Manager aggregation uses the scope-specific warning
 `Coverage incomplete: some managed project session usage is unavailable.`
 Ordinary usage retains its owned-session warning.
 
-## `/herdsman definitions`
+## `/herdsman-definitions`
 
 Opens the native `Agents & Coordinators` category menu with `Agent definitions` and
 `Coordinator profiles`. Each category lists effective definitions; reserved profiles
@@ -192,7 +203,7 @@ delegation targets. Manager/Chief profiles may nevertheless list ordinary
 Agent definitions in `agents` to authorize their own direct delegation.
 Runtime profiles support `Details` only;
 `managed-lead` supports `Model`, `Thinking`, and `Details`, but has no `Enabled`
-action. Use `/manager refresh` or `/chief refresh` to validate and apply the
+action. Use `/manager-refresh` or `/chief-refresh` to validate and apply the
 active role's definition. Definition files are not watched while a profile is
 active.
 
@@ -239,7 +250,7 @@ alongside live Agent records. It omits definition source paths and raw
 configuration. Use the Definitions UI for full configuration details and
 source paths; explicitly provisioned skill paths remain in the skills summary.
 
-`/herdsman definitions` does not probe runtime tool availability.
+`/herdsman-definitions` does not probe runtime tool availability.
 
 Selecting an ordinary Agent definition opens:
 
@@ -299,24 +310,23 @@ Pi Herdsman refreshes and verifies the exact label, pane, and session identity
 before issuing herdr's focus command. If the agent changed, no focus command
 is sent.
 
-## `/herdsman placement`
+## `/herdsman-placement`
 
 Selecting `Settings` → `Interface` → `Agent terminal layout` opens a native selector showing the effective setting.
 When unset, the effective setting is `subtree`.
 Explicit values continue to set directly:
 
 ```text
-/herdsman placement tab
-/herdsman placement subtree
-/herdsman placement split
+/herdsman-placement tab
+/herdsman-placement subtree
+/herdsman-placement split
 ```
 
 See [Configuration](configuration.md).
 
-## `/herdsman stop`
+## `/herdsman-stop`
 
-Destructive lead-only emergency control. The same operation is available as
-`/agents stop` through the alias.
+Destructive lead-only emergency control.
 
 It aborts the current lead turn and attempts to close the exactly proven owned
 agent tree.
@@ -373,13 +383,13 @@ does not abandon the session's directly owned Agent work.
 
 A restored Manager uses the same profile,
 supervision UI, context, and applicable ownership/recovery access as explicit
-activation. `/manager leave` preserves project work
+activation. `/manager-leave` preserves project work
 and is refused only when a Lead is waiting for this Manager's answer or the
 Manager's own ask to Chief remains pending; otherwise it
 relinquishes the lease and restores the exact Lead tool baseline, including
 `agent`, and Lead instruction profile. Invoking `/manager` while already active
 opens the overview without refreshing the profile or waiting for the current
-turn to become idle. `/manager refresh` revalidates and applies the active
+turn to become idle. `/manager-refresh` revalidates and applies the active
 Manager definition after the current turn becomes idle; a failed refresh keeps
 the previous profile. Refresh requires active Manager mode.
 Manager definitions accept trusted project and global overlays; omitted fields
@@ -404,7 +414,7 @@ The Manager overview lists branch-based work, including paused work whose Lead
 is no longer running. It offers resume for paused work and focus or stop for a
 live assigned Lead, plus `Remove worktree…` for assigned projects including
 paused work. This uses the same explicitly confirmed removal operation as
-`/manager remove <branch>`; it preserves the Git branch and Pi conversation.
+`/manager-remove <branch>`; it preserves the Git branch and Pi conversation.
 Running managed execution may be stopped, and assignment retirement is
 reported separately from checkout removal. Manager staff reports include
 eligible live Leads in its verified worktree group; exact current assignments
@@ -417,7 +427,7 @@ assignment cannot be resumed, though new work may use the remaining Git branch.
 
 For a legacy assignment with no usable checkout provenance, the Manager
 overview also offers `Forget orphaned assignment…` for paused work. The direct
-command is `/manager forget <branch>`. This releases Manager authority only; it
+command is `/manager-forget <branch>`. This releases Manager authority only; it
 does not remove a worktree, stop a process, or change Agent ownership. The
 operation requires fresh Git/Herdr observations, no checkout on the branch, no
 known live target execution, and typing `forget <branch>` to acknowledge that
@@ -428,10 +438,10 @@ action is not authorized by worktree-removal preapproval.
 An active Manager can remove an assigned project checkout with:
 
 ```text
-/manager remove <branch>
+/manager-remove <branch>
 ```
 
-Use `/manager remove` without a branch to review a pending model-requested
+Use `/manager-remove` without a branch to review a pending model-requested
 removal. Pressing Enter on the exact bare command opens review without branch
 completion; adding a space begins branch completion. Pending review appears in
 native Pi status and survives `/reload` of the same session. Approval still
@@ -439,7 +449,7 @@ uses the exact typed word `remove` unless the current repository has been
 explicitly preauthorized by a human.
 
 An interactive user can inspect or change repository-scoped removal approval with
-`/manager removal-confirmation [required|skip]` or `Settings` →
+`/manager-removal-confirmation [required|skip]` or `Settings` →
 `Manager & repositories` → `Confirm worktree removal`, without activating Manager.
 A verified repository identity is required. `skip` requests a native confirmation naming the
 verified repository; `required` restores per-removal confirmation immediately.
@@ -449,17 +459,17 @@ repository source. Granting increased integration
 authority, including through inheritance, or creating a positive repository
 override requires confirmation.
 
-This command does not activate Manager mode. Completion suggests `leave`,
-`remove`, `forget`, and `removal-confirmation`, with `required` and `skip` after
-the latter; assigned branches are suggested after `remove ` and `forget ` (with a
-trailing space), not after the exact bare commands. Suggestions are advisory and
-are not required. Before removal, the shared operation verifies the exact assignment
-and linked checkout, checks that the checkout is clean, and asks for interactive
-confirmation. Type `remove` to confirm. Running owned project execution may be
-stopped and will not be automatically restarted if a later removal step fails.
-Herdr removes the checkout without force; the Git branch and Pi conversation
-remain, and the confirmation explains that the assignment is retired only
-after authoritative removal is verified. Cancellation makes no changes.
+These Manager-specific commands do not activate Manager mode. Argument
+completion is advisory: `manager-remove` and `manager-forget` suggest assigned
+branch names, and `manager-removal-confirmation` suggests `required` and
+`skip`. Suggestions do not authorize execution. Before removal, the shared
+operation verifies the exact assignment and linked checkout, checks that the
+checkout is clean, and asks for interactive confirmation. Type `remove` to
+confirm. Running owned project execution may be stopped and will not be
+automatically restarted if a later removal step fails. Herdr removes the
+checkout without force; the Git branch and Pi conversation remain, and the
+confirmation explains that the assignment is retired only after authoritative
+removal is verified. Cancellation makes no changes.
 
 The native multiline confirmation identifies the branch and absolute checkout
 path, separates what is removed from what is preserved, and requires the exact
@@ -483,11 +493,11 @@ configuration. See
 
 An eligible ordinary Lead can activate runtime Chief mode with `/chief`.
 While Chief, `/chief` opens the overview without refreshing the profile or
-waiting for the current turn to become idle. `/chief refresh` revalidates and
+waiting for the current turn to become idle. `/chief-refresh` revalidates and
 applies the active Chief definition after the current turn becomes idle; a
 failed refresh keeps the previous profile. Refresh requires active Chief mode.
 Chief accepts global definition overrides only and defaults to staff
-coordination tools. `/chief leave` exits the mode.
+coordination tools. `/chief-leave` exits the mode.
 A Manager cannot activate Chief. Chief's staff roster contains active
 Managers and ordinary Leads without an active project Manager. Ordinary Leads
 in a Manager's verified worktree group appear under that Manager instead. A

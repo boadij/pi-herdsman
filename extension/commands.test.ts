@@ -914,7 +914,7 @@ test("managed identity survives tree and assignment loss while native new-sessio
   branch = [];
   await pi.events.get("session_tree")![0](undefined, context);
   assert.equal(readSessionKind(entries, sessionId)?.kind, "managed");
-  await pi.commandOptions.get("lead").handler("flexible", context);
+  await pi.commandOptions.get("lead-flexible").handler("", context);
   assert.ok(notices.some((message) => message.includes("Managed Leads")));
   removeProjectAssignment(
     supervisionRuntime(),
@@ -967,7 +967,7 @@ test("managed identity survives tree and assignment loss while native new-sessio
   );
   assert.equal(pi.pi.getActiveTools().includes("list_staff"), false);
   assert.equal(pi.pi.getActiveTools().includes("bash"), false);
-  await pi.commandOptions.get("lead").handler("flexible", context);
+  await pi.commandOptions.get("lead-flexible").handler("", context);
   assert.equal(sessionLeadExecutionState(entries, sessionId)?.mode, "flexible");
   const ordinaryId = sessionId;
   writeProjectAssignment(supervisionRuntime(), {
@@ -1161,7 +1161,7 @@ test("known managed identity remains unavailable and recovery-only when startup 
     [],
     "uncertain scope grants neither fresh work nor global peer/supervisor tools",
   );
-  await pi.commandOptions.get("lead")!.handler("flexible", context);
+  await pi.commandOptions.get("lead-flexible")!.handler("", context);
   assert.ok(
     notices.some((message) => message.includes("Managed Leads")),
     "managed sessions cannot select an ordinary execution profile",
@@ -1377,7 +1377,7 @@ test("ordinary Lead profile switches retain the saved tool baseline", async () =
       new Set(pi.pi.getActiveTools()),
       new Set([...baseline, ...leadToolsWithSkill]),
     );
-    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    await pi.commandOptions.get("lead-orchestrate").handler("", context);
     assert.deepEqual(
       new Set(pi.pi.getActiveTools()),
       new Set(leadToolsWithSkill),
@@ -1385,7 +1385,7 @@ test("ordinary Lead profile switches retain the saved tool baseline", async () =
     const persisted = sessionLeadExecutionState(entries);
     assert.equal(persisted?.mode, "orchestrate");
     assert.deepEqual(persisted?.leadTools, [...baseline]);
-    await pi.commandOptions.get("lead").handler("flexible", context);
+    await pi.commandOptions.get("lead-flexible").handler("", context);
     assert.deepEqual(
       new Set(pi.pi.getActiveTools()),
       new Set([...baseline, ...leadToolsWithSkill]),
@@ -1430,7 +1430,7 @@ test("ordinary mode activation rolls back state and tools when projection fails"
       if (!tools.includes("read")) throw new Error("target projection failed");
       setActiveTools(tools);
     };
-    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    await pi.commandOptions.get("lead-orchestrate").handler("", context);
     assert.ok(
       notices.some((message) => message.includes("target projection failed")),
     );
@@ -1461,7 +1461,7 @@ test("ordinary mode persistence rollback restores inherited tool tracking", asyn
     await pi.events.get("session_start")![0](undefined, context);
     const notices: string[] = [];
     context.ui.notify = (message: string) => notices.push(message);
-    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    await pi.commandOptions.get("lead-orchestrate").handler("", context);
     assert.ok(
       notices.some((message) => message.includes("mode persistence failed")),
     );
@@ -1514,7 +1514,7 @@ test("failed ordinary mode rollback invalidates execution and fails closed", asy
       if (calls <= 2) throw new Error("projection failed");
       setActiveTools(tools);
     };
-    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    await pi.commandOptions.get("lead-orchestrate").handler("", context);
     assert.ok(notices.some((message) => message.includes("projection failed")));
     assert.deepEqual(pi.pi.getActiveTools(), leadToolsWithoutAgents);
     assert.deepEqual(sessionLeadExecutionState(entries)?.mode, "flexible");
@@ -1554,8 +1554,8 @@ test("a restricted Flexible definition cannot replace the ordinary tool baseline
       new Set(pi.pi.getActiveTools()),
       new Set(["read", ...leadToolsWithSkill]),
     );
-    await pi.commandOptions.get("lead").handler("orchestrate", context);
-    await pi.commandOptions.get("lead").handler("flexible", context);
+    await pi.commandOptions.get("lead-orchestrate").handler("", context);
+    await pi.commandOptions.get("lead-flexible").handler("", context);
     assert.deepEqual(
       new Set(pi.pi.getActiveTools()),
       new Set(["read", ...leadToolsWithSkill]),
@@ -1831,7 +1831,7 @@ test("session tree navigation restores each branch's execution mode, baseline, a
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, context);
-    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    await pi.commandOptions.get("lead-orchestrate").handler("", context);
     branch = branchEntry("flexible", ["read", "bash"]);
     await pi.events.get("session_tree")![0](undefined, context);
     assert.deepEqual(pi.pi.getActiveTools(), [
@@ -2009,7 +2009,7 @@ test("session tree restoration respects checkpoint order and tool policies", asy
         );
         assert.equal(pi.entries.length, entriesBefore);
         if ("extraTools" in scenario) {
-          await pi.commandOptions.get("lead").handler("orchestrate", context);
+          await pi.commandOptions.get("lead-orchestrate").handler("", context);
           assert.deepEqual(sessionLeadExecutionState(pi.entries)?.leadTools, [
             "read",
             "history",
@@ -2020,8 +2020,8 @@ test("session tree restoration respects checkpoint order and tool policies", asy
             join(cwd, ".pi", "coordinators", "flexible-lead.md"),
             "---\nname: flexible-lead\n---\nflexible\n",
           );
-          await pi.commandOptions.get("lead").handler("orchestrate", context);
-          await pi.commandOptions.get("lead").handler("flexible", context);
+          await pi.commandOptions.get("lead-orchestrate").handler("", context);
+          await pi.commandOptions.get("lead-flexible").handler("", context);
           assert.deepEqual(
             new Set(pi.pi.getActiveTools()),
             new Set(["read", "bash", "history", ...leadToolsWithSkill]),
@@ -2107,7 +2107,7 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, context);
-    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    await pi.commandOptions.get("lead-orchestrate").handler("", context);
     assert.deepEqual(pi.pi.getActiveTools(), leadToolsWithSkill);
     await pi.commandOptions.get("manager").handler("", context);
     assert.deepEqual(pi.pi.getActiveTools(), managerTools);
@@ -2164,13 +2164,13 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
       targetLease.release();
       removePeerLeadRecord(peerRuntime(), targetId);
     }
-    await pi.commandOptions.get("lead").handler("flexible", context);
+    await pi.commandOptions.get("lead-flexible").handler("", context);
     assert.deepEqual(pi.pi.getActiveTools(), managerTools);
     assert.deepEqual(sessionLeadExecutionState(pi.entries), {
       mode: "flexible",
       leadTools: [...baseline],
     });
-    await pi.commandOptions.get("manager").handler("leave", context);
+    await pi.commandOptions.get("manager-leave").handler("", context);
     assert.deepEqual(pi.pi.getActiveTools(), [
       ...baseline,
       ...leadToolsWithSkill,
@@ -2186,7 +2186,7 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
       "history",
       "notes",
     ]);
-    await pi.commandOptions.get("manager").handler("leave", context);
+    await pi.commandOptions.get("manager-leave").handler("", context);
     assert.deepEqual(pi.pi.getActiveTools(), [
       ...baseline,
       "history",
@@ -2197,7 +2197,7 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
     await pi.commandOptions.get("manager").handler("", context);
     assert.deepEqual(pi.pi.getActiveTools(), ["read", ...managerTools]);
     writeFileSync(managerOverride, "---\nname: manager\ntools: []\n---\n");
-    await pi.commandOptions.get("manager").handler("refresh", context);
+    await pi.commandOptions.get("manager-refresh").handler("", context);
     assert.deepEqual(pi.pi.getActiveTools(), managerTools);
     let releaseIdle!: () => void;
     let markWaiting!: () => void;
@@ -2210,10 +2210,10 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
       await idle;
     };
     const refresh = pi.commandOptions
-      .get("manager")
-      .handler("refresh", context);
+      .get("manager-refresh")
+      .handler("", context);
     await waiting;
-    await pi.commandOptions.get("manager").handler("leave", context);
+    await pi.commandOptions.get("manager-leave").handler("", context);
     assert.deepEqual(pi.pi.getActiveTools(), [
       ...baseline,
       "history",
@@ -2285,7 +2285,7 @@ test("registered Manager turn_end adapter reconciles late tools in the live poli
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, context);
-    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    await pi.commandOptions.get("lead-orchestrate").handler("", context);
     const ordinaryBaseline = pi.pi.getActiveTools();
     await pi.commandOptions.get("manager").handler("", context);
 
@@ -2309,7 +2309,7 @@ test("registered Manager turn_end adapter reconciles late tools in the live poli
       managerOverride,
       "---\nname: manager\ntools: [mcp__forgejo__get_issue_by_index]\n---\n",
     );
-    await pi.commandOptions.get("manager").handler("refresh", context);
+    await pi.commandOptions.get("manager-refresh").handler("", context);
     pi.pi.registerTool({ name: "mcp__forgejo__get_issue_by_index" });
     await invokeEventHandlers(pi, "before_agent_start")(
       { systemPromptOptions: { sections: {} } },
@@ -2328,7 +2328,7 @@ test("registered Manager turn_end adapter reconciles late tools in the live poli
     );
     const validTools = pi.pi.getActiveTools();
     writeFileSync(managerOverride, "---\nname: manager\ntools: invalid\n---\n");
-    await pi.commandOptions.get("manager").handler("refresh", context);
+    await pi.commandOptions.get("manager-refresh").handler("", context);
     assert.deepEqual(pi.pi.getActiveTools(), validTools);
 
     pi.pi.registerTool({ name: "late_during_continuation" });
@@ -2339,7 +2339,7 @@ test("registered Manager turn_end adapter reconciles late tools in the live poli
     await invokeEventHandlers(pi, "turn_end")({}, context);
     assert.ok(!pi.pi.getActiveTools().includes("late_during_continuation"));
     assert.equal(sessionLeadRoleState(pi.entries)?.role, "manager");
-    await pi.commandOptions.get("manager").handler("leave", context);
+    await pi.commandOptions.get("manager-leave").handler("", context);
     assert.deepEqual(pi.pi.getActiveTools(), ordinaryBaseline);
     assert.ok(!pi.pi.getActiveTools().includes("late_unallowed"));
     assert.ok(!pi.pi.getActiveTools().includes("late_during_continuation"));
@@ -2400,8 +2400,8 @@ test("ordinary Leads deliver peer messages across non-Git sockets", async (t) =>
         undefined,
         fixtures[index]!.context,
       );
-      await fixtures[index]!.pi.commandOptions.get("lead").handler(
-        "orchestrate",
+      await fixtures[index]!.pi.commandOptions.get("lead-orchestrate").handler(
+        "",
         fixtures[index]!.context,
       );
     }
@@ -2557,7 +2557,7 @@ test("Chief discovers and exchanges messages with a non-Git ordinary Lead", asyn
     setEnvironment(lead);
     registerExtension!(leadPi.pi as never);
     await leadPi.events.get("session_start")![0](undefined, leadCtx);
-    await leadPi.commandOptions.get("lead").handler("orchestrate", leadCtx);
+    await leadPi.commandOptions.get("lead-orchestrate").handler("", leadCtx);
     assert.equal(
       readPeerLeadRecord(runtime, lead.sessionId)?.sessionKind,
       "ordinary",
@@ -2960,8 +2960,8 @@ test("Manager peer messages deliver to a live Manager without changing its role"
       fixture.context,
     );
     await fixture.pi.commandOptions
-      .get("lead")
-      .handler("orchestrate", fixture.context);
+      .get("lead-orchestrate")
+      .handler("", fixture.context);
     await fixture.pi.commandOptions.get("manager").handler("", fixture.context);
     assert.ok(
       fixture.pi.pi.getActiveTools().includes("list_staff"),
@@ -3206,7 +3206,7 @@ test("Chief transitions and mode changes preserve the ordinary Lead baseline", a
   try {
     await pi.events.get("session_start")![0](undefined, context);
     await t.waitFor(() => assert.equal(tabLabel, "Lead"));
-    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    await pi.commandOptions.get("lead-orchestrate").handler("", context);
     await pi.commandOptions.get("chief").handler("", context);
     await t.waitFor(() => assert.equal(tabLabel, "Chief"));
     assert.deepEqual(tabRenames, ["Lead", "Chief"]);
@@ -3215,13 +3215,13 @@ test("Chief transitions and mode changes preserve the ordinary Lead baseline", a
       ["tab", "rename", "chief-baseline-tab", "Chief"],
     ]);
     assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
-    await pi.commandOptions.get("lead").handler("flexible", context);
+    await pi.commandOptions.get("lead-flexible").handler("", context);
     assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
     assert.deepEqual(sessionLeadExecutionState(pi.entries), {
       mode: "flexible",
       leadTools: [...baseline],
     });
-    await pi.commandOptions.get("chief").handler("leave", context);
+    await pi.commandOptions.get("chief-leave").handler("", context);
     await t.waitFor(() => assert.equal(tabLabel, "Lead"));
     assert.deepEqual(tabRenames, ["Lead", "Chief", "Lead"]);
     assert.deepEqual(renameArgs.at(-1), [
@@ -3296,7 +3296,7 @@ test("persisted Chief restores the saved ordinary execution profile on exit", as
       setActiveTools(next);
     };
 
-    await pi.commandOptions.get("chief").handler("leave", context);
+    await pi.commandOptions.get("chief-leave").handler("", context);
 
     assert.deepEqual(pi.pi.getActiveTools(), restoredTools);
     assert.deepEqual(sessionLeadExecutionState(entries), {
@@ -3507,7 +3507,7 @@ test("session stats sums Pi usage entries and proven nested sessions once", asyn
   const notices: string[] = [];
   context.ui.notify = (message: string) => notices.push(message);
   try {
-    await pi.commandOptions.get("agents").handler("stats", context);
+    await pi.commandOptions.get("herdsman-stats").handler("", context);
     assert.match(
       notices[0]!,
       /Current session[\s\S]*Input\s+48[\s\S]*Total\s+53[\s\S]*Cost\s+\$0\.180/,
@@ -3533,7 +3533,7 @@ test("session stats sums Pi usage entries and proven nested sessions once", asyn
       nestedPath,
       nativeSessions.get(nestedPath)!.entries!,
     );
-    await pi.commandOptions.get("agents").handler("stats", context);
+    await pi.commandOptions.get("herdsman-stats").handler("", context);
     assert.match(notices[1]!, /Managed agents · 1 session/);
     assert.match(notices[1]!, /Coverage incomplete/);
   } finally {
@@ -3718,7 +3718,7 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
     SessionManager.listAll = async () => {
       throw new Error("global inventory must not be touched by Manager stats");
     };
-    await manager.commandOptions.get("agents").handler("stats", context);
+    await manager.commandOptions.get("herdsman-stats").handler("", context);
     assert.match(notices[1]!, /Managed Leads · 2 sessions[\s\S]*Input\s+16/);
     assert.match(notices[1]!, /Managed agents · 2 sessions[\s\S]*Input\s+20/);
     assert.match(notices[1]!, /Total\s+38/);
@@ -3750,7 +3750,7 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
       text: "branch-a-alias",
       piSessionFile: conflictPath,
     });
-    await manager.commandOptions.get("agents").handler("stats", context);
+    await manager.commandOptions.get("herdsman-stats").handler("", context);
     assert.match(notices.at(-1)!, /Coverage incomplete/);
     assert.doesNotMatch(notices.at(-1)!, /Input\s+99/);
     nativeSessions.delete(conflictPath);
@@ -3770,7 +3770,7 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
       branch: "branch-b",
       text: "branch-b",
     });
-    await manager.commandOptions.get("agents").handler("stats", context);
+    await manager.commandOptions.get("herdsman-stats").handler("", context);
     assert.match(notices.at(-1)!, /Managed Leads · 1 session[\s\S]*Input\s+5/);
     assert.match(notices.at(-1)!, /Managed agents · 1 session[\s\S]*Input\s+7/);
     assert.match(
@@ -3800,7 +3800,7 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
       paths[leadB]!,
       nativeSessions.get(paths[leadB]!)!.entries ?? [],
     );
-    await manager.commandOptions.get("agents").handler("stats", context);
+    await manager.commandOptions.get("herdsman-stats").handler("", context);
     assert.match(notices.at(-1)!, /Coverage incomplete/);
     assert.doesNotMatch(notices.at(-1)!, /Managed Leads · 2 sessions/);
 
@@ -3842,7 +3842,7 @@ test("session stats marks malformed owned assignment receipts incomplete", async
   const notices: string[] = [];
   context.ui.notify = (message: string) => notices.push(message);
   try {
-    await pi.commandOptions.get("agents").handler("stats", context);
+    await pi.commandOptions.get("herdsman-stats").handler("", context);
     assert.match(notices[0]!, /Managed agents · 0 sessions/);
     assert.match(notices[0]!, /Coverage incomplete/);
   } finally {
@@ -3873,7 +3873,7 @@ test("session stats marks malformed owned completed results incomplete", async (
   const notices: string[] = [];
   context.ui.notify = (message: string) => notices.push(message);
   try {
-    await pi.commandOptions.get("agents").handler("stats", context);
+    await pi.commandOptions.get("herdsman-stats").handler("", context);
     assert.match(notices[0]!, /Managed agents · 0 sessions/);
     assert.match(notices[0]!, /Coverage incomplete/);
   } finally {
@@ -4464,8 +4464,8 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     deferNextLeadRename = true;
     const leaveWithDelayedRename = first.commandOptions
-      .get("manager")
-      .handler("leave", ctx1);
+      .get("manager-leave")
+      .handler("", ctx1);
     await t.waitFor(() => assert.equal(deferredLeadRenameDidStart, true));
     await leaveWithDelayedRename;
     const reenterManager = first.commandOptions
@@ -4478,8 +4478,8 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     const tabListsBeforeStaleRead = tabListCalls;
     deferNextPaneGet = true;
     const leaveWithDelayedRead = first.commandOptions
-      .get("manager")
-      .handler("leave", ctx1);
+      .get("manager-leave")
+      .handler("", ctx1);
     await t.waitFor(() => assert.equal(deferredPaneGetDidStart, true));
     await leaveWithDelayedRead;
     const reenterAfterStaleRead = first.commandOptions
@@ -4823,7 +4823,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       managerLeaseId,
     );
     assert.deepEqual(first.pi.getActiveTools(), activeManagerTools);
-    await first.commandOptions.get("manager").handler("leave", ctx1);
+    await first.commandOptions.get("manager-leave").handler("", ctx1);
     const leadMetadata = metadataReports
       .slice()
       .reverse()
@@ -5135,7 +5135,7 @@ test("Manager leave retains its lease and role when persistence fails", async ()
         throw new Error("injected pending removal invalidation failure");
       originalAppendForRemoval(type, data);
     };
-    await pi.commandOptions.get("manager").handler("leave", ctx);
+    await pi.commandOptions.get("manager-leave").handler("", ctx);
     pi.pi.appendEntry = originalAppendForRemoval;
     assert.ok(
       notices.some((message) =>
@@ -5161,7 +5161,7 @@ test("Manager leave retains its lease and role when persistence fails", async ()
         }
         originalAppend(type, data);
       };
-      await pi.commandOptions.get("manager").handler("leave", ctx);
+      await pi.commandOptions.get("manager-leave").handler("", ctx);
       pi.pi.appendEntry = originalAppend;
       assert.equal(failed, true, notices.join("; "));
       assert.ok(
@@ -5181,7 +5181,7 @@ test("Manager leave retains its lease and role when persistence fails", async ()
       );
       assert.deepEqual(pi.pi.getActiveTools(), managerTools);
     }
-    await pi.commandOptions.get("manager").handler("leave", ctx);
+    await pi.commandOptions.get("manager-leave").handler("", ctx);
     assert.equal(
       readManagerDescriptor(supervisionRuntime(), WORKSPACE),
       undefined,
@@ -5201,7 +5201,7 @@ test("Manager leave retains its lease and role when persistence fails", async ()
         throw new Error("role storage unavailable");
       originalAppend(type, data);
     };
-    await pi.commandOptions.get("manager").handler("leave", ctx);
+    await pi.commandOptions.get("manager-leave").handler("", ctx);
     pi.pi.appendEntry = originalAppend;
     assert.equal(
       readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.leaseId,
@@ -5282,7 +5282,7 @@ test("Manager leave suspends authority when lease release fails", async () => {
         realFs.writeFileSync(join(lock, owner), "{}");
     };
 
-    await pi.commandOptions.get("manager").handler("leave", ctx);
+    await pi.commandOptions.get("manager-leave").handler("", ctx);
 
     assert.ok(
       notices.some((message) =>
@@ -9447,7 +9447,7 @@ test("pending removal intent restores from the active session branch and rejects
   );
   assert.match(
     String(fixture.statusUpdates.at(-1)?.[1]),
-    /1 worktree removal approval pending.*\/manager remove/,
+    /1 worktree removal approval pending.*\/manager-remove/,
   );
   fixture.sessionEntries.push(
     {
@@ -11272,62 +11272,45 @@ async function managerDelegateAssignmentTest(
     );
     assert.equal(assignment?.id, childSession);
     const managerCommand = pi.commandOptions.get("manager")!;
-    assert.deepEqual(managerCommand.getArgumentCompletions(""), [
-      { value: "refresh", label: "refresh" },
-      { value: "leave", label: "leave" },
-      { value: "remove", label: "remove" },
-      { value: "forget", label: "forget" },
-      { value: "removal-confirmation", label: "removal-confirmation" },
+    assert.equal(managerCommand.getArgumentCompletions, undefined);
+    const removeCommand = pi.commandOptions.get("manager-remove")!;
+    const forgetCommand = pi.commandOptions.get("manager-forget")!;
+    const policyCommand = pi.commandOptions.get(
+      "manager-removal-confirmation",
+    )!;
+    assert.deepEqual(removeCommand.getArgumentCompletions("herds"), [
+      { value: assignment.branch, label: assignment.branch },
     ]);
-    assert.deepEqual(managerCommand.getArgumentCompletions("rem"), [
-      { value: "remove", label: "remove" },
-      { value: "removal-confirmation", label: "removal-confirmation" },
+    assert.deepEqual(forgetCommand.getArgumentCompletions("herds"), [
+      { value: assignment.branch, label: assignment.branch },
     ]);
-    assert.deepEqual(managerCommand.getArgumentCompletions("ref"), [
-      { value: "refresh", label: "refresh" },
+    assert.deepEqual(forgetCommand.getArgumentCompletions(""), [
+      { value: assignment.branch, label: assignment.branch },
     ]);
-    assert.deepEqual(
-      managerCommand.getArgumentCompletions("removal-confirmation "),
-      [
-        { value: "removal-confirmation required", label: "required" },
-        { value: "removal-confirmation skip", label: "skip" },
-      ],
-    );
-    assert.deepEqual(
-      managerCommand.getArgumentCompletions("removal-confirmation s"),
-      [{ value: "removal-confirmation skip", label: "skip" }],
-    );
-    assert.deepEqual(
-      managerCommand.getArgumentCompletions("remove-preapproval"),
-      [],
-    );
+    assert.deepEqual(removeCommand.getArgumentCompletions("herds "), [
+      { value: assignment.branch, label: assignment.branch },
+    ]);
+    assert.deepEqual(policyCommand.getArgumentCompletions(""), [
+      { value: "required", label: "required" },
+      { value: "skip", label: "skip" },
+    ]);
+    assert.deepEqual(policyCommand.getArgumentCompletions("s"), [
+      { value: "skip", label: "skip" },
+    ]);
     const policyNotices: string[] = [];
     const previousNotify = ctx.ui.notify;
     ctx.ui.notify = (message: string) => policyNotices.push(message);
-    await managerCommand.handler("removal-confirmation", ctx);
+    await policyCommand.handler("", ctx);
     assert.match(
       policyNotices.pop()!,
       /Worktree removal approval: (Skipped|Required) for /,
     );
-    await managerCommand.handler("removal-confirmation invalid", ctx);
+    await policyCommand.handler("off", ctx);
     assert.equal(
       policyNotices.pop(),
-      "Usage: /manager removal-confirmation [required|skip]",
+      "Usage: /manager-removal-confirmation [required|skip]",
     );
     ctx.ui.notify = previousNotify;
-    assert.deepEqual(managerCommand.getArgumentCompletions("remove herds"), [
-      { value: `remove ${assignment.branch}`, label: assignment.branch },
-    ]);
-    assert.deepEqual(managerCommand.getArgumentCompletions("forget herds"), [
-      { value: `forget ${assignment.branch}`, label: assignment.branch },
-    ]);
-    assert.deepEqual(managerCommand.getArgumentCompletions("forget "), [
-      { value: `forget ${assignment.branch}`, label: assignment.branch },
-    ]);
-    assert.deepEqual(managerCommand.getArgumentCompletions("remove"), []);
-    assert.deepEqual(managerCommand.getArgumentCompletions("remove "), [
-      { value: `remove ${assignment.branch}`, label: assignment.branch },
-    ]);
     let confirmationPrompts = 0;
     ctx.hasUI = true;
     ctx.ui.input = async () => {
@@ -11439,7 +11422,7 @@ async function managerDelegateAssignmentTest(
           }
           throw new Error(`Unexpected review menu: ${title}`);
         };
-        if (route === "cli") await managerCommand.handler("remove", ctx);
+        if (route === "cli") await removeCommand.handler("", ctx);
         else await pi.commandOptions.get("herdsman")!.handler("", ctx);
       };
       const firstId = requestedTool.details.request_id;
@@ -11507,7 +11490,7 @@ async function managerDelegateAssignmentTest(
       .find((tool) => tool.name === "list_staff")!
       .execute("after-removal-request", {}, undefined, undefined, ctx);
     assert.equal(afterRequest.details.ok, true);
-    await managerCommand.handler(`remove ${assignment.branch}`, ctx);
+    await removeCommand.handler(assignment.branch, ctx);
     assert.equal(confirmationPrompts, 1);
     assert.equal(
       pi.calls.some((args) => args[0] === "worktree" && args[1] === "remove"),
@@ -11813,7 +11796,7 @@ async function managerDelegateAssignmentTest(
       );
       const lookupNotices: string[] = [];
       leadCtx.ui.notify = (message: string) => lookupNotices.push(message);
-      await lead.commandOptions.get("lead").handler("orchestrate", leadCtx);
+      await lead.commandOptions.get("lead-orchestrate").handler("", leadCtx);
       assert.ok(
         lookupNotices.some(
           (message) =>
@@ -11824,7 +11807,7 @@ async function managerDelegateAssignmentTest(
       unavailableScope = true;
       const unavailableNotices: string[] = [];
       leadCtx.ui.notify = (message: string) => unavailableNotices.push(message);
-      await lead.commandOptions.get("lead").handler("flexible", leadCtx);
+      await lead.commandOptions.get("lead-flexible").handler("", leadCtx);
       assert.ok(
         unavailableNotices.some((message) => message.includes("Managed Leads")),
       );
@@ -11872,7 +11855,7 @@ async function managerDelegateAssignmentTest(
         "retained checkout keeps both the assignment and Managed Lead tab label",
       );
       assert.deepEqual(lead.pi.getActiveTools(), []);
-      await lead.commandOptions.get("lead").handler("orchestrate", leadCtx);
+      await lead.commandOptions.get("lead-orchestrate").handler("", leadCtx);
       assert.deepEqual(lead.pi.getActiveTools(), []);
       managedPresentation = [];
       await lead.commandOptions.get("herdsman").handler("", leadCtx);
@@ -11919,14 +11902,14 @@ async function managerDelegateAssignmentTest(
       assert.equal(lead.pi.getActiveTools().includes("continue_agent"), false);
       const retiredLeadNotices: string[] = [];
       leadCtx.ui.notify = (message: string) => retiredLeadNotices.push(message);
-      await lead.commandOptions.get("lead").handler("orchestrate", leadCtx);
+      await lead.commandOptions.get("lead-orchestrate").handler("", leadCtx);
       assert.ok(
         retiredLeadNotices.some((message) => message.includes("Managed Leads")),
         "retired Managed Lead cannot fall back to ordinary execution",
       );
       assert.equal(tabLabels.get("child-tab"), "Managed Lead");
       process.env.HERDR_WORKSPACE_ID = WORKSPACE;
-      await pi.commandOptions.get("manager").handler("leave", ctx);
+      await pi.commandOptions.get("manager-leave").handler("", ctx);
       assert.equal(
         readManagerDescriptor(supervisionRuntime(), WORKSPACE),
         undefined,
@@ -14090,7 +14073,7 @@ test("ordinary Lead peer presence disappears in Chief mode and on shutdown", asy
     await pi.commandOptions.get("chief").handler("", context);
     assert.equal(readPeerLeadRecord(peerRuntime(), sessionId), undefined);
 
-    await pi.commandOptions.get("chief").handler("leave", context);
+    await pi.commandOptions.get("chief-leave").handler("", context);
     const restored = readPeerLeadRecord(peerRuntime(), sessionId);
     assert.ok(restored);
     assert.notEqual(restored.claim.id, first.claim.id);
@@ -14331,7 +14314,7 @@ test("Chief leave restores minimal peer presence before provenance resolves", as
     assert.equal(initial.workspaceLabel, undefined);
 
     await pi.commandOptions.get("chief").handler("", context);
-    const leaving = pi.commandOptions.get("chief").handler("leave", context);
+    const leaving = pi.commandOptions.get("chief-leave").handler("", context);
     await leaveProvenance.promise;
     await leaving;
 
@@ -14444,8 +14427,8 @@ test("queued peer traffic stays durable through Chief mode and drains after leav
     assert.equal(listCoordinationMessagePaths(runtime, receiverId).length, 1);
 
     await receiver.commandOptions
-      .get("chief")
-      .handler("leave", receiverContext);
+      .get("chief-leave")
+      .handler("", receiverContext);
     await delivered.promise;
     await Promise.resolve();
     const peerDeliveries = receiver.sentMessageCalls.filter((call) =>
@@ -15517,7 +15500,7 @@ test("Chief activation rollback fails closed when its restrictive projection fai
   context.ui.notify = (message: string) => notices.push(message);
   registerExtension!(pi.pi as never);
   await pi.events.get("session_start")![0](undefined, context);
-  await pi.commandOptions.get("lead").handler("orchestrate", context);
+  await pi.commandOptions.get("lead-orchestrate").handler("", context);
   const projected = pi.pi.getActiveTools();
   assert.deepEqual(projected, leadToolsWithSkill);
   assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
@@ -15609,7 +15592,7 @@ test("Chief leave cancellation preserves Chief tools", async () => {
 
     const notices: string[] = [];
     context.ui.notify = (message: string) => notices.push(message);
-    await pi.commandOptions.get("chief").handler("leave", context);
+    await pi.commandOptions.get("chief-leave").handler("", context);
     assert.deepEqual(confirmations, [
       ["Leave chief mode?", "Supervised leads will not be changed."],
     ]);
@@ -15658,7 +15641,7 @@ test("Chief tool activation failure restores ordinary Lead tools", async () => {
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, context);
-    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    await pi.commandOptions.get("lead-orchestrate").handler("", context);
     const ordinaryTools = pi.pi.getActiveTools();
     const setActiveTools = pi.pi.setActiveTools;
     pi.pi.setActiveTools = (next: string[]) => {
@@ -15896,7 +15879,7 @@ test("manual chief leave completes lead cleanup when tool restoration fails", as
     setActiveTools(next);
   };
 
-  await pi.commandOptions.get("chief").handler("leave", context);
+  await pi.commandOptions.get("chief-leave").handler("", context);
 
   const restoredLeadTools = [...new Set([...baseline, ...leadTools])];
   assert.deepEqual(pi.pi.getActiveTools(), restoredLeadTools);
@@ -16137,97 +16120,57 @@ test("Chief activation preserves access to previously owned work", async () => {
   setLeadEnvironment();
 });
 
-test("Herdsman and agents share command handling and grammar", async () => {
+test("flat slash commands expose native action and argument completion", async () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  assert.deepEqual(
-    pi.entryRenderers.map((entry) => entry.customType),
-    ["pi-herdsman-agent-definitions", "pi-herdsman-herd-run"],
-  );
-  assert.ok(
-    pi.messageRenderers.some(
-      (message) => message.customType === "pi-herdsman-stop-summary",
-    ),
-  );
-  const command = pi.commandOptions.get("agents");
-  assert.ok(command);
-  const herdsman = pi.commandOptions.get("herdsman");
-  const lead = pi.commandOptions.get("lead");
-  assert.ok(herdsman);
-  assert.ok(lead);
-  assert.deepEqual(lead.getArgumentCompletions(""), [
-    { value: "flexible", label: "flexible" },
-    { value: "orchestrate", label: "orchestrate" },
+  assert.equal(pi.commands.includes("agents"), false);
+  assert.ok(pi.commands.includes("herdsman"));
+  assert.ok(pi.commands.includes("herdsman-stats"));
+  assert.ok(pi.commands.includes("lead-flexible"));
+  assert.ok(pi.commands.includes("lead-orchestrate"));
+  const fixed = [
+    "herdsman",
+    "herdsman-stats",
+    "herdsman-version",
+    "lead",
+    "lead-flexible",
+    "lead-orchestrate",
+  ];
+  for (const name of fixed)
+    assert.equal(
+      pi.commandOptions.get(name)?.getArgumentCompletions,
+      undefined,
+    );
+  const placement = pi.commandOptions.get("herdsman-placement")!;
+  assert.deepEqual(placement.getArgumentCompletions(""), [
+    { value: "tab", label: "tab" },
+    { value: "subtree", label: "subtree" },
+    { value: "split", label: "split" },
   ]);
-  assert.equal(command.description, "Alias for /herdsman");
-  assert.equal(herdsman.description, "Open Pi Herdsman");
-  assert.equal(command.handler, herdsman.handler);
-  assert.equal(command.getArgumentCompletions, herdsman.getArgumentCompletions);
-  assert.deepEqual(herdsman.getArgumentCompletions(""), [
-    { value: "version", label: "version" },
-    { value: "stats", label: "stats" },
-    { value: "definitions", label: "definitions" },
-    { value: "placement", label: "placement" },
-    { value: "stop", label: "stop" },
+  assert.deepEqual(placement.getArgumentCompletions("s"), [
+    { value: "subtree", label: "subtree" },
+    { value: "split", label: "split" },
   ]);
-  assert.deepEqual(herdsman.getArgumentCompletions("placement "), [
-    { value: "placement tab", label: "tab" },
-    { value: "placement subtree", label: "subtree" },
-    { value: "placement split", label: "split" },
-  ]);
-  assert.deepEqual(herdsman.getArgumentCompletions("placement s"), [
-    { value: "placement subtree", label: "subtree" },
-    { value: "placement split", label: "split" },
+  assert.deepEqual(placement.getArgumentCompletions("s "), [
+    { value: "subtree", label: "subtree" },
+    { value: "split", label: "split" },
   ]);
   const context = fakeContext([]) as any;
   context.hasUI = true;
   const notices: string[] = [];
-  context.ui.select = async () => undefined;
-  context.ui.custom = async <T>(
-    factory: (
-      tui: { requestRender: () => void },
-      theme: {
-        fg: (_color: string, text: string) => string;
-        bold: (text: string) => string;
-      },
-      keybindings: { matches: (data: string, key: string) => boolean },
-      done: (result: T) => void,
-    ) => { handleInput: (data: string) => void },
-  ): Promise<T> =>
-    new Promise<T>((resolve) => {
-      const component = factory(
-        { requestRender: () => undefined },
-        {
-          fg: (_color: string, text: string) => text,
-          bold: (text: string) => text,
-        },
-        {
-          matches: (data: string, key: string) =>
-            data === "\u001b" && key === "tui.select.cancel",
-        },
-        resolve,
-      );
-      component.handleInput("\u001b");
-    });
   context.ui.notify = (message: string) => notices.push(message);
-  await command.handler("", context);
-  await command.handler("version extra", context);
-  await herdsman.handler("placement invalid", context);
-  await herdsman.handler("anything", context);
+  await pi.commandOptions.get("herdsman").handler("stats", context);
+  await placement.handler("invalid split", context);
+  await pi.commandOptions.get("herdsman-stop").handler("extra", context);
   assert.deepEqual(notices, [
-    "Usage: /herdsman [version | stats | definitions | placement [tab|subtree|split] | stop]",
-    "Usage: /herdsman placement [tab|subtree|split]",
-    "Usage: /herdsman [version | stats | definitions | placement [tab|subtree|split] | stop]",
+    "Usage: /herdsman",
+    "Usage: /herdsman-placement [tab|subtree|split]",
+    "Usage: /herdsman-stop",
   ]);
-  await command.handler(" version ", context);
-  assert.equal(
-    notices.at(-1)?.split("\n").slice(0, 2).join("\n"),
-    `Pi Herdsman ${formatRuntimeBuild(HERDSMAN_BUILD)}\nSHA-256: ${HERDSMAN_BUILD.sha256}`,
-  );
 });
 
-test("/agents placement subtree writes flat config outside project settings", async () => {
+test("/herdsman-placement subtree writes flat config outside project settings", async () => {
   setLeadEnvironment();
   const projectRoot = join(PI_AGENT_ROOT, "placement-project");
   const configPath = join(PI_AGENT_ROOT, "pi-herdsman", "config.json");
@@ -16238,7 +16181,9 @@ test("/agents placement subtree writes flat config outside project settings", as
   context.cwd = projectRoot;
   context.hasUI = true;
   try {
-    await pi.commandOptions.get("agents").handler("placement subtree", context);
+    await pi.commandOptions
+      .get("herdsman-placement")
+      .handler("subtree", context);
     assert.equal(
       JSON.parse(realFs.readFileSync(configPath, "utf8")).spawnPlacement,
       "subtree",
@@ -16360,7 +16305,7 @@ test("Chief profile drives the turn-start tools, prompt, and tool-call guard", a
     ctx.ui.notify = (message: string) => notices.push(message);
     const previousTools = pi.pi.getActiveTools();
     writeFileSync(overridePath, "---\nname: chief\ntools: invalid\n---\n");
-    await pi.commandOptions.get("chief").handler("refresh", ctx);
+    await pi.commandOptions.get("chief-refresh").handler("", ctx);
     assert.ok(notices.length > 0);
     assert.deepEqual(pi.pi.getActiveTools(), previousTools);
     const afterInvalid = await invokeEventHandlers(pi, "before_agent_start")(
@@ -16383,9 +16328,9 @@ test("Chief profile drives the turn-start tools, prompt, and tool-call guard", a
       markWaiting();
       await idle;
     };
-    const refresh = pi.commandOptions.get("chief").handler("refresh", ctx);
+    const refresh = pi.commandOptions.get("chief-refresh").handler("", ctx);
     await waiting;
-    await pi.commandOptions.get("chief").handler("leave", ctx);
+    await pi.commandOptions.get("chief-leave").handler("", ctx);
     const leadToolsAfterLeave = pi.pi.getActiveTools();
     releaseIdle();
     await refresh;
@@ -16750,7 +16695,7 @@ test("Lead profile switch during Agent startup rejects and rolls back stale assi
       );
     await startEntered;
     assert.equal(paused, true);
-    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    await pi.commandOptions.get("lead-orchestrate").handler("", context);
     assert.ok(!pi.pi.getActiveTools().includes("delegate_agent"));
     releaseStart();
 
@@ -16821,7 +16766,7 @@ test("Lead retains owned Agent controls after switching to an empty allowlist", 
       ...managedState(label),
       ownerSessionId: context.sessionManager.getSessionId(),
     });
-    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    await pi.commandOptions.get("lead-orchestrate").handler("", context);
     const active = pi.pi.getActiveTools();
     for (const name of ["delegate_agent", "continue_agent"])
       assert.ok(!active.includes(name), name);
@@ -16962,15 +16907,15 @@ test("Chief activation replaces the lead widget and overview selection is intera
   assert.ok(widgetCalls.some(({ key }) => key === "pi-herdsman-staff"));
   assert.equal(
     pi.commandOptions.get("chief").description,
-    "Activate Chief mode, open its overview, or refresh its profile",
+    "Activate Chief mode or open overview",
   );
-  assert.deepEqual(pi.commandOptions.get("chief").getArgumentCompletions(""), [
-    { value: "refresh", label: "refresh" },
-    { value: "leave", label: "leave" },
-  ]);
-  assert.deepEqual(
-    pi.commandOptions.get("chief").getArgumentCompletions("ref"),
-    [{ value: "refresh", label: "refresh" }],
+  assert.equal(
+    pi.commandOptions.get("chief").getArgumentCompletions,
+    undefined,
+  );
+  assert.equal(
+    pi.commandOptions.get("chief-refresh").description,
+    "Refresh active Chief profile",
   );
   assert.equal(customCalls, 0);
   let idleCalls = 0;
@@ -17016,7 +16961,7 @@ test("Chief activation replaces the lead widget and overview selection is intera
   overview.handleInput("\u001b[B");
   overview.handleInput("\r");
   await t.waitFor(() => assert.equal(overviewDone, 2, notices.join(" | ")));
-  await pi.commandOptions.get("chief").handler("leave", context);
+  await pi.commandOptions.get("chief-leave").handler("", context);
   assert.ok(
     widgetCalls.some(
       ({ key, content }) =>
@@ -18839,7 +18784,7 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
   await pi.commandOptions.get("chief").handler("", context);
   assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
 
-  await pi.commandOptions.get("chief").handler("leave", context);
+  await pi.commandOptions.get("chief-leave").handler("", context);
   assert.deepEqual(pi.pi.getActiveTools(), [
     "read",
     "bash",
@@ -19391,7 +19336,7 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
   const context = fakeContext(entries) as any;
   await pi.events.get("session_start")![0](undefined, context);
   assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
-  await pi.commandOptions.get("chief").handler("leave", context);
+  await pi.commandOptions.get("chief-leave").handler("", context);
   assert.deepEqual(pi.pi.getActiveTools(), [
     "read",
     "bash",
@@ -19618,7 +19563,7 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
     return undefined;
   };
   await command.handler("", context);
-  await pi.commandOptions.get("agents").handler("", context);
+  await pi.commandOptions.get("herdsman").handler("", context);
   assert.equal(
     prompts[0]?.label,
     `Pi Herdsman · ${formatRuntimeBuild(HERDSMAN_BUILD)}`,
@@ -20159,8 +20104,8 @@ test("definition pickers preselect configured values and honor cancellation", as
     });
     try {
       const handlerCompletion = pi.commandOptions
-        .get("agents")
-        .handler("definitions", context);
+        .get("herdsman-definitions")
+        .handler("", context);
       await Promise.race([
         Promise.all([handlerCompletion, interactionsComplete]),
         interactionTimeoutExpired,
@@ -20281,7 +20226,7 @@ test("TUI Model picker fuzzy-filters models and cancels in place", async () => {
       }
     });
   try {
-    await pi.commandOptions.get("agents").handler("definitions", context);
+    await pi.commandOptions.get("herdsman-definitions").handler("", context);
     assert.equal(customCalls, 9);
     assert.equal(
       discoverAgent("search-agent").frontmatter.model,
@@ -21301,7 +21246,7 @@ test("Definitions edits standalone definitions through the shared override write
   realFs.writeFileSync(definitionPath, original);
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman-definitions");
   const prompts: { label: string; options: string[] }[] = [];
   let selection = 0;
   const context = fakeContext() as any;
@@ -21326,7 +21271,7 @@ test("Definitions edits standalone definitions through the shared override write
     return undefined;
   };
   try {
-    await command.handler("definitions", context);
+    await command.handler("", context);
     assert.ok(
       prompts.some(
         ({ label, options }) =>
@@ -21353,7 +21298,7 @@ test("Definitions exposes managed Lead settings without Agent discovery", async 
   mkdirSync(dirname(overridePath), { recursive: true });
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman-definitions");
   const prompts: { label: string; options: string[] }[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
@@ -21387,7 +21332,7 @@ test("Definitions exposes managed Lead settings without Agent discovery", async 
     return undefined;
   };
   try {
-    await command.handler("definitions", context);
+    await command.handler("", context);
     const categoryMenu = prompts.find(
       ({ label }) => label === "Agents & Coordinators",
     );
@@ -21445,7 +21390,7 @@ test("Definitions contextual help distinguishes managed Lead and Agent launches 
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman-definitions");
   const context = fakeContext() as any;
   context.hasUI = true;
   context.mode = "tui";
@@ -21535,8 +21480,8 @@ test("Definitions contextual help distinguishes managed Lead and Agent launches 
     });
   try {
     // The TUI Escape key closes this command's menu; reopen it for the Agent case.
-    await command.handler("definitions", context);
-    await command.handler("definitions", context);
+    await command.handler("", context);
+    await command.handler("", context);
     assert.equal(customCall, 8);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
@@ -21557,7 +21502,7 @@ test("Definitions Details snapshots effective append and replace instructions", 
     const pi = fakePi();
     registerExtension!(pi.pi as never);
     const initialEntryCount = pi.entries.length;
-    const command = pi.commandOptions.get("agents");
+    const command = pi.commandOptions.get("herdsman-definitions");
     const context = fakeContext() as any;
     context.hasUI = true;
     context.mode = "tui";
@@ -21593,7 +21538,7 @@ test("Definitions Details snapshots effective append and replace instructions", 
     };
     let error: unknown;
     try {
-      await command.handler("definitions", context);
+      await command.handler("", context);
     } catch (caught) {
       error = caught;
     } finally {
@@ -21762,7 +21707,7 @@ test("Definitions Details in RPC reports metadata without expanding instructions
     return undefined;
   };
   try {
-    await pi.commandOptions.get("agents").handler("definitions", context);
+    await pi.commandOptions.get("herdsman-definitions").handler("", context);
     assert.equal(notices.length, 1);
     assert.match(notices[0] ?? "", /details-rpc/u);
     assert.doesNotMatch(notices[0] ?? "", /RPC_PRIVATE_INSTRUCTIONS_SENTINEL/u);
@@ -21849,7 +21794,7 @@ test("Definitions cancellation navigates one menu level at a time", async () => 
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman-definitions");
   const prompts: { label: string; options: string[] }[] = [];
   let selection = 0;
   const context = fakeContext() as any;
@@ -21884,7 +21829,7 @@ test("Definitions cancellation navigates one menu level at a time", async () => 
     }
   };
   try {
-    await command.handler("definitions", context);
+    await command.handler("", context);
     assert.deepEqual(
       prompts.map(({ label }) => label),
       [
@@ -21912,7 +21857,7 @@ test("Definitions applies model and thinking overrides independently", async () 
     setLeadEnvironment();
     const pi = fakePi();
     registerExtension!(pi.pi as never);
-    const command = pi.commandOptions.get("agents");
+    const command = pi.commandOptions.get("herdsman-definitions");
     const definitionPath = join(PI_AGENTS_DIR, "implementer.md");
     const prompts: { label: string; options: string[] }[] = [];
     let selection = 0;
@@ -21954,7 +21899,7 @@ test("Definitions applies model and thinking overrides independently", async () 
       }
     };
     try {
-      await command.handler("definitions", context);
+      await command.handler("", context);
       const content = realFs.readFileSync(definitionPath, "utf8");
       assert.doesNotMatch(content, new RegExp(`^${scenario.property}:`, "m"));
       assert.equal(
@@ -21973,7 +21918,7 @@ test("Definitions toggles enabled state for bundled definitions", async () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman-definitions");
   const definitionPath = join(PI_AGENTS_DIR, "implementer.md");
   realFs.writeFileSync(
     definitionPath,
@@ -22018,7 +21963,7 @@ test("Definitions toggles enabled state for bundled definitions", async () => {
     }
   };
   try {
-    await command.handler("definitions", context);
+    await command.handler("", context);
     assert.match(
       realFs.readFileSync(definitionPath, "utf8"),
       /^enabled: true$/m,
@@ -22061,7 +22006,7 @@ test("Definitions edits global values without claiming masked project changes", 
   );
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman-definitions");
   const context = fakeContext() as any;
   const notices: string[] = [];
   let selection = 0;
@@ -22126,7 +22071,7 @@ test("Definitions edits global values without claiming masked project changes", 
     }
   };
   try {
-    await command.handler("definitions", context);
+    await command.handler("", context);
     assert.equal(
       discoverAgent("implementer", { projectRoot: project }).frontmatter.model,
       "provider/private-model",
@@ -22183,7 +22128,7 @@ test("Definitions shows inherited private values and keeps scope selection avail
   realFs.symlinkSync(globalPath, projectPath);
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman-definitions");
   const context = fakeContext() as any;
   const notices: string[] = [];
   context.cwd = project;
@@ -22229,7 +22174,7 @@ test("Definitions shows inherited private values and keeps scope selection avail
     }
   };
   try {
-    await command.handler("definitions", context);
+    await command.handler("", context);
     assert.ok(selection >= 5);
     assert.match(notices.join("\n"), /not a regular file/u);
     assert.equal(realFs.lstatSync(projectPath).isSymbolicLink(), true);
@@ -22272,7 +22217,7 @@ test("Definitions can edit a regular lower scope when the default source is a sy
 
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman-definitions");
   const context = fakeContext() as any;
   const notices: string[] = [];
   context.cwd = project;
@@ -22316,7 +22261,7 @@ test("Definitions can edit a regular lower scope when the default source is a sy
   };
 
   try {
-    await command.handler("definitions", context);
+    await command.handler("", context);
     assert.match(
       realFs.readFileSync(projectPath, "utf8"),
       /model: new\/model/u,
@@ -22348,7 +22293,7 @@ test("Definitions settings remain available when a global Agent references a pro
   );
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman-definitions");
   const context = fakeContext() as any;
   let selection = 0;
   context.cwd = project;
@@ -22380,7 +22325,7 @@ test("Definitions settings remain available when a global Agent references a pro
         (definition) => definition.name === "parent",
       ),
     );
-    await command.handler("definitions", context);
+    await command.handler("", context);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     realFs.rmSync(project, { recursive: true, force: true });
@@ -22392,7 +22337,7 @@ test("Definitions refreshes the model registry before post-model thinking choice
   setLeadEnvironment();
   const pi = fakePi({ thinkingLevel: "high" });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman-definitions");
   const definitionPath = join(PI_AGENTS_DIR, "implementer.md");
   const refreshedModel = {
     provider: "refresh-provider",
@@ -22442,7 +22387,7 @@ test("Definitions refreshes the model registry before post-model thinking choice
     }
   };
   try {
-    await command.handler("definitions", context);
+    await command.handler("", context);
     assert.equal(
       discoverAgent("implementer").frontmatter.model,
       "refresh-provider/refresh-model",
@@ -22459,7 +22404,7 @@ test("Definitions uses the current model for inherited thinking choices", async 
   setLeadEnvironment();
   const pi = fakePi({ thinkingLevel: "medium" });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman-definitions");
   const context = fakeContext() as any;
   context.hasUI = true;
   context.model = {
@@ -22499,7 +22444,7 @@ test("Definitions uses the current model for inherited thinking choices", async 
     }
   };
   try {
-    await command.handler("definitions", context);
+    await command.handler("", context);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
   }
@@ -22529,7 +22474,7 @@ test("Definitions resolves explicit compact model IDs for thinking choices", asy
     );
     const pi = fakePi({ thinkingLevel: "high" });
     registerExtension!(pi.pi as never);
-    const command = pi.commandOptions.get("agents");
+    const command = pi.commandOptions.get("herdsman-definitions");
     const context = fakeContext() as any;
     context.hasUI = true;
     context.mode = "rpc";
@@ -22565,7 +22510,7 @@ test("Definitions resolves explicit compact model IDs for thinking choices", asy
       }
     };
     try {
-      await command.handler("definitions", context);
+      await command.handler("", context);
     } finally {
       pi.events.get("session_shutdown")?.[0]();
       realFs.rmSync(definitionPath, { force: true });
@@ -22589,7 +22534,7 @@ test("Definitions preserves Unicode names and model/thinking metadata", async ()
   );
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman-definitions");
   const prompts: string[][] = [];
   let categorySelections = 0;
   const context = fakeContext() as any;
@@ -22602,7 +22547,7 @@ test("Definitions preserves Unicode names and model/thinking metadata", async ()
     return undefined;
   };
   try {
-    await command.handler("definitions", context);
+    await command.handler("", context);
     const options = prompts[1] ?? [];
     const rowA = options.find((option) => option.includes("模型"));
     const rowB = options.find((option) => option.includes("長い名前"));
@@ -22637,7 +22582,7 @@ test("Definitions separates Agent definitions and preserves provenance", async (
   );
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman-definitions");
   const prompts: { label: string; options: string[] }[] = [];
   let selections = 0;
   const context = fakeContext() as any;
@@ -22651,7 +22596,7 @@ test("Definitions separates Agent definitions and preserves provenance", async (
     return undefined;
   };
   try {
-    await command.handler("definitions", context);
+    await command.handler("", context);
     assert.deepEqual(
       prompts.map(({ label }) => label),
       [
@@ -22696,13 +22641,13 @@ test("lead agents stop reports an empty owned inventory safely", async () => {
         : { stdout: "{}", stderr: "", code: 0 },
   });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman-stop");
   const notices: string[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
   context.ui.notify = (message: string) => notices.push(message);
-  await command.handler("stop", context);
-  await command.handler("stop", context);
+  await command.handler("", context);
+  await command.handler("", context);
   assert.equal(
     pi.sentMessageCalls.filter(
       (call: any) => call.message.customType === "pi-herdsman-stop-summary",
@@ -22816,14 +22761,14 @@ test("Lead stop does not let the Lead continue a nested descendant directly", as
     },
   });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman-stop");
   const notices: string[] = [];
   const context = fakeContext(pi.entries) as any;
   context.hasUI = true;
   context.ui.notify = (message: string) => notices.push(message);
   try {
     await pi.events.get("session_start")?.[0](undefined, context);
-    await command.handler("stop", context);
+    await command.handler("", context);
     assert.deepEqual(lifecycle.closeOrder, [
       agents.agentLabel,
       parent.agentLabel,
@@ -23229,12 +23174,12 @@ test("lead agents stop refuses an agent whose identity changes after inventory",
     },
   });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman-stop");
   const context = fakeContext() as any;
   context.hasUI = true;
   context.ui.notify = () => undefined;
   try {
-    await command.handler("stop", context);
+    await command.handler("", context);
     assert.equal(lifecycle.closeOrder.length, 0);
     assert.match(stopSummary(pi), /presence could not be verified/);
     assert.equal(
@@ -23354,7 +23299,7 @@ test("lead can continue an active Agent after registered stop and reopening owne
   };
   const pi = fakePi({ exec, entries: ownerEntries });
   registerExtension!(pi.pi as never);
-  const stop = pi.commandOptions.get("agents");
+  const stop = pi.commandOptions.get("herdsman-stop");
   const stopContext = fakeContext(ownerEntries) as any;
   stopContext.sessionManager.getSessionId = () => LEAD_SESSION_ID;
   stopContext.sessionManager.getSessionFile = () => ownerPath;
@@ -23374,7 +23319,7 @@ test("lead can continue an active Agent after registered stop and reopening owne
 
   assert.equal(readResult(mailbox, requestId), undefined);
   assert.ok(ownerEntries.includes(acceptance));
-  await stop.handler("stop", stopContext);
+  await stop.handler("", stopContext);
   assert.deepEqual(lifecycle.closeOrder, [state.agentLabel]);
   assert.equal(readAgentState(mailbox), undefined);
   assert.ok(existsSync(agentPath), "the saved Agent session remains available");
@@ -23517,11 +23462,11 @@ test("lead agents stop does not record closure proof when mailbox cleanup warns"
     },
   });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman-stop");
   const context = fakeContext(pi.entries) as any;
   context.hasUI = true;
   try {
-    await command.handler("stop", context);
+    await command.handler("", context);
     assert.deepEqual(lifecycle.closeOrder, [state.agentLabel]);
     assert.match(stopSummary(pi), /mailbox cleanup failed/);
     assert.equal(
@@ -23578,9 +23523,9 @@ test("lead agents stop reports cleanup failures and preserves accurate discarded
   });
   const pi = fakePi({ exec: lifecycle.exec });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman-stop");
   try {
-    await command.handler("stop", { ...fakeContext(), hasUI: true } as any);
+    await command.handler("", { ...fakeContext(), hasUI: true } as any);
     const summary = stopSummary(pi);
     assert.match(summary, /Stopped 0 of 2 agents/);
     assert.match(summary, /✗ stop-failed-agent/);
@@ -23612,9 +23557,9 @@ test("lead agents stop continues independent leads after a partial cascade failu
   });
   const pi = fakePi({ exec: lifecycle.exec });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman-stop");
   try {
-    await command.handler("stop", { ...fakeContext(), hasUI: true } as any);
+    await command.handler("", { ...fakeContext(), hasUI: true } as any);
     assert.deepEqual(lifecycle.closeOrder, [states[1]!.agentLabel]);
     assert.match(stopSummary(pi), /Stopped 1 of 2 agents/);
     assert.match(stopSummary(pi), /✓ stop-independent/);
@@ -23657,9 +23602,9 @@ test("lead agents stop scopes its summary to the current lead subtree", async ()
   const lifecycle = cascadeExecutor(states);
   const pi = fakePi({ exec: lifecycle.exec });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman-stop");
   try {
-    await command.handler("stop", { ...fakeContext(), hasUI: true } as any);
+    await command.handler("", { ...fakeContext(), hasUI: true } as any);
     assert.deepEqual(lifecycle.closeOrder, [owned.agentLabel]);
     assert.match(stopSummary(pi), /Stopped 1 agents/);
     assert.match(stopSummary(pi), /✓ scoped-owned-agent/);
@@ -24000,7 +23945,7 @@ for (const role of ["chief", "manager"] as const)
     deferIdentity = true;
     click();
     await identityLookup;
-    await pi.commandOptions.get(role).handler("leave", ctx);
+    await pi.commandOptions.get(`${role}-leave`).handler("", ctx);
     releaseIdentity();
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.deepEqual(

@@ -290,7 +290,7 @@ direct-report tools but no project tools.
 ## Usage follows ownership
 
 Session usage uses Pi's native token and cost records. In ordinary sessions,
-`/agents stats` covers the current Pi session and transitively owned managed
+`/herdsman-stats` covers the current Pi session and transitively owned managed
 Agents whose exact persisted identities can be verified.
 
 When the current session is an active Manager, stats additionally cover the
@@ -329,10 +329,10 @@ closed when evidence is stale, missing, duplicated, or ambiguous.
 ## Role transitions
 
 `/manager` enters Manager mode from an eligible Lead in the primary workspace.
-`/manager leave` returns to Lead while preserving project work.
+`/manager-leave` returns to Lead while preserving project work.
 
 `/chief` enters Chief mode from an eligible ordinary Lead. A Manager cannot
-activate Chief. `/chief leave` returns to Lead.
+activate Chief. `/chief-leave` returns to Lead.
 
 Both special roles restore the Lead tool baseline when they are left. Exact
 eligibility and command behavior are documented in

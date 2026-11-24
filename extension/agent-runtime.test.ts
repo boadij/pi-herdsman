@@ -5575,7 +5575,17 @@ test("a stray agent variable does not suppress the active Lead tool surface", as
     "message_peer",
     "load_skill",
   ]);
-  assert.deepEqual(lead.commands, ["lead", "herdsman", "agents"]);
+  assert.deepEqual(lead.commands, [
+    "lead",
+    "lead-flexible",
+    "lead-orchestrate",
+    "herdsman",
+    "herdsman-version",
+    "herdsman-stats",
+    "herdsman-definitions",
+    "herdsman-stop",
+    "herdsman-placement",
+  ]);
   lead.events.get("session_shutdown")?.[0]();
 });
 

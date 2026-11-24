@@ -4203,7 +4203,7 @@ export function renderCoordinationResult(
         "!",
         expanded
           ? `Confirmation required\n${resultContent(result)}`
-          : `Confirmation required · ${value(details.branch) || value(args.branch)} · /manager remove ${value(details.branch) || value(args.branch)}`,
+          : `Confirmation required · ${value(details.branch) || value(args.branch)} · /manager-remove ${value(details.branch) || value(args.branch)}`,
       ),
       0,
       0,
