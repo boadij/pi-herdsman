@@ -137,6 +137,9 @@ test("Pi exposes eligible skills to direct and Code Mode invocation", async (t) 
     call?: ReturnType<typeof fauxToolCall>,
     afterDeclaration?: () => void,
     target = session,
+    onNextDeclarations?: (
+      nextDeclarations: ReturnType<typeof getCurrentTools>,
+    ) => void,
   ) {
     declarations = [];
     faux.setResponses([
@@ -147,7 +150,10 @@ test("Pi exposes eligible skills to direct and Code Mode invocation", async (t) 
           ? fauxAssistantMessage([call], { stopReason: "toolUse" })
           : fauxAssistantMessage("done");
       },
-      () => fauxAssistantMessage("done"),
+      (context) => {
+        onNextDeclarations?.(getCurrentTools(context.messages));
+        return fauxAssistantMessage("done");
+      },
     ]);
     await target.prompt("Check the session tools.");
     return declarations.find(({ name }) => name === "load_skill");
@@ -179,6 +185,17 @@ test("Pi exposes eligible skills to direct and Code Mode invocation", async (t) 
     );
     assert.ok(session.getActiveToolNames().includes("load_skill"));
   }
+  tools = ["load_skill", "read", "codemode"];
+  assert.equal(
+    await prompt(),
+    undefined,
+    "native reader hides direct declaration",
+  );
+  assert.ok(
+    !session.getCallableToolNames().includes("load_skill"),
+    "native reader also removes Code Mode callability",
+  );
+
   await prompt(fauxToolCall("load_skill", { name: "guide" }));
   assert.equal(lastToolResult().isError, true);
   assert.deepEqual(lastToolResult().content, [
@@ -191,6 +208,11 @@ test("Pi exposes eligible skills to direct and Code Mode invocation", async (t) 
     if (nonReader === "codemode") {
       assert.equal(declaration, undefined);
       assert.ok(session.getCallableToolNames().includes("load_skill"));
+      const codemode = declarations.find(({ name }) => name === "codemode");
+      assert.ok(codemode?.description.includes("Do not reload a skill"));
+      assert.ok(codemode?.description.includes('- "guide":'));
+      assert.ok(!codemode?.description.includes('"manual"'));
+      assert.ok(!codemode?.description.includes(cwd));
       const registered = session
         .getAllTools()
         .find(({ name }) => name === "load_skill");
@@ -303,10 +325,35 @@ test("Pi exposes eligible skills to direct and Code Mode invocation", async (t) 
   chief = false;
   assert.ok(await prompt(), "project skills return outside Chief scope");
 
+  tools = ["load_skill", "codemode"];
   for (const emptyCatalog of [[], [manual]]) {
     skills = emptyCatalog;
     assert.equal(await prompt(), undefined);
+    assert.ok(
+      !session.getCallableToolNames().includes("load_skill"),
+      "empty eligibility removes Code Mode callability",
+    );
   }
+
+  tools = ["load_skill", "codemode"];
+  skills = [guide];
+  await prompt();
+  let nextDeclarations: ReturnType<typeof getCurrentTools> = [];
+  await prompt(
+    fauxToolCall("codemode", { code: 'text("continue after policy change");' }),
+    () => {
+      session.setActiveToolsByName(["load_skill", "bash", "codemode"]);
+    },
+    session,
+    (declared) => {
+      nextDeclarations = declared;
+    },
+  );
+  assert.ok(!nextDeclarations.some(({ name }) => name === "load_skill"));
+  const nextCodemode = nextDeclarations.find(({ name }) => name === "codemode");
+  assert.ok(nextCodemode);
+  assert.ok(!nextCodemode.description.includes('- "guide":'));
+  assert.ok(!session.getCallableToolNames().includes("load_skill"));
 
   tools = ["load_skill"];
   skills = [guide];
