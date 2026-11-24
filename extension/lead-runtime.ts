@@ -11644,11 +11644,17 @@ export function createLeadRoleTransitions(
     return resolve(profile);
   };
   const finalizeOptionalManagerStartup = (ctx: ExtensionContext): void => {
-    if (state.controllerRole !== "manager" || !state.managerLease) return;
+    if (
+      state.controllerRole !== "manager" ||
+      state.roleSuspended ||
+      !state.managerLease
+    )
+      return;
     try {
       if (!host.persistLeadCoordination())
         throw new Error("Manager coordination state could not be published");
       host.assertCurrentLeadCoordination(ctx);
+      host.persistRole("manager");
       return;
     } catch (error) {
       const lease = state.managerLease;
