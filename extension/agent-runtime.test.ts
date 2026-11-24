@@ -8544,9 +8544,15 @@ test("deferred bootstrap failures publish failed outcomes and never become ready
       const loader = agent.tools.find(({ name }) => name === "load_skill");
       assert.ok(loader);
       assert.ok(agent.pi.getActiveTools().includes("load_skill"));
-      assert.deepEqual(loader.prepareLoadout({ declared: [] }), {
-        hiddenDeclarations: ["load_skill"],
-      });
+      assert.deepEqual(
+        loader.prepareLoadout({
+          declared: [],
+          getExposure: () => "direct",
+        }),
+        {
+          hiddenDeclarations: ["load_skill"],
+        },
+      );
       await assert.rejects(
         loader.execute(
           "call",
