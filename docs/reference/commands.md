@@ -74,9 +74,9 @@ cannot activate Manager or Chief, including after retirement. Use native Pi
 separate Git checkout or fresh process configuration. In Manager or Chief mode, `/lead` changes the
 underlying ordinary Lead preference without replacing the active role tools.
 
-Selecting `Agents & definitions` opens `Running agents`, `Agent definitions`,
-`Coordinator profiles`, and `Stop all agents…`. The root does not depend on
-Agent status or definitions to render.
+Selecting `Agents & definitions` opens `Agent definitions`, `Coordinator profiles`,
+and `Stop all agents…`. Neither the root menu nor the category depends on live
+Agent discovery or definition resolution to render.
 
 ### Settings menu
 
@@ -299,16 +299,6 @@ session's settings.
 `Remove local override` removes only that source's field, allowing the next
 lower-precedence value to become effective. It does not necessarily inherit
 the active session's setting.
-
-## `/herdsman` → Agents & definitions → Running agents
-
-Select a live managed agent to focus its pane. Each row shows the agent's
-reported model and thinking level where available. Model names normally show
-only the last segment of the reported ID. If distinct IDs would show the same
-name, the menu uses the full IDs, truncated if necessary.
-Pi Herdsman refreshes and verifies the exact label, pane, and session identity
-before issuing herdr's focus command. If the agent changed, no focus command
-is sent.
 
 ## `/herdsman-placement`
 

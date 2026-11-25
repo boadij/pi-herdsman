@@ -9,6 +9,7 @@ import type {
 import {
   buildSessionProjection,
   CURRENT_SESSION_VERSION,
+  getAgentDir,
   parseSessionEntries,
   resolveCliModel,
   SessionManager,
@@ -144,6 +145,7 @@ import {
   closeHerdrPane,
   inspectHerdrAgent,
   listHerdrAgents,
+  requireHerdrPiIntegration,
   rollbackHerdrStart,
   startHerdrAgent,
   paneProcess,
@@ -187,7 +189,9 @@ import {
   agentModelCatalog,
   allowedOverrideModels,
   EXPECTED_STARTUP_MODEL_ENV,
+  inheritedStartupModelExpectation,
   modelToken,
+  type StartupModelExpectation,
 } from "./agent-model-overrides.ts";
 
 const delegationLockPath = (workspaceId: string, sessionId: string) =>
@@ -272,15 +276,10 @@ export function rootStatusBreadcrumb(
   return [{ text: role ?? "owner/controller", ...(role ? { role } : {}) }];
 }
 
-export type AgentStatusSnapshotOptions = {
-  observedExecutionSettingsOnly?: boolean;
-};
-
 export function buildAgentStatusSnapshot(
   view: ManagedAgentSnapshotView,
   ctx: ExtensionContext,
   host: AgentStatusSnapshotHost,
-  options?: AgentStatusSnapshotOptions,
 ): StatusSnapshot {
   const ownerSessionId = ctx.sessionManager.getSessionId();
   const unresolvedMailboxState =
@@ -360,12 +359,8 @@ export function buildAgentStatusSnapshot(
         : {}),
       task: typeof task === "string" ? task : runtime?.task,
       startedAt: presentation.startedAt ?? runtime?.startedAt,
-      model: options?.observedExecutionSettingsOnly
-        ? agent.model
-        : (presentation.model ?? runtime?.model ?? undefined),
-      thinking: options?.observedExecutionSettingsOnly
-        ? agent.thinking
-        : (presentation.thinking ?? runtime?.thinking ?? undefined),
+      model: presentation.model ?? runtime?.model ?? undefined,
+      thinking: presentation.thinking ?? runtime?.thinking ?? undefined,
       contextPercent: presentation.contextPercent,
       ...(agent.stale
         ? {
@@ -3869,6 +3864,8 @@ export type Runtime = {
   startedAt?: number;
   contextPercent?: number;
   cleanupError?: string;
+  resultReadError?: string;
+  resultReadFailureKey?: string;
 };
 type AgentHealthDiagnostic = Awaited<ReturnType<typeof inspectHerdrAgent>>;
 
@@ -4694,7 +4691,7 @@ export function listedAgentRecord(
   const cleanupError =
     runtime &&
     dependencies.sameIdentity(dependencies.runtimeIdentityState(runtime), state)
-      ? runtime.cleanupError
+      ? (runtime.cleanupError ?? runtime.resultReadError)
       : undefined;
   return {
     ...publicAgent,
@@ -4832,6 +4829,7 @@ export function createAgentController(
     { episode: string; intervalMs: number; nextAt: number }
   >();
   const runtimes = new Map<string, Runtime>();
+  const resultReadFailures = new Map<string, string>();
   const pendingStarts = new Map<string, PendingStart>();
   const resultWatchers = new Map<string, () => void>();
   const askWatchers = new Map<string, () => void>();
@@ -6841,7 +6839,7 @@ export function createAgentController(
             current.lastAck.requestId === pending.requestId))
       )
         pendingStarts.delete(state.agentLabel);
-      invalidateRuntime(state.agentLabel, state.workspaceId);
+      invalidateRuntime(state.agentLabel, state.workspaceId, true);
       report?.onClosed?.({
         state: current,
         definition: snapshot.agentDefinition,
@@ -7177,7 +7175,11 @@ export function createAgentController(
     ownerMessageWatchers.get(runtime.mailboxPath)?.();
     ownerMessageWatchers.delete(runtime.mailboxPath);
   };
-  const invalidateRuntime = (label: string, workspaceId?: string): void => {
+  const invalidateRuntime = (
+    label: string,
+    workspaceId?: string,
+    retireResultDiagnostics = false,
+  ): void => {
     const runtime = runtimes.get(label);
     if (
       !runtime ||
@@ -7201,6 +7203,7 @@ export function createAgentController(
       resultDeliverySemanticRefs.delete(key);
     }
     runtime.startedAt = undefined;
+    if (retireResultDiagnostics) retireResultReadFailures(runtime);
     runtimes.delete(label);
   };
   const watchResult = (
@@ -7217,8 +7220,11 @@ export function createAgentController(
       if (active && context.isIdle() && runtimes.get(runtime.label) === runtime)
         try {
           const result = readResult(runtime.mailboxPath, requestId);
+          clearResultReadFailure(runtime, requestId);
           if (result) void deliverResult(runtime, context, result, signal);
-        } catch {}
+        } catch (error) {
+          reportResultReadFailure(runtime, requestId, error);
+        }
     };
     const stop = observeMailbox(
       runtime.mailboxPath,
@@ -7371,6 +7377,16 @@ export function createAgentController(
           thinking: presentation.thinking ?? match.listed.thinking ?? null,
           agentDefinition: match.agentDefinition,
         };
+        const persistedResultRequestId =
+          runtime.activeRequestId ?? runtime.completedRequestId;
+        if (persistedResultRequestId) {
+          const failureKey = resultReadFailureKey(
+            runtime,
+            persistedResultRequestId,
+          );
+          runtime.resultReadFailureKey = failureKey;
+          runtime.resultReadError = resultReadFailures.get(failureKey);
+        }
         if (match.presence.kind === "live") {
           validateIdentity(runtime, state, match.presence.agent);
           await validateIntegration(runtime, context, { signal });
@@ -7386,7 +7402,15 @@ export function createAgentController(
         }
         if (!runtime.completedRequestId) continue;
         const requestId = runtime.completedRequestId;
-        const result = readResult(runtime.mailboxPath, requestId);
+        let result: ResultRecord | undefined;
+        try {
+          result = readResult(runtime.mailboxPath, requestId);
+          clearResultReadFailure(runtime, requestId);
+        } catch (error) {
+          incomplete = true;
+          reportResultReadFailure(runtime, requestId, error);
+          continue;
+        }
         if (result) {
           await deliverResult(runtime, context, result, signal);
           if (signal.aborted) return;
@@ -7541,6 +7565,45 @@ export function createAgentController(
     if (prefix === undefined || runtime.cleanupError?.startsWith(prefix))
       runtime.cleanupError = undefined;
   };
+  const resultReadFailureKey = (runtime: Runtime, requestId: string) =>
+    `${runtime.workspaceId}\0${runtime.label}\0${runtime.runId}\0${runtime.ownerSessionId}\0${requestId}`;
+  const reportResultReadFailure = (
+    runtime: Runtime,
+    requestId: string,
+    error: unknown,
+  ) => {
+    const message = `Result read failed for ${requestId}; retrying: ${String(error)}`;
+    const key = resultReadFailureKey(runtime, requestId);
+    if (resultReadFailures.get(key) === message) return;
+    resultReadFailures.set(key, message);
+    runtime.resultReadFailureKey = key;
+    runtime.resultReadError = message;
+    options.onChanged();
+  };
+  const clearResultReadFailure = (runtime: Runtime, requestId: string) => {
+    const key = resultReadFailureKey(runtime, requestId);
+    if (!resultReadFailures.delete(key)) return;
+    if (runtime.resultReadFailureKey === key) {
+      runtime.resultReadFailureKey = undefined;
+      runtime.resultReadError = undefined;
+    }
+    options.onChanged();
+  };
+  const retireResultReadFailures = (runtime: Runtime) => {
+    let retired = false;
+    for (const requestId of [
+      runtime.activeRequestId,
+      runtime.completedRequestId,
+    ]) {
+      if (!requestId) continue;
+      retired =
+        resultReadFailures.delete(resultReadFailureKey(runtime, requestId)) ||
+        retired;
+    }
+    runtime.resultReadFailureKey = undefined;
+    runtime.resultReadError = undefined;
+    if (retired) options.onChanged();
+  };
   const cancelAskRetries = (runtime: Runtime) => {
     const prefix = `${runtime.mailboxPath}:`;
     for (const key of askDeliveryRetries.keys())
@@ -7685,12 +7748,6 @@ export function createAgentController(
     try {
       const state = readAgentState(runtime.mailboxPath);
       if (!state) return false;
-      requireCompatibleBuild(
-        options.build,
-        state.build,
-        "notify_owner",
-        `Agent ${state.agentLabel}`,
-      );
       validateIdentity(runtime, state);
       if (context.sessionManager.getSessionId() !== runtime.ownerSessionId)
         return false;
@@ -8296,9 +8353,11 @@ export function createAgentController(
       let result: ResultRecord | undefined;
       try {
         result = readResult(runtime.mailboxPath, runtime.completedRequestId);
-      } catch {
+      } catch (error) {
+        reportResultReadFailure(runtime, runtime.completedRequestId, error);
         continue;
       }
+      clearResultReadFailure(runtime, runtime.completedRequestId);
       if (!result) continue;
       if (
         !hasDeliveredResult(entries, resultIdentity(runtime, result.requestId))
@@ -8328,6 +8387,7 @@ export function createAgentController(
       if (requestId) {
         try {
           const result = readResult(runtime.mailboxPath, requestId);
+          clearResultReadFailure(runtime, requestId);
           if (
             result &&
             (await deliverResult(
@@ -8341,7 +8401,7 @@ export function createAgentController(
           )
             submitted++;
         } catch (error) {
-          options.reportWatcherError(context, error);
+          reportResultReadFailure(runtime, requestId, error);
         }
       }
       if (phase === "settle")
@@ -9105,6 +9165,8 @@ export function createAgentController(
           );
         const evidenceAssignmentId =
           continuationEvidence?.evidenceAssignmentId ?? assignment!.requestId;
+        const agentDir = resolve(getAgentDir());
+        requireHerdrPiIntegration(agentDir);
         const taskEvidence = persistRequiredEvidenceSnapshot(
           evidenceAssignmentId,
           "work-assignment.md",
@@ -9707,25 +9769,12 @@ export function createAgentController(
             `PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS=${JSON.stringify(
               delegationEnabled ? effectiveDefinition.frontmatter.agents : [],
             )}`,
-            ...(process.env.PI_CODING_AGENT_DIR
-              ? [`PI_CODING_AGENT_DIR=${process.env.PI_CODING_AGENT_DIR}`]
-              : []),
             ...(effectiveDefinition.frontmatter.extensions?.some((source) =>
               source.startsWith("npm:"),
             )
               ? []
               : ["PI_OFFLINE=1"]),
           ];
-          // Pi reports the providers that extensions registered; a model from one
-          // of them cannot resolve in a child denied extension discovery.
-          // Older registries and test doubles may not expose the list, in which
-          // case nothing counts as extension-provided and the model is inherited
-          // exactly as before this change.
-          const registeredProviderIds = new Set(
-            (ctx.modelRegistry?.getRegisteredProviderIds?.() ?? []).map((id) =>
-              id.toLowerCase(),
-            ),
-          );
           const configured = configuredModel(effectiveDefinition.frontmatter);
           // Use the same snapshot for thinking validation and the ordinary
           // inherited-model launch arguments after asynchronous preparation.
@@ -9746,14 +9795,15 @@ export function createAgentController(
                   token: modelToken(inheritedModel),
                 }
               : undefined,
-            saved: resumed?.savedModel,
-            savedUnresolved: resumed?.savedModelUnresolved,
-            isForeignProvider: (providerId) =>
-              registeredProviderIds.has(providerId.toLowerCase()),
-            isKnownModel: (provider, id) =>
-              ctx.modelRegistry.find(provider, id) !== undefined,
           });
-          let expectedStartupModel = assignmentModel;
+          let expectedStartupModel: StartupModelExpectation | undefined =
+            assignmentModel
+              ? {
+                  provider: assignmentModel.provider,
+                  id: assignmentModel.id,
+                  requireCatalog: true,
+                }
+              : undefined;
           if (overrides && Object.hasOwn(overrides, "thinking")) {
             const selected = validateAgentThinkingOverride(
               ctx,
@@ -9762,34 +9812,25 @@ export function createAgentController(
               assignmentModel,
               inheritedModel,
             );
-            expectedStartupModel = selected;
-            if (
-              effectiveDefinition.frontmatter.noExtensions &&
-              !childModel.extensionDiscovery &&
-              registeredProviderIds.has(selected.provider.toLowerCase())
-            )
-              fail(
-                "invalid_request",
-                "The unchanged model requires extension discovery disabled by the Agent definition",
-                "delegate",
-                {
-                  nextAction:
-                    "Specify an exact permitted model ID or omit the thinking override.",
-                },
-              );
+            expectedStartupModel = {
+              provider: selected.provider,
+              id: selected.id,
+              requireCatalog: true,
+              thinking: overrides.thinking,
+            };
           }
-          if (expectedStartupModel) {
-            const { provider, id } = expectedStartupModel;
-            const expected = [provider, id];
-            if (overrides?.thinking !== undefined)
-              expected.push(overrides.thinking);
-            env.push(
-              `${EXPECTED_STARTUP_MODEL_ENV}=${JSON.stringify(expected)}`,
+          if (!expectedStartupModel && !configured && inheritedModel)
+            expectedStartupModel = inheritedStartupModelExpectation(
+              ctx.modelRegistry,
+              inheritedModel,
             );
-          }
+          if (expectedStartupModel)
+            env.push(
+              `${EXPECTED_STARTUP_MODEL_ENV}=${JSON.stringify(expectedStartupModel)}`,
+            );
           if (
             (resumed?.savedModel || resumed?.savedModelUnresolved) &&
-            !configuredModel(effectiveDefinition.frontmatter)
+            !configured
           )
             env.push("PI_HERDSMAN_RESTORE_MODEL=saved-session");
           const launchArgs = agentLaunchArgs(effectiveDefinition, {
@@ -9948,6 +9989,7 @@ export function createAgentController(
             })();
           };
           started = await startHerdrAgent(pi, ctx, {
+            agentDir,
             label,
             runId,
             cwd: agentCwd,
@@ -12461,6 +12503,7 @@ export function createAgentController(
       submittedOwnerMessages.clear();
       resultDeliveryEvidence.clear();
       resultDeliverySemanticRefs.clear();
+      resultReadFailures.clear();
       runtimes.clear();
     },
     setRuntime(runtime: Runtime) {

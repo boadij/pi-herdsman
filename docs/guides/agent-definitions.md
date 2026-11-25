@@ -189,7 +189,8 @@ mutate that assignment.
 
 ### `implementer`
 
-Focused source-edit agent for an explicitly approved implementation.
+Focused source-edit agent for an explicitly approved implementation, including
+focused checks and reusable verification evidence.
 
 ### `researcher`
 
@@ -202,11 +203,11 @@ become available.
 
 The bundled researcher explicitly requests Pi's native Code Mode
 (`builtin:codemode`) and `npm:pi-web-access`. Its `noExtensions: true` disables
-ordinary extension discovery unless the selected model requires discovery for
-its provider. Pi may resolve and install the explicitly requested npm extension
-when it is not cached and online startup is permitted. In an operator-enforced
-offline environment, web tools may be unavailable. Without them, the researcher
-retains local inspection capabilities and reports unavailable external evidence.
+ordinary extension discovery. Pi may resolve and install the explicitly requested
+npm extension when it is not cached and online startup is permitted. In an
+operator-enforced offline environment, web tools may be unavailable. Without
+them, the researcher retains local inspection capabilities and reports
+unavailable external evidence.
 
 Higher-precedence overlays can replace the bundled `extensions` list. Use the
 [existing array modifiers](../reference/agent-definition-schema.md#file-format)
@@ -219,13 +220,16 @@ allowlist is not an operating-system sandbox.
 
 ### `reviewer`
 
-Independent read-only internal team reviewer. Findings inform the delegator's
-decisions, not user or supervisor approval.
+Independent read-only internal team reviewer. Assesses correctness and the
+adequacy of validation evidence without repeating established investigations.
+Findings inform the delegator's decisions, not user or supervisor approval.
 
 ### `ship`
 
 Executes reviewed Git commits and pushes and GitHub pull request and release
-operations. Hosting operations require an already authenticated GitHub CLI
+operations. Reuses applicable technical acceptance evidence while independently
+verifying delivery prerequisites and exact outgoing material. Hosting operations
+require an already authenticated GitHub CLI
 (`gh`); other hosting interfaces are not supported. Commit, push, PR creation,
 merge, release publication, and updates to specified release fields each
 require separate explicit authorization. The Agent uses native protections and verifies
@@ -234,9 +238,9 @@ credentials. Repository-specific shipping and release policy remains local.
 
 ### `validator`
 
-Verification-only execution of focused tests, checks, and isolated smoke
-scenarios for existing changes. It reports observed results without authoring
-fixes or reviewing design. Like `implementer` and `generalist`, it offers both
+Verification-only execution of outstanding tests, checks, and isolated smoke
+scenarios for existing changes. It distinguishes reused evidence from newly
+observed results without authoring fixes or reviewing design. Like `implementer` and `generalist`, it offers both
 Pi's `bash` and Windows-only `powershell` tools; shell execution is not a
 read-only sandbox.
 
@@ -246,11 +250,14 @@ Fast read-only codebase reconnaissance.
 
 ### `generalist`
 
-General-purpose scoped execution agent.
+General-purpose scoped execution agent for tightly coupled investigation,
+decisions, implementation, and verification.
 
 The bundled definitions are portable defaults, not required workflow stages.
-Project definitions are for repository-specific policy; global definitions are
-for user-specific final policy.
+Select Agents for remaining work and forward relevant completed results. Repeat
+work only when the evidence is insufficient or no longer applicable, or when
+independent verification is required. Project definitions are for repository-specific
+policy; global definitions are for user-specific final policy.
 
 ### Write useful descriptions
 
@@ -488,16 +495,42 @@ inheritance behavior.
 For continuation, an omitted model uses the saved Pi session's selection, not
 the current caller's model. The resumed Agent verifies that Pi restored the
 saved model before it accepts work; ambiguous history, an unavailable model,
-or a mismatch stops startup. Extension discovery stays enabled when the
-selected model's provider is identified as extension-registered, whether
-configured, inherited, or restored, even if the definition sets
-`noExtensions: true`. An explicit definition model overrides saved history; Pi
-resolves the unchanged selector. Enabling discovery may load other configured
-extensions too. Restarted Manager-assigned managed Leads apply
-the same check before inbox activation; a model explicitly set by the effective
-`managed-lead` definition overrides the saved selection. See the
+or a mismatch stops startup. An explicit definition model overrides saved
+history; Pi resolves the unchanged selector. Restarted Manager-assigned
+managed Leads apply the same check before inbox activation; a model explicitly
+set by the effective `managed-lead` definition overrides the saved selection. See the
 [execution-settings contract](../reference/agent-definition-schema.md#execution-settings)
 for the exact behavior.
+
+## Configure an extension-backed model
+
+The effective definition controls extension discovery regardless of how the
+model is selected. To use a provider extension without enabling ordinary
+discovery, add it explicitly in a partial definition overlay:
+
+```markdown
+---
+name: scout
+model: mistral-native/zai-glm-5-3-flash
+extensions: ["+npm:pi-mistral-native"]
+---
+```
+
+This overlay inherits the bundled scout's `noExtensions: true` and adds the
+provider extension without replacing scout's existing extension list.
+
+If the provider extension is already configured for ordinary Pi discovery,
+you can instead enable that discovery for scout:
+
+```markdown
+---
+name: scout
+model: mistral-native/zai-glm-5-3-flash
+noExtensions: false
+---
+```
+
+Ordinary discovery can load other configured extensions as well.
 
 ## Override an existing bundled role
 

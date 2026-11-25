@@ -1,18 +1,19 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import fs, {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
   statSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { createServer, type Socket } from "node:net";
 import nodeTest, { type TestContext, type TestOptions } from "node:test";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { dirname, join, toNamespacedPath } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -40,6 +41,7 @@ import {
   closeRetainedHerdrPane,
   verifyRetainedHerdrPane,
   rollbackHerdrStart,
+  requireHerdrPiIntegration,
   startHerdrAgent,
   startHerdrAgentInPane,
   prepareHerdrManagerPane,
@@ -60,6 +62,16 @@ import {
 import { claimProcessLock } from "./lock.ts";
 import { OperationError } from "./errors.ts";
 import { herdsmanTempRoot } from "./storage.ts";
+
+const TEST_AGENT_DIR = mkdtempSync(join(tmpdir(), "pi-herdsman profile-"));
+const TEST_INTEGRATION_PATH = join(
+  TEST_AGENT_DIR,
+  "extensions",
+  "herdr-agent-state.ts",
+);
+mkdirSync(dirname(TEST_INTEGRATION_PATH));
+writeFileSync(TEST_INTEGRATION_PATH, "export default function () {}\n");
+nodeTest.after(() => rmSync(TEST_AGENT_DIR, { recursive: true, force: true }));
 
 // Settlement-negative fixtures must exercise the 30-second deadline without
 // spending 30 seconds in wall-clock polling. Advance only this test's clock.
@@ -98,6 +110,107 @@ const test: HerdrTest = (name: string, ...args: any[]) => {
     },
   );
 };
+
+test("Herdr Pi integration preflight observes filesystem changes", (t) => {
+  const agentDir = mkdtempSync(join(tmpdir(), "pi-herdsman-preflight-"));
+  t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+  const path = join(agentDir, "extensions", "herdr-agent-state.ts");
+  const missing = (failure: unknown) => {
+    assert.ok(failure instanceof OperationError);
+    assert.equal(failure.detail.category, "invalid_request");
+    assert.equal(failure.detail.operation, "preflight");
+    assert.equal(failure.detail.rollbackOccurred, false);
+    assert.equal(failure.detail.retryAttempted, false);
+    assert.ok(failure.message.includes(path));
+    const nextAction = failure.detail.nextAction;
+    assert.ok(nextAction);
+    assert.ok(nextAction.includes("herdr integration install pi"));
+    assert.ok(nextAction.includes(`PI_CODING_AGENT_DIR set to ${agentDir}`));
+    assert.ok(failure.message.includes(nextAction));
+    return true;
+  };
+  assert.throws(() => requireHerdrPiIntegration(agentDir), missing);
+  mkdirSync(path, { recursive: true });
+  assert.throws(
+    () => requireHerdrPiIntegration(agentDir),
+    /not a regular file/,
+  );
+  rmSync(path, { recursive: true });
+  writeFileSync(path, "");
+  assert.equal(requireHerdrPiIntegration(agentDir), path);
+  unlinkSync(path);
+  assert.throws(() => requireHerdrPiIntegration(agentDir), missing);
+
+  const target = join(agentDir, "installed.ts");
+  writeFileSync(target, "");
+  symlinkSync(target, path, "file");
+  assert.equal(requireHerdrPiIntegration(agentDir), path);
+  unlinkSync(target);
+  assert.throws(() => requireHerdrPiIntegration(agentDir), missing);
+});
+
+test("Herdr Pi integration preflight preserves read-access failures", (t) => {
+  t.mock.method(fs, "accessSync", (path: string, mode: number) => {
+    assert.equal(path, TEST_INTEGRATION_PATH);
+    assert.equal(mode, fs.constants.R_OK);
+    throw new Error("EACCES: injected read-access failure");
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.throws(() => requireHerdrPiIntegration(TEST_AGENT_DIR), {
+      detail: {
+        category: "invalid_request",
+        operation: "preflight",
+        rollbackOccurred: false,
+        retryAttempted: false,
+        message: `Unable to access required Herdr Pi integration at ${TEST_INTEGRATION_PATH}: Error: EACCES: injected read-access failure`,
+      },
+    });
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  }
+});
+
+test("both launchers reject a missing Herdr Pi integration before startup", async (t) => {
+  const agentDir = mkdtempSync(join(tmpdir(), "pi-herdsman-preflight-"));
+  t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+  const previousWorkspace = process.env.HERDR_WORKSPACE_ID;
+  process.env.HERDR_WORKSPACE_ID = "preflight-workspace";
+  t.after(() => {
+    if (previousWorkspace === undefined) delete process.env.HERDR_WORKSPACE_ID;
+    else process.env.HERDR_WORKSPACE_ID = previousWorkspace;
+  });
+  const exec = t.mock.fn();
+  const pi = { exec } as any;
+  const ctx = { cwd: agentDir } as any;
+  const options = {
+    agentDir,
+    cwd: agentDir,
+    label: "agent",
+    runId: "run-id",
+    // Reaching the lifecycle lock first would throw the abort reason.
+    signal: AbortSignal.abort(),
+  };
+  await assert.rejects(
+    startHerdrAgent(pi, ctx, {
+      ...options,
+      placement: { kind: "tab", label: "agents" },
+    }),
+    /Required Herdr Pi integration is missing/,
+  );
+  await assert.rejects(
+    startHerdrAgentInPane(pi, ctx, {
+      ...options,
+      primaryWorkspaceId: "preflight-workspace",
+      workspaceId: "preflight-workspace",
+      tabId: "tab",
+      paneId: "pane",
+    }),
+    /Required Herdr Pi integration is missing/,
+  );
+  assert.equal(exec.mock.callCount(), 0);
+});
 
 test("nested topology keeps the Herdr workspace authoritative", () => {
   assert.deepEqual(
@@ -1931,6 +2044,7 @@ test("serializes lifecycle mutations across managed and concrete tab identities"
 
   try {
     const starting = startHerdrAgent(pi, { cwd: "/tmp" } as any, {
+      agentDir: TEST_AGENT_DIR,
       label: "agent",
       runId: "run-id",
       cwd: "/tmp",
@@ -2000,8 +2114,9 @@ test("start injects mandatory extensions before definition args and configures t
     "PI_HERDSMAN_LABEL=agent",
     "PI_HERDSMAN_WORKSPACE_ID=agent-workspace",
     "PI_HERDSMAN_AGENT_DEFINITION=agent",
-    "PI_CODING_AGENT_DIR=/controller/agent-data",
+    "PI_CODING_AGENT_DIR=/stale-profile",
     "PI_OFFLINE=1",
+    "PI_CODING_AGENT_DIR=/another-stale-profile",
   ];
   const calls: string[][] = [];
   const execTimeouts: Array<number | undefined> = [];
@@ -2094,6 +2209,7 @@ test("start injects mandatory extensions before definition args and configures t
 
   try {
     await startHerdrAgent(pi, { cwd } as any, {
+      agentDir: TEST_AGENT_DIR,
       label: "agent",
       runId: "run-id",
       cwd,
@@ -2139,15 +2255,17 @@ test("start injects mandatory extensions before definition args and configures t
       ...contract.filter(
         (arg) =>
           !arg.startsWith("PI_HERDSMAN_WORKSPACE_ID=") &&
-          !arg.startsWith("PI_SUBAGENT_PARENT_SESSION="),
+          !arg.startsWith("PI_SUBAGENT_PARENT_SESSION=") &&
+          !arg.startsWith("PI_CODING_AGENT_DIR="),
       ),
+      `PI_CODING_AGENT_DIR=${TEST_AGENT_DIR}`,
       "PI_SUBAGENT_PARENT_SESSION=lead-session",
       "PI_HERDSMAN_WORKSPACE_ID=root-workspace",
     ],
   );
   assert.deepEqual(startArgs.slice(startArgs.indexOf("--") + 1), [
     "--extension",
-    join(getAgentDir(), "extensions", "herdr-agent-state.ts"),
+    TEST_INTEGRATION_PATH,
     "--extension",
     join(dirname(fileURLToPath(import.meta.url)), "index.ts"),
     "--extension",
@@ -2273,6 +2391,7 @@ async function executeFailedStart(
   try {
     try {
       await startHerdrAgent(pi, { cwd } as any, {
+        agentDir: TEST_AGENT_DIR,
         label: "agent",
         runId: "run-id",
         cwd,
@@ -2695,6 +2814,7 @@ test("invalid environment assignments are rejected before topology mutation", as
     ]) {
       await assert.rejects(
         startHerdrAgent(pi, { cwd: "/tmp" } as any, {
+          agentDir: TEST_AGENT_DIR,
           label: "agent",
           runId: "run-id",
           cwd: "/tmp",
@@ -2776,6 +2896,7 @@ test("foreground projection does not veto a ready shell before agent start", asy
 
   try {
     const started = await startHerdrAgent(pi, { cwd } as any, {
+      agentDir: TEST_AGENT_DIR,
       label: "agent",
       runId: "run-id",
       cwd,
@@ -2897,6 +3018,7 @@ test("fresh panes wait for shell and pane metadata before agent start", async ()
 
   try {
     await startHerdrAgent(pi, { cwd } as any, {
+      agentDir: TEST_AGENT_DIR,
       label: "agent",
       runId: "run-id",
       cwd,
@@ -2998,6 +3120,7 @@ test("startup does not launch while the exact readiness marker is pending", asyn
   } as any;
   try {
     const starting = startHerdrAgent(pi, { cwd: "/tmp/pending-agent" } as any, {
+      agentDir: TEST_AGENT_DIR,
       label: "pending",
       runId: "pending-run",
       cwd: "/tmp/pending-agent",
@@ -3066,6 +3189,7 @@ test("startup readiness failure captures the blocked pane diagnostic", async () 
   let caught: unknown;
   try {
     await startHerdrAgent(pi, { cwd: "/tmp/blocked-agent" } as any, {
+      agentDir: TEST_AGENT_DIR,
       label: "blocked",
       runId: "blocked-run",
       cwd: "/tmp/blocked-agent",
@@ -3265,6 +3389,7 @@ async function startAgentCase(
     let failure: unknown;
     try {
       await startHerdrAgent(pi, { cwd } as any, {
+        agentDir: TEST_AGENT_DIR,
         label: "case",
         runId: "case-run",
         cwd,
@@ -3485,6 +3610,7 @@ test("split rejects a stale caller before topology mutation", async () => {
   try {
     await assert.rejects(
       startHerdrAgent(pi, { cwd: "/tmp" } as any, {
+        agentDir: TEST_AGENT_DIR,
         label: "agent",
         runId: "run-id",
         cwd: "/tmp",
@@ -3598,6 +3724,7 @@ async function placementCalls(config: {
 
   try {
     await startHerdrAgent(pi, { cwd } as any, {
+      agentDir: TEST_AGENT_DIR,
       label: "agent",
       runId: "run-id",
       cwd,
@@ -7371,6 +7498,10 @@ test("existing-pane startup waits for shell readiness before starting Pi", async
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;
   environment.HERDR_WORKSPACE_ID = "primary-workspace";
   const calls: string[][] = [];
+  const extensionPath = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "index.ts",
+  );
   let releaseMarker!: () => void;
   let markerStarted!: () => void;
   const markerPending = new Promise<void>(
@@ -7450,9 +7581,12 @@ test("existing-pane startup waits for shell readiness before starting Pi", async
       pi,
       { cwd: "/tmp/existing-agent" } as any,
       {
+        agentDir: TEST_AGENT_DIR,
         label: "existing",
         runId: "existing-run",
         cwd: "/tmp/existing-agent",
+        extensionPath,
+        agentArgs: ["--session-id", "lead-session"],
         primaryWorkspaceId: "primary-workspace",
         workspaceId: "existing-workspace",
         tabId: "existing-tab",
@@ -7466,10 +7600,18 @@ test("existing-pane startup waits for shell readiness before starting Pi", async
     );
     releaseMarker();
     await starting;
-    assert.equal(
-      calls.filter((args) => args[0] === "agent" && args[1] === "start").length,
-      1,
+    const starts = calls.filter(
+      (args) => args[0] === "agent" && args[1] === "start",
     );
+    assert.equal(starts.length, 1);
+    assert.deepEqual(starts[0]!.slice(starts[0]!.indexOf("--") + 1), [
+      "--extension",
+      extensionPath,
+      "--extension",
+      TEST_INTEGRATION_PATH,
+      "--session-id",
+      "lead-session",
+    ]);
   } finally {
     if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
     else environment.HERDR_WORKSPACE_ID = previousWorkspace;
@@ -7650,6 +7792,7 @@ test("Chief prepares and launches an exact Manager pane across workspaces", asyn
       } as any;
       const ctx = { cwd: tmpdir() } as any;
       const options = {
+        agentDir: TEST_AGENT_DIR,
         repository: { canonicalRepoKey: commonDir, checkoutPath: cwd },
         assertCurrentAuthority: async () => {
           if (scenario === "authority lost" && authorityLost)
@@ -7835,6 +7978,7 @@ test("existing-pane structured startup timeout captures pane diagnostics", async
   try {
     await assert.rejects(
       startHerdrAgentInPane(pi, { cwd: "/tmp/target" } as any, {
+        agentDir: TEST_AGENT_DIR,
         label: "lead",
         runId: "lead-run",
         cwd: "/tmp/target",
@@ -7919,6 +8063,7 @@ test("existing-pane startup requires group membership and an exact pane", async 
     },
   } as any;
   const options = {
+    agentDir: TEST_AGENT_DIR,
     label: "lead",
     runId: "lead-run",
     cwd: "/tmp/target",

@@ -21,7 +21,7 @@ import {
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { createChiefProjectRuntime } from "./chief-project.ts";
-import { fakeContext } from "./support.ts";
+import { fakeContext, PI_AGENT_ROOT } from "./support.ts";
 import {
   claimManagerLease,
   getManagerStartIntent,
@@ -111,6 +111,7 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
     "uncertain",
     "uncertain resume",
     "safe refusal",
+    "missing integration",
     "denied",
     "optional",
     "pending",
@@ -123,7 +124,16 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         mkdtempSync(join(tmpdir(), "chief-project-")),
       );
       const prior = process.env.PI_CODING_AGENT_DIR;
-      process.env.PI_CODING_AGENT_DIR = join(root, "pi");
+      const agentDir = join(root, "pi");
+      const hook = join("extensions", "herdr-agent-state.ts");
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      if (scenario !== "missing integration" && scenario !== "optional") {
+        mkdirSync(join(agentDir, "extensions"), { recursive: true });
+        writeFileSync(
+          join(agentDir, hook),
+          readFileSync(join(PI_AGENT_ROOT, hook)),
+        );
+      }
       const gitDirectory = join(root, "project", ".git");
       mkdirSync(gitDirectory, { recursive: true });
       const repository = realpathSync.native(dirname(gitDirectory));
@@ -146,6 +156,7 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         rmSync(root, { force: true, recursive: true });
       });
       let tabCreated = false;
+      const placementCalls: string[] = [];
       let denyChief = false;
       let observedPid = process.pid;
       let launches = 0;
@@ -214,10 +225,22 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
                   : canonicalRepoKey,
               stderr: "",
             };
-          switch (args.slice(0, 2).join(" ")) {
+          const operation = args.slice(0, 2).join(" ");
+          if (
+            ["workspace create", "tab create", "agent start"].includes(
+              operation,
+            )
+          )
+            placementCalls.push(operation);
+          switch (operation) {
             case "api snapshot":
               return response({
-                snapshot: { agents: [], panes: [], workspaces: [workspace] },
+                snapshot: {
+                  agents: [],
+                  panes: [],
+                  workspaces:
+                    scenario === "missing integration" ? [] : [workspace],
+                },
               });
             case "workspace get":
               return response({ workspace });
@@ -232,6 +255,10 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
                 worktrees: [],
               });
             case "tab create":
+              assert.equal(
+                args[args.indexOf("--env") + 1],
+                `PI_CODING_AGENT_DIR=${agentDir}`,
+              );
               tabCreated = true;
               return response({
                 tab: { tab_id: pane.tab_id },
@@ -275,6 +302,7 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
               return response({ pane });
             case "agent start": {
               launches++;
+              assert.ok(args.includes(join(agentDir, hook)));
               assert.equal(args.at(-2), "--session");
               assert.ok(!args.some((arg) => arg.includes("--trust")));
               const path = args.at(-1)!;
@@ -382,6 +410,14 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
       });
       const ctx = fakeContext();
       const start = () => chief.start(repository, undefined, ctx);
+      if (scenario === "missing integration") {
+        await assert.rejects(
+          start(),
+          /Required Herdr Pi integration is missing/,
+        );
+        assert.deepEqual(placementCalls, []);
+        return;
+      }
       if (scenario === "optional") {
         activate(randomUUID(), join(repository, "not-flushed.jsonl"));
         assert.deepEqual(await start(), {

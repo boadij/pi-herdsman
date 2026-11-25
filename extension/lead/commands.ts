@@ -45,19 +45,15 @@ import {
   type SpawnPlacement,
 } from "../core.ts";
 import {
-  collapseDisplayText,
   compactModelToken,
   managedExecutionLabel,
   summarizeDefinitionLayerChanges,
   type StatusSnapshot,
-  type buildStatusRows,
-  type renderRunningOptions,
   type formatStatusCounts,
   type InstructionSection,
 } from "../presentation.ts";
 
 type LeadCommandHost = {
-  pi: import("@earendil-works/pi-coding-agent").ExtensionAPI;
   persistStopClosures(
     ctx: ExtensionContext,
     closures: NonNullable<
@@ -188,8 +184,6 @@ type LeadCommandHost = {
   ): Promise<string | undefined>;
   updateMessageLimit(key: string, value: number | undefined): void;
   isLead(): boolean;
-  buildStatusRows: typeof buildStatusRows;
-  renderRunningOptions: typeof renderRunningOptions;
   formatStatusCounts: typeof formatStatusCounts;
   openSupervisionOverview(ctx: ExtensionCommandContext): Promise<void>;
   controller: ReturnType<
@@ -198,7 +192,6 @@ type LeadCommandHost = {
   loadStatusSnapshot(
     ctx: ExtensionContext,
     signal?: AbortSignal,
-    options?: { observedExecutionSettingsOnly?: boolean },
   ): Promise<StatusSnapshot>;
   roleActive(role: "manager" | "chief"): boolean;
   transitionRole(
@@ -212,8 +205,6 @@ type LeadCommandHost = {
 export type LeadCommandBaseHost = Omit<
   LeadCommandHost,
   | "isLead"
-  | "buildStatusRows"
-  | "renderRunningOptions"
   | "formatStatusCounts"
   | "openSupervisionOverview"
   | "controller"
@@ -1255,87 +1246,6 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         if (initialSection) return;
       }
     },
-    async openRunningAgentsMenu(ctx: ExtensionCommandContext): Promise<void> {
-      const signal = host.controller.sessionSignal();
-      const snapshot = await host.loadStatusSnapshot(ctx, signal, {
-        observedExecutionSettingsOnly: true,
-      });
-      const agents = snapshot.agents.filter(
-        (agent) => agent.state !== "lost" && agent.state !== "unknown",
-      );
-      const rows = host.buildStatusRows(agents, { now: Date.now() });
-      if (!rows.length) {
-        ctx.ui.notify(
-          "No running Agents. Ask Pi to delegate using an available definition.",
-        );
-        return;
-      }
-      const options = host.renderRunningOptions(rows);
-      if (ctx.mode !== "tui" && new Set(options).size !== options.length) {
-        ctx.ui.notify("Running list is ambiguous; reopen Running.", "warning");
-        return;
-      }
-      const fullModelsByLabel = new Map(
-        agents.map(({ label, model }) => [label, model]),
-      );
-      const fullModelsByCompactName = new Map<string, Set<string>>();
-      for (const row of rows) {
-        const compact = collapseDisplayText(row.model);
-        const full = fullModelsByLabel.get(row.label);
-        if (!compact || !full) continue;
-        const models =
-          fullModelsByCompactName.get(compact) ?? new Set<string>();
-        models.add(full);
-        fullModelsByCompactName.set(compact, models);
-      }
-      const selected = await host.selectMenu(
-        ctx,
-        "Running",
-        options.map((label, index) => {
-          const row = rows[index]!;
-          const compact = collapseDisplayText(row.model);
-          const model =
-            !compact || (fullModelsByCompactName.get(compact)?.size ?? 0) > 1
-              ? collapseDisplayText(fullModelsByLabel.get(row.label))
-              : compact;
-          const description = [model, collapseDisplayText(row.thinking)]
-            .filter(Boolean)
-            .join(" · ");
-          return {
-            value: String(index),
-            label,
-            ...(description ? { description } : {}),
-            help: row.task ? `Task: ${row.task}` : "Focus this managed Agent.",
-          };
-        }),
-      );
-      if (selected === undefined) return;
-      const selectedIndex = Number(selected);
-      const selectedRow =
-        !Number.isInteger(selectedIndex) ||
-        selectedIndex < 0 ||
-        selectedIndex >= rows.length
-          ? undefined
-          : rows[selectedIndex];
-      if (!selectedRow) return;
-      const fresh = await host.loadStatusSnapshot(
-        ctx,
-        host.controller.sessionSignal(),
-      );
-      const target = fresh.agents.find(
-        (agent) =>
-          agent.label === selectedRow.label &&
-          agent.paneId === selectedRow.paneId &&
-          agent.sessionId === selectedRow.sessionId,
-      );
-      if (!target?.paneId) {
-        ctx.ui.notify("Agent changed; reopen Running.", "warning");
-        return;
-      }
-      await host.runHerdr(host.pi, ctx, ["agent", "focus", target.paneId], {
-        signal: host.controller.sessionSignal(),
-      });
-    },
     async showSessionStats(ctx: ExtensionCommandContext): Promise<void> {
       const managerActive = host.roleActive("manager");
       const stats = host.collectOwnedSessionUsage(ctx);
@@ -2320,28 +2230,12 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       }
     },
     async openAgentsMenu(ctx: ExtensionCommandContext): Promise<void> {
-      let selectedSection = "running";
-      while (true) {
-        let running = "Unavailable";
-        try {
-          const snapshot = await host.loadStatusSnapshot(
-            ctx,
-            host.controller.sessionSignal(),
-          );
-          running = host.formatStatusCounts(snapshot.agents) || "0";
-        } catch {
-          if (ctx.signal?.aborted) return;
-        }
+      let selectedSection = "agent-definitions";
+      while (!ctx.signal?.aborted) {
         const selected = await host.selectMenu(
           ctx,
           "Agents & definitions",
           [
-            {
-              value: "running",
-              label: "Running agents",
-              description: running,
-              help: "Focus a live managed Agent.",
-            },
             { value: "agent-definitions", label: "Agent definitions" },
             { value: "coordinator-profiles", label: "Coordinator profiles" },
             {
@@ -2354,8 +2248,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         );
         if (!selected) return;
         selectedSection = selected;
-        if (selected === "running") await this.openRunningAgentsMenu(ctx);
-        else if (selected === "agent-definitions")
+        if (selected === "agent-definitions")
           await this.openDefinitionsMenu(ctx, "agents");
         else if (selected === "coordinator-profiles")
           await this.openDefinitionsMenu(ctx, "roles");
@@ -2386,7 +2279,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             {
               value: "agents",
               label: "Agents & definitions",
-              help: "Manage running Agents and inspect definitions.",
+              help: "Configure Agent definitions and Coordinator profiles, or stop owned Agents in an emergency.",
             },
             {
               value: "manager",

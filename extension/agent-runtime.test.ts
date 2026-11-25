@@ -20,7 +20,6 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { EXPECTED_STARTUP_MODEL_ENV } from "./agent-model-overrides.ts";
 import type { AskRecord, RequestRecord, ManagedAgentState } from "./mailbox.ts";
 import { claimProcessLock, tryClaimAssignmentLock } from "./lock.ts";
 import {
@@ -87,6 +86,8 @@ import support, {
   nativeSessions,
   seedLeadRole,
 } from "./support.ts";
+const { EXPECTED_STARTUP_MODEL_ENV } =
+  await import("./agent-model-overrides.ts");
 const { readConfig, updateConfig } = await import("./config.ts");
 
 test("Pi tree navigation preserves a late inherited direct tool", async () => {
@@ -8652,12 +8653,27 @@ test("startup model verification rejects child catalog drift and permits virtual
   const provider = "extension/provider";
   const id = "fast/model";
   const previous = process.env[EXPECTED_STARTUP_MODEL_ENV];
-  for (const [catalogId, selectedId, thinking, failure] of [
-    ["fast/model-preview", "fast/model-preview", undefined, /child catalog/u],
-    ["other", id, undefined, /child catalog/u],
-    [id, id, "high", /thinking level high, but Pi selected off/u],
-    [id, id, "off", undefined],
-    [id, id, undefined, undefined],
+  for (const [catalogId, selectedId, requireCatalog, thinking, failure] of [
+    [
+      "fast/model-preview",
+      "fast/model-preview",
+      true,
+      undefined,
+      /child catalog/u,
+    ],
+    ["other", id, true, undefined, /child catalog/u],
+    ["other", id, false, undefined, undefined],
+    [
+      "fast/model-preview",
+      "fast/model-preview",
+      false,
+      undefined,
+      /was not selected/u,
+    ],
+    [id, id, true, "high", /thinking level high, but Pi selected off/u],
+    [id, id, true, "off", undefined],
+    [id, id, true, undefined, undefined],
+    [id, id, undefined, undefined, /startup model identity is invalid/u],
   ] as const) {
     const mailbox = setAgentEnvironment("expected-model-agent");
     const agent = fakePi();
@@ -8679,15 +8695,18 @@ test("startup model verification rejects child catalog drift and permits virtual
         p === provider && m === catalogId ? entry : undefined,
     };
     context.thinkingLevel = "off";
-    process.env[EXPECTED_STARTUP_MODEL_ENV] = JSON.stringify(
-      thinking === undefined ? [provider, id] : [provider, id, thinking],
-    );
+    process.env[EXPECTED_STARTUP_MODEL_ENV] = JSON.stringify({
+      provider,
+      id,
+      requireCatalog,
+      thinking,
+    });
     try {
       await agent.events.get("session_start")![0](undefined, context);
       const outcome = readAgentStartupOutcome(mailbox);
       if (!failure) {
         assert.equal(outcome?.status, "ready");
-        assert.equal(context.model, entry);
+        if (requireCatalog) assert.equal(context.model, entry);
         assert.equal(process.env[EXPECTED_STARTUP_MODEL_ENV], undefined);
       } else {
         assert.equal(outcome?.status, "failed");
@@ -8736,10 +8755,10 @@ test("deferred bootstrap model change is rejected before request pumping", async
     participants: [{ id: "test/model", payload: "opaque" }],
   });
   const previous = process.env[EXPECTED_STARTUP_MODEL_ENV];
-  process.env[EXPECTED_STARTUP_MODEL_ENV] = JSON.stringify([
-    selected.provider,
-    selected.id,
-  ]);
+  process.env[EXPECTED_STARTUP_MODEL_ENV] = JSON.stringify({
+    ...selected,
+    requireCatalog: true,
+  });
   try {
     await agent.events.get("session_start")![0](undefined, context);
     assert.equal(readAgentStartupOutcome(mailbox), undefined);

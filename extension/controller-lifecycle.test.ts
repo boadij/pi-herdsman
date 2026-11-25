@@ -4744,24 +4744,13 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
   );
   scopeUnavailable = false;
 
-  const rpcRunningStatus = async () => {
-    context.mode = "rpc";
-    const selections = ["Agents & definitions"];
-    context.ui.select = async (_title, options) => {
-      const selection = selections.shift();
-      return selection
-        ? options.find(
-            (option) =>
-              option === selection || option.startsWith(`${selection}  `),
-          )
-        : undefined;
-    };
-    await pi.commandOptions.get("herdsman")!.handler("", context);
-    context.mode = "tui";
-  };
+  // Emergency stop refreshes managed scope before asking for confirmation.
+  context.ui.confirm = async () => false;
+  const refreshManagedScope = () =>
+    pi.commandOptions.get("herdsman-stop")!.handler("", context);
 
   scopePlans.push({});
-  await rpcRunningStatus();
+  await refreshManagedScope();
 
   let releaseRefresh!: () => void;
   let refreshStarted!: () => void;
@@ -4772,7 +4761,7 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
     refreshStarted = resolve;
   });
   scopePlans.push({ gate: refreshGate, started: refreshStarted });
-  const refreshing = rpcRunningStatus();
+  const refreshing = refreshManagedScope();
   await refreshStartedPromise;
   assert.ok(
     pi.pi.getActiveTools().includes("read_evidence"),
@@ -4808,7 +4797,7 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
 
   scopeUnavailable = true;
   scopePlans.push({ unavailable: true });
-  await rpcRunningStatus();
+  await refreshManagedScope();
   assert.ok(
     !pi.pi.getActiveTools().includes("read_evidence"),
     "completed unavailable verification revokes Lead tools before overlapping checks",
@@ -4825,10 +4814,10 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
   let olderStatus: Promise<void> | undefined;
   let newerStatus: Promise<void> | undefined;
   try {
-    olderStatus = rpcRunningStatus();
+    olderStatus = refreshManagedScope();
     await olderStartedPromise;
     scopePlans.push({ unavailable: true });
-    newerStatus = rpcRunningStatus();
+    newerStatus = refreshManagedScope();
     await newerStatus;
     assert.ok(!pi.pi.getActiveTools().includes("read_evidence"));
     releaseOlder();
@@ -4861,7 +4850,7 @@ test("registered managed Lead fails closed if its worktree scope disappears", as
   const originalSessionId = context.sessionManager.getSessionId;
   let sessionStatus: Promise<void> | undefined;
   try {
-    sessionStatus = rpcRunningStatus();
+    sessionStatus = refreshManagedScope();
     await sessionCheckStartedPromise;
     context.sessionManager.getSessionId = () => "different-session";
     releaseSessionChange();

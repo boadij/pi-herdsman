@@ -34,6 +34,12 @@ confirmation; unresolved records remain durable and are reconciled after
 restart. Because Pi message submission is asynchronous, recovery may replay a
 notification if interruption occurred before its receipt became visible.
 Delivery is therefore recoverable and may be at-least-once, not exactly-once.
+Accepted notifications can be delivered and reconciled while the Agent is still
+working, including after the owner restarts on a different build, when both
+implementations support the same mailbox contract. This does not relax exact-
+build requirements for live execution or control. A shared mailbox version does
+not guarantee compatibility with every historical implementation; unsupported
+records are preserved and reported rather than discarded.
 
 Notifications do not set `pendingAskId`, block completion, or create a reply
 obligation. The owner may use `steer_agent` when that operation is eligible.

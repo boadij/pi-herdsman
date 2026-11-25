@@ -33,6 +33,7 @@ import {
   sameDirectory,
   sameObservedSessionPath,
   resolveAssignmentCheckout,
+  requireHerdrPiIntegration,
 } from "../herdr.ts";
 import { readResult, unacknowledgedRequestExists } from "../mailbox.ts";
 import { claimSessionActivationLock } from "../lock.ts";
@@ -49,11 +50,7 @@ import {
   readRequiredEvidenceSnapshot,
   type RequiredEvidence,
 } from "../storage.ts";
-import {
-  acceptedCloseProof,
-  resolveSavedSessionModelSelection,
-  STOP_CLOSURE_ENTRY,
-} from "../agent-controller.ts";
+import { acceptedCloseProof, STOP_CLOSURE_ENTRY } from "../agent-controller.ts";
 import type { ExpectedSession, HerdrRecord } from "../herdr.ts";
 import type { RuntimeBuild } from "../compatibility.ts";
 import {
@@ -70,6 +67,11 @@ import {
   resolveChildModel,
   writePrivatePromptSnapshots,
 } from "../agent-definitions.ts";
+import {
+  EXPECTED_STARTUP_MODEL_ENV,
+  inheritedStartupModelExpectation,
+  modelToken,
+} from "../agent-model-overrides.ts";
 import type { MessageFileInput } from "../core.ts";
 import type { ManagedAgentState } from "../mailbox.ts";
 import { randomUUID } from "node:crypto";
@@ -1271,7 +1273,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             "Type remove to confirm.",
           ].join("\n"),
           undefined,
-          { signal: operationSignal },
+          { signal: operationSignal, blockedKind: "permission" },
         );
     operationSignal?.throwIfAborted();
     if (answer !== "remove")
@@ -1890,7 +1892,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     const answer = await ctx.ui.input(
       `Release Manager authority for ${branch}?\n\nThis removes the durable project assignment and retires its pending project messages. Git checkouts, branches, Pi conversations, processes, and Agent ownership are not changed.\n\nNo live target execution or matching branch checkout was found, but unobserved execution cannot be ruled out.\n\nType forget ${branch} to confirm.`,
       undefined,
-      { signal: operationSignal },
+      { signal: operationSignal, blockedKind: "permission" },
     );
     if (answer !== `forget ${branch}`)
       return {
@@ -3702,8 +3704,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (live.length === 1 && currentAssignment!.piSessionFile)
       await bindLeadSessionFile(currentAssignment!, live[0]);
     let savedSessionCwd: string | undefined;
-    let savedModel:
-      ReturnType<typeof resolveSavedSessionModelSelection> | undefined;
     if (operation.action === "resume" && currentAssignment!.piSessionFile) {
       let saved: ReturnType<typeof host.SessionManager.open>;
       try {
@@ -3718,10 +3718,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           `Saved Lead session restoration failed for ${currentAssignment!.id}: recorded session history has a mismatched session ID; existing work was preserved.`,
         );
       savedSessionCwd = saved.getCwd();
-      savedModel = resolveSavedSessionModelSelection(
-        saved,
-        (provider, modelId) => ctx.modelRegistry.find(provider, modelId),
-      );
     }
     const placement =
       operation.action === "resume"
@@ -3929,6 +3925,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     };
     if (branchWorktrees[0]?.open_workspace_id)
       await assertUnoccupied(branchWorktrees[0].open_workspace_id);
+    const agentDir = resolve(getAgentDir());
+    if (operation.action === "delegate" && branchWorktrees.length === 0)
+      requireHerdrPiIntegration(agentDir);
     let assignment: ProjectAssignment;
     const evidenceScope =
       operation.action === "resume"
@@ -4360,6 +4359,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         if (!piAlreadyRunning) {
           await assertResumePlacement();
           await assertUnoccupied(workspaceId!);
+          requireHerdrPiIntegration(agentDir);
           const projectTrusted = ctx.isProjectTrusted();
           effectiveProjectTrusted = projectTrusted;
           if (operation.action === "resume") {
@@ -4408,32 +4408,25 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           const effectiveDefinition =
             body === definition.body ? definition : { ...definition, body };
           if (body) promptPaths.push(...writePrivatePromptSnapshots([body]));
-          const registeredProviderIds = new Set(
-            (ctx.modelRegistry?.getRegisteredProviderIds?.() ?? []).map((id) =>
-              id.toLowerCase(),
-            ),
-          );
+          const configured = configuredModel(effectiveDefinition.frontmatter);
+          const inheritedModel =
+            operation.action === "delegate" ? ctx.model : undefined;
           const modelDecision = resolveChildModel({
-            configured: configuredModel(effectiveDefinition.frontmatter),
-            inherited:
-              operation.action === "delegate" && ctx.model
-                ? {
-                    provider: ctx.model.provider,
-                    token: `${ctx.model.provider}/${ctx.model.id}`,
-                  }
-                : undefined,
-            saved:
-              operation.action === "resume" && savedModel?.kind === "resolved"
-                ? savedModel.model
-                : undefined,
-            savedUnresolved:
-              operation.action === "resume" &&
-              (savedModel === undefined || savedModel.kind === "unresolved"),
-            isForeignProvider: (providerId) =>
-              registeredProviderIds.has(providerId.toLowerCase()),
-            isKnownModel: (provider, modelId) =>
-              ctx.modelRegistry.find(provider, modelId) !== undefined,
+            configured,
+            inherited: inheritedModel
+              ? {
+                  provider: inheritedModel.provider,
+                  token: modelToken(inheritedModel),
+                }
+              : undefined,
           });
+          const expectedStartupModel =
+            !configured && inheritedModel
+              ? inheritedStartupModelExpectation(
+                  ctx.modelRegistry,
+                  inheritedModel,
+                )
+              : undefined;
           const launchArgs = agentLaunchArgs(effectiveDefinition, {
             ...(body ? { bodyPromptPath: promptPaths.at(-1)! } : {}),
             cwd: cwd!,
@@ -4459,7 +4452,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               "--label",
               label,
               "--env",
-              `PI_CODING_AGENT_DIR=${getAgentDir()}`,
+              `PI_CODING_AGENT_DIR=${agentDir}`,
+              ...(expectedStartupModel
+                ? [
+                    "--env",
+                    `${EXPECTED_STARTUP_MODEL_ENV}=${JSON.stringify(expectedStartupModel)}`,
+                  ]
+                : []),
               "--no-focus",
             ],
             { signal },
@@ -4507,6 +4506,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           )?.instanceId;
           leadStartupStartedAt = Date.now();
           await startHerdrAgentInPane(pi, ctx, {
+            agentDir,
             primaryWorkspaceId,
             workspaceId,
             tabId,

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
   AGENT_ID,
@@ -13,7 +13,9 @@ import {
   realFs,
 } from "../support.ts";
 import { rememberCoordinatorTarget } from "../coordinator-target.ts";
+import { OperationError } from "../errors.ts";
 import {
+  herdsmanDataRoot,
   persistRequiredEvidenceSnapshot,
   readRequiredEvidenceSnapshot,
 } from "../storage.ts";
@@ -32,6 +34,26 @@ const { getAgentDir } = await import("@earendil-works/pi-coding-agent");
 const { herdrAgentAlias } = await import("../herdr.ts");
 
 const lifecycleStop = "stop after assignment publication";
+
+function removeHerdrIntegrationForTest(t: TestContext) {
+  const integrationPath = join(
+    resolve(getAgentDir()),
+    "extensions",
+    "herdr-agent-state.ts",
+  );
+  const savedPath = `${integrationPath}.disabled`;
+  realFs.renameSync(integrationPath, savedPath);
+  t.after(() => realFs.renameSync(savedPath, integrationPath));
+  return (error: unknown) => {
+    assert.ok(error instanceof OperationError);
+    assert.equal(error.detail.category, "invalid_request");
+    assert.equal(error.detail.operation, "preflight");
+    assert.ok(error.message.includes(integrationPath));
+    assert.match(error.detail.nextAction ?? "", /herdr integration install pi/);
+    assert.match(error.message, /herdr integration install pi/);
+    return true;
+  };
+}
 
 test("Lead startup attestation requires the exact session and a fresh generation", () => {
   const priorGeneration = randomUUID();
@@ -767,6 +789,7 @@ function projectLifecycle(options: {
   rejectAtPublication?: boolean;
   launch?: (options: any) => never;
   switchBranchOnTabCreate?: boolean;
+  inheritedModel?: { provider: string; id: string };
 }) {
   const repoKey = realFs.realpathSync(process.cwd());
   const managerCheckout = repoKey;
@@ -778,6 +801,7 @@ function projectLifecycle(options: {
   mkdirSync(assignmentRoot, { recursive: true });
   const branch = "feature/baseline";
   let checkoutBranch = branch;
+  let worktreeCreates = 0;
   const supervision = {
     ...supervisionRuntime(WORKSPACE),
     root: assignmentRoot,
@@ -853,13 +877,15 @@ function projectLifecycle(options: {
       if (args[0] === "worktree" && args[1] === "list") return topology;
       if (args[0] === "workspace" && args[1] === "get")
         return { workspace: { workspace_id: WORKSPACE } };
-      if (args[0] === "worktree" && args[1] === "create")
+      if (args[0] === "worktree" && args[1] === "create") {
+        worktreeCreates++;
         return {
           workspace: { workspace_id: workspaceId },
           root_pane: { pane_id: "pane" },
           tab: { tab_id: "tab" },
           worktree: { path: worktreePath, branch },
         };
+      }
       if (args[0] === "worktree" && args[1] === "open")
         return {
           workspace: { workspace_id: workspaceId },
@@ -887,7 +913,13 @@ function projectLifecycle(options: {
           "--label",
           `lead-${id.slice(0, 8)}`,
           "--env",
-          `PI_CODING_AGENT_DIR=${getAgentDir()}`,
+          `PI_CODING_AGENT_DIR=${resolve(getAgentDir())}`,
+          ...(options.inheritedModel
+            ? [
+                "--env",
+                `PI_HERDSMAN_EXPECTED_STARTUP_MODEL=${JSON.stringify({ ...options.inheritedModel, requireCatalog: true })}`,
+              ]
+            : []),
           "--no-focus",
         ]);
         return {
@@ -970,6 +1002,14 @@ function projectLifecycle(options: {
   } as any);
   const ctx = fakeContext() as any;
   ctx.cwd = managerCheckout;
+  if (options.inheritedModel) {
+    const model = options.inheritedModel;
+    ctx.model = model;
+    ctx.modelRegistry = {
+      find: (provider: string, id: string) =>
+        provider === model.provider && id === model.id ? model : undefined,
+    };
+  }
   ctx.sessionManager.getSessionId = () => manager.piSessionId;
   return {
     branch,
@@ -977,6 +1017,9 @@ function projectLifecycle(options: {
     managerCheckout,
     worktreePath,
     workspaceId,
+    get worktreeCreates() {
+      return worktreeCreates;
+    },
     get published() {
       return readProjectAssignment(supervision as any, repoKey, branch);
     },
@@ -1002,12 +1045,24 @@ function projectLifecycle(options: {
 }
 
 test("fresh delegation launches in the profile-aware worktree tab", async () => {
+  const model = { provider: "extension/provider", id: "model" };
   const lifecycle = projectLifecycle({
+    inheritedModel: model,
     launch: (options) => {
+      assert.equal(options.agentDir, resolve(getAgentDir()));
       assert.equal(options.workspaceId, lifecycle.workspaceId);
       assert.equal(options.cwd, lifecycle.worktreePath);
       assert.equal(options.tabId, "lead-tab");
       assert.equal(options.paneId, "lead-pane");
+      assert.equal(options.agentArgs.includes("--no-extensions"), true);
+      assert.equal(
+        options.agentArgs[options.agentArgs.indexOf("--provider") + 1],
+        model.provider,
+      );
+      assert.equal(
+        options.agentArgs[options.agentArgs.indexOf("--model") + 1],
+        `${model.provider}/${model.id}`,
+      );
       assert.deepEqual(options.agentArgs.slice(-2), [
         "--session-id",
         lifecycle.published?.id,
@@ -1017,6 +1072,22 @@ test("fresh delegation launches in the profile-aware worktree tab", async () => 
   });
   await assert.rejects(lifecycle.activate(), /launch observed/);
   assert.ok(lifecycle.published);
+});
+
+test("fresh delegation rejects missing Herdr integration before creating worktree or evidence", async (t) => {
+  const missingIntegration = removeHerdrIntegrationForTest(t);
+  const lifecycle = projectLifecycle({});
+  const evidenceDir = join(herdsmanDataRoot(), "evidence");
+  const evidenceEntries = () =>
+    realFs.existsSync(evidenceDir)
+      ? realFs.readdirSync(evidenceDir).sort()
+      : [];
+  const priorEvidence = evidenceEntries();
+
+  await assert.rejects(lifecycle.activate(), missingIntegration);
+  assert.equal(lifecycle.worktreeCreates, 0);
+  assert.equal(lifecycle.published, undefined);
+  assert.deepEqual(evidenceEntries(), priorEvidence);
 });
 
 test("fresh delegation refuses to launch after the checkout branch changes during tab creation", async () => {
@@ -1742,7 +1813,7 @@ test("resume revalidates checkout placement after async preparation", async () =
   managerLease.release();
 });
 
-test("resume preserves queued manager message when controlled recovery fails", async () => {
+test("resume preserves queued manager message when controlled recovery fails", async (t) => {
   const repoKey = realFs.realpathSync(process.cwd());
   const checkout = join(tmpdir(), `resume-${randomUUID()}`);
   mkdirSync(checkout);
@@ -1784,12 +1855,12 @@ test("resume preserves queued manager message when controlled recovery fails", a
   let alreadyRunning = false;
   let startingUnverifiedPi = false;
   let snapshotCalls = 0;
+  let preparations = 0;
   let sessionOpenError: Error | undefined;
   let openedSessionId = id;
   const ctx = fakeContext() as any;
   ctx.cwd = repoKey;
   ctx.modelRegistry = {
-    getRegisteredProviderIds: () => ["mistral-native"],
     find: () => undefined,
   };
   let launchedArgs: string[] | undefined;
@@ -1962,16 +2033,17 @@ test("resume preserves queued manager message when controlled recovery fails", a
       inline: { bytes: 1000 },
       mailbox: { bytes: 1000 },
     }),
-    prepareCoordinationInput: async (message: string) => ({
-      text: message,
-      resultBindings: [],
-    }),
+    prepareCoordinationInput: async (message: string) => {
+      preparations++;
+      return { text: message, resultBindings: [] };
+    },
     writeChiefMessage: (message: any) => events.push(message),
     startHerdrAgentInPane: async (
       _pi: unknown,
       _ctx: unknown,
       options: any,
     ) => {
+      assert.equal(options.agentDir, resolve(getAgentDir()));
       launches++;
       launchedArgs = options.agentArgs;
       launchPlacement = [
@@ -2036,7 +2108,7 @@ test("resume preserves queued manager message when controlled recovery fails", a
       "--label",
       `lead-${id.slice(0, 8)}`,
       "--env",
-      `PI_CODING_AGENT_DIR=${getAgentDir()}`,
+      `PI_CODING_AGENT_DIR=${resolve(getAgentDir())}`,
       "--no-focus",
     ],
   ]);
@@ -2048,7 +2120,7 @@ test("resume preserves queued manager message when controlled recovery fails", a
   ]);
   assert.ok(launchedArgs);
   assert.equal(launchedArgs!.includes("--model"), false);
-  assert.equal(launchedArgs!.includes("--no-extensions"), false);
+  assert.equal(launchedArgs!.includes("--no-extensions"), true);
   assert.deepEqual(launchedArgs!.slice(-2), ["--session-id", id]);
   assert.equal(result.details.status, "recovery_unverified");
   assert.equal(result.details.message_queued, true);
@@ -2090,8 +2162,31 @@ test("resume preserves queued manager message when controlled recovery fails", a
   }
   tabFailure = undefined;
   tabCreates.length = 0;
-  alreadyRunning = true;
   events.length = 0;
+  const missingIntegration = removeHerdrIntegrationForTest(t);
+  const priorPreparations = preparations;
+  const readAssignment = () =>
+    readProjectAssignment(
+      { root: assignmentRoot, assignments: assignmentRoot } as any,
+      repoKey,
+      assignment.branch,
+    );
+  const priorAssignment = readAssignment();
+  await assert.rejects(
+    runtime.activateProjectLead(
+      { action: "resume", branch: assignment.branch, message: "continue" },
+      ctx,
+      new AbortController().signal,
+    ),
+    missingIntegration,
+  );
+  assert.deepEqual(readAssignment(), priorAssignment);
+  assert.equal(preparations, priorPreparations);
+  assert.equal(events.length, 0);
+  assert.deepEqual(tabCreates, []);
+  assert.equal(launches, 1);
+
+  alreadyRunning = true;
   const runningResult = (await runtime.activateProjectLead(
     { action: "resume", branch: assignment.branch, message: "continue" },
     ctx,

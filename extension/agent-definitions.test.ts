@@ -1576,19 +1576,19 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     ],
     [
       "reviewer",
-      "Independent read-only internal team reviewer for plans, diffs, implementations, and codebase health; use for verification, missing cases, and regressions, not user or supervisor approval",
+      "Independent read-only internal team reviewer for correctness, regressions, requirements, and adequacy of validation evidence; not user or supervisor approval",
     ],
     [
       "generalist",
-      "General-purpose execution for bounded investigation, editing, and validation; use when work spans capabilities; prefer focused specialists for narrow tasks",
+      "General-purpose execution for bounded work requiring tightly coupled investigation, decisions, editing, and validation; prefer focused specialists for narrow tasks",
     ],
     [
       "ship",
-      "Git and GitHub specialist for authorized commits, pushes, pull requests, merges, and releases; defaults to Conventional Commits",
+      "Git and GitHub delivery specialist for authorized commits, pushes, pull requests, merges, and releases; reuses technical acceptance evidence and defaults to Conventional Commits",
     ],
     [
       "validator",
-      "Focused verification agent for running tests, checks, and smoke scenarios against existing changes; use to report observed evidence, not implement fixes or review design",
+      "Focused verification agent for outstanding tests, checks, and smoke scenarios against existing changes; reports observed and reused evidence, not fixes or design review",
     ],
   ]);
   const required = withPiAgentDir(
@@ -2584,32 +2584,35 @@ test("builds exact Pi capability launch arguments", () => {
   ]);
 });
 
-test("drops --no-extensions when the child's model comes from an extension", () => {
-  const definition = {
-    name: "scout",
-    path: "/agents/scout.md",
-    frontmatter: { name: "scout", noExtensions: true },
-    body: "",
-  };
-  const foreign = agentLaunchArgs(definition, {
-    modelDecision: {
-      kind: "use",
-      model: "acme/reasoning/mini",
-      extensionDiscovery: true,
-    },
-  });
-  assert.deepEqual(foreign.slice(0, 2), ["--model", "acme/reasoning/mini"]);
-  assert.equal(foreign.includes("--no-extensions"), false);
-
-  const lean = agentLaunchArgs(definition, {
-    modelDecision: {
-      kind: "use",
-      model: "vendor-one/chat-large",
-      extensionDiscovery: false,
-    },
-  });
-  assert.deepEqual(lean.slice(0, 2), ["--model", "vendor-one/chat-large"]);
-  assert.equal(lean.includes("--no-extensions"), true);
+test("model selection cannot change extension discovery policy", () => {
+  const exact = { provider: "acme", token: "acme/custom-model" };
+  const decisions = [
+    resolveChildModel({}),
+    resolveChildModel({ configured: "openai-codex/gpt-6-luna:high" }),
+    resolveChildModel({ inherited: exact }),
+    resolveChildModel({ assignment: exact }),
+  ];
+  const extensions = ["builtin:codemode", "npm:@example/provider"];
+  for (const noExtensions of [true, false, undefined]) {
+    for (const modelDecision of decisions) {
+      const args = agentLaunchArgs(
+        {
+          name: "validator",
+          path: "/agents/validator.md",
+          frontmatter: { name: "validator", noExtensions, extensions },
+          body: "",
+        },
+        { modelDecision },
+      );
+      assert.equal(args.includes("--no-extensions"), noExtensions === true);
+      assert.deepEqual(
+        args.flatMap((arg, index) =>
+          arg === "--extension" ? [args[index + 1]] : [],
+        ),
+        extensions,
+      );
+    }
+  }
 });
 
 test("resolves model and thinking fallbacks independently at launch", () => {
@@ -2625,6 +2628,7 @@ test("resolves model and thinking fallbacks independently at launch", () => {
   const suffix = ["--no-context-files", "--no-skills"];
   for (const [frontmatter, settings] of [
     [{}, ["--model", "inherited/model", "--thinking", "high"]],
+    [{ model: "   " }, ["--model", "inherited/model", "--thinking", "high"]],
     [
       { model: "explicit/model" },
       ["--model", "explicit/model", "--thinking", "high"],
@@ -2779,7 +2783,6 @@ test("ship loads native Code Mode without exposing unselected ordinary tools", (
       modelDecision: {
         kind: "use",
         model: "codemode-probe/test",
-        extensionDiscovery: false,
       },
     });
     assert.equal(args.includes("--no-extensions"), true);
@@ -3872,7 +3875,6 @@ test("definition edits target existing sources and reject stale or linked files"
   );
 });
 
-const noForeignProviders = () => false;
 const inheritedModel = (provider: string, token: string) => ({
   provider,
   token,
@@ -3894,7 +3896,6 @@ test("assignment thinking takes precedence or defers to Pi for a model-only over
   const overrideModel = `${selected.provider}/${selected.id}`;
   const modelDecision = resolveChildModel({
     assignment: { provider: selected.provider, token: overrideModel },
-    isForeignProvider: (provider) => provider === selected.provider,
   });
   const modelRuntime = {
     // A longer provider prefix must not redirect Pi away from the exact pair.
@@ -3934,120 +3935,28 @@ test("assignment thinking takes precedence or defers to Pi for a model-only over
       assert.notEqual(thinkingIndex, -1);
       assert.equal(args[thinkingIndex + 1], expected);
     }
-    assert.equal(args.includes("--no-extensions"), !model);
+    assert.equal(args.includes("--no-extensions"), true);
   }
 });
 
-test("a child with no requested model passes no --model at all", () => {
-  assert.deepEqual(
-    resolveChildModel({ isForeignProvider: noForeignProviders }),
-    {
-      kind: "none",
-      extensionDiscovery: false,
-    },
-  );
-});
-
-test("a blank configured model is treated as no model", () => {
-  assert.deepEqual(
-    resolveChildModel({
-      configured: "   ",
-      isForeignProvider: noForeignProviders,
-    }),
-    { kind: "none", extensionDiscovery: false },
-  );
-});
-
-test("saved extension models enable discovery without a CLI model override", () => {
-  const decision = resolveChildModel({
-    saved: { provider: "acme", modelId: "zai-glm-5-3" },
-    isForeignProvider: (id) => id === "acme",
-    isKnownModel: () => true,
-  });
-  assert.deepEqual(decision, { kind: "none", extensionDiscovery: true });
-  const definition = {
-    name: "scout",
-    path: "/agents/scout.md",
-    frontmatter: { name: "scout", noExtensions: true },
-    body: "",
-  };
-  const args = agentLaunchArgs(definition, { modelDecision: decision });
-  assert.equal(args.includes("--no-extensions"), false);
-  assert.equal(args.includes("--model"), false);
-});
-
-test("a built-in or config provider keeps the child lean", () => {
-  assert.deepEqual(
-    resolveChildModel({
-      inherited: inheritedModel("vendor-one", "vendor-one/chat-large"),
-      isForeignProvider: noForeignProviders,
-    }),
-    {
-      kind: "use",
-      model: "vendor-one/chat-large",
-      extensionDiscovery: false,
-    },
-  );
-});
-
-test("an extension-provided model carries the right to discover extensions", () => {
-  assert.deepEqual(
-    resolveChildModel({
-      inherited: inheritedModel("acme", "acme/reasoning/mini"),
-      isForeignProvider: (id) => id === "acme",
-    }),
-    {
-      kind: "use",
-      model: "acme/reasoning/mini",
-      extensionDiscovery: true,
-    },
-  );
-});
-
-test("a configured model outranks the inherited one and keeps the definition's policy", () => {
-  assert.deepEqual(
-    resolveChildModel({
-      configured: "vendor-two/chat-small",
-      inherited: inheritedModel("acme", "acme/reasoning/mini"),
-      isForeignProvider: (id) => id === "acme",
-    }),
-    {
-      kind: "use",
-      model: "vendor-two/chat-small",
-      extensionDiscovery: false,
-    },
-  );
-});
-
-test("configured extension models enable discovery without changing model precedence", () => {
-  const cases: [string, string[], boolean][] = [
-    ["mistral-native/zai-glm-5-3-flash", ["mistral-native"], true],
-    ["MISTRAL-NATIVE/zai-glm-5-3-flash", ["mistral-native"], true],
-    ["org/native/model-x", ["org/native"], true],
-    ["anthropic/claude-model", ["mistral-native"], false],
-    ["unknown/model-x", ["mistral-native"], false],
-    ["zai-glm-5-3-flash", ["mistral-native"], false],
-  ];
-
-  for (const [configured, providers, extensionDiscovery] of cases) {
-    assert.deepEqual(
-      resolveChildModel({
-        configured,
-        inherited: inheritedModel("mistral-native", "mistral-native/inherited"),
-        isForeignProvider: (provider) => providers.includes(provider),
-      }),
-      { kind: "use", model: configured, extensionDiscovery },
-      configured,
+test("an absent or blank model selector passes no --model", () => {
+  for (const configured of [undefined, "   "]) {
+    const args = agentLaunchArgs(
+      { name: "scout", path: "/agents/scout.md", frontmatter: {}, body: "" },
+      { modelDecision: resolveChildModel({ configured }) },
     );
+    assert.equal(args.includes("--model"), false);
   }
+});
 
+test("a configured project model outranks inheritance without changing extension policy", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-pinned-model-"));
   try {
     const projectAgents = join(root, ".pi", "agents");
     mkdirSync(projectAgents, { recursive: true });
     writeFileSync(
       join(projectAgents, "scout.md"),
-      "---\nname: scout\nmodel: mistral-native/zai-glm-5-3-flash\n---\n",
+      '---\nname: scout\nmodel: mistral-native/zai-glm-5-3-flash\nextensions: ["+npm:pi-mistral-native"]\n---\n',
     );
     const effective = discoverAgent("scout", { projectRoot: root });
     assert.equal(effective.frontmatter.noExtensions, true);
@@ -4059,7 +3968,6 @@ test("configured extension models enable discovery without changing model preced
     const decision = resolveChildModel({
       configured: configuredModel(effective.frontmatter),
       inherited: inheritedModel("anthropic", "anthropic/claude-model"),
-      isForeignProvider: (provider) => provider === "mistral-native",
     });
     const args = agentLaunchArgs(effective, {
       bodyPromptPath: "/tmp/scout-prompt",
@@ -4069,7 +3977,8 @@ test("configured extension models enable discovery without changing model preced
       args.slice(args.indexOf("--model"), args.indexOf("--model") + 2),
       ["--model", "mistral-native/zai-glm-5-3-flash"],
     );
-    assert.equal(args.includes("--no-extensions"), false);
+    assert.equal(args.includes("--no-extensions"), true);
+    assert.equal(args.includes("npm:pi-mistral-native"), true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -4080,10 +3989,9 @@ test("the inherited provider is Pi's resolved provider, not the token's first se
   // follow Pi rather than re-derive the provider from the string.
   assert.deepEqual(
     resolveChildModel({
-      inherited: inheritedModel("acme", "solo-chat"),
-      isForeignProvider: (id) => id === "acme",
+      inherited: inheritedModel("acme/native", "solo-chat"),
     }),
-    { kind: "use", model: "solo-chat", extensionDiscovery: true },
+    { kind: "use", model: "solo-chat", provider: "acme/native" },
   );
 });
 

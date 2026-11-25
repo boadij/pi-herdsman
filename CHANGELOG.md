@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.55.0](https://github.com/boadij/pi-herdsman/compare/v0.54.0...v0.55.0) (2026-11-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **agents:** honor extension discovery independently of model selection ([#1130](https://github.com/boadij/pi-herdsman/issues/1130))
+* expose role-specific supervisor messaging tools ([#1122](https://github.com/boadij/pi-herdsman/issues/1122))
+* **ui:** flatten slash commands for action-first fuzzy discovery ([#1120](https://github.com/boadij/pi-herdsman/issues/1120))
+
+### Features
+
+* expose role-specific supervisor messaging tools ([#1122](https://github.com/boadij/pi-herdsman/issues/1122)) ([6a4f481](https://github.com/boadij/pi-herdsman/commit/6a4f4811ebe93b29cd1c590efd9321144fba09e6))
+* **skills:** support native Code Mode skill loading ([#1116](https://github.com/boadij/pi-herdsman/issues/1116)) ([ab5389b](https://github.com/boadij/pi-herdsman/commit/ab5389b696b85dc39e0682c798acd1575700867d))
+* **ui:** flatten slash commands for action-first fuzzy discovery ([#1120](https://github.com/boadij/pi-herdsman/issues/1120)) ([87cc3b2](https://github.com/boadij/pi-herdsman/commit/87cc3b231034c9e8e0efcee2e61827e1189e35e7))
+
+
+### Fixes
+
+* **agents:** honor extension discovery independently of model selection ([#1130](https://github.com/boadij/pi-herdsman/issues/1130)) ([eb14f89](https://github.com/boadij/pi-herdsman/commit/eb14f891f1aadf32d7cfb8722c6c90b70c8c9b2d))
+* **agents:** settle durable handoffs across builds ([#1133](https://github.com/boadij/pi-herdsman/issues/1133)) ([f282284](https://github.com/boadij/pi-herdsman/commit/f282284cea033f870c2180f7f1c0fcc01f8c64ed))
+* **manager:** preserve automatically activated Manager role ([#1119](https://github.com/boadij/pi-herdsman/issues/1119)) ([3413ee7](https://github.com/boadij/pi-herdsman/commit/3413ee715083ba4506f5b1134e163048a351ba1c))
+* **runtime:** validate managed Pi launch prerequisites ([#1129](https://github.com/boadij/pi-herdsman/issues/1129)) ([c5af3ee](https://github.com/boadij/pi-herdsman/commit/c5af3ee84c12711af78dd9279b8d7c78e72f84f7))
+
+
+### Performance
+
+* **agents:** narrow specialist responsibilities and reuse completed work ([#1138](https://github.com/boadij/pi-herdsman/issues/1138)) ([bb30570](https://github.com/boadij/pi-herdsman/commit/bb30570bf366585ae8b0fada36867a4abac6424e))
+
+
+### Refactoring
+
+* **ui:** remove redundant Running agents menu ([#1134](https://github.com/boadij/pi-herdsman/issues/1134)) ([bed0089](https://github.com/boadij/pi-herdsman/commit/bed0089ab6eddb5d633c1372b115f546fab1cda1))
+
+
+### Other Changes
+
+* **deps:** update dependency @types/node to v22.20.7 ([#1131](https://github.com/boadij/pi-herdsman/issues/1131)) ([f1277b3](https://github.com/boadij/pi-herdsman/commit/f1277b31533aebfdd8a75828673d72f2123f83a7))
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.11.13 ([#1112](https://github.com/boadij/pi-herdsman/issues/1112)) ([ffa0ac6](https://github.com/boadij/pi-herdsman/commit/ffa0ac6f9cd9a7a8750536d4e6bbd2f5fd919512))
+* **deps:** update ghcr.io/jdx/mise docker tag to v2026.11.14 ([#1117](https://github.com/boadij/pi-herdsman/issues/1117)) ([0fa6d2c](https://github.com/boadij/pi-herdsman/commit/0fa6d2c0730b81b813c10d35766dec870ee902da))
+* **runtime:** fully adopt Pi 1.6.1 ([#1139](https://github.com/boadij/pi-herdsman/issues/1139)) ([175b36e](https://github.com/boadij/pi-herdsman/commit/175b36e5af70a1e997744c85531582f2f6539f3a))
+
 ## [0.54.0](https://github.com/boadij/pi-herdsman/compare/v0.53.0...v0.54.0) (2026-11-23)
 
 

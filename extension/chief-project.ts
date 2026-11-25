@@ -1,6 +1,7 @@
 import {
   type ExtensionAPI,
   type ExtensionContext,
+  getAgentDir,
   parseSessionEntries,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
@@ -17,7 +18,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { requireCompatibleBuild, type RuntimeBuild } from "./compatibility.ts";
 import { readConfig } from "./config.ts";
@@ -27,6 +28,7 @@ import {
   localRepositoryScope,
   paneProcess,
   prepareHerdrManagerPane,
+  requireHerdrPiIntegration,
   runHerdr,
   sameDirectory,
   sameObservedSessionPath,
@@ -596,9 +598,13 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
           return { status: "already_running", repository: repositoryPath };
         }
 
+        stage = "preflight";
+        const agentDir = resolve(getAgentDir());
+        requireHerdrPiIntegration(agentDir);
         stage = "workspace";
         const assertCurrentAuthority = () => host.assertChief(ctx);
         const options = {
+          agentDir,
           repository,
           signal,
           assertCurrentAuthority,

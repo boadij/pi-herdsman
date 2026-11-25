@@ -652,9 +652,10 @@ export function preparePi(
   model: string,
   execute?: Command,
 ): Promise<"ambient" | "auth.json symlink">;
-export function prepareContinuationFaux(
+export function prepareFauxAgentOverlays(
   paths: OpenRecord,
   extensionPath: string,
+  names: string[],
 ): Promise<void>;
 export function nestedPaneInput(
   ctx: OpenRecord,

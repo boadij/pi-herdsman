@@ -13,6 +13,7 @@ import type {
   TranscriptMessages,
 } from "@earendil-works/pi-ai";
 import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
+import { agentLaunchArgs, discoverAgent } from "./agent-definitions.ts";
 import {
   decide as decideSmokeFaux,
   managerHandoffSupervisorToolAvailable,
@@ -156,7 +157,7 @@ import {
   agentsForPiSession,
   isolatedSessionDetails,
   preparePi,
-  prepareContinuationFaux,
+  prepareFauxAgentOverlays,
   requireTestedBaseline,
   requireNestedHerdrServer,
   resolveSmokeModel,
@@ -6866,18 +6867,36 @@ test("smoke auth resolves credentials from the configured model", async () => {
   ]);
 });
 
-test("continuation installs the faux extension on the isolated implementer definition", async () => {
+test("simulated core and continuation overlays preserve bundled Agent extension policy", async () => {
   const piAgent = await mkdtemp(join(tmpdir(), "pi-herdsman-smoke-agent-"));
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const provider = join(piAgent, "extensions", "smoke-faux.mjs");
+  process.env.PI_CODING_AGENT_DIR = piAgent;
   try {
-    await prepareContinuationFaux(
-      { piAgent },
-      "/isolated/extensions/smoke-faux.mjs",
-    );
-    assert.match(
-      await readFile(join(piAgent, "agents", "implementer.md"), "utf8"),
-      /extensions: \["\/isolated\/extensions\/smoke-faux\.mjs"\]/,
-    );
+    const names = ["implementer", "scout"];
+    await prepareFauxAgentOverlays({ piAgent }, provider, names);
+    for (const name of names) {
+      const definition = discoverAgent(name);
+      assert.deepEqual(definition.frontmatter.extensions, [
+        "builtin:codemode",
+        provider,
+      ]);
+      const args = agentLaunchArgs(definition, {
+        managedAgent: true,
+        bodyPromptPath: join(piAgent, "body.md"),
+        inheritedModel: "smoke-faux/core",
+      });
+      assert.ok(args.includes("--no-extensions"));
+      assert.deepEqual(
+        args.flatMap((arg, index) =>
+          arg === "--extension" ? [args[index + 1]] : [],
+        ),
+        ["builtin:codemode", provider],
+      );
+    }
   } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
     await rm(piAgent, { recursive: true, force: true });
   }
 });
