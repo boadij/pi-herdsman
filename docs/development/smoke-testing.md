@@ -466,9 +466,10 @@ Verify ordinary Leads see six destinations: `Lead mode`, `Agents & definitions`,
 The other roles see five destinations without `Lead mode`; verify `Agents &
 definitions` remains available in each. Verify `/herdsman` opens the same menu,
 active role state is secondary metadata, and selected-row contextual help updates
-in the TUI. `Agents & definitions` groups running agents, definitions, Coordinator
-profiles, and stop-all. Verify `Settings` has `Sessions & agents`, `Manager &
-repositories`, `Interface`, and `Delegation options`. Check that `Agent terminal
+in the TUI. Verify `Agents & definitions` lists `Agent definitions`,
+`Coordinator profiles`, and `Stop all agents…`. Open both editors and verify
+cancelling returns to the category. Verify `Settings` has `Sessions & agents`,
+`Manager & repositories`, `Interface`, and `Delegation options`. Check that `Agent terminal
 layout` opens the placement selector under `Interface`, and `Agent nesting limit`
 is selected first under `Delegation options`. At a normal terminal width, move
 to `Delegate Agents to other directories (cwd)` and check the full label,
@@ -480,6 +481,15 @@ verify `Use default` removes an override even if it already equals the default. 
 For a Managed Lead, `/lead` shows managed with `managed-lead` help and no ordinary
 mode choices. Verify Managed Leads cannot select ordinary modes or activate
 Manager/Chief.
+
+In a disposable Lead session, delegate at least two Agents and verify that
+clicking each visible widget row focuses its exact pane. Lower the widget
+height so an Agent is omitted. Open Herdr's native Goto picker with the
+configured prefix followed by `g`; use the keyboard to find and focus the
+omitted Agent. Repeat native keyboard navigation in regular terminal mode.
+Decline `Stop all agents…` and verify the Agents remain active, then confirm
+the stop and verify cleanup. Restore any temporary settings.
+
 Using disposable project data only, fork and clone an assigned Lead and verify
 new exact ordinary session IDs, no inherited assignment/Agent ownership or
 role/profile policy, and unchanged source identity through tree navigation and

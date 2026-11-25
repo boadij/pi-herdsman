@@ -47,7 +47,6 @@ import {
   buildStatusRows,
   layoutStatusRows,
   renderStatusRows,
-  renderRunningOptions,
   buildStatusTree,
   buildSupervisedLeadDisplays,
   classifySupervisedLead,
@@ -1592,7 +1591,7 @@ test("status projection renders the complete stable tree with aligned columns", 
   }
 });
 
-test("Status tree ordering, running options, and responsive rows share invariants", (_t) => {
+test("Status tree ordering and responsive rows share invariants", (_t) => {
   {
     const agents = [
       { label: "scout:a", definition: "scout", state: "starting" as const },
@@ -1635,19 +1634,9 @@ test("Status tree ordering, running options, and responsive rows share invariant
       ],
       { now: Date.now(), frame: 0 },
     );
-    const options = renderRunningOptions(rows);
     assert.equal(rows[0]!.definition, "implementer");
     assert.equal(rows[0]!.agentLabel, "parent:task");
     assert.equal(Object.hasOwn(rows[0]!, "agent"), false);
-    assert.equal(options.length, 2);
-    assert.match(options[0]!, /└─ implementer\s+parent:task\s+◐ blocked/);
-    assert.match(options[1]!, /└─ scout\s+child:task\s+● working/);
-    assert.ok(options.every((option) => !option.includes("\n")));
-    assert.doesNotMatch(options.join("\n"), /⠋|5m|model|high|24%|Wait|Inspect/);
-    const labelStart = (option: string, label: string) =>
-      visibleWidth(option.slice(0, option.indexOf(label)));
-    assert.equal(labelStart(options[0]!, "parent:task"), 3 + 11 + 2);
-    assert.equal(labelStart(options[1]!, "child:task"), 6 + 11 + 2);
   }
 
   {
@@ -6586,13 +6575,6 @@ test("Agent rosters show only verified live reports of model and thinking", () =
   const ctx = {
     sessionManager: { getSessionId: () => "owner" },
   } as Parameters<typeof buildAgentStatusSnapshot>[1];
-  const menu = buildAgentStatusSnapshot(view, ctx, host, {
-    observedExecutionSettingsOnly: true,
-  });
-  assert.deepEqual(
-    menu.agents.map(({ model, thinking }) => [model, thinking]),
-    expected,
-  );
   const widget = buildAgentStatusSnapshot(view, ctx, host);
   assert.equal(widget.agents[3]?.model, runtime.model);
   assert.equal(widget.agents[3]?.thinking, runtime.thinking);

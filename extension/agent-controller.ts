@@ -276,15 +276,10 @@ export function rootStatusBreadcrumb(
   return [{ text: role ?? "owner/controller", ...(role ? { role } : {}) }];
 }
 
-export type AgentStatusSnapshotOptions = {
-  observedExecutionSettingsOnly?: boolean;
-};
-
 export function buildAgentStatusSnapshot(
   view: ManagedAgentSnapshotView,
   ctx: ExtensionContext,
   host: AgentStatusSnapshotHost,
-  options?: AgentStatusSnapshotOptions,
 ): StatusSnapshot {
   const ownerSessionId = ctx.sessionManager.getSessionId();
   const unresolvedMailboxState =
@@ -364,12 +359,8 @@ export function buildAgentStatusSnapshot(
         : {}),
       task: typeof task === "string" ? task : runtime?.task,
       startedAt: presentation.startedAt ?? runtime?.startedAt,
-      model: options?.observedExecutionSettingsOnly
-        ? agent.model
-        : (presentation.model ?? runtime?.model ?? undefined),
-      thinking: options?.observedExecutionSettingsOnly
-        ? agent.thinking
-        : (presentation.thinking ?? runtime?.thinking ?? undefined),
+      model: presentation.model ?? runtime?.model ?? undefined,
+      thinking: presentation.thinking ?? runtime?.thinking ?? undefined,
       contextPercent: presentation.contextPercent,
       ...(agent.stale
         ? {
