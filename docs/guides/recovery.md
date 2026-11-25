@@ -45,6 +45,13 @@ unacknowledged request must not be duplicated or resubmitted: timeout or lack
 of acknowledgement does not prove non-delivery. `settling` alone does not
 generate generic attention.
 
+Durable notifications, terminal results, and exact persisted-receipt
+reconciliation use the supported mailbox contract rather than executable-build
+equality. They can settle across builds, including notifications during active
+work. Live execution and control still require an exact build match. Unsupported
+records remain preserved and are surfaced through existing recovery diagnostics;
+a shared version does not establish compatibility with every historical build.
+
 An Agent may remain `settling` after its result is delivered while accepted
 `notify_owner` records await receipt in the owner's persisted session history.
 Do not treat a successful Pi message submission as confirmation or close the

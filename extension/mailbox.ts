@@ -130,6 +130,12 @@ export interface AskRecord {
   resultBindings?: ResultBinding[];
   createdAt: number;
 }
+/**
+ * Version 5 defines the durable handoff contract: record interpretation,
+ * evidence bindings, receipt identity, and settlement prerequisites must stay
+ * compatible across builds. Breaking those semantics requires a version bump.
+ * This does not imply interoperability with every historical v5 executable.
+ */
 export interface OwnerMessageRecord {
   version: 5;
   messageId: string;
