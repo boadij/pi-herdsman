@@ -1098,8 +1098,45 @@ test("unverifiable exact assignment initialization never persists ordinary ident
     ),
   );
   herdrAvailable = true;
+  const { EXPECTED_STARTUP_MODEL_ENV } =
+    await import("./agent-model-overrides.ts");
+  const expected = {
+    provider: "test-provider",
+    id: "custom",
+    requireCatalog: false,
+  };
+  const previousExpectation = process.env[EXPECTED_STARTUP_MODEL_ENV];
+  t.after(() => {
+    if (previousExpectation === undefined)
+      delete process.env[EXPECTED_STARTUP_MODEL_ENV];
+    else process.env[EXPECTED_STARTUP_MODEL_ENV] = previousExpectation;
+  });
+  process.env[EXPECTED_STARTUP_MODEL_ENV] = JSON.stringify(expected);
+  context.model = { provider: expected.provider, id: "fallback" };
   await pi.events.get("session_start")![0](undefined, context);
   assert.equal(readSessionKind(pi.entries, LEAD_SESSION_ID)?.kind, "managed");
+  assert.ok(
+    pi.entries.some((entry: any) =>
+      String(entry.data?.error).includes(
+        "Expected startup model test-provider/custom",
+      ),
+    ),
+  );
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)
+      ?.startupAttestation,
+    undefined,
+  );
+  assert.equal(pi.pi.getActiveTools().includes("message_manager"), false);
+
+  context.model = { provider: expected.provider, id: expected.id };
+  await pi.events.get("session_start")![0](undefined, context);
+  assert.equal(process.env[EXPECTED_STARTUP_MODEL_ENV], undefined);
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)
+      ?.startupAttestation?.kind,
+    "model_restore",
+  );
   assert.equal(
     pi.pi.getActiveTools().includes("delegate_agent"),
     true,
@@ -1111,6 +1148,34 @@ test("unverifiable exact assignment initialization never persists ordinary ident
   );
   assert.equal(pi.pi.getActiveTools().includes("message_manager"), true);
   assert.equal(pi.pi.getActiveTools().includes("message_chief"), false);
+
+  const override = join(PI_AGENT_ROOT, "coordinators", "managed-lead.md");
+  mkdirSync(dirname(override), { recursive: true });
+  realFs.writeFileSync(
+    override,
+    '---\nname: managed-lead\nmodel: "   "\n---\n',
+  );
+  t.after(() => realFs.rmSync(override, { force: true }));
+  pi.entries.push({
+    type: "model_change",
+    provider: expected.provider,
+    modelId: expected.id,
+  });
+  context.model = { provider: expected.provider, id: "fallback" };
+  await pi.events.get("session_start")![0](undefined, context);
+  assert.ok(
+    pi.entries.some((entry: any) =>
+      String(entry.data?.error).includes(
+        "saved model test-provider/custom was not restored",
+      ),
+    ),
+  );
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)
+      ?.startupAttestation,
+    undefined,
+  );
+  assert.equal(pi.pi.getActiveTools().includes("message_manager"), false);
 });
 
 test("known managed identity remains unavailable and recovery-only when startup scope is unverifiable", async (t) => {

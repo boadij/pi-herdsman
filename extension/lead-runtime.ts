@@ -68,6 +68,11 @@ import {
 
 import { OperationError } from "./errors.ts";
 import {
+  assertStartupModel,
+  EXPECTED_STARTUP_MODEL_ENV,
+  readStartupModelExpectation,
+} from "./agent-model-overrides.ts";
+import {
   includeFanInMessage,
   registerRecipientFanIn,
   releaseFanInMessage,
@@ -4324,6 +4329,8 @@ export function registerLeadRuntime(
         explicitModelOverride,
       );
     }
+    const expected = readStartupModelExpectation();
+    if (expected) assertStartupModel(ctx, expected);
     const startupAttestation = {
       kind: "model_restore" as const,
       assignmentId: ctx.sessionManager.getSessionId(),
@@ -4338,6 +4345,7 @@ export function registerLeadRuntime(
       throw new Error(
         "Managed Lead model restoration was verified, but its fresh startup attestation could not be published",
       );
+    if (expected) delete process.env[EXPECTED_STARTUP_MODEL_ENV];
   };
   const prepareLeadExecution = async (
     ctx: ExtensionContext,

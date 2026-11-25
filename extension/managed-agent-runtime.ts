@@ -126,13 +126,13 @@ import {
 } from "./storage.ts";
 import {
   agentDefinitionEnabled,
-  VALID_THINKING_LEVELS,
   validateAgentDefinitionReferences,
   type AgentDefinition,
 } from "./agent-definitions.ts";
 import {
+  assertStartupModel,
   EXPECTED_STARTUP_MODEL_ENV,
-  modelToken,
+  readStartupModelExpectation,
   sessionAgentModelCatalog,
 } from "./agent-model-overrides.ts";
 
@@ -4155,30 +4155,9 @@ export function registerManagedAgentSessionStartHandler(
       if (!candidate) throw new Error("invalid agent environment");
       options.ensureAgentIdentity(ctx);
       verified = candidate;
-      const startupModelEnv = process.env[EXPECTED_STARTUP_MODEL_ENV];
-      let expectedStartupModel: [string, string, string?] | undefined;
-      if (startupModelEnv !== undefined) {
-        // Use the existing model verification failure path and outcome stage.
+      if (process.env[EXPECTED_STARTUP_MODEL_ENV] !== undefined)
         startupStage = "model_restore";
-        let pair: unknown;
-        try {
-          pair = JSON.parse(startupModelEnv);
-        } catch {
-          // Report the same failure as for a malformed pair.
-        }
-        if (
-          !Array.isArray(pair) ||
-          (pair.length !== 2 && pair.length !== 3) ||
-          typeof pair[0] !== "string" ||
-          !pair[0] ||
-          typeof pair[1] !== "string" ||
-          !pair[1] ||
-          (pair.length === 3 &&
-            !VALID_THINKING_LEVELS.some((level) => level === pair[2]))
-        )
-          throw new Error("Expected Agent startup model identity is invalid");
-        expectedStartupModel = [pair[0], pair[1], pair[2]];
-      }
+      const expectedStartupModel = readStartupModelExpectation();
       const restoreModel = process.env.PI_HERDSMAN_RESTORE_MODEL;
       if (restoreModel) {
         startupStage = "model_restore";
@@ -4367,24 +4346,7 @@ export function registerManagedAgentSessionStartHandler(
         }
         if (expectedStartupModel) {
           startupStage = "model_restore";
-          const [provider, id, thinking] = expectedStartupModel;
-          const actual = ctx.model;
-          const registered = ctx.modelRegistry.find(provider, id);
-          // Pi can synthesize a matching ID that is not in the catalog. Check
-          // membership as well as selection, without inspecting virtual routing.
-          if (
-            actual?.provider !== provider ||
-            actual.id !== id ||
-            registered?.provider !== provider ||
-            registered.id !== id
-          )
-            throw new Error(
-              `Expected startup model ${modelToken({ provider, id })} was not selected from the child catalog. Pi selected ${actual ? modelToken(actual) : "no model"}.`,
-            );
-          if (thinking !== undefined && ctx.thinkingLevel !== thinking)
-            throw new Error(
-              `Expected startup thinking level ${thinking}, but Pi selected ${ctx.thinkingLevel ?? "no level"}.`,
-            );
+          assertStartupModel(ctx, expectedStartupModel);
           // This checks the initial selection only; reloads and nested launches
           // must not inherit the startup expectation.
           delete process.env[EXPECTED_STARTUP_MODEL_ENV];

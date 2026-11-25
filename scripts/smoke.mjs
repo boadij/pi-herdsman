@@ -3693,14 +3693,16 @@ export async function preparePi(paths, model, execute = run) {
   }
 }
 
-export async function prepareContinuationFaux(paths, extensionPath) {
+export async function prepareFauxAgentOverlays(paths, extensionPath, names) {
   const agents = join(paths.piAgent, "agents");
   await mkdir(agents, { recursive: true });
-  await writeFile(
-    join(agents, "implementer.md"),
-    `---\nname: implementer\nextensions: [${JSON.stringify(extensionPath)}]\n---\n`,
-    { flag: "wx" },
-  );
+  for (const name of names) {
+    await writeFile(
+      join(agents, `${name}.md`),
+      `---\nname: ${name}\nextensions: [${JSON.stringify(`+${extensionPath}`)}]\n---\n`,
+      { flag: "wx" },
+    );
+  }
 }
 
 async function prepareHerdr(paths) {
@@ -4461,7 +4463,7 @@ async function runTerminalFailureSmoke(ctx) {
   await mkdir(definitionDir, { recursive: true });
   await writeFile(
     join(definitionDir, "managed-lead.md"),
-    `---\nname: managed-lead\nmodel: smoke-faux/terminal-error\nextensions: [${JSON.stringify(providerPath)}]\n---\n`,
+    `---\nname: managed-lead\nmodel: smoke-faux/terminal-error\nextensions: [${JSON.stringify(`+${providerPath}`)}]\n---\n`,
   );
   await writeFile(
     join(ctx.paths.piAgent, "settings.json"),
@@ -13537,8 +13539,12 @@ async function main() {
         join(repoRoot, "scripts", "smoke-faux.mjs"),
         ctx.simulatedProviderExtension,
       );
-      if (scenario === "continuation")
-        await prepareContinuationFaux(paths, ctx.simulatedProviderExtension);
+      if (scenario === "core" || scenario === "continuation")
+        await prepareFauxAgentOverlays(
+          paths,
+          ctx.simulatedProviderExtension,
+          scenario === "core" ? ["implementer", "scout"] : ["implementer"],
+        );
     }
     if (scenario === "agent-terminal-failure") {
       await mkdir(join(ctx.rootCwd, ".pi", "agents"), { recursive: true });
@@ -13569,7 +13575,7 @@ async function main() {
       });
       await writeFile(
         join(ctx.rootCwd, ".pi", "coordinators", "managed-lead.md"),
-        `---\nname: managed-lead\nmodel: smoke-faux/manager-handoff-lead\nextensions: [${JSON.stringify(ctx.simulatedProviderExtension)}]\n---\n`,
+        `---\nname: managed-lead\nmodel: smoke-faux/manager-handoff-lead\nextensions: [${JSON.stringify(`+${ctx.simulatedProviderExtension}`)}]\n---\n`,
       );
     }
     if (scenario === "manager-merge") {
@@ -13594,8 +13600,9 @@ async function main() {
         ["scout", "agent-crash-child"],
       ];
       for (const [name, modelId] of definitions) {
+        const extension = `${name === "smoke-crash-target" ? "" : "+"}${ctx.simulatedProviderExtension}`;
         const faux = ctx.simulated
-          ? `model: smoke-faux/${modelId}\nnoExtensions: false\nextensions: [${JSON.stringify(ctx.simulatedProviderExtension)}]\n`
+          ? `model: smoke-faux/${modelId}\nextensions: [${JSON.stringify(extension)}]\n`
           : "";
         await writeFile(
           join(ctx.rootCwd, ".pi", "agents", `${name}.md`),

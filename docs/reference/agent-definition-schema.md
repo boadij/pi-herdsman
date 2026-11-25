@@ -258,11 +258,8 @@ command-line model. The continued Agent restores it from session history and
 checks it against the loaded model registry and Pi's active model before it
 observes requests or accepts work. If the history is ambiguous, the model is
 unavailable, or Pi selected a different model, startup fails rather than
-continuing with a different model. If resolving the saved model requires a
-provider registered by an extension, extension discovery remains enabled even
-when `noExtensions: true`. An explicit definition `model` takes precedence
-over saved history; if its provider is identified as extension-registered,
-extension discovery remains enabled even when `noExtensions: true`.
+continuing with a different model. An explicit definition `model` takes
+precedence over saved history and is passed to Pi as written.
 
 The same saved-model check applies when a Manager restarts an assigned managed
 Lead with no explicit `managed-lead` model override. The Lead verifies the
@@ -303,7 +300,7 @@ the fallback.
 | `noSkills`               | boolean                                                               | skills disabled unless `inheritSkills: true`                           | Controls Pi native skill discovery; explicit `skills` values are still passed separately.                                                                                                 |
 | `inheritSkills`          | boolean                                                               | does not enable by itself unless `true`                                | `true` changes omitted `noSkills` default so native skills remain available. Explicit `noSkills` wins.                                                                                    |
 | `skills`                 | array of non-empty strings                                            | no explicit skill arguments                                            | Each value is passed unchanged as a Pi skill path/resource.                                                                                                                               |
-| `noExtensions`           | boolean                                                               | Pi normal extension policy                                             | `true` emits `--no-extensions`, except when the launched model needs extension discovery. Launcher-injected herdr infrastructure remains.                                                 |
+| `noExtensions`           | boolean                                                               | Pi normal extension policy                                             | `true` emits `--no-extensions`; `false` leaves ordinary Pi discovery enabled.                                                                                                             |
 | `extensions`             | array of non-empty strings                                            | no extra extension arguments                                           | Each value is passed unchanged to Pi.                                                                                                                                                     |
 | `agents`                 | array of unique non-empty definition names                            | all available Agents for Leads; no direct agents for other owners      | Fresh-delegation allowlist for direct Agent children.                                                                                                                                     |
 | `inheritProjectContext`  | boolean                                                               | `true` only for definition name `delegate`; otherwise `false`          | Controls context files at or below the execution project boundary.                                                                                                                        |
@@ -435,20 +432,14 @@ filtering does not sandbox loaded extension code.
 Tools with the same name are not independently permissionable by source, and
 the winner for a name collision is not a supported ordering contract.
 
-`noExtensions` disables ordinary extension discovery, but launcher-injected
-Pi Herdsman agent and Herdr-state extensions remain mandatory infrastructure.
-Explicit `extensions` entries remain separate launch inputs and are passed to
-Pi normally. Launcher-injected infrastructure remains separate from the
-definition's extension and tool policy.
-
-Any selected model can require extension discovery even when
-`noExtensions: true`: this applies when its provider is positively identified
-as registered by an extension, whether the model is configured, inherited for
-fresh delegation, or restored on continuation. Configured model selectors are
-passed to Pi as written; Pi remains responsible for resolving them. On
-continuation, ambiguous or unavailable saved-model restoration fails closed.
-Enabling discovery follows Pi's normal extension-loading policy and may load
-other configured extensions, not only the model provider.
+For managed Agents and managed Leads, the effective definition's
+`noExtensions: true` disables ordinary Pi extension discovery independently
+of model selection. Explicit `extensions` entries are passed to Pi unchanged,
+and launcher-injected Herdsman and Herdr-state extensions remain mandatory.
+If a selected model requires an extension, explicitly select that extension
+or deliberately enable ordinary discovery with `noExtensions: false`.
+Ordinary discovery follows Pi's normal policy and may load other configured
+extensions as well.
 
 ## Managed-agent coordination tools
 

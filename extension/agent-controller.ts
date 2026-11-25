@@ -189,7 +189,9 @@ import {
   agentModelCatalog,
   allowedOverrideModels,
   EXPECTED_STARTUP_MODEL_ENV,
+  inheritedStartupModelExpectation,
   modelToken,
+  type StartupModelExpectation,
 } from "./agent-model-overrides.ts";
 
 const delegationLockPath = (workspaceId: string, sessionId: string) =>
@@ -9717,16 +9719,6 @@ export function createAgentController(
               ? []
               : ["PI_OFFLINE=1"]),
           ];
-          // Pi reports the providers that extensions registered; a model from one
-          // of them cannot resolve in a child denied extension discovery.
-          // Older registries and test doubles may not expose the list, in which
-          // case nothing counts as extension-provided and the model is inherited
-          // exactly as before this change.
-          const registeredProviderIds = new Set(
-            (ctx.modelRegistry?.getRegisteredProviderIds?.() ?? []).map((id) =>
-              id.toLowerCase(),
-            ),
-          );
           const configured = configuredModel(effectiveDefinition.frontmatter);
           // Use the same snapshot for thinking validation and the ordinary
           // inherited-model launch arguments after asynchronous preparation.
@@ -9747,14 +9739,15 @@ export function createAgentController(
                   token: modelToken(inheritedModel),
                 }
               : undefined,
-            saved: resumed?.savedModel,
-            savedUnresolved: resumed?.savedModelUnresolved,
-            isForeignProvider: (providerId) =>
-              registeredProviderIds.has(providerId.toLowerCase()),
-            isKnownModel: (provider, id) =>
-              ctx.modelRegistry.find(provider, id) !== undefined,
           });
-          let expectedStartupModel = assignmentModel;
+          let expectedStartupModel: StartupModelExpectation | undefined =
+            assignmentModel
+              ? {
+                  provider: assignmentModel.provider,
+                  id: assignmentModel.id,
+                  requireCatalog: true,
+                }
+              : undefined;
           if (overrides && Object.hasOwn(overrides, "thinking")) {
             const selected = validateAgentThinkingOverride(
               ctx,
@@ -9763,34 +9756,25 @@ export function createAgentController(
               assignmentModel,
               inheritedModel,
             );
-            expectedStartupModel = selected;
-            if (
-              effectiveDefinition.frontmatter.noExtensions &&
-              !childModel.extensionDiscovery &&
-              registeredProviderIds.has(selected.provider.toLowerCase())
-            )
-              fail(
-                "invalid_request",
-                "The unchanged model requires extension discovery disabled by the Agent definition",
-                "delegate",
-                {
-                  nextAction:
-                    "Specify an exact permitted model ID or omit the thinking override.",
-                },
-              );
+            expectedStartupModel = {
+              provider: selected.provider,
+              id: selected.id,
+              requireCatalog: true,
+              thinking: overrides.thinking,
+            };
           }
-          if (expectedStartupModel) {
-            const { provider, id } = expectedStartupModel;
-            const expected = [provider, id];
-            if (overrides?.thinking !== undefined)
-              expected.push(overrides.thinking);
-            env.push(
-              `${EXPECTED_STARTUP_MODEL_ENV}=${JSON.stringify(expected)}`,
+          if (!expectedStartupModel && !configured && inheritedModel)
+            expectedStartupModel = inheritedStartupModelExpectation(
+              ctx.modelRegistry,
+              inheritedModel,
             );
-          }
+          if (expectedStartupModel)
+            env.push(
+              `${EXPECTED_STARTUP_MODEL_ENV}=${JSON.stringify(expectedStartupModel)}`,
+            );
           if (
             (resumed?.savedModel || resumed?.savedModelUnresolved) &&
-            !configuredModel(effectiveDefinition.frontmatter)
+            !configured
           )
             env.push("PI_HERDSMAN_RESTORE_MODEL=saved-session");
           const launchArgs = agentLaunchArgs(effectiveDefinition, {

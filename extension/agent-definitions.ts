@@ -1456,97 +1456,33 @@ export function updateAgentOverride(
 }
 
 export function configuredModel(frontmatter: Frontmatter): string | undefined {
-  return typeof frontmatter.model === "string" && frontmatter.model
+  return typeof frontmatter.model === "string" && frontmatter.model.trim()
     ? frontmatter.model
     : undefined;
 }
 
-/**
- * Which model a delegated child may be launched with.
- *
- * Agent definitions opt out of extension discovery (`noExtensions: true`),
- * which is what keeps a child lean, while delegation hands that child the
- * spawning controller's model. When that model's provider is registered by an
- * extension, the two contradict each other and pi exits with
- * `Model "<id>" not found` about two seconds after launch.
- *
- * Pi reports which providers extensions registered, so the model's needs
- * outrank the definition's preference to stay lean.
- */
 export type ChildModelDecision =
-  /** Nothing to pass: the child uses its own default. */
-  | { kind: "none"; extensionDiscovery: boolean }
-  /**
-   * Pass `--model`. `extensionDiscovery` is true when the model's provider is
-   * registered by an extension, in which case the child must not be launched
-   * with `--no-extensions` or it cannot resolve the model it was given.
-   */
-  | {
-      kind: "use";
-      model: string;
-      provider?: string;
-      extensionDiscovery: boolean;
-    };
+  { kind: "none" } | { kind: "use"; model: string; provider?: string };
 
 export function resolveChildModel(input: {
-  /** Exact model selected and validated for this assignment's overrides. */
   assignment?: { provider: string; token: string };
-  /** Model pinned by the agent definition's frontmatter, passed to Pi as given. */
   configured?: string;
-  /** The spawning controller's model; Pi already resolved its provider. */
   inherited?: { provider: string; token: string };
-  /** Selection already stored in a resumed Pi session; never passed as CLI model. */
-  saved?: { provider: string; modelId: string };
-  /** Historical model entries conflict and cannot be resolved in this registry. */
-  savedUnresolved?: boolean;
-  /** True when `providerId` is registered by an extension. */
-  isForeignProvider: (providerId: string) => boolean;
-  isKnownModel?: (providerId: string, modelId: string) => boolean;
 }): ChildModelDecision {
-  if (input.assignment) {
+  if (input.assignment)
     return {
       kind: "use",
       model: input.assignment.token,
       provider: input.assignment.provider,
-      extensionDiscovery: input.isForeignProvider(input.assignment.provider),
     };
-  }
-  if (input.configured !== undefined && input.configured.trim() !== "") {
-    const model = input.configured;
-    let extensionDiscovery = false;
-
-    for (
-      let slash = model.lastIndexOf("/");
-      slash > 0;
-      slash = model.lastIndexOf("/", slash - 1)
-    ) {
-      if (input.isForeignProvider(model.slice(0, slash).trim().toLowerCase())) {
-        extensionDiscovery = true;
-        break;
-      }
-    }
-
-    return { kind: "use", model, extensionDiscovery };
-  }
-  if (input.inherited === undefined) {
-    const saved = input.saved;
+  if (input.configured?.trim()) return { kind: "use", model: input.configured };
+  if (input.inherited)
     return {
-      kind: "none",
-      extensionDiscovery:
-        input.savedUnresolved === true ||
-        (!!saved &&
-          (input.isForeignProvider(saved.provider) ||
-            (input.isKnownModel !== undefined &&
-              !input.isKnownModel(saved.provider, saved.modelId)))),
+      kind: "use",
+      model: input.inherited.token,
+      provider: input.inherited.provider,
     };
-  }
-  return {
-    kind: "use",
-    model: input.inherited.token,
-    // Only an inherited model needs the exception: a child denied discovery
-    // cannot resolve a model whose provider only an extension supplies.
-    extensionDiscovery: input.isForeignProvider(input.inherited.provider),
-  };
+  return { kind: "none" };
 }
 
 function configuredThinking(agent: AgentDefinition): string | undefined {
@@ -1821,16 +1757,11 @@ export function agentLaunchArgs(
   const args: string[] = [];
   if (approveProject === true) args.push("--approve");
   else if (approveProject === false) args.push("--no-approve");
-  const requestedModel = configuredModel(frontmatter) ?? inheritedModel;
   const decision =
     options.modelDecision ??
-    (requestedModel === undefined
-      ? { kind: "none" as const, extensionDiscovery: false }
-      : {
-          kind: "use" as const,
-          model: requestedModel,
-          extensionDiscovery: false,
-        });
+    resolveChildModel({
+      configured: configuredModel(frontmatter) ?? inheritedModel,
+    });
   if (decision.kind === "use") {
     // Constrain Pi's resolver without reimplementing its prefix or fuzzy lookup.
     if (decision.provider !== undefined)
@@ -1921,11 +1852,7 @@ export function agentLaunchArgs(
   if (noSkills) args.push("--no-skills");
   for (const skill of frontmatter.skills ?? []) args.push("--skill", skill);
 
-  // A model whose provider comes from an extension cannot resolve inside a
-  // child denied extension discovery, so the model's needs outrank the
-  // definition's preference to stay lean.
-  if (frontmatter.noExtensions && !decision.extensionDiscovery)
-    args.push("--no-extensions");
+  if (frontmatter.noExtensions) args.push("--no-extensions");
   for (const extension of frontmatter.extensions ?? [])
     args.push("--extension", extension);
   if (managedAgent)

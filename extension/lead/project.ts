@@ -50,11 +50,7 @@ import {
   readRequiredEvidenceSnapshot,
   type RequiredEvidence,
 } from "../storage.ts";
-import {
-  acceptedCloseProof,
-  resolveSavedSessionModelSelection,
-  STOP_CLOSURE_ENTRY,
-} from "../agent-controller.ts";
+import { acceptedCloseProof, STOP_CLOSURE_ENTRY } from "../agent-controller.ts";
 import type { ExpectedSession, HerdrRecord } from "../herdr.ts";
 import type { RuntimeBuild } from "../compatibility.ts";
 import {
@@ -71,6 +67,11 @@ import {
   resolveChildModel,
   writePrivatePromptSnapshots,
 } from "../agent-definitions.ts";
+import {
+  EXPECTED_STARTUP_MODEL_ENV,
+  inheritedStartupModelExpectation,
+  modelToken,
+} from "../agent-model-overrides.ts";
 import type { MessageFileInput } from "../core.ts";
 import type { ManagedAgentState } from "../mailbox.ts";
 import { randomUUID } from "node:crypto";
@@ -3703,8 +3704,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (live.length === 1 && currentAssignment!.piSessionFile)
       await bindLeadSessionFile(currentAssignment!, live[0]);
     let savedSessionCwd: string | undefined;
-    let savedModel:
-      ReturnType<typeof resolveSavedSessionModelSelection> | undefined;
     if (operation.action === "resume" && currentAssignment!.piSessionFile) {
       let saved: ReturnType<typeof host.SessionManager.open>;
       try {
@@ -3719,10 +3718,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           `Saved Lead session restoration failed for ${currentAssignment!.id}: recorded session history has a mismatched session ID; existing work was preserved.`,
         );
       savedSessionCwd = saved.getCwd();
-      savedModel = resolveSavedSessionModelSelection(
-        saved,
-        (provider, modelId) => ctx.modelRegistry.find(provider, modelId),
-      );
     }
     const placement =
       operation.action === "resume"
@@ -4413,32 +4408,25 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           const effectiveDefinition =
             body === definition.body ? definition : { ...definition, body };
           if (body) promptPaths.push(...writePrivatePromptSnapshots([body]));
-          const registeredProviderIds = new Set(
-            (ctx.modelRegistry?.getRegisteredProviderIds?.() ?? []).map((id) =>
-              id.toLowerCase(),
-            ),
-          );
+          const configured = configuredModel(effectiveDefinition.frontmatter);
+          const inheritedModel =
+            operation.action === "delegate" ? ctx.model : undefined;
           const modelDecision = resolveChildModel({
-            configured: configuredModel(effectiveDefinition.frontmatter),
-            inherited:
-              operation.action === "delegate" && ctx.model
-                ? {
-                    provider: ctx.model.provider,
-                    token: `${ctx.model.provider}/${ctx.model.id}`,
-                  }
-                : undefined,
-            saved:
-              operation.action === "resume" && savedModel?.kind === "resolved"
-                ? savedModel.model
-                : undefined,
-            savedUnresolved:
-              operation.action === "resume" &&
-              (savedModel === undefined || savedModel.kind === "unresolved"),
-            isForeignProvider: (providerId) =>
-              registeredProviderIds.has(providerId.toLowerCase()),
-            isKnownModel: (provider, modelId) =>
-              ctx.modelRegistry.find(provider, modelId) !== undefined,
+            configured,
+            inherited: inheritedModel
+              ? {
+                  provider: inheritedModel.provider,
+                  token: modelToken(inheritedModel),
+                }
+              : undefined,
           });
+          const expectedStartupModel =
+            !configured && inheritedModel
+              ? inheritedStartupModelExpectation(
+                  ctx.modelRegistry,
+                  inheritedModel,
+                )
+              : undefined;
           const launchArgs = agentLaunchArgs(effectiveDefinition, {
             ...(body ? { bodyPromptPath: promptPaths.at(-1)! } : {}),
             cwd: cwd!,
@@ -4465,6 +4453,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               label,
               "--env",
               `PI_CODING_AGENT_DIR=${agentDir}`,
+              ...(expectedStartupModel
+                ? [
+                    "--env",
+                    `${EXPECTED_STARTUP_MODEL_ENV}=${JSON.stringify(expectedStartupModel)}`,
+                  ]
+                : []),
               "--no-focus",
             ],
             { signal },

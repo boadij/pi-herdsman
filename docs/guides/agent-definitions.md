@@ -202,11 +202,11 @@ become available.
 
 The bundled researcher explicitly requests Pi's native Code Mode
 (`builtin:codemode`) and `npm:pi-web-access`. Its `noExtensions: true` disables
-ordinary extension discovery unless the selected model requires discovery for
-its provider. Pi may resolve and install the explicitly requested npm extension
-when it is not cached and online startup is permitted. In an operator-enforced
-offline environment, web tools may be unavailable. Without them, the researcher
-retains local inspection capabilities and reports unavailable external evidence.
+ordinary extension discovery. Pi may resolve and install the explicitly requested
+npm extension when it is not cached and online startup is permitted. In an
+operator-enforced offline environment, web tools may be unavailable. Without
+them, the researcher retains local inspection capabilities and reports
+unavailable external evidence.
 
 Higher-precedence overlays can replace the bundled `extensions` list. Use the
 [existing array modifiers](../reference/agent-definition-schema.md#file-format)
@@ -488,16 +488,42 @@ inheritance behavior.
 For continuation, an omitted model uses the saved Pi session's selection, not
 the current caller's model. The resumed Agent verifies that Pi restored the
 saved model before it accepts work; ambiguous history, an unavailable model,
-or a mismatch stops startup. Extension discovery stays enabled when the
-selected model's provider is identified as extension-registered, whether
-configured, inherited, or restored, even if the definition sets
-`noExtensions: true`. An explicit definition model overrides saved history; Pi
-resolves the unchanged selector. Enabling discovery may load other configured
-extensions too. Restarted Manager-assigned managed Leads apply
-the same check before inbox activation; a model explicitly set by the effective
-`managed-lead` definition overrides the saved selection. See the
+or a mismatch stops startup. An explicit definition model overrides saved
+history; Pi resolves the unchanged selector. Restarted Manager-assigned
+managed Leads apply the same check before inbox activation; a model explicitly
+set by the effective `managed-lead` definition overrides the saved selection. See the
 [execution-settings contract](../reference/agent-definition-schema.md#execution-settings)
 for the exact behavior.
+
+## Configure an extension-backed model
+
+The effective definition controls extension discovery regardless of how the
+model is selected. To use a provider extension without enabling ordinary
+discovery, add it explicitly in a partial definition overlay:
+
+```markdown
+---
+name: scout
+model: mistral-native/zai-glm-5-3-flash
+extensions: ["+npm:pi-mistral-native"]
+---
+```
+
+This overlay inherits the bundled scout's `noExtensions: true` and adds the
+provider extension without replacing scout's existing extension list.
+
+If the provider extension is already configured for ordinary Pi discovery,
+you can instead enable that discovery for scout:
+
+```markdown
+---
+name: scout
+model: mistral-native/zai-glm-5-3-flash
+noExtensions: false
+---
+```
+
+Ordinary discovery can load other configured extensions as well.
 
 ## Override an existing bundled role
 
