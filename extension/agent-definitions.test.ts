@@ -1576,19 +1576,19 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     ],
     [
       "reviewer",
-      "Independent read-only internal team reviewer for plans, diffs, implementations, and codebase health; use for verification, missing cases, and regressions, not user or supervisor approval",
+      "Independent read-only internal team reviewer for correctness, regressions, requirements, and adequacy of validation evidence; not user or supervisor approval",
     ],
     [
       "generalist",
-      "General-purpose execution for bounded investigation, editing, and validation; use when work spans capabilities; prefer focused specialists for narrow tasks",
+      "General-purpose execution for bounded work requiring tightly coupled investigation, decisions, editing, and validation; prefer focused specialists for narrow tasks",
     ],
     [
       "ship",
-      "Git and GitHub specialist for authorized commits, pushes, pull requests, merges, and releases; defaults to Conventional Commits",
+      "Git and GitHub delivery specialist for authorized commits, pushes, pull requests, merges, and releases; reuses technical acceptance evidence and defaults to Conventional Commits",
     ],
     [
       "validator",
-      "Focused verification agent for running tests, checks, and smoke scenarios against existing changes; use to report observed evidence, not implement fixes or review design",
+      "Focused verification agent for outstanding tests, checks, and smoke scenarios against existing changes; reports observed and reused evidence, not fixes or design review",
     ],
   ]);
   const required = withPiAgentDir(
