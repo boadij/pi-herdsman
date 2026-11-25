@@ -7222,7 +7222,9 @@ export function createAgentController(
         try {
           const result = readResult(runtime.mailboxPath, requestId);
           if (result) void deliverResult(runtime, context, result, signal);
-        } catch {}
+        } catch (error) {
+          options.reportWatcherError(context, error);
+        }
     };
     const stop = observeMailbox(
       runtime.mailboxPath,
@@ -7689,12 +7691,6 @@ export function createAgentController(
     try {
       const state = readAgentState(runtime.mailboxPath);
       if (!state) return false;
-      requireCompatibleBuild(
-        options.build,
-        state.build,
-        "notify_owner",
-        `Agent ${state.agentLabel}`,
-      );
       validateIdentity(runtime, state);
       if (context.sessionManager.getSessionId() !== runtime.ownerSessionId)
         return false;
@@ -8300,7 +8296,8 @@ export function createAgentController(
       let result: ResultRecord | undefined;
       try {
         result = readResult(runtime.mailboxPath, runtime.completedRequestId);
-      } catch {
+      } catch (error) {
+        options.reportWatcherError(context, error);
         continue;
       }
       if (!result) continue;

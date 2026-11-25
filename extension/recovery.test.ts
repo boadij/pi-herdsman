@@ -20,6 +20,7 @@ import support, {
   LEAD_SESSION_ID,
   AGENT_ID,
   HERDSMAN_BUILD,
+  OTHER_HERDSMAN_BUILD,
   WORKSPACE,
   cascadeExecutor,
   defaultFixtureIdentity,
@@ -3698,7 +3699,163 @@ test("result is removed after agent state reaches completed", async (t) => {
   pi.events.get("session_shutdown")?.[0]();
 });
 
-test("unconfirmed owner notification gates completed-result mailbox cleanup", async (t) => {
+test("mixed-build notification delivers during active work without enabling control", async (t) => {
+  setLeadEnvironment();
+  const label = "active-mixed-build-notification-agent";
+  const identity = recoveryIdentity(label);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  const state = {
+    ...managedState(label, REQUEST_ID, identity),
+    build: OTHER_HERDSMAN_BUILD,
+  };
+  writeAgentState(mailbox, state);
+  const notification: OwnerMessageRecord = {
+    version: 5,
+    messageId: "88888888-8888-4888-8888-888888888888",
+    requestId: REQUEST_ID,
+    runId: state.runId,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    piSessionId: state.piSessionId,
+    text: "An active-work update.",
+    createdAt: Date.now(),
+  };
+  writeOwnerMessage(mailbox, notification);
+  const entries: unknown[] = [];
+  const lifecycle = cascadeExecutor([state]);
+  const pi = fakePi({ entries, exec: lifecycle.exec });
+  registerExtension!(pi.pi as never);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const context = fakeContext(entries);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.ok(
+      pi.sent.some(
+        (message: any) =>
+          message.customType === "pi-herdsman-agent-owner-message",
+      ),
+    );
+    assert.equal(readAgentState(mailbox)?.activeRequestId, REQUEST_ID);
+    assert.equal(readOwnerMessages(mailbox).length, 1);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("unsupported terminal result is preserved during recovery", async (t) => {
+  setLeadEnvironment();
+  const label = "unsupported-result-recovery-agent";
+  const identity = recoveryIdentity(label);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  const requestId = randomUUID();
+  const state = {
+    ...managedState(label, undefined, identity),
+    completedRequestId: requestId,
+  };
+  writeAgentState(mailbox, state);
+  const path = join(mailbox, `result-${requestId}.json`);
+  writeFileSync(
+    path,
+    JSON.stringify({ version: 999, runId: state.runId, requestId }),
+  );
+  const entries: unknown[] = [];
+  const pi = fakePi({ entries, exec: cascadeExecutor([state]).exec });
+  registerExtension!(pi.pi as never);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    await pi.events.get("session_start")![0](undefined, fakeContext(entries));
+    assert.equal(JSON.parse(readFileSync(path, "utf8")).version, 999);
+    assert.ok(readAgentState(mailbox));
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("mixed-build startup reconciles a preexisting exact notification receipt", async (t) => {
+  setLeadEnvironment();
+  const label = "preexisting-notification-receipt-agent";
+  const identity = recoveryIdentity(label);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  const state = {
+    ...managedState(label, undefined, identity),
+    completedRequestId: REQUEST_ID,
+    build: OTHER_HERDSMAN_BUILD,
+  };
+  writeAgentState(mailbox, state);
+  writeResult(mailbox, {
+    version: 5,
+    runId: state.runId,
+    requestId: REQUEST_ID,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    status: "completed",
+    text: "finished normally",
+    completedAt: Date.now(),
+  });
+  const notification: OwnerMessageRecord = {
+    version: 5,
+    messageId: "77777777-7777-4777-8777-777777777777",
+    requestId: REQUEST_ID,
+    runId: state.runId,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    piSessionId: state.piSessionId,
+    text: "Already received before restart.",
+    createdAt: Date.now(),
+  };
+  writeOwnerMessage(mailbox, notification);
+  const entries: unknown[] = [
+    {
+      customType: "pi-herdsman-agent-result",
+      details: resultEntryDetails(state, REQUEST_ID),
+    },
+    {
+      customType: "pi-herdsman-agent-owner-message",
+      details: {
+        messageId: notification.messageId,
+        requestId: notification.requestId,
+        runId: notification.runId,
+        ownerSessionId: notification.ownerSessionId,
+        workspaceId: notification.workspaceId,
+        agentLabel: notification.agentLabel,
+        paneId: notification.paneId,
+        piSessionId: notification.piSessionId,
+      },
+    },
+  ];
+  const pi = fakePi({ entries, exec: cascadeExecutor([state]).exec });
+  registerExtension!(pi.pi as never);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    await pi.events.get("session_start")![0](undefined, fakeContext(entries));
+    for (let index = 0; index < 5; index++) await Promise.resolve();
+    assert.equal(
+      pi.sentMessageCalls.filter(
+        ({ message }) =>
+          (message as any).customType === "pi-herdsman-agent-owner-message",
+      ).length,
+      0,
+    );
+    assert.equal(readResult(mailbox, REQUEST_ID), undefined);
+    assert.equal(readAgentState(mailbox), undefined);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("mixed-build owner notification still gates completed-result mailbox cleanup", async (t) => {
   setLeadEnvironment();
   const label = "notification-cleanup-gate-agent";
   const identity = recoveryIdentity(label);
@@ -3707,6 +3864,7 @@ test("unconfirmed owner notification gates completed-result mailbox cleanup", as
   const state = {
     ...managedState(label, undefined, identity),
     completedRequestId: REQUEST_ID,
+    build: OTHER_HERDSMAN_BUILD,
   };
   writeAgentState(mailbox, state);
   writeResult(mailbox, {
