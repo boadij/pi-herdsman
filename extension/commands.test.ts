@@ -13461,7 +13461,6 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
 
     managerCtx.isIdle = () => false;
     useLeadIdentity();
-    changeLeadCwdAfterLocalScope = true;
     const sameIdentityUplink = await lead.tools
       .find((tool) => tool.name === "message_manager")!
       .execute(
@@ -13472,21 +13471,12 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
         leadCtx,
       );
     useManagerIdentity();
+    changeLeadCwdAfterLocalScope = true;
     managerCtx.isIdle = () => true;
     assert.notEqual(sameIdentityUplink.isError, true);
+    await t.waitFor(() => assert.equal(leadCwdMutationQueries, 1));
     assert.equal(leadCwdMutationQueries, 1);
-    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(leadAgent.cwd, repoA);
-    const queuedSameIdentityUplink = listCoordinationMessagePaths(
-      supervisionRuntime(),
-      LEAD_SESSION_ID,
-    ).find(
-      (path) => readChiefMessage(path).id === sameIdentityUplink.details.id,
-    );
-    assert.ok(
-      queuedSameIdentityUplink,
-      "a verified local-repository Lead message is not rejected by stale inherited topology",
-    );
     assert.equal(
       manager.sentMessageCalls.some(
         ({ message }: any) =>
@@ -13496,17 +13486,17 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
       false,
       "Manager revalidates the Lead pane/workspace/cwd after asynchronous scope discovery",
     );
-    assert.equal(
-      listCoordinationMessagePaths(supervisionRuntime(), LEAD_SESSION_ID).some(
-        (path) => readChiefMessage(path).id === sameIdentityUplink.details.id,
+    await t.waitFor(() =>
+      assert.equal(
+        listCoordinationMessagePaths(
+          supervisionRuntime(),
+          LEAD_SESSION_ID,
+        ).some(
+          (path) => readChiefMessage(path).id === sameIdentityUplink.details.id,
+        ),
+        false,
+        "recipient-side authorization rejects and removes the changed-identity message",
       ),
-      true,
-      "the verified message remains queued until Manager delivery",
-    );
-    removeChiefMessage(
-      supervisionRuntime(),
-      LEAD_SESSION_ID,
-      sameIdentityUplink.details.id,
     );
     leadAgent.cwd = "/tmp";
 
