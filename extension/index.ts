@@ -616,6 +616,7 @@ type TestProjectAssignmentLockHooks = {
     request: import("./mailbox.ts").RequestRecord,
   ) => undefined;
   afterManagedSessionIdentityInitialized?: () => void;
+  managedLeadDefinition?: () => AgentDefinition;
   removeProjectMessage?: typeof removeProjectMessage;
 };
 
@@ -1850,7 +1851,13 @@ function registerExtensionImpl(
       readProjectOverrides,
       updateProjectOverride,
       contextAgentDefinitions,
-      discoverRoleDefinition,
+      discoverRoleDefinition: (
+        name: Parameters<typeof discoverRoleDefinition>[0],
+        options?: Parameters<typeof discoverRoleDefinition>[1],
+      ) =>
+        name === "managed-lead" && lockHooks?.managedLeadDefinition
+          ? lockHooks.managedLeadDefinition()
+          : discoverRoleDefinition(name, options),
       getSystemPromptOptions: (ctx: ExtensionCommandContext) =>
         ctx.getSystemPromptOptions(),
       chiefSystemPrompt,

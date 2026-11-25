@@ -12892,6 +12892,19 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
   const repoA = realFs.mkdtempSync(
     join(tmpdir(), "manager-lead-repository-a-"),
   );
+  const relativeProfilePath = join(
+    PI_AGENT_ROOT,
+    "coordinators",
+    "flexible-lead.md",
+  );
+  realFs.mkdirSync(dirname(relativeProfilePath), { recursive: true });
+  const previousRelativeProfile = realFs.existsSync(relativeProfilePath)
+    ? readFileSync(relativeProfilePath, "utf8")
+    : undefined;
+  writeFileSync(
+    relativeProfilePath,
+    "---\nname: flexible-lead\ntools: [+codemode, -write]\n---\nrelative policy\n",
+  );
   const leadSession = randomUUID();
   const leadWorkspace = `workspace-${randomUUID()}`;
   const unrelatedSession = randomUUID();
@@ -13093,6 +13106,27 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     let leadIsIdle = false;
     leadCtx.isIdle = () => leadIsIdle;
     await lead.events.get("session_start")![0](undefined, leadCtx);
+    await lead.commandOptions.get("lead-flexible")!.handler("", leadCtx);
+    await invokeEventHandlers(lead, "before_agent_start")(
+      { systemPromptOptions: { sections: {} } },
+      leadCtx,
+    );
+    assert.ok(
+      lead.sentMessageCalls.some(
+        ({ message }: any) =>
+          message?.customType === "pi-herdsman-supervisor-state" &&
+          JSON.stringify(message).includes("supervisor: manager"),
+      ),
+      JSON.stringify(lead.sentMessageCalls),
+    );
+    assert.ok(lead.pi.getActiveTools().includes("message_manager"));
+    assert.equal(
+      await lead.events.get("tool_call")![0](
+        { toolName: "message_manager", input: {} },
+        leadCtx,
+      ),
+      undefined,
+    );
     const { worktreeGroupScope } = await import("./herdr.ts");
     await assert.rejects(
       worktreeGroupScope(lead.pi, leadCtx, leadWorkspace),
@@ -13209,14 +13243,21 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
       1,
       "the Manager receives the ordinary Lead message despite stale inherited workspace topology",
     );
-    const queuedUplink = listCoordinationMessagePaths(
-      supervisionRuntime(),
-      LEAD_SESSION_ID,
-    )[0]!;
-    removeChiefMessage(
-      supervisionRuntime(),
-      LEAD_SESSION_ID,
-      readChiefMessage(queuedUplink).id,
+    managerCtx.isIdle = () => true;
+    await t.waitFor(() =>
+      assert.ok(
+        manager!.sentMessageCalls.some(
+          ({ message }: any) =>
+            message?.customType === "pi-herdsman-lead_message" &&
+            message?.details?.id === uplink.details.id,
+        ),
+      ),
+    );
+    await t.waitFor(() =>
+      assert.deepEqual(
+        listCoordinationMessagePaths(supervisionRuntime(), LEAD_SESSION_ID),
+        [],
+      ),
     );
     assert.equal(
       leadWorkspaceTopologyQueries,
@@ -13420,6 +13461,7 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
 
     managerCtx.isIdle = () => false;
     useLeadIdentity();
+    changeLeadCwdAfterLocalScope = true;
     const sameIdentityUplink = await lead.tools
       .find((tool) => tool.name === "message_manager")!
       .execute(
@@ -13432,9 +13474,9 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     useManagerIdentity();
     managerCtx.isIdle = () => true;
     assert.notEqual(sameIdentityUplink.isError, true);
-    assert.equal(leadCwdMutationQueries, 0);
+    assert.equal(leadCwdMutationQueries, 1);
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(leadAgent.cwd, "/tmp");
+    assert.equal(leadAgent.cwd, repoA);
     const queuedSameIdentityUplink = listCoordinationMessagePaths(
       supervisionRuntime(),
       LEAD_SESSION_ID,
@@ -13602,6 +13644,10 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
       useManagerIdentity();
       await manager.events.get("session_shutdown")?.[0]();
     }
+    if (previousRelativeProfile === undefined)
+      realFs.rmSync(relativeProfilePath, { force: true });
+    else writeFileSync(relativeProfilePath, previousRelativeProfile);
+    realFs.rmSync(repoA, { recursive: true, force: true });
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_TAB_ID;
@@ -22052,7 +22098,6 @@ test("Definitions edits global values without claiming masked project changes", 
   const notices: string[] = [];
   let selection = 0;
   context.cwd = project;
-  context.isProjectTrusted = () => true;
   context.hasUI = true;
   context.mode = "rpc";
   context.modelRegistry = {

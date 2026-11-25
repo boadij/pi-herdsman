@@ -42,6 +42,7 @@ import {
   removeProjectMessage,
   removeChiefMessage,
   readChiefMessage,
+  readProjectAssignment,
   listProjectMessageHeaders,
   readProjectMessage,
   retireProjectAssignment,
@@ -7872,6 +7873,119 @@ test("registered message_manager publishes for a Lead initialized from its exact
     for (const message of listProjectMessageHeaders(runtime, repoKey, branch))
       removeProjectMessage(runtime, repoKey, branch, message.id);
     removeProjectAssignment(runtime, repoKey, branch);
+    setLeadEnvironment();
+  }
+});
+
+test("Managed Lead definition-resolution failure with an exact assignment denies supervisor messaging", async () => {
+  setLeadEnvironment();
+  const cwd = realFs.mkdtempSync(join(tmpdir(), "managed-invalid-profile-"));
+  const sessionId = randomUUID();
+  const repoKey = `managed-invalid-${randomUUID()}`;
+  const branch = `managed-invalid-${randomUUID()}`;
+  process.env.HERDR_PANE_ID = "managed-invalid-profile-pane";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `managed-invalid-profile-${randomUUID()}.sock`,
+  );
+  const runtime = supervisionRuntime();
+  writeProjectAssignment(runtime, {
+    version: 2,
+    id: sessionId,
+    repoKey,
+    branch,
+    checkoutPath: cwd,
+    text: "managed invalid profile regression",
+  });
+  const pi = fakePi({
+    exec: (_command, args) =>
+      args[0] === "worktree" && args[1] === "list"
+        ? {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                source: {
+                  repo_key: repoKey,
+                  repo_name: repoKey,
+                  source_workspace_id: WORKSPACE,
+                },
+                worktrees: [
+                  {
+                    path: cwd,
+                    branch,
+                    is_linked_worktree: true,
+                    open_workspace_id: WORKSPACE,
+                  },
+                ],
+              },
+            }),
+            stderr: "",
+            code: 0,
+          }
+        : { stdout: "{}", stderr: "", code: 0 },
+  });
+  let managedDefinitionResolutionCalls = 0;
+  registerExtensionForTest!(pi.pi as never, {
+    managedLeadDefinition: () => {
+      managedDefinitionResolutionCalls++;
+      throw new Error("invalid trusted Managed Lead execution profile");
+    },
+  });
+  const context = fakeContext(pi.entries) as any;
+  context.cwd = cwd;
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => sessionId,
+  };
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.ok(
+      pi.entries.some(
+        (entry: any) =>
+          entry?.customType === "pi-herdsman-session-kind" &&
+          entry.data?.sessionId === sessionId &&
+          entry.data?.kind === "managed" &&
+          entry.data?.repoKey === repoKey &&
+          entry.data?.branch === branch,
+      ),
+      "session startup must establish the exact assigned Managed identity",
+    );
+    assert.deepEqual(
+      readProjectAssignment(runtime, repoKey, branch),
+      {
+        version: 2,
+        id: sessionId,
+        repoKey,
+        branch,
+        checkoutPath: cwd,
+        text: "managed invalid profile regression",
+      },
+      "the project assignment remains exact and valid while profile resolution fails",
+    );
+    await invokeBeforeAgentStart(
+      pi,
+      { systemPrompt: "base", systemPromptOptions: { sections: {} } },
+      context,
+    );
+    assert.ok(managedDefinitionResolutionCalls > 0);
+    assert.deepEqual(
+      pi.pi
+        .getActiveTools()
+        .filter(
+          (name) => name === "message_manager" || name === "message_chief",
+        ),
+      [],
+      "a valid assignment does not restore upward tools to invalid Managed Lead execution",
+    );
+    const blocked = await pi.events.get("tool_call")![0](
+      { toolName: "message_manager", input: { message: "must be rejected" } },
+      context,
+    );
+    assert.equal((blocked as any)?.block, true);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    removeProjectAssignment(runtime, repoKey, branch);
+    realFs.rmSync(cwd, { recursive: true, force: true });
     setLeadEnvironment();
   }
 });

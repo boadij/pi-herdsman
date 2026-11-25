@@ -2824,6 +2824,7 @@ export function registerLeadRuntime(
   };
   const executionToolsWithSelectedSupervisor = (): string[] => {
     const tools = executionTools();
+    if (sessionKind?.kind === "managed") return tools;
     const active = new Set(pi.getActiveTools());
     const selected = options.supervisorToolNames.filter((name) =>
       active.has(name),
@@ -4640,6 +4641,20 @@ export function registerLeadRuntime(
   };
   const agentEvents = createLeadAgentEventRuntime({
     ...options.agentEventOptions,
+    selectSupervisorTool: (destination) => {
+      const selected =
+        sessionKind?.kind === "managed" &&
+        destination &&
+        (managedLifecycle !== "assigned" ||
+          leadExecutionPending ||
+          leadRuntime.roleSuspended ||
+          leadRuntime.chiefMode === "suspended" ||
+          !leadExecution?.valid ||
+          !leadExecution.managed)
+          ? undefined
+          : destination;
+      options.agentEventOptions.selectSupervisorTool?.(selected);
+    },
     currentLeadRelativePolicy: () => {
       if (
         !leadExecution?.valid ||
@@ -4653,7 +4668,7 @@ export function registerLeadRuntime(
             !leadExecution.managed))
       )
         return undefined;
-      const required = executionTools();
+      const required = executionToolsWithSelectedSupervisor();
       return {
         excluded: configuredToolPolicy(leadExecution.definition, []).excluded,
         owned: leadToolState.ownedTools,
