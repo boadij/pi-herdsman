@@ -9,6 +9,7 @@ import type {
 import {
   buildSessionProjection,
   CURRENT_SESSION_VERSION,
+  getAgentDir,
   parseSessionEntries,
   resolveCliModel,
   SessionManager,
@@ -144,6 +145,7 @@ import {
   closeHerdrPane,
   inspectHerdrAgent,
   listHerdrAgents,
+  requireHerdrPiIntegration,
   rollbackHerdrStart,
   startHerdrAgent,
   paneProcess,
@@ -9107,6 +9109,8 @@ export function createAgentController(
           );
         const evidenceAssignmentId =
           continuationEvidence?.evidenceAssignmentId ?? assignment!.requestId;
+        const agentDir = resolve(getAgentDir());
+        requireHerdrPiIntegration(agentDir);
         const taskEvidence = persistRequiredEvidenceSnapshot(
           evidenceAssignmentId,
           "work-assignment.md",
@@ -9709,9 +9713,6 @@ export function createAgentController(
             `PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS=${JSON.stringify(
               delegationEnabled ? effectiveDefinition.frontmatter.agents : [],
             )}`,
-            ...(process.env.PI_CODING_AGENT_DIR
-              ? [`PI_CODING_AGENT_DIR=${process.env.PI_CODING_AGENT_DIR}`]
-              : []),
             ...(effectiveDefinition.frontmatter.extensions?.some((source) =>
               source.startsWith("npm:"),
             )
@@ -9932,6 +9933,7 @@ export function createAgentController(
             })();
           };
           started = await startHerdrAgent(pi, ctx, {
+            agentDir,
             label,
             runId,
             cwd: agentCwd,

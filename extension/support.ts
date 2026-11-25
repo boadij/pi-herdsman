@@ -174,6 +174,12 @@ const {
 } = await import("@earendil-works/pi-tui");
 export { tuiVisibleWidth };
 process.env.PI_CODING_AGENT_DIR = PI_AGENT_ROOT;
+const extensionsDir = join(PI_AGENT_ROOT, "extensions");
+realFs.mkdirSync(extensionsDir);
+realFs.writeFileSync(
+  join(extensionsDir, "herdr-agent-state.ts"),
+  "export default function () {}\n",
+);
 export const PI_AGENTS_DIR = join(PI_AGENT_ROOT, "agents");
 realFs.mkdirSync(PI_AGENTS_DIR);
 realFs.writeFileSync(

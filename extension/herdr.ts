@@ -1,12 +1,13 @@
-import {
-  getAgentDir,
-  type ExecResult,
-  type ExtensionAPI,
-  type ExtensionContext,
+import type {
+  ExecResult,
+  ExtensionAPI,
+  ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  accessSync,
   closeSync,
+  constants,
   mkdirSync,
   openSync,
   readSync,
@@ -240,11 +241,37 @@ const PRESENTATION_EVENTS = new Set([
   "tab_renamed",
 ]);
 const MAX_EVENT_BUFFER_BYTES = 1024 * 1024;
-const HERDR_AGENT_STATE_EXTENSION = join(
-  getAgentDir(),
-  "extensions",
-  "herdr-agent-state.ts",
-);
+
+export function requireHerdrPiIntegration(agentDir: string): string {
+  const path = join(agentDir, "extensions", "herdr-agent-state.ts");
+  try {
+    if (statSync(path).isFile()) {
+      accessSync(path, constants.R_OK);
+      return path;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      const nextAction = `Run herdr integration install pi with PI_CODING_AGENT_DIR set to ${agentDir}, then retry.`;
+      fail(
+        "invalid_request",
+        `Required Herdr Pi integration is missing: ${path}. ${nextAction}`,
+        "preflight",
+        { nextAction },
+      );
+    }
+    fail(
+      "invalid_request",
+      `Unable to access required Herdr Pi integration at ${path}: ${String(error)}`,
+      "preflight",
+    );
+  }
+  fail(
+    "invalid_request",
+    `Required Herdr Pi integration is not a regular file: ${path}`,
+    "preflight",
+  );
+}
+
 function error(operation: string, message: string, details?: unknown): never {
   throw new OperationError({
     category: "internal_failure",
@@ -1231,6 +1258,7 @@ export async function reportLeadMetadata(
 }
 
 export type StartHerdrOptions = {
+  agentDir: string;
   label: string;
   runId: string;
   cwd: string;
@@ -1537,8 +1565,14 @@ export async function startHerdrAgent(
   ctx: ExtensionContext,
   options: StartHerdrOptions,
 ): Promise<StartedHerdrAgent> {
+  const herdrStateExtension = requireHerdrPiIntegration(options.agentDir);
   const workspaceId = workspace(ctx);
-  const env = validateEnvironment(options.env ?? []);
+  const env = validateEnvironment([
+    ...(options.env ?? []).filter(
+      (entry) => !entry.startsWith("PI_CODING_AGENT_DIR="),
+    ),
+    `PI_CODING_AGENT_DIR=${options.agentDir}`,
+  ]);
   const release = await lockLifecycle(ctx, options.signal);
   let attempt: StartedHerdrAgent | undefined;
   let retryAttempted = false;
@@ -1805,7 +1839,7 @@ export async function startHerdrAgent(
             // Publish Pi session identity before Herdsman's startup handler
             // makes the managed mailbox state observable.
             "--extension",
-            HERDR_AGENT_STATE_EXTENSION,
+            herdrStateExtension,
             ...(options.extensionPath
               ? ["--extension", options.extensionPath]
               : []),
@@ -1890,6 +1924,7 @@ export async function startHerdrAgentInPane(
   ctx: ExtensionContext,
   options: StartHerdrInPaneOptions,
 ): Promise<StartedHerdrAgent> {
+  const herdrStateExtension = requireHerdrPiIntegration(options.agentDir);
   const { totalTimeout, childTimeout } = startupTimeoutBudget(
     options.timeoutMs,
   );
@@ -2025,7 +2060,7 @@ export async function startHerdrAgentInPane(
               ? ["--extension", options.extensionPath]
               : []),
             "--extension",
-            HERDR_AGENT_STATE_EXTENSION,
+            herdrStateExtension,
             ...(options.agentArgs ?? []),
           ],
           {

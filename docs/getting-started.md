@@ -26,6 +26,10 @@ pi install npm:pi-herdsman
 herdr integration install pi
 ```
 
+The Herdr Pi integration is installed separately for each Pi agent directory.
+If you use an alternative `PI_CODING_AGENT_DIR`, run
+`herdr integration install pi` in that same environment before delegating work.
+
 The native bootstraps install missing components and preserve compatible newer
 versions. When `pi-web-access` is not already installed, they ask
 `Install pi-web-access? [y/N]`; pressing Enter skips it. Existing installations
