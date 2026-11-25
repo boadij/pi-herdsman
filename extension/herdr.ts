@@ -622,7 +622,7 @@ export async function gitRepositoryScope(
       !isAbsolute(path)
     )
       throw new Error("Git local repository identity is unavailable");
-    return realpathSync(path);
+    return realpathSync.native(path);
   };
   const [checkoutPath, gitDir, commonDir] = await Promise.all([
     gitPath("--show-toplevel"),

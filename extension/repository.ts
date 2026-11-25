@@ -119,41 +119,79 @@ function directoryEntry(path: string) {
 }
 
 /** Walk every component; lstat on only the leaf misses redirected ancestors. */
-function inspectDirectory(path: string): { path: string; exists: boolean } {
+function inspectDirectory(path: string) {
   let current = parse(path).root;
   const segments = pathSegments(path);
   for (const [index, segment] of segments.entries()) {
     const next = join(current, segment);
     const info = directoryEntry(next);
-    if (!info)
+    if (!info) {
+      const anchor = realpathSync.native(current);
       return {
-        path: join(realpathSync.native(current), ...segments.slice(index)),
+        path: join(anchor, ...segments.slice(index)),
         exists: false,
+        anchor,
       };
+    }
     if (!info.isDirectory() || info.isSymbolicLink())
       throw new Error(
         `Repository path contains a symlink or non-directory: ${next}`,
       );
     current = next;
   }
-  return { path: realpathSync.native(current), exists: true };
+  const anchor = realpathSync.native(current);
+  return { path: anchor, exists: true, anchor };
 }
 
 /** Inspect only; the caller owns approval for creation and Git bootstrap. */
 export function resolveLocalRepositoryPath(value: string) {
-  return inspectDirectory(absolutePath(value, homedir()));
+  const selected = inspectDirectory(absolutePath(value, homedir()));
+  const identity = directoryEntry(selected.anchor);
+  if (!identity?.isDirectory() || identity.dev === 0n || identity.ino === 0n)
+    throw new Error("Cannot verify local repository directory identity");
+  return { ...selected, dev: identity.dev, ino: identity.ino };
+}
+
+type LocalSelection = ReturnType<typeof resolveLocalRepositoryPath>;
+
+export function verifyLocalRepositoryPath(selected: LocalSelection): void {
+  const current = resolveLocalRepositoryPath(selected.path);
+  if (
+    current.exists !== selected.exists ||
+    current.anchor !== selected.anchor ||
+    current.dev !== selected.dev ||
+    current.ino !== selected.ino
+  )
+    throw new Error("Approved local repository path changed");
 }
 
 /** Create a missing, previously approved local path; never adopt a new leaf. */
-export function createLocalRepositoryDirectory(value: string): string {
-  const target = resolveLocalRepositoryPath(value);
+export function createLocalRepositoryDirectory(
+  target: LocalSelection,
+): LocalSelection {
   if (target.exists)
     throw new Error(
       `Local repository directory already exists: ${target.path}`,
     );
-  ensureParentDirectory(dirname(target.path));
-  mkdirSync(target.path);
-  return inspectDirectory(target.path).path;
+  verifyLocalRepositoryPath(target);
+  const missing = [];
+  for (let path = target.path; path !== target.anchor; path = dirname(path)) {
+    if (dirname(path) === path)
+      throw new Error("Approved local repository ancestor is unavailable");
+    missing.push(path);
+  }
+  let parent = resolveLocalRepositoryPath(target.anchor);
+  if (parent.dev !== target.dev || parent.ino !== target.ino)
+    throw new Error("Approved local repository ancestor changed");
+  for (const path of missing.reverse()) {
+    verifyLocalRepositoryPath(parent);
+    // Exclusive mkdir: never adopt a directory created while approval was pending.
+    mkdirSync(path);
+    parent = resolveLocalRepositoryPath(path);
+    if (!parent.exists)
+      throw new Error("New local repository directory disappeared");
+  }
+  return parent;
 }
 
 function ensureParentDirectory(

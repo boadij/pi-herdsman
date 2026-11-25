@@ -7579,7 +7579,10 @@ test("Chief prepares and launches an exact Manager pane across workspaces", asyn
                 },
               });
             case "workspace create":
-              assert.deepEqual(args.slice(2), ["--cwd", cwd, "--no-focus"]);
+              assert.equal(args.length, 5);
+              assert.equal(args[2], "--cwd");
+              assert.ok(sameDirectory(args[3]!, cwd));
+              assert.equal(args[4], "--no-focus");
               mutations.push(key);
               hasWorkspace = true;
               return response({ workspace: { workspace_id: workspaceId } });

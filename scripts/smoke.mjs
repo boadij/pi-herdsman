@@ -6,6 +6,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   readdir,
   realpath,
@@ -7244,45 +7245,91 @@ function isolatedSessionRoots(ctx) {
   ];
 }
 
+function isSessionDescendant(root, candidate) {
+  const segment = relative(root, candidate);
+  return (
+    segment !== "" &&
+    segment !== ".." &&
+    !segment.startsWith(`..${sep}`) &&
+    !isAbsolute(segment)
+  );
+}
+
+function sameSessionFileIdentity(first, second) {
+  return first.dev === second.dev && first.ino === second.ino;
+}
+
+async function pinIsolatedSessionRoot(ctx, root) {
+  // createIsolation places both roots under an already canonical directory.
+  // Standalone observations can use the parent of piSessions as that anchor.
+  const ancestor = dirname(ctx.paths.piSessions);
+  if (!isSessionDescendant(ancestor, root))
+    throw new Error("managed Pi session resolves outside isolation");
+  const expected = resolve(
+    ctx.paths.root ?? (await realpath(ancestor)),
+    relative(ancestor, root),
+  );
+  const approved = await lstat(expected, { bigint: true });
+  if (!approved.isDirectory())
+    throw new Error("managed Pi session resolves outside isolation");
+  async function verify() {
+    if ((await realpath(root)) !== expected)
+      throw new Error("managed Pi session resolves outside isolation");
+    const current = await lstat(expected, { bigint: true });
+    if (!current.isDirectory() || !sameSessionFileIdentity(approved, current))
+      throw new Error("managed Pi session resolves outside isolation");
+  }
+  await verify();
+  return { expected, verify };
+}
+
 export async function isolatedSessionDetails(ctx, agent) {
   const identity = agent?.agent_session;
   if (identity?.kind !== "path" || typeof identity.value !== "string")
     return null;
   const path = resolve(identity.value);
-  const insideSessionRoot = (candidate) =>
-    isolatedSessionRoots(ctx).some((root) => {
-      const segment = relative(root, candidate);
-      return (
-        segment &&
-        segment !== ".." &&
-        !segment.startsWith(`..${sep}`) &&
-        !isAbsolute(segment)
-      );
-    });
-  if (!insideSessionRoot(path))
+  const root = isolatedSessionRoots(ctx).find((root) =>
+    isSessionDescendant(root, path),
+  );
+  if (!root)
     throw new Error(
       "managed Pi session path is outside the isolated session directory",
     );
-  let details;
   try {
-    details = await lstat(path);
+    const pinned = await pinIsolatedSessionRoot(ctx, root);
+    return await readIsolatedSession(path, pinned);
   } catch (error) {
     if (error.code === "ENOENT") return undefined;
     throw error;
   }
-  if (
-    !details.isFile() ||
-    details.isSymbolicLink() ||
-    details.size > MAX_SESSION_BYTES
-  )
-    throw new Error(
-      "managed Pi session is not a bounded regular isolated session file",
-    );
+}
+
+async function readIsolatedSession(path, root) {
   let contents;
   try {
-    if (!insideSessionRoot(await realpath(path)))
+    const details = await lstat(path, { bigint: true });
+    const assertBoundedFile = (file) => {
+      if (!file.isFile() || file.size > MAX_SESSION_BYTES)
+        throw new Error(
+          "managed Pi session is not a bounded regular isolated session file",
+        );
+    };
+    assertBoundedFile(details);
+    const canonicalPath = await realpath(path);
+    if (!canonicalPath.startsWith(`${root.expected}${sep}`))
       throw new Error("managed Pi session resolves outside isolation");
-    contents = await readFile(path, "utf8");
+    await root.verify();
+    const file = await open(canonicalPath, "r");
+    try {
+      const opened = await file.stat({ bigint: true });
+      if (!sameSessionFileIdentity(details, opened))
+        throw new Error("managed Pi session resolves outside isolation");
+      assertBoundedFile(opened);
+      contents = await file.readFile("utf8");
+    } finally {
+      await file.close();
+    }
+    await root.verify();
   } catch (error) {
     if (error.code === "ENOENT") return undefined;
     throw error;
@@ -7296,11 +7343,26 @@ export async function isolatedSessionDetails(ctx, agent) {
 }
 
 export async function exactIsolatedSession(ctx, id) {
-  const entries = (
+  const files = (
     await Promise.all(
       isolatedSessionRoots(ctx).map(async (root) => {
         try {
-          return await readdir(root, { recursive: true, withFileTypes: true });
+          const pinned = await pinIsolatedSessionRoot(ctx, root);
+          const entries = await readdir(pinned.expected, {
+            recursive: true,
+            withFileTypes: true,
+          });
+          await pinned.verify();
+          return entries
+            .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+            .map((entry) => ({
+              pinned,
+              path: join(
+                root,
+                relative(pinned.expected, entry.parentPath),
+                entry.name,
+              ),
+            }));
         } catch (error) {
           if (error.code !== "ENOENT" || root === ctx.paths.piSessions)
             throw error;
@@ -7309,21 +7371,13 @@ export async function exactIsolatedSession(ctx, id) {
       }),
     )
   ).flat();
-  const files = entries.filter(
-    (entry) => entry.isFile() && entry.name.endsWith(".jsonl"),
-  );
   if (files.length > 256)
     throw new Error(
       "too many isolated Pi session files to identify Lead safely",
     );
   const matches = [];
-  for (const entry of files) {
-    const session = await isolatedSessionDetails(ctx, {
-      agent_session: {
-        kind: "path",
-        value: join(entry.parentPath, entry.name),
-      },
-    });
+  for (const { pinned, path } of files) {
+    const session = await readIsolatedSession(path, pinned);
     if (session?.id === id) matches.push(session);
   }
   if (matches.length > 1)
@@ -10053,7 +10107,38 @@ async function runManagerRecoverySmoke(ctx) {
       retainedRecord.senderEnvironment.git?.head === senderHead,
     "retained message must identify the exact sender checkout, branch and HEAD",
   );
-  assert.equal((await candidatePids(resumedPaneId)).includes(resumedPid), true);
+  const retainedProcessInfo = await paneInfo(resumedPaneId);
+  const retainedForeground =
+    retainedProcessInfo.process_info?.foreground_processes ?? [];
+  const retainedPidMatched = candidateProcess(
+    retainedProcessInfo,
+    ctx.candidateExtension,
+    ctx.herdrStateExtension,
+  ).some((process) => process.pid === resumedPid);
+  const retainedReports = (await agents()).filter(
+    (agent) =>
+      agent.pane_id === resumedPaneId &&
+      agent.tab_id === resumedPane.tab_id &&
+      agent.workspace_id === workspaceId,
+  );
+  const retainedSession =
+    retainedReports.length === 1
+      ? await isolatedSessionDetails(ctx, retainedReports[0])
+      : null;
+  const retainedObservation = {
+    pinnedPidInForeground: retainedForeground.some(
+      (process) => process.pid === resumedPid,
+    ),
+    candidateFilterMatched: retainedPidMatched,
+    exactSessionPathAndId:
+      retainedSession?.path === resumedSession.path &&
+      retainedSession.id === first.session,
+    paneReports: retainedReports.length,
+  };
+  assert.ok(
+    retainedPidMatched,
+    `resumed Lead observation: ${JSON.stringify(retainedObservation)}`,
+  );
   let retainedLead = false;
   for (const agent of await agents())
     if (

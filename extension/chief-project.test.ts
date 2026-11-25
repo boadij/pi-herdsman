@@ -10,10 +10,11 @@ import {
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import {
   SessionManager,
@@ -32,6 +33,78 @@ import {
   writeManagerRecoveryReference,
 } from "./supervision.ts";
 
+test("Chief Git approval cannot transfer to a replacement directory", async (t) => {
+  for (const change of [
+    "existing",
+    "missing ancestor",
+    "missing symlink",
+    "declined",
+  ] as const) {
+    await t.test(change, async (t) => {
+      const root = realpathSync.native(
+        mkdtempSync(join(tmpdir(), "chief-approval-")),
+      );
+      t.after(() => rmSync(root, { recursive: true, force: true }));
+      const anchor = join(root, "selected");
+      const retired = join(root, "retired");
+      const replacement = join(root, "replacement");
+      mkdirSync(anchor);
+      mkdirSync(replacement);
+      const target =
+        change === "existing" ? anchor : join(anchor, "missing", "project");
+      let confirmations = 0;
+      const context = fakeContext();
+      context.hasUI = true;
+      context.ui.confirm = async (_title, message) => {
+        confirmations++;
+        assert.ok(message.includes(target));
+        if (change === "declined") return false;
+        renameSync(anchor, retired);
+        if (change === "missing symlink")
+          symlinkSync(replacement, anchor, "junction");
+        else mkdirSync(anchor);
+        return true;
+      };
+      const chief = createChiefProjectRuntime(
+        {
+          exec: async (command: string, args: string[]) => {
+            assert.equal(command, "git");
+            assert.equal(args[0], "rev-parse", "no mutating Git command");
+            return { code: 128, stdout: "", stderr: "" };
+          },
+        } as unknown as ExtensionAPI,
+        {
+          assertChief: async () => {},
+          remoteIdentity: async () => undefined,
+          runtime: () => {
+            throw new Error("Unexpected startup");
+          },
+          build: { version: "test", sha256: "a".repeat(64) },
+          extensionPath: "/extension.ts",
+        },
+      );
+      const start = () => chief.start(target, undefined, context);
+      if (change === "declined") {
+        assert.deepEqual(await start(), {
+          status: "cancelled",
+          repository: target,
+        });
+      } else if (change === "existing") {
+        const result = await start();
+        assert.equal(result.status, "partial_failure");
+        assert.ok("reason" in result && /changed/.test(result.reason));
+      } else {
+        await assert.rejects(start(), /changed|symlink/);
+      }
+      assert.equal(confirmations, 1);
+      for (const path of [anchor, retired, replacement])
+        assert.equal(existsSync(join(path, ".git")), false);
+      if (change !== "existing")
+        assert.equal(existsSync(dirname(target)), false);
+    });
+  }
+});
+
 test("Chief lifecycle uses one exact Pi conversation and preserves uncertain startup", async (t) => {
   for (const scenario of [
     "lifecycle",
@@ -46,12 +119,15 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
     "foreign",
   ] as const) {
     await t.test(scenario, async (t) => {
-      const root = realpathSync(mkdtempSync(join(tmpdir(), "chief-project-")));
+      const root = realpathSync.native(
+        mkdtempSync(join(tmpdir(), "chief-project-")),
+      );
       const prior = process.env.PI_CODING_AGENT_DIR;
       process.env.PI_CODING_AGENT_DIR = join(root, "pi");
-      const repository = join(root, "project");
-      const canonicalRepoKey = join(repository, ".git");
-      mkdirSync(canonicalRepoKey, { recursive: true });
+      const gitDirectory = join(root, "project", ".git");
+      mkdirSync(gitDirectory, { recursive: true });
+      const repository = realpathSync.native(dirname(gitDirectory));
+      const canonicalRepoKey = realpathSync.native(gitDirectory);
       const runtime = supervisionRuntime(join(root, "socket"));
       let currentRuntime = runtime;
       const build = { version: "test", sha256: "a".repeat(64) };

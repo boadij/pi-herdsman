@@ -45,7 +45,9 @@ export async function requireNoLiveLegacyManager(
     }
     signal?.throwIfAborted();
     if (
-      legacy.canonicalRepoKey === canonicalRepoKey ||
+      (legacy.canonicalRepoKey !== undefined &&
+        (legacy.canonicalRepoKey === canonicalRepoKey ||
+          sameDirectory(legacy.canonicalRepoKey, canonicalRepoKey))) ||
       recordedRepoMatches ||
       (checkout
         ? sameDirectory(checkout.canonicalRepoKey, canonicalRepoKey)
@@ -70,7 +72,7 @@ export async function ensureManagerGitRepository(
     ): Promise<void>;
   },
 ): Promise<Awaited<ReturnType<typeof gitRepositoryScope>> | undefined> {
-  const target = realpathSync(resolve(directory));
+  const target = realpathSync.native(resolve(directory));
   const targetStat = statSync(target, { bigint: true });
   if (
     !targetStat.isDirectory() ||

@@ -111,18 +111,15 @@ test("repository sources reject ambiguous paths, unsafe remote authorities, and 
 test("local resolution is non-mutating and rejects redirected ancestors and non-directories", (t) => {
   const root = tempDirectory(t);
   const missing = join(root, "missing", "project");
-  assert.deepEqual(resolveLocalRepositoryPath(missing), {
-    path: missing,
-    exists: false,
-  });
+  const selection = resolveLocalRepositoryPath(missing);
+  assert.equal(selection.path, missing);
+  assert.equal(selection.exists, false);
   assert.equal(existsSync(dirname(missing)), false);
-  assert.equal(createLocalRepositoryDirectory(missing), missing);
-  assert.deepEqual(resolveLocalRepositoryPath(missing), {
-    path: missing,
-    exists: true,
-  });
+  const created = createLocalRepositoryDirectory(selection);
+  assert.equal(created.path, missing);
+  assert.equal(created.exists, true);
   assert.throws(
-    () => createLocalRepositoryDirectory(missing),
+    () => createLocalRepositoryDirectory(created),
     /already exists/,
   );
 
@@ -138,7 +135,7 @@ test("local resolution is non-mutating and rejects redirected ancestors and non-
   symlinkSync(missing, alias, "junction");
   assert.throws(() => resolveLocalRepositoryPath(alias), /symlink/);
   assert.throws(
-    () => createLocalRepositoryDirectory(join(alias, "child")),
+    () => resolveLocalRepositoryPath(join(alias, "child")),
     /symlink/,
   );
   assert.equal(existsSync(join(missing, "child")), false);

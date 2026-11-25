@@ -7,6 +7,7 @@ import {
   realpathSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -66,7 +67,7 @@ test("live workspace-keyed legacy authority blocks only a correlated repository"
   );
   const lock = acquireProcessLock(descriptorPath + ".lock");
   try {
-    const targetKey = realpathSync(join(primary, ".git"));
+    const targetKey = realpathSync.native(join(primary, ".git"));
     await assert.rejects(
       requireNoLiveLegacyManager(pi, runtime, targetKey, workspaceId),
       /legacy Manager authority.*restart/,
@@ -100,7 +101,13 @@ test("live workspace-keyed legacy authority blocks only a correlated repository"
     lock.release();
     const legacy = JSON.parse(readFileSync(descriptorPath, "utf8"));
     const otherScope = await gitRepositoryScope(pi, other);
-    for (const oldKey of [workspaceId, targetKey]) {
+    const alternateKey = join(realpathSync.native(root), "legacy-common");
+    symlinkSync(
+      targetKey,
+      alternateKey,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    for (const oldKey of [workspaceId, targetKey, alternateKey]) {
       const foreignPath = join(
         foreign.root,
         "managers",
@@ -113,8 +120,8 @@ test("live workspace-keyed legacy authority blocks only a correlated repository"
           JSON.stringify({
             ...legacy,
             claim: foreignLock.claim,
-            ...(oldKey === targetKey
-              ? { canonicalRepoKey: targetKey, piSessionFile: undefined }
+            ...(oldKey !== workspaceId
+              ? { canonicalRepoKey: oldKey, piSessionFile: undefined }
               : {}),
           }),
         );
@@ -181,7 +188,7 @@ test("live workspace-keyed legacy authority blocks only a correlated repository"
   await requireNoLiveLegacyManager(
     pi,
     runtime,
-    realpathSync(join(primary, ".git")),
+    realpathSync.native(join(primary, ".git")),
     workspaceId,
   );
 });

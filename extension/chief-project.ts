@@ -42,6 +42,7 @@ import {
   parseRepositorySource,
   RepositoryCloneError,
   resolveLocalRepositoryPath,
+  verifyLocalRepositoryPath,
 } from "./repository.ts";
 import {
   claimManagerStartupLock,
@@ -422,7 +423,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
         );
         preparationChanged = true;
       } else {
-        const selected = resolveLocalRepositoryPath(source.path);
+        let selected = resolveLocalRepositoryPath(source.path);
         repositoryPath = selected.path;
         if (selected.exists)
           repository = await ensureManagerGitRepository(pi, repositoryPath, {
@@ -434,18 +435,36 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
             "Recovery requires a verified local primary Git checkout",
           );
         if (!repository) {
-          if (!(await approve(repositoryPath)))
-            return { status: "cancelled", repository: repositoryPath };
-          await host.assertChief(ctx);
-          preparationChanged = true;
           stage = "git_setup";
-          if (!selected.exists)
-            repositoryPath = createLocalRepositoryDirectory(repositoryPath);
+          const needsCreation = !selected.exists;
+          if (needsCreation) {
+            if (!(await approve(repositoryPath)))
+              return { status: "cancelled", repository: repositoryPath };
+            await host.assertChief(ctx);
+            verifyLocalRepositoryPath(selected);
+            preparationChanged = true;
+            selected = createLocalRepositoryDirectory(selected);
+            repositoryPath = selected.path;
+          }
           repository = await ensureManagerGitRepository(pi, repositoryPath, {
             signal,
             createIfMissing: true,
-            verifyApprovedTarget: () => host.assertChief(ctx),
+            confirm: needsCreation
+              ? undefined
+              : async (target) => {
+                  const approved = await approve(target);
+                  if (approved) preparationChanged = true;
+                  return approved;
+                },
+            verifyApprovedTarget: async (target) => {
+              await host.assertChief(ctx);
+              verifyLocalRepositoryPath(selected);
+              if (!sameDirectory(target, selected.path))
+                throw new Error("Approved local repository path changed");
+            },
           });
+          if (!repository)
+            return { status: "cancelled", repository: repositoryPath };
         }
       }
       if (!repository)

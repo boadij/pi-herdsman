@@ -3284,7 +3284,7 @@ test("Manager authority and startup serialize across local sockets; discovery st
   );
 });
 
-test("Manager authority is OS-account scoped but discovery and recovery are Pi-profile scoped", (t) => {
+test("Manager authority spans profiles and repository aliases, but discovery and recovery stay profile scoped", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "manager-profiles-"));
   const env = ["PI_CODING_AGENT_DIR", "HOME", "USERPROFILE"] as const;
   const before = env.map((key) => process.env[key]);
@@ -3313,10 +3313,42 @@ test("Manager authority is OS-account scoped but discovery and recovery are Pi-p
       encoding: "utf8",
     });
     assert.equal(git.status, 0, git.stderr);
-    return realFs.realpathSync(join(checkout, ".git"));
+    return checkout;
   };
-  const canonicalRepoKey = repository("repo");
-  const otherKey = repository("other-repo");
+  const checkout = repository("repo");
+  const alias = join(directory, "repo-alias");
+  symlinkSync(
+    checkout,
+    alias,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  const { gitRepositoryScope } = await import("./herdr.ts");
+  const pi: Parameters<typeof gitRepositoryScope>[0] = {
+    async exec(command, args, options) {
+      const result = spawnSync(command, args, {
+        cwd: options?.cwd,
+        encoding: "utf8",
+      });
+      return {
+        stdout: result.stdout ?? "",
+        stderr: result.stderr ?? "",
+        code: result.status ?? -1,
+        killed: !!result.signal,
+        truncated: false,
+      };
+    },
+  };
+  const { canonicalRepoKey } = await gitRepositoryScope(pi, checkout);
+  const { canonicalRepoKey: aliasKey } = await gitRepositoryScope(pi, alias);
+  const { canonicalRepoKey: otherKey } = await gitRepositoryScope(
+    pi,
+    repository("other-repo"),
+  );
+  assert.equal(
+    canonicalRepoKey,
+    realFs.realpathSync.native(join(checkout, ".git")),
+  );
+  assert.equal(aliasKey, canonicalRepoKey);
   const identity = {
     build: BUILD,
     canonicalRepoKey,
@@ -3329,18 +3361,19 @@ test("Manager authority is OS-account scoped but discovery and recovery are Pi-p
   };
   assert.equal(
     managerDescriptorPath(first, canonicalRepoKey),
-    managerDescriptorPath(second, canonicalRepoKey),
+    managerDescriptorPath(second, aliasKey),
   );
   const startup = claimManagerStartupLock(first, canonicalRepoKey);
   t.after(startup.release);
   const lease = claimManagerLease(identity, first);
   t.after(lease.release);
   assert.throws(
-    () => claimManagerStartupLock(second, canonicalRepoKey),
+    () => claimManagerStartupLock(second, aliasKey),
     ProcessLockOccupiedError,
   );
   assert.throws(
-    () => claimManagerLease(identity, second),
+    () =>
+      claimManagerLease({ ...identity, canonicalRepoKey: aliasKey }, second),
     ProcessLockOccupiedError,
   );
   assert.throws(

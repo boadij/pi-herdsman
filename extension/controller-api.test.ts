@@ -2725,14 +2725,14 @@ for (const reachable of [true, false]) {
         assert.equal(state.role, "manager");
         assert.ok(
           realFs.existsSync(
-            managerDescriptorPath(runtime, realpathSync(tmpdir())),
+            managerDescriptorPath(runtime, realpathSync.native(tmpdir())),
           ),
         );
         const leadId = randomUUID();
         const branch = "smoke/manager-replay";
         const managerA = readManagerDescriptor(
           runtime,
-          realpathSync(tmpdir()),
+          realpathSync.native(tmpdir()),
         )!;
         for (let index = 0; index < 3; index++) {
           const emptyBranch = `smoke/empty-${index}`;
@@ -3159,7 +3159,7 @@ for (const reachable of [true, false]) {
         assert.equal(state.role, "lead");
         assert.equal(
           realFs.existsSync(
-            managerDescriptorPath(runtime, realpathSync(tmpdir())),
+            managerDescriptorPath(runtime, realpathSync.native(tmpdir())),
           ),
           false,
         );
@@ -4946,7 +4946,7 @@ async function runManagerStartupScenario(
           assert.equal(realFs.existsSync(childSessionPath), false);
           const descriptorPath = managerDescriptorPath(
             supervisionRuntime(),
-            realpathSync(repoKey),
+            realpathSync.native(repoKey),
           );
           realFs.unlinkSync(descriptorPath);
           realFs.rmSync(`${descriptorPath}.lock`, { recursive: true });
@@ -5978,11 +5978,11 @@ async function runManagerStartupScenario(
         } else {
           const descriptorPath = managerDescriptorPath(
             supervisionRuntime(),
-            realpathSync(repoKey),
+            realpathSync.native(repoKey),
           );
           const descriptor = readManagerDescriptor(
             supervisionRuntime(),
-            realpathSync(repoKey),
+            realpathSync.native(repoKey),
           )!;
           writeFileSync(
             descriptorPath,
@@ -7618,11 +7618,11 @@ async function runManagerStartupScenario(
         );
         const descriptorPath = managerDescriptorPath(
           supervisionRuntime(),
-          realpathSync(repoKey),
+          realpathSync.native(repoKey),
         );
         const descriptor = readManagerDescriptor(
           supervisionRuntime(),
-          realpathSync(repoKey),
+          realpathSync.native(repoKey),
         )!;
         writeFileSync(
           descriptorPath,

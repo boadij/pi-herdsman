@@ -4532,7 +4532,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     assert.equal(
       readManagerDescriptor(
         supervisionRuntime(),
-        realFs.realpathSync(projectCwd),
+        realFs.realpathSync.native(projectCwd),
       )?.piSessionId,
       ctx1.sessionManager.getSessionId(),
     );
@@ -4559,7 +4559,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       ),
     );
     const runtime = supervisionRuntime();
-    const repo = realFs.realpathSync(projectCwd);
+    const repo = realFs.realpathSync.native(projectCwd);
     assert.equal(readManagerRecoveryReference(runtime, repo), undefined);
     flushRole();
     await invokeEventHandlers(first, "turn_end")({}, ctx1);
@@ -4798,7 +4798,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     assert.ok(
       readManagerDescriptor(
         supervisionRuntime(),
-        realFs.realpathSync(projectCwd),
+        realFs.realpathSync.native(projectCwd),
       ),
     );
     await first.commandOptions.get("chief").handler("", ctx1);
@@ -4923,7 +4923,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     const managerLeaseId = readManagerDescriptor(
       supervisionRuntime(),
-      realFs.realpathSync(projectCwd),
+      realFs.realpathSync.native(projectCwd),
     )?.leaseId;
     const activeManagerTools = first.pi.getActiveTools();
     let overviewOpened = false;
@@ -4948,7 +4948,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     assert.equal(
       readManagerDescriptor(
         supervisionRuntime(),
-        realFs.realpathSync(projectCwd),
+        realFs.realpathSync.native(projectCwd),
       )?.leaseId,
       managerLeaseId,
     );
@@ -5013,7 +5013,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     assert.equal(
       readManagerDescriptor(
         supervisionRuntime(),
-        realFs.realpathSync(projectCwd),
+        realFs.realpathSync.native(projectCwd),
       )?.piSessionId,
       persistedManagerSessionId,
       "the restored Manager holds the verified workspace lease",
@@ -5077,7 +5077,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     assert.equal(
       readManagerDescriptor(
         supervisionRuntime(),
-        realFs.realpathSync(projectCwd),
+        realFs.realpathSync.native(projectCwd),
       ),
       undefined,
       "the restored process releases the repository lease on shutdown",
@@ -5271,7 +5271,7 @@ test("Manager leave retains its lease and role when persistence fails", async ()
     await pi.commandOptions.get("manager").handler("", ctx);
     const leaseId = readManagerDescriptor(
       supervisionRuntime(),
-      realFs.realpathSync("/tmp"),
+      realFs.realpathSync.native("/tmp"),
     )?.leaseId;
     assert.ok(leaseId);
     const pendingRequest = {
@@ -5299,8 +5299,10 @@ test("Manager leave retains its lease and role when persistence fails", async ()
       ),
     );
     assert.equal(
-      readManagerDescriptor(supervisionRuntime(), realFs.realpathSync("/tmp"))
-        ?.leaseId,
+      readManagerDescriptor(
+        supervisionRuntime(),
+        realFs.realpathSync.native("/tmp"),
+      )?.leaseId,
       leaseId,
     );
     assert.equal(
@@ -5329,8 +5331,10 @@ test("Manager leave retains its lease and role when persistence fails", async ()
         ),
       );
       assert.equal(
-        readManagerDescriptor(supervisionRuntime(), realFs.realpathSync("/tmp"))
-          ?.leaseId,
+        readManagerDescriptor(
+          supervisionRuntime(),
+          realFs.realpathSync.native("/tmp"),
+        )?.leaseId,
         leaseId,
       );
       assert.equal(
@@ -5341,7 +5345,10 @@ test("Manager leave retains its lease and role when persistence fails", async ()
     }
     await pi.commandOptions.get("manager-leave").handler("", ctx);
     assert.equal(
-      readManagerDescriptor(supervisionRuntime(), realFs.realpathSync("/tmp")),
+      readManagerDescriptor(
+        supervisionRuntime(),
+        realFs.realpathSync.native("/tmp"),
+      ),
       undefined,
     );
     assert.equal(
@@ -5351,7 +5358,7 @@ test("Manager leave retains its lease and role when persistence fails", async ()
     await pi.commandOptions.get("manager").handler("", ctx);
     const suspendedLease = readManagerDescriptor(
       supervisionRuntime(),
-      realFs.realpathSync("/tmp"),
+      realFs.realpathSync.native("/tmp"),
     )?.leaseId;
     assert.ok(suspendedLease);
     pi.pi.appendEntry = (type: string, data: unknown) => {
@@ -5362,8 +5369,10 @@ test("Manager leave retains its lease and role when persistence fails", async ()
     await pi.commandOptions.get("manager-leave").handler("", ctx);
     pi.pi.appendEntry = originalAppend;
     assert.equal(
-      readManagerDescriptor(supervisionRuntime(), realFs.realpathSync("/tmp"))
-        ?.leaseId,
+      readManagerDescriptor(
+        supervisionRuntime(),
+        realFs.realpathSync.native("/tmp"),
+      )?.leaseId,
       suspendedLease,
     );
     assert.equal(
@@ -5438,12 +5447,12 @@ test("Manager leave suspends authority when lease release fails", async (t) => {
   const runtime = supervisionRuntime();
   const descriptorPath = managerDescriptorPath(
     runtime,
-    realFs.realpathSync(projectCwd),
+    realFs.realpathSync.native(projectCwd),
   );
   try {
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
-    const lock = `${managerDescriptorPath(runtime, realFs.realpathSync(projectCwd))}.lock`;
+    const lock = `${managerDescriptorPath(runtime, realFs.realpathSync.native(projectCwd))}.lock`;
     const owner = realFs.readdirSync(lock)[0];
     assert.ok(owner);
     const originalAppend = pi.pi.appendEntry;
@@ -5514,7 +5523,7 @@ for (const scenario of [
     setLeadEnvironment();
     updateConfig("autoActivateManager", true);
     const sessionId = randomUUID();
-    const checkout = realFs.realpathSync(
+    const checkout = realFs.realpathSync.native(
       mkdtempSync(join(tmpdir(), "manager-startup-session-")),
     );
     t.after(() => rmSync(checkout, { recursive: true, force: true }));
@@ -5880,7 +5889,7 @@ async function checkManagerAutoStart(
   });
   const sessionId = `verified-auto-manager-${randomUUID()}`;
   const sessionFile = join(projectCwd, "manager.jsonl");
-  const repoKey = realFs.realpathSync(projectCwd);
+  const repoKey = realFs.realpathSync.native(projectCwd);
   let reportedSession = sessionId;
   const agent = {
     ...managerAgentIdentity(),
@@ -6558,7 +6567,7 @@ function managerBootstrapLockPath(cwd: string): string {
   return join(
     herdsmanTempRoot(),
     "locks",
-    `manager-bootstrap-${createHash("sha256").update(realFs.realpathSync(cwd)).digest("hex")}`,
+    `manager-bootstrap-${createHash("sha256").update(realFs.realpathSync.native(cwd)).digest("hex")}`,
   );
 }
 
@@ -6845,7 +6854,7 @@ test("Manager activation from an unassociated workspace inherited from a linked 
   assert.equal(
     readManagerDescriptor(
       supervisionRuntime(),
-      realFs.realpathSync(join(current, ".git")),
+      realFs.realpathSync.native(join(current, ".git")),
     )?.repoKey,
     join(current, ".git"),
   );
@@ -7460,7 +7469,10 @@ test("Manager auto-start rejects mismatched Herdr identity and releases its leas
     assert.equal(coordinationRestoredBeforeIdentityCheck, true);
     assert.deepEqual(pi.pi.getActiveTools(), ["read", ...leadToolsWithSkill]);
     assert.equal(
-      readManagerDescriptor(supervisionRuntime(), realFs.realpathSync("/tmp")),
+      readManagerDescriptor(
+        supervisionRuntime(),
+        realFs.realpathSync.native("/tmp"),
+      ),
       undefined,
     );
     assert.equal(
@@ -7533,7 +7545,7 @@ test("Manager auto-start suspends and invalidates Lead when identity cleanup rel
             worktrees: [],
           });
         if (command === "herdr" && isAgentList(args)) {
-          const lock = `${managerDescriptorPath(supervisionRuntime(), realFs.realpathSync(projectCwd))}.lock`;
+          const lock = `${managerDescriptorPath(supervisionRuntime(), realFs.realpathSync.native(projectCwd))}.lock`;
           if (!realFs.existsSync(lock))
             return respond({ agents: [{ ...agent, pane_id: "manager-pane" }] });
           const owner = realFs.readdirSync(lock)[0];
@@ -7557,7 +7569,7 @@ test("Manager auto-start suspends and invalidates Lead when identity cleanup rel
   const runtime = supervisionRuntime();
   const descriptorPath = managerDescriptorPath(
     runtime,
-    realFs.realpathSync(projectCwd),
+    realFs.realpathSync.native(projectCwd),
   );
   try {
     const context = fakeContext(pi.entries) as any;
@@ -7687,7 +7699,10 @@ test("malformed Lead coordination blocks Manager auto-start", async () => {
     assert.deepEqual(pi.pi.getActiveTools(), ["read"]);
     assert.equal(topologyLookups, 0);
     assert.equal(
-      readManagerDescriptor(supervisionRuntime(), realFs.realpathSync("/tmp")),
+      readManagerDescriptor(
+        supervisionRuntime(),
+        realFs.realpathSync.native("/tmp"),
+      ),
       undefined,
     );
     assert.ok(
@@ -7753,7 +7768,10 @@ test("malformed Lead coordination skips fallback topology restoration when auto-
     assert.deepEqual(pi.pi.getActiveTools(), ["read"]);
     assert.equal(topologyLookups, 0);
     assert.equal(
-      readManagerDescriptor(supervisionRuntime(), realFs.realpathSync("/tmp")),
+      readManagerDescriptor(
+        supervisionRuntime(),
+        realFs.realpathSync.native("/tmp"),
+      ),
       undefined,
     );
     assert.equal(readPeerLeadRecord(peerRuntime(), LEAD_SESSION_ID), undefined);
@@ -12257,7 +12275,7 @@ async function managerDelegateAssignmentTest(
       assert.equal(
         readManagerDescriptor(
           supervisionRuntime(),
-          realFs.realpathSync(gitRepoPath),
+          realFs.realpathSync.native(gitRepoPath),
         ),
         undefined,
       );
@@ -13732,7 +13750,7 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     repoALocalScopeQueries = 0;
     const managerDescriptor = readManagerDescriptor(
       supervisionRuntime(),
-      realFs.realpathSync("/tmp"),
+      realFs.realpathSync.native("/tmp"),
     );
     assert.ok(managerDescriptor);
     const crossRepositoryUplink = {
@@ -14131,7 +14149,7 @@ test("Manager-to-ordinary-Lead inbox rechecks authority before importing result 
     tabId: managerTab,
     workspaceId: WORKSPACE,
     repoKey: "/tmp",
-    canonicalRepoKey: realFs.realpathSync("/tmp"),
+    canonicalRepoKey: realFs.realpathSync.native("/tmp"),
   });
   writeLeadCoordinationState(supervisionRuntime(), {
     version: 1,
@@ -15706,12 +15724,12 @@ test("Chief accepts a recorded Manager sender independently of source workspace"
     tabId: sender.tab_id,
     workspaceId: sender.workspace_id,
     repoKey: "/tmp",
-    canonicalRepoKey: realFs.realpathSync("/tmp"),
+    canonicalRepoKey: realFs.realpathSync.native("/tmp"),
   });
   const managerRuntime = supervisionRuntime();
   const selectedDescriptorPath = managerDescriptorPath(
     managerRuntime,
-    realFs.realpathSync("/tmp"),
+    realFs.realpathSync.native("/tmp"),
   );
   const unrelatedMalformedPath = managerDescriptorPath(
     managerRuntime,
@@ -24525,7 +24543,7 @@ test("managed Lead sampler requires a verified assignment, caches its sample, an
     tabId: managerTabId,
     workspaceId: WORKSPACE,
     repoKey,
-    canonicalRepoKey: realFs.realpathSync(repoKey),
+    canonicalRepoKey: realFs.realpathSync.native(repoKey),
   };
   let managerLease = claimManagerLease({
     ...managerIdentity,
