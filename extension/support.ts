@@ -750,7 +750,6 @@ export const {
   StatusWidget,
   formatAgentDefinitions,
   buildStatusRows,
-  renderRunningOptions,
   truncateModelText,
   visibleWidth,
 } = await import("./presentation.ts");

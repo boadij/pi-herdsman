@@ -107,7 +107,6 @@ import {
   observeLocalHeaderActivity,
   type AgentControllerOptions,
   type AgentStatusSnapshotHost,
-  type AgentStatusSnapshotOptions,
   type PendingStart,
   type ControllerScope,
   type RootDelegationPolicy,
@@ -154,8 +153,6 @@ import type { ResultBinding } from "./storage.ts";
 import {
   populateMenuFrame,
   syncAutomaticSessionName,
-  buildStatusRows,
-  renderRunningOptions,
   formatStatusCounts,
   createSupervisionWidget,
   type FocusIntent,
@@ -3343,7 +3340,6 @@ export function registerLeadRuntime(
     ctx: ExtensionContext,
     signal = controller.sessionSignal(),
     allowTranscriptDefinitionFallback = true,
-    statusOptions?: AgentStatusSnapshotOptions,
   ): Promise<StatusSnapshot> => {
     const isLead = roleTransitions && activeLeadRole(leadRuntime) === "lead";
     let assignmentVerified = false;
@@ -3428,19 +3424,14 @@ export function registerLeadRuntime(
     } else {
       verifiedManagedAssignment = undefined;
     }
-    const snapshot = buildAgentStatusSnapshot(
-      view,
-      ctx,
-      {
-        ...options.statusSnapshotHost,
-        scope: { kind: "root" },
-        activeRootRoleForPresentation,
-        listedAgentRecord: controller.listedAgentRecord,
-        runtimeForLabel: (label) => controller.runtimeForLabel(label),
-        herdStartedAt: () => herdRunRuntime?.startedAt(),
-      },
-      statusOptions,
-    );
+    const snapshot = buildAgentStatusSnapshot(view, ctx, {
+      ...options.statusSnapshotHost,
+      scope: { kind: "root" },
+      activeRootRoleForPresentation,
+      listedAgentRecord: controller.listedAgentRecord,
+      runtimeForLabel: (label) => controller.runtimeForLabel(label),
+      herdStartedAt: () => herdRunRuntime?.startedAt(),
+    });
     const execution =
       isLead && sessionKind?.kind === "managed"
         ? { kind: "managed" as const, lifecycle: managedLifecycle }
@@ -3559,11 +3550,11 @@ export function registerLeadRuntime(
         !!agent.paneId,
     );
     if (!current() || fresh.stale || fresh.unavailable || matches.length !== 1)
-      throw new Error("Agent changed; reopen Running.");
+      throw new Error("Agent changed; reopen status.");
     const target = matches[0]!;
     const live = await identityRuntime.liveAgent(ctx, target.sessionId!);
     if (!current() || live.length !== 1 || live[0]!.pane_id !== target.paneId)
-      throw new Error("Agent changed; reopen Running.");
+      throw new Error("Agent changed; reopen status.");
     const verified = await verifiedHerdrAgent(
       {
         piSessionId: target.sessionId!,
@@ -3582,7 +3573,7 @@ export function registerLeadRuntime(
       },
     );
     if (!current() || !verified)
-      throw new Error("Agent changed; reopen Running.");
+      throw new Error("Agent changed; reopen status.");
     await options.commandHost.runHerdr(
       pi,
       ctx,
@@ -3905,7 +3896,6 @@ export function registerLeadRuntime(
   });
   const commandRuntime = createLeadCommandRuntime({
     ...options.commandHost,
-    pi,
     persistStopClosures: (ctx, closures) =>
       projectRuntime.persistStopClosures(ctx, closures),
     getRemovalPreauthorization: (ctx: ExtensionContext) =>
@@ -3933,8 +3923,6 @@ export function registerLeadRuntime(
       );
     },
     isLead: () => activeLeadRole(leadRuntime) === "lead",
-    buildStatusRows,
-    renderRunningOptions,
     formatStatusCounts,
     openSupervisionOverview: (ctx: ExtensionCommandContext) =>
       supervisionUiRuntime.openOverview(ctx, {
@@ -3961,8 +3949,8 @@ export function registerLeadRuntime(
         selectMenu: options.commandHost.selectMenu,
       }),
     controller,
-    loadStatusSnapshot: (ctx, _signal, statusOptions) =>
-      loadStatusSnapshot(ctx, controller.sessionSignal(), true, statusOptions),
+    loadStatusSnapshot: (ctx, _signal) =>
+      loadStatusSnapshot(ctx, controller.sessionSignal(), true),
     roleActive: (role: "manager" | "chief") =>
       role === "manager"
         ? activeLeadRole(leadRuntime) === "manager" &&

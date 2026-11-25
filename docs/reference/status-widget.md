@@ -144,9 +144,8 @@ marker. It adds aligned text only for blocked, unknown, and lost Agents, while
 its ambient header summarizes nonzero working, blocked, transitioning,
 unknown, and lost categories as `● N  ◐ N  ◌ N  ? N  × N` (starting and settling share
 `◌`). If no Agent needs an attention label, the state-text column disappears;
-when attention is present, routine rows keep its blank alignment. Running
-menus and consequential confirmations continue to use full descriptive
-lifecycle labels and counts.
+when attention is present, routine rows keep its blank alignment. Consequential
+confirmations continue to use descriptive lifecycle counts.
 Ordinary Leads supervised by the Manager are shown separately from project
 work, with a supervised label; they are not treated as managed work. A Manager
 can inspect an eligible direct report through the overview, independently of
@@ -263,9 +262,11 @@ its current live pane. Click a visible ancestor segment in an Agent breadcrumb
 to focus that exact Lead or Agent; the current identity segment is not a
 navigation target. On a managed Lead, click `managed` to focus the Manager
 currently assigned to the exact project. These mouse actions are unavailable
-in regular terminal/scrollback mode, which retains normal terminal selection
-and the existing keyboard/menu alternatives such as the Running menu and
-`/chief` or `/manager` overview.
+in regular terminal/scrollback mode, which retains normal terminal selection.
+For keyboard navigation, regular terminal mode, or Agents omitted by the
+widget's height limit, use Herdr's native Goto picker (`prefix+g`, with
+`Ctrl+B` as the default prefix) or its existing pane navigation. The
+`/chief` and `/manager` overviews remain available in their respective roles.
 
 Navigation does not grant coordination authority. Agent targets are checked
 against the caller's durable ownership ancestry; Manager targets for project
@@ -357,7 +358,7 @@ The header reports exact non-zero lifecycle states in the order `working`,
 `blocked`, `settling`, `starting`, `unknown`, and `lost`. `starting` is a
 presentation-only count for controller-local assignments that have begun
 startup but have not yet become active or terminal. It is not mailbox state,
-control authority, or Running inventory.
+or control authority.
 
 Before the first successful refresh, the header says `unavailable`.
 
@@ -415,11 +416,8 @@ shutdown also clear transient startup state.
 
 The normal widget retains owned `lost` and fail-closed `unknown` rows because
 they represent durable unresolved generations whose physical state is either
-proven gone or not safely provable. `Running` inspection excludes `lost` and
-fail-closed `unknown` rows because they are not safely focusable targets; it
-otherwise shows authoritative live agent rows and excludes presentation-only
-starting rows. A terminal result is followed by cleanup; the widget does not
-retain an idle completed agent.
+proven gone or not safely provable. A terminal result is followed by cleanup;
+the widget does not retain an idle completed agent.
 
 ## Optional metadata
 
