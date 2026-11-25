@@ -12,7 +12,13 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { basename, join, resolve, toNamespacedPath } from "node:path";
+import {
+  basename,
+  isAbsolute,
+  join,
+  resolve,
+  toNamespacedPath,
+} from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { createServer, type Socket } from "node:net";
 import { test, type TestContext } from "node:test";
@@ -225,6 +231,11 @@ const claimChiefLease = (identity: any) =>
 const claimManagerLease = (identity: any) =>
   claimManagerLeaseRaw({
     ...identity,
+    canonicalRepoKey:
+      identity.canonicalRepoKey ??
+      (isAbsolute(identity.repoKey)
+        ? identity.repoKey
+        : join(tmpdir(), identity.repoKey)),
     build: identity.build ?? HERDSMAN_BUILD,
   });
 const writeLeadCoordinationState = (runtime: any, state: any) =>
@@ -383,7 +394,10 @@ test(
       workspaceId: WORKSPACE,
       repoKey: realpathSync(tmpdir()),
     });
-    const descriptorPath = managerDescriptorPath(runtime, WORKSPACE);
+    const descriptorPath = managerDescriptorPath(
+      runtime,
+      realpathSync(tmpdir()),
+    );
     const descriptor = readFileSync(descriptorPath, "utf8");
     let managerReleased = false;
     let managerIdentityUnavailable = false;
@@ -621,6 +635,7 @@ test(
         tabId: "second-manager-tab",
         workspaceId: "second-manager-workspace",
         repoKey: realpathSync(tmpdir()),
+        canonicalRepoKey: join(tmpdir(), "second-manager-repo"),
       });
       agents.push({
         agent_session: {
@@ -649,7 +664,7 @@ test(
         };
         const secondDescriptorPath = managerDescriptorPath(
           runtime,
-          "second-manager-workspace",
+          second.descriptor.canonicalRepoKey,
         );
         const secondDescriptor = readFileSync(secondDescriptorPath, "utf8");
         writeFileSync(secondDescriptorPath, "{");
@@ -807,6 +822,7 @@ test(
         tabId: "other-manager-tab",
         workspaceId: "other-manager-workspace",
         repoKey: realpathSync(tmpdir()),
+        canonicalRepoKey: join(tmpdir(), "other-manager-repo"),
       });
       agents.push({
         agent_session: {
@@ -2707,10 +2723,17 @@ for (const reachable of [true, false]) {
         assert.ok(notices.includes("Manager mode active."));
         assert.equal(realFs.existsSync(managerSessionFile), false);
         assert.equal(state.role, "manager");
-        assert.ok(realFs.existsSync(managerDescriptorPath(runtime, WORKSPACE)));
+        assert.ok(
+          realFs.existsSync(
+            managerDescriptorPath(runtime, realpathSync(tmpdir())),
+          ),
+        );
         const leadId = randomUUID();
         const branch = "smoke/manager-replay";
-        const managerA = readManagerDescriptor(runtime, WORKSPACE)!;
+        const managerA = readManagerDescriptor(
+          runtime,
+          realpathSync(tmpdir()),
+        )!;
         for (let index = 0; index < 3; index++) {
           const emptyBranch = `smoke/empty-${index}`;
           writeProjectAssignment(runtime, {
@@ -3135,7 +3158,9 @@ for (const reachable of [true, false]) {
         );
         assert.equal(state.role, "lead");
         assert.equal(
-          realFs.existsSync(managerDescriptorPath(runtime, WORKSPACE)),
+          realFs.existsSync(
+            managerDescriptorPath(runtime, realpathSync(tmpdir())),
+          ),
           false,
         );
         assert.equal(pi.pi.getActiveTools().includes("delegate_work"), false);
@@ -4921,7 +4946,7 @@ async function runManagerStartupScenario(
           assert.equal(realFs.existsSync(childSessionPath), false);
           const descriptorPath = managerDescriptorPath(
             supervisionRuntime(),
-            WORKSPACE,
+            realpathSync(repoKey),
           );
           realFs.unlinkSync(descriptorPath);
           realFs.rmSync(`${descriptorPath}.lock`, { recursive: true });
@@ -5953,11 +5978,11 @@ async function runManagerStartupScenario(
         } else {
           const descriptorPath = managerDescriptorPath(
             supervisionRuntime(),
-            WORKSPACE,
+            realpathSync(repoKey),
           );
           const descriptor = readManagerDescriptor(
             supervisionRuntime(),
-            WORKSPACE,
+            realpathSync(repoKey),
           )!;
           writeFileSync(
             descriptorPath,
@@ -7593,11 +7618,11 @@ async function runManagerStartupScenario(
         );
         const descriptorPath = managerDescriptorPath(
           supervisionRuntime(),
-          WORKSPACE,
+          realpathSync(repoKey),
         );
         const descriptor = readManagerDescriptor(
           supervisionRuntime(),
-          WORKSPACE,
+          realpathSync(repoKey),
         )!;
         writeFileSync(
           descriptorPath,

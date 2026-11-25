@@ -384,6 +384,12 @@ function emptyPromptSections(): Record<string, string> {
   return {};
 }
 
+const CHIEF_PROJECT_TOOLS = [
+  "clone_repository",
+  "start_manager",
+  "resume_manager",
+];
+
 const REGISTERED_ROLE_TOOLS = [
   "list_agents",
   "delegate_agent",
@@ -690,6 +696,9 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     integrate_branch: "integrate branch",
     stop_lead: "stop lead",
     remove_worktree: "remove worktree",
+    clone_repository: "clone repository",
+    start_manager: "start Manager",
+    resume_manager: "resume Manager",
   };
   for (const legacy of ["agent", "chief", "peer", "staff"])
     assert.equal(tools.has(legacy), false, `legacy tool remains: ${legacy}`);
@@ -802,6 +811,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
       "stop_lead",
       "remove_worktree",
       "integrate_branch",
+      ...CHIEF_PROJECT_TOOLS,
     ].sort(),
   );
   for (const name of [
@@ -910,7 +920,7 @@ test("extension loading does not call runtime action methods", () => {
   }
 });
 
-test("Chief activation exposes only semantic staff tools", async () => {
+test("Chief activation exposes only semantic staff and project tools", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "semantic-chief-pane";
   process.env.HERDR_TAB_ID = "semantic-chief-tab";
@@ -932,22 +942,43 @@ test("Chief activation exposes only semantic staff tools", async () => {
   const chief = fakePi({
     entries,
     activeTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
-    allTools: REGISTERED_ROLE_TOOLS,
+    allTools: [
+      ...REGISTERED_ROLE_TOOLS,
+      ...CHIEF_PROJECT_TOOLS.map((name) => ({ name })),
+    ],
   });
   registerExtension!(chief.pi as never);
   try {
-    await chief.events.get("session_start")![0](
-      undefined,
-      fakeContext(entries) as any,
-    );
+    const context = fakeContext(entries) as any;
+    const tools = new Map(chief.tools.map((tool) => [tool.name, tool]));
+    for (const name of CHIEF_PROJECT_TOOLS) {
+      const tool = tools.get(name)!;
+      const args =
+        name === "clone_repository"
+          ? { url: "https://example.com/project" }
+          : { repository: "/project" };
+      assertPortableToolSchema(tool);
+      assert.equal(tool.defaultActive, false);
+      assert.equal(tool.executionMode, "sequential");
+      assert.equal(Value.Check(tool.parameters, args), true);
+      assert.equal(
+        Value.Check(tool.parameters, { ...args, unexpected: true }),
+        false,
+      );
+      await assert.rejects(
+        tool.execute("not-chief", args, undefined, undefined, context),
+        /verified active Chief/,
+      );
+    }
+    await chief.events.get("session_start")![0](undefined, context);
     assert.equal(chief.pi.getSessionName(), "Chief");
     assert.deepEqual(chief.pi.getActiveTools(), [
       "list_staff",
       "inspect_staff",
       "read_staff_transcript",
       "message_staff",
+      ...CHIEF_PROJECT_TOOLS,
     ]);
-    const tools = new Map(chief.tools.map((tool) => [tool.name, tool]));
     for (const [name, valid, invalid, required] of STAFF_TOOL_CASES) {
       const tool = tools.get(name);
       assert.ok(tool, `missing ${name}`);
@@ -1070,8 +1101,11 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
   const lead = fakePi({
-    activeTools: [],
-    allTools: REGISTERED_ROLE_TOOLS,
+    activeTools: CHIEF_PROJECT_TOOLS,
+    allTools: [
+      ...REGISTERED_ROLE_TOOLS,
+      ...CHIEF_PROJECT_TOOLS.map((name) => ({ name })),
+    ],
   });
   registerExtension!(lead.pi as never);
   const historicalStaffMessage = lead.tools.find(
@@ -1164,6 +1198,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
       "stop_lead",
       "remove_worktree",
       "integrate_branch",
+      ...CHIEF_PROJECT_TOOLS,
     ].sort(),
   );
   assert.equal(lead.pi.getActiveTools().includes("integrate_branch"), false);
@@ -1180,6 +1215,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     assertPortableToolSchema(tool);
     if (tool.name === "read_evidence") continue;
     assert.equal(tool.executionMode, "sequential");
+    if (CHIEF_PROJECT_TOOLS.includes(tool.name)) continue; // Use Pi’s default rendering.
     assert.equal(typeof tool.renderCall, "function");
     assert.equal(typeof tool.renderResult, "function");
   }
@@ -6691,7 +6727,7 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
     )?.description;
     assert.match(closeDescription ?? "", /abandoning unfinished assignments/);
     assert.ok(!pi.tools.some((tool) => tool.name === "close_agent"));
-    // Simulate restoring verified Manager state from a session without name history.
+    // Simulate a same-process reload with a buffered Manager role and no name history.
     for (let i = pi.entries.length - 1; i >= 0; i--) {
       const entry = pi.entries[i] as { type: string; customType?: string };
       if (
@@ -6700,7 +6736,7 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
       )
         pi.entries.splice(i, 1);
     }
-    await pi.events.get("session_start")![0](undefined, context);
+    await pi.events.get("session_start")![0]({ reason: "reload" }, context);
     assert.deepEqual(
       pi.entries
         .filter((entry: any) => entry.type === "session_info")
@@ -6754,6 +6790,7 @@ test("delegating agents do not receive Manager supervisor projections", async ()
     tabId: "manager-tab",
     workspaceId: WORKSPACE,
     repoKey: "repo-key",
+    canonicalRepoKey: join(tmpdir(), "mock-manager-repo"),
   });
   writeProjectAssignment(runtime, {
     version: 2,
@@ -8435,7 +8472,11 @@ for (const delegationEnabled of [false, true]) {
         role === "chief"
           ? claimChiefLease(rootIdentity)
           : role === "manager"
-            ? claimManagerLease({ ...rootIdentity, repoKey: "repo-key" })
+            ? claimManagerLease({
+                ...rootIdentity,
+                repoKey: "repo-key",
+                canonicalRepoKey: join(tmpdir(), "mock-manager-repo"),
+              })
             : undefined;
       const agentSessionId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
       const agentPaneId = "status-boundary-agent-pane";
@@ -8511,6 +8552,9 @@ for (const delegationEnabled of [false, true]) {
                         {
                           pane_id: leadPaneId,
                           workspace_id: WORKSPACE,
+                          ...(role === "manager"
+                            ? { tab_id: lead.tab_id }
+                            : {}),
                           agent: "pi",
                         },
                       ],

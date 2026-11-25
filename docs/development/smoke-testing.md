@@ -35,6 +35,7 @@ npm run smoke
 npm run smoke -- core
 npm run smoke -- continuation
 npm run smoke -- chief-tree
+npm run smoke -- chief-manager --simulated
 npm run smoke -- manager-bootstrap
 npm run smoke -- manager-recovery
 npm run smoke -- terminal-failure
@@ -58,13 +59,14 @@ managed descendants do not load the probe.
 
 ### Deterministic simulated acceptance
 
-The harness also supports an opt-in Pi-native faux provider for ten bounded
+The harness also supports an opt-in Pi-native faux provider for these bounded
 scenarios:
 
 ```sh
 npm run smoke -- core --simulated
 npm run smoke -- continuation --simulated
 npm run smoke -- chief-tree --simulated
+npm run smoke -- chief-manager --simulated
 npm run smoke -- supervisor-agent --simulated
 npm run smoke -- terminal-failure --simulated
 npm run smoke -- agent-terminal-failure --simulated
@@ -174,6 +176,7 @@ side effects.
 The available scenarios are `core` (nested delegation and candidate-extension
 propagation), `continuation` (persisted Pi-session continuation across managed
 generations), `chief-tree` (current Chief/session_tree behavior),
+`chief-manager` (Chief starts and recovers a Manager),
 `supervisor-agent` (Chief direct Agent delegation, completed result delivery,
 and role exit), `manager-bootstrap` (real confirmation of Git initialization in
 a disposable non-Git primary workspace followed by first delegation and
@@ -207,6 +210,17 @@ is a single acceptance invocation and is never automatically retried.
 snapshots and verifies Chief differs from Lead while selecting a pre-Chief
 branch restores ordinary Lead tools. It does not
 replace the broader manual Chief supervision checks below.
+
+`chief-manager` requires `--simulated`: model responses are scripted, but Pi,
+Herdsman, Herdr, and Git run for real in isolation. It exercises Chief startup
+in a project without a workspace, a repeat start without a duplicate pane or
+process, and `resume_required` after quitting Manager Pi. It checks that a
+mismatched saved session reference blocks both startup and resume, then
+reopens the original session file and history under a new PID. The scenario
+checks persisted conversational replies from the Manager and verifies that an
+existing assignment, worktree, and live Lead session and PID survive the
+turnover. It does not test remote cloning, interactive Git bootstrap, or
+live-model decisions.
 
 For runtime changes to settlement or tool selection, verify cancellation does
 not deliver partial assistant text as a successful result and verify the
@@ -577,8 +591,9 @@ After every smoke:
 
 ## Project Manager / Chief supervision live matrix
 
-`manager-recovery` is the canonical automated live Manager lifecycle check. It
-covers fresh delegation, project review messaging, pause/resume, Manager
+`manager-recovery` is the automated live check for Manager-owned project work,
+not for Chief reopening the Manager session. It covers fresh delegation,
+project review messaging, pause/resume, Manager
 turnover while a project message is pending and its later delivery, missing
 worktree retirement without an explicit Herdr removal event, refusal to resume
 the retired assignment, exact Pi-session continuity before retirement, and
@@ -591,63 +606,63 @@ of failure.
 The manual checks below are **NOT RUN**, not claims of failure or success.
 Automated live scenario results are separate and do not replace these checks.
 
-| Scenario                                                                                                                                                                                                                                            | Result  |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| Ordinary Leads have only their authorized `message_manager` or `message_chief`, managed Leads have `message_manager`, and both have peer tools but not staff tools; Manager has `message_chief` and staff/project tools; Chief has staff tools only | NOT RUN |
-| Selecting a pre-Chief Lead branch through `/tree` exits Chief mode and restores ordinary Lead lifecycle/tool state                                                                                                                                  | NOT RUN |
-| Leaving Chief persists `role` plus exact `leadTools`; resume repairs stale restored Chief tools before another model turn                                                                                                                           | NOT RUN |
-| A legitimate ordinary branch loadout is preserved instead of being overwritten by an older `leadTools` checkpoint                                                                                                                                   | NOT RUN |
-| Persisted Chief resume collision becomes suspended                                                                                                                                                                                                  | NOT RUN |
-| Ordinary losing `/chief` collision remains a lead with its tools and offers Focus/Cancel                                                                                                                                                            | NOT RUN |
-| Delegating agent and agent retain their current role tools                                                                                                                                                                                          | NOT RUN |
-| Activate one Chief with `/chief`                                                                                                                                                                                                                    | NOT RUN |
-| Activation refuses a lead with owned or unresolved agent work                                                                                                                                                                                       | NOT RUN |
-| Two exact simultaneous Chief claims have one winner                                                                                                                                                                                                 | NOT RUN |
-| Stale exact lease recovery                                                                                                                                                                                                                          | NOT RUN |
-| Malformed role, lead state, lease, or descriptor fails closed; coordination publication invalidates stale state and disables actions                                                                                                                | NOT RUN |
-| Discover leads across multiple workspaces                                                                                                                                                                                                           | NOT RUN |
-| Exclude managed agents and the active Chief from leads                                                                                                                                                                                              | NOT RUN |
-| Agent exclusion uses the production validated snapshot and stale/ambiguous generations fail closed                                                                                                                                                  | NOT RUN |
-| Herdr `agent_status` lifecycle normalization is reflected                                                                                                                                                                                           | NOT RUN |
-| Nested agent aggregation attaches only to the proven lead                                                                                                                                                                                           | NOT RUN |
-| A blocked agent does not mark its lead `needs you`                                                                                                                                                                                                  | NOT RUN |
-| Duplicate live agents, coordination records, or agent evidence fail closed                                                                                                                                                                          | NOT RUN |
-| Target disappearance or replacement between list and action is rejected                                                                                                                                                                             | NOT RUN |
-| Inspect a lead and compare bounded peek evidence                                                                                                                                                                                                    | NOT RUN |
-| Read `read_staff_transcript` when `transcript` is advertised; the action validates the persisted session header, version, and exact Pi session ID; content is bounded and read-only                                                                 | NOT RUN |
-| `inspect_staff` exposes live terminal/process evidence while `read_staff_transcript` exposes persisted conversation/tool evidence                                                                                                                   | NOT RUN |
-| Focus a lead after exact revalidation                                                                                                                                                                                                               | NOT RUN |
-| Chief `message` to idle, working, or blocked leads                                                                                                                                                                                                  | NOT RUN |
-| Two Chief messages queue and arrive once and in order                                                                                                                                                                                               | NOT RUN |
-| A quarantined message does not block a new message to the same lead                                                                                                                                                                                 | NOT RUN |
-| Leads retain descendant ownership after a Chief `message`                                                                                                                                                                                           | NOT RUN |
-| Ordinary Lead `message_chief` reaches the active Chief                                                                                                                                                                                              | NOT RUN |
-| Managed Lead can use nonblocking `message_manager` for timely Manager coordination before its normal result handoff                                                                                                                                 | NOT RUN |
-| Routine information waits for the automatic result; timely messages and later results are not deduplicated                                                                                                                                          | NOT RUN |
-| Metadata publication failure does not remove communication eligibility                                                                                                                                                                              | NOT RUN |
-| Ordinary lead messages leave lead coordination state unchanged                                                                                                                                                                                      | NOT RUN |
-| Downward message_staff to an active direct report uses Pi steering; non-supervisor inbox traffic remains deferred                                                                                                                                   | NOT RUN |
-| Receiver restart delivers each queued message once                                                                                                                                                                                                  | NOT RUN |
-| Accepted-before-delete crash deduplicates without reinjection                                                                                                                                                                                       | NOT RUN |
-| Failed delivery/acceptance retains the queued record                                                                                                                                                                                                | NOT RUN |
-| Transient authorization lookup failure retains the queued message                                                                                                                                                                                   | NOT RUN |
-| Stale lease, wrong sender/generation, duplicate identity, and malformed records fail closed                                                                                                                                                         | NOT RUN |
-| Lead/Chief messages show bounded direction-aware model-visible sender and target identity                                                                                                                                                           | NOT RUN |
-| Queued inbox records are ordered by `createdAt`, then ID                                                                                                                                                                                            | NOT RUN |
-| Resume with a free or occupied lease                                                                                                                                                                                                                | NOT RUN |
-| Confirm `/chief-leave` without mutating supervised leads                                                                                                                                                                                            | NOT RUN |
-| Suspended Chief retains no Herdsman authority tools                                                                                                                                                                                                 | NOT RUN |
-| Descendant `working`, `settling`, and `blocked` states remain exact; counts report `active`, `blocked`, and `total`                                                                                                                                 | NOT RUN |
-| Chief rows separate `!` attention from lifecycle: `●` working, `◐` blocked, `?` unknown, and `◉` delegated active descendants                                                                                                                       | NOT RUN |
-| Empty-roster Escape closes the native custom UI                                                                                                                                                                                                     | NOT RUN |
-| Empty-roster Ctrl+C closes the native custom UI                                                                                                                                                                                                     | NOT RUN |
-| Real terminal arrow sequences navigate the visual order                                                                                                                                                                                             | NOT RUN |
-| Space switches overview to peek and Escape/Space returns without nested custom UI                                                                                                                                                                   | NOT RUN |
-| Ctrl+C closes from peek                                                                                                                                                                                                                             | NOT RUN |
-| Enter focuses the lead and closes the overview                                                                                                                                                                                                      | NOT RUN |
-| Background refresh redraws the open overview                                                                                                                                                                                                        | NOT RUN |
-| Ambient and overview rendering stay within the supplied width                                                                                                                                                                                       | NOT RUN |
-| Named herdr sockets independently support one Chief each                                                                                                                                                                                            | NOT RUN |
+| Scenario                                                                                                                                                                                                                                                                   | Result  |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| Ordinary Leads have only their authorized `message_manager` or `message_chief`, managed Leads have `message_manager`, and both have peer tools but not staff tools; Manager has `message_chief` and staff/project tools; Chief has staff and Chief project lifecycle tools | NOT RUN |
+| Selecting a pre-Chief Lead branch through `/tree` exits Chief mode and restores ordinary Lead lifecycle/tool state                                                                                                                                                         | NOT RUN |
+| Leaving Chief persists `role` plus exact `leadTools`; resume repairs stale restored Chief tools before another model turn                                                                                                                                                  | NOT RUN |
+| A legitimate ordinary branch loadout is preserved instead of being overwritten by an older `leadTools` checkpoint                                                                                                                                                          | NOT RUN |
+| Persisted Chief resume collision becomes suspended                                                                                                                                                                                                                         | NOT RUN |
+| Ordinary losing `/chief` collision remains a lead with its tools and offers Focus/Cancel                                                                                                                                                                                   | NOT RUN |
+| Delegating agent and agent retain their current role tools                                                                                                                                                                                                                 | NOT RUN |
+| Activate one Chief with `/chief`                                                                                                                                                                                                                                           | NOT RUN |
+| Activation refuses a lead with owned or unresolved agent work                                                                                                                                                                                                              | NOT RUN |
+| Two exact simultaneous Chief claims have one winner                                                                                                                                                                                                                        | NOT RUN |
+| Stale exact lease recovery                                                                                                                                                                                                                                                 | NOT RUN |
+| Malformed role, lead state, lease, or descriptor fails closed; coordination publication invalidates stale state and disables actions                                                                                                                                       | NOT RUN |
+| Discover leads across multiple workspaces                                                                                                                                                                                                                                  | NOT RUN |
+| Exclude managed agents and the active Chief from leads                                                                                                                                                                                                                     | NOT RUN |
+| Agent exclusion uses the production validated snapshot and stale/ambiguous generations fail closed                                                                                                                                                                         | NOT RUN |
+| Herdr `agent_status` lifecycle normalization is reflected                                                                                                                                                                                                                  | NOT RUN |
+| Nested agent aggregation attaches only to the proven lead                                                                                                                                                                                                                  | NOT RUN |
+| A blocked agent does not mark its lead `needs you`                                                                                                                                                                                                                         | NOT RUN |
+| Duplicate live agents, coordination records, or agent evidence fail closed                                                                                                                                                                                                 | NOT RUN |
+| Target disappearance or replacement between list and action is rejected                                                                                                                                                                                                    | NOT RUN |
+| Inspect a lead and compare bounded peek evidence                                                                                                                                                                                                                           | NOT RUN |
+| Read `read_staff_transcript` when `transcript` is advertised; the action validates the persisted session header, version, and exact Pi session ID; content is bounded and read-only                                                                                        | NOT RUN |
+| `inspect_staff` exposes live terminal/process evidence while `read_staff_transcript` exposes persisted conversation/tool evidence                                                                                                                                          | NOT RUN |
+| Focus a lead after exact revalidation                                                                                                                                                                                                                                      | NOT RUN |
+| Chief `message` to idle, working, or blocked leads                                                                                                                                                                                                                         | NOT RUN |
+| Two Chief messages queue and arrive once and in order                                                                                                                                                                                                                      | NOT RUN |
+| A quarantined message does not block a new message to the same lead                                                                                                                                                                                                        | NOT RUN |
+| Leads retain descendant ownership after a Chief `message`                                                                                                                                                                                                                  | NOT RUN |
+| Ordinary Lead `message_chief` reaches the active Chief                                                                                                                                                                                                                     | NOT RUN |
+| Managed Lead can use nonblocking `message_manager` for timely Manager coordination before its normal result handoff                                                                                                                                                        | NOT RUN |
+| Routine information waits for the automatic result; timely messages and later results are not deduplicated                                                                                                                                                                 | NOT RUN |
+| Metadata publication failure does not remove communication eligibility                                                                                                                                                                                                     | NOT RUN |
+| Ordinary lead messages leave lead coordination state unchanged                                                                                                                                                                                                             | NOT RUN |
+| Downward message_staff to an active direct report uses Pi steering; non-supervisor inbox traffic remains deferred                                                                                                                                                          | NOT RUN |
+| Receiver restart delivers each queued message once                                                                                                                                                                                                                         | NOT RUN |
+| Accepted-before-delete crash deduplicates without reinjection                                                                                                                                                                                                              | NOT RUN |
+| Failed delivery/acceptance retains the queued record                                                                                                                                                                                                                       | NOT RUN |
+| Transient authorization lookup failure retains the queued message                                                                                                                                                                                                          | NOT RUN |
+| Stale lease, wrong sender/generation, duplicate identity, and malformed records fail closed                                                                                                                                                                                | NOT RUN |
+| Lead/Chief messages show bounded direction-aware model-visible sender and target identity                                                                                                                                                                                  | NOT RUN |
+| Queued inbox records are ordered by `createdAt`, then ID                                                                                                                                                                                                                   | NOT RUN |
+| Resume with a free or occupied lease                                                                                                                                                                                                                                       | NOT RUN |
+| Confirm `/chief-leave` without mutating supervised leads                                                                                                                                                                                                                   | NOT RUN |
+| Suspended Chief retains no Herdsman authority tools                                                                                                                                                                                                                        | NOT RUN |
+| Descendant `working`, `settling`, and `blocked` states remain exact; counts report `active`, `blocked`, and `total`                                                                                                                                                        | NOT RUN |
+| Chief rows separate `!` attention from lifecycle: `●` working, `◐` blocked, `?` unknown, and `◉` delegated active descendants                                                                                                                                              | NOT RUN |
+| Empty-roster Escape closes the native custom UI                                                                                                                                                                                                                            | NOT RUN |
+| Empty-roster Ctrl+C closes the native custom UI                                                                                                                                                                                                                            | NOT RUN |
+| Real terminal arrow sequences navigate the visual order                                                                                                                                                                                                                    | NOT RUN |
+| Space switches overview to peek and Escape/Space returns without nested custom UI                                                                                                                                                                                          | NOT RUN |
+| Ctrl+C closes from peek                                                                                                                                                                                                                                                    | NOT RUN |
+| Enter focuses the lead and closes the overview                                                                                                                                                                                                                             | NOT RUN |
+| Background refresh redraws the open overview                                                                                                                                                                                                                               | NOT RUN |
+| Ambient and overview rendering stay within the supplied width                                                                                                                                                                                                              | NOT RUN |
+| Named herdr sockets independently support one Chief each                                                                                                                                                                                                                   | NOT RUN |
 
 Named herdr socket independence remains **NOT RUN** in this manual matrix.
 See [Validation](validation.md) for the repository test gate.

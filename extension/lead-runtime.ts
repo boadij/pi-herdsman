@@ -9,14 +9,22 @@ import {
   createLeadCommandRuntime,
   type LeadCommandBaseHost,
 } from "./lead/commands.ts";
-import { readSessionKind, type SessionKindEntry } from "./supervision.ts";
+import {
+  readSessionKind,
+  sessionLeadRoleState,
+  type SessionKindEntry,
+} from "./supervision.ts";
 import type {
   BuildSystemPromptOptions,
   ExtensionAPI,
   ExtensionContext,
   SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
-import { getSelectListTheme } from "@earendil-works/pi-coding-agent";
+import {
+  getSelectListTheme,
+  parseSessionEntries,
+  SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import {
   visibleWidth,
   type SelectItem,
@@ -27,6 +35,8 @@ import type {
   ChiefDescriptor,
   ManagerDescriptor,
   ManagerLease,
+  ManagerRecoveryReference,
+  ManagerStartIntent,
   ProjectAssignment,
   UnverifiedLead,
   ProjectMessage,
@@ -64,6 +74,10 @@ import {
   writePeerDeliveryReceipt,
   COORDINATION_INBOX_SCAN_LIMIT,
   peerRuntime,
+  consumeManagerStartIntent,
+  getManagerStartIntent,
+  removeManagerRecoveryReference,
+  writeManagerRecoveryReference,
 } from "./supervision.ts";
 
 import { OperationError } from "./errors.ts";
@@ -160,16 +174,13 @@ import {
 } from "./presentation.ts";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
-import { lstatSync, realpathSync, statSync } from "node:fs";
-import {
-  dirname,
-  isAbsolute,
-  join,
-  resolve,
-  toNamespacedPath,
-} from "node:path";
+import { lstatSync, readFileSync, statSync } from "node:fs";
+import { isAbsolute, resolve, toNamespacedPath } from "node:path";
 import { persistedTranscriptReady as controllerPersistedTranscriptReady } from "./agent-controller.ts";
-import { herdsmanTempRoot } from "./storage.ts";
+import {
+  ensureManagerGitRepository,
+  requireNoLiveLegacyManager,
+} from "./manager-git.ts";
 
 import {
   createLeadCoordinationRuntime,
@@ -1244,6 +1255,29 @@ export function createLeadSessionTreeRuntime(host: {
   };
 }
 
+function isFreshLeadSession(
+  ctx: ExtensionContext,
+  reason?: SessionStartEvent["reason"],
+): boolean {
+  return (
+    reason === "new" ||
+    (reason === "startup" &&
+      !ctx.sessionManager.getHeader()?.parentSession &&
+      !ctx.sessionManager
+        .getEntries()
+        .some(
+          (entry) =>
+            (entry.type === "custom" &&
+              entry.customType === "pi-herdsman-session-kind") ||
+            entry.type === "message" ||
+            entry.type === "custom_message" ||
+            entry.type === "compaction" ||
+            entry.type === "branch_summary" ||
+            entry.type === "context_edit",
+        ))
+  );
+}
+
 export function createLeadSessionStartRuntime(host: {
   prepareLeadExecution(
     ctx: ExtensionContext,
@@ -1333,22 +1367,7 @@ export function createLeadSessionStartRuntime(host: {
       reason?: SessionStartEvent["reason"],
     ): Promise<void> {
       // Check history before startup can append session identity.
-      const freshSession =
-        reason === "new" ||
-        (reason === "startup" &&
-          !ctx.sessionManager.getHeader()?.parentSession &&
-          !ctx.sessionManager
-            .getEntries()
-            .some(
-              (entry) =>
-                (entry.type === "custom" &&
-                  entry.customType === "pi-herdsman-session-kind") ||
-                entry.type === "message" ||
-                entry.type === "custom_message" ||
-                entry.type === "compaction" ||
-                entry.type === "branch_summary" ||
-                entry.type === "context_edit",
-            ));
+      const freshSession = isFreshLeadSession(ctx, reason);
       host.diagnostic();
       host.controller.abortSession();
       host.leadInboxRuntime.beginSession();
@@ -1430,29 +1449,54 @@ export function createLeadSessionStartRuntime(host: {
         skipLeadExecutionProfileResolution = persistedRole === "chief";
         host.roleTransitions.reconcileRoleTools();
         let optionalManager = false;
+        let leadStateRestored = false;
+        let leadStateValid = true;
+        let startupIntent: ManagerStartIntent | undefined;
         if (freshSession && !hasPersistedRole && !malformedRole) {
           try {
-            optionalManager = host.autoActivateManager(ctx);
+            startupIntent = host.roleTransitions.managerStartIntent(sessionId);
           } catch (error) {
-            host.appendRoleError(ctx, error);
+            malformedRole = true;
+            await host.failClosedRole(ctx, error);
+          }
+          if (!startupIntent && !malformedRole) {
+            try {
+              optionalManager = host.autoActivateManager(ctx);
+            } catch (error) {
+              host.appendRoleError(ctx, error);
+            }
           }
         }
-        let leadStateRestored = false;
-        let leadStateValid = !optionalManager;
-        if (optionalManager && host.roleTransitions.canRestoreChiefState()) {
+        if (
+          (startupIntent || optionalManager || persistedRole === "manager") &&
+          !malformedRole &&
+          host.roleTransitions.canRestoreChiefState()
+        ) {
           leadStateValid = host.roleTransitions.restoreChiefState(ctx);
           leadStateRestored = true;
           if (!leadStateValid) malformedRole = true;
         }
         try {
-          await host.roleTransitions.resolveControllerRole(
-            ctx,
-            persistedRole,
-            optionalManager && leadStateValid,
-          );
+          if (!malformedRole && !sessionSignal.aborted) {
+            if (startupIntent)
+              await host.roleTransitions.activateManagerFromIntent(
+                ctx,
+                startupIntent,
+              );
+            else
+              await host.roleTransitions.resolveControllerRole(
+                ctx,
+                persistedRole,
+                optionalManager && leadStateValid,
+                reason === "reload",
+              );
+          }
         } catch (error) {
           if (sessionSignal.aborted) return;
-          host.appendRoleError(ctx, error);
+          if (startupIntent) {
+            malformedRole = true;
+            await host.failClosedRole(ctx, error);
+          } else host.appendRoleError(ctx, error);
         }
         if (sessionSignal.aborted) return;
         if (optionalManager && leadStateValid)
@@ -2014,7 +2058,7 @@ export function registerLeadRuntime(
       try {
         const descriptor = roleHost.readManagerDescriptor(
           roleHost.supervisionRuntime(),
-          state.managerLease.descriptor.workspaceId,
+          state.managerLease.descriptor.canonicalRepoKey,
         );
         if (
           descriptor &&
@@ -3166,7 +3210,7 @@ export function registerLeadRuntime(
       const runtime = options.roleTransitionHost.supervisionRuntime();
       const status = options.roleTransitionHost.readManagerDescriptorStatus(
         runtime,
-        manager.workspaceId,
+        manager.canonicalRepoKey,
       );
       if (
         activeLeadRole(state) !== "manager" ||
@@ -4853,8 +4897,9 @@ export function registerLeadRuntime(
   });
   pi.on(
     "agent_settled",
-    (event: { aborted: boolean }, ctx: ExtensionContext) => {
+    async (event: { aborted: boolean }, ctx: ExtensionContext) => {
       if (isQuarantinedSession(ctx)) return;
+      await roleTransitions.persistPendingManagerRecovery(ctx);
       const result = agentEvents.agentSettled(ctx, event.aborted);
       projectRuntime.updateRemovalStatus(ctx);
       return result;
@@ -4894,11 +4939,51 @@ export function registerLeadRuntime(
     }
     return agentEvents.toolCall(event, ctx);
   });
+  let pendingManagerStartup: (() => Promise<void>) | undefined;
   pi.on("session_start", async (event, ctx) => {
     inheritedProjection = undefined;
-    await sessionStart.sessionStart(ctx, event?.reason);
-    syncRootSessionName(ctx);
-    projectRuntime.updateRemovalStatus(ctx);
+    pendingManagerStartup = undefined;
+    const sessionId = ctx.sessionManager.getSessionId();
+    const completeStartup = async () => {
+      await sessionStart.sessionStart(ctx, event?.reason);
+      syncRootSessionName(ctx);
+      projectRuntime.updateRemovalStatus(ctx);
+    };
+    if (event?.reason === "startup" && options.hasPane()) {
+      let verifyAfterSessionStart = false;
+      try {
+        const persisted = roleHost.sessionLeadRoleState(
+          ctx.sessionManager.getBranch(),
+          sessionId,
+        );
+        verifyAfterSessionStart =
+          persisted?.role === "manager" ||
+          (!persisted &&
+            isFreshLeadSession(ctx, event.reason) &&
+            roleTransitions.managerStartIntent(sessionId) !== undefined);
+      } catch {
+        // The normal startup path diagnoses invalid role or intent records.
+      }
+      if (verifyAfterSessionStart) {
+        // Pi awaits session_start handlers sequentially. With an explicit
+        // --extension, ours can run before Herdr reports this Pi session.
+        // Wait for Pi's post-session_start boundary, not for Herdr inside our hook.
+        pendingManagerStartup = async () => {
+          if (
+            !ctx.signal?.aborted &&
+            ctx.sessionManager.getSessionId() === sessionId
+          )
+            await completeStartup();
+        };
+        return;
+      }
+    }
+    await completeStartup();
+  });
+  pi.on("resources_discover", async () => {
+    const startup = pendingManagerStartup;
+    pendingManagerStartup = undefined;
+    if (startup) await startup();
   });
   pi.on("session_info_changed", (event: any, ctx: ExtensionContext) => {
     if (!roleTransitions.chiefModeInactive()) return;
@@ -4907,6 +4992,7 @@ export function registerLeadRuntime(
   });
   pi.on("turn_end", async (event: any, ctx: ExtensionContext) => {
     if (isQuarantinedSession(ctx)) return;
+    await roleTransitions.persistPendingManagerRecovery(ctx);
     controller.refreshDelegateSchema();
     if (
       activeLeadRole(leadRuntime) === "lead" ||
@@ -4931,6 +5017,7 @@ export function registerLeadRuntime(
     syncRootSessionName(ctx);
   });
   pi.on("session_shutdown", (_event: unknown, ctx: ExtensionContext) => {
+    pendingManagerStartup = undefined;
     inheritedProjection = undefined;
     return shutdown.shutdown(ctx);
   });
@@ -9764,7 +9851,15 @@ export async function resolveLeadControllerRole(
     localRepositoryScope: (
       workspaceId: string,
       signal?: AbortSignal,
-    ) => Promise<{ isPrimary: boolean; repoKey: string }>;
+    ) => Promise<{
+      isPrimary: boolean;
+      repoKey: string;
+      canonicalRepoKey: string;
+    }>;
+    verifyNoLegacyManager(
+      canonicalRepoKey: string,
+      workspaceId: string,
+    ): Promise<void>;
     claimManagerLease: typeof import("./supervision.ts").claimManagerLease;
     coordinationHealthy(): boolean;
     verifyManagerIdentity(
@@ -9819,6 +9914,9 @@ export async function resolveLeadControllerRole(
     return;
   deps.activationGuard(sessionId, "Manager");
   try {
+    await deps.verifyNoLegacyManager(scope.canonicalRepoKey, workspaceId);
+    if (!deps.isCurrent() || ctx.sessionManager.getSessionId() !== sessionId)
+      return;
     const lease = deps.claimManagerLease({
       build: deps.build,
       piSessionId: sessionId,
@@ -9827,6 +9925,7 @@ export async function resolveLeadControllerRole(
       tabId,
       workspaceId,
       repoKey: scope.repoKey,
+      canonicalRepoKey: scope.canonicalRepoKey,
     });
     {
       let verified: unknown;
@@ -9839,6 +9938,7 @@ export async function resolveLeadControllerRole(
         if (
           !currentScope.isPrimary ||
           currentScope.repoKey !== scope.repoKey ||
+          currentScope.canonicalRepoKey !== scope.canonicalRepoKey ||
           !(await deps.verifyCurrentIdentity()) ||
           ctx.sessionManager.getSessionId() !== sessionId
         )
@@ -9910,10 +10010,85 @@ export async function resolveLeadControllerRole(
   }
 }
 
+/** Pi may buffer setup-only role entries until the first real conversation. */
+export function durableManagerRecoveryReference(
+  descriptor: ManagerDescriptor,
+  checkoutPath: string,
+  role: "manager" | "lead" = "manager",
+): ManagerRecoveryReference | undefined {
+  const { canonicalRepoKey, piSessionId, piSessionFile } = descriptor;
+  if (!piSessionFile) return undefined;
+  const stat = lstatSync(piSessionFile, { throwIfNoEntry: false });
+  if (!stat) return undefined;
+  if (!stat.isFile())
+    throw new Error("Manager Pi session is not a regular file");
+  const entries = parseSessionEntries(readFileSync(piSessionFile, "utf8"));
+  const header = entries[0];
+  if (
+    header?.type !== "session" ||
+    header.id !== piSessionId ||
+    !sameDirectory(header.cwd, checkoutPath)
+  )
+    throw new Error(
+      "Manager Pi session file does not match the current session and checkout",
+    );
+  const branch = SessionManager.inMemory(
+    checkoutPath,
+    undefined,
+    entries,
+  ).getBranch();
+  if (sessionLeadRoleState(branch, piSessionId)?.role !== role)
+    throw new Error(
+      `Manager Pi session file does not contain the expected ${role} role`,
+    );
+  return { version: 1, canonicalRepoKey, piSessionId, piSessionFile };
+}
+
 export function createLeadRoleTransitions(
   state: LeadRuntimeState,
   host: LeadRoleTransitionHost,
 ) {
+  let pendingManagerRecovery: ManagerLease | undefined;
+  const publishManagerRecovery = (
+    ctx: ExtensionContext,
+    lease: ManagerLease,
+    requireDurable: boolean,
+  ): boolean => {
+    const descriptor = lease.descriptor;
+    const sessionId = ctx.sessionManager.getSessionId();
+    if (
+      state.managerLease !== lease ||
+      state.controllerRole !== "manager" ||
+      state.roleSuspended ||
+      descriptor.piSessionId !== sessionId ||
+      descriptor.piSessionFile !== ctx.sessionManager.getSessionFile()
+    )
+      throw new Error("Manager authority changed before recovery publication");
+    const reference = durableManagerRecoveryReference(descriptor, ctx.cwd);
+    if (!reference) {
+      if (requireDurable)
+        throw new Error("Manager Pi session file is not durable");
+      return false;
+    }
+    if (
+      host.sessionLeadRoleState(ctx.sessionManager.getBranch(), sessionId)
+        ?.role !== "manager"
+    )
+      throw new Error("Manager role changed before recovery publication");
+    const runtime = host.supervisionRuntime();
+    const status = host.readManagerDescriptorStatus(
+      runtime,
+      descriptor.canonicalRepoKey,
+    );
+    if (
+      !status?.live ||
+      !host.sameManagerDescriptor(status.descriptor, descriptor)
+    )
+      throw new Error("Manager lease changed before recovery publication");
+    host.assertCurrentLeadCoordination(ctx);
+    writeManagerRecoveryReference(runtime, reference);
+    return true;
+  };
   const projectWorkLocks = new Map<string, Promise<void>>();
   const withProjectWorkLock = async <T>(
     key: string,
@@ -10173,7 +10348,7 @@ export function createLeadRoleTransitions(
       ownLease &&
       host.readManagerDescriptorStatus(
         host.supervisionRuntime(),
-        ownLease.descriptor.workspaceId,
+        ownLease.descriptor.canonicalRepoKey,
       );
     const descriptor = ownLease
       ? ownStatus?.live &&
@@ -10747,6 +10922,7 @@ export function createLeadRoleTransitions(
     const previousLeadContext = state.leadContext;
     state.chiefModeGeneration++;
     const finish = () => {
+      pendingManagerRecovery = undefined;
       state.leadContext = ctx;
       state.chiefMode = "inactive";
       state.controllerRole = "lead";
@@ -11001,6 +11177,12 @@ export function createLeadRoleTransitions(
       }
       return "Manager profile refreshed.";
     }
+    return establishManager(ctx);
+  };
+  const establishManager = async (
+    ctx: ExtensionContext,
+    intent?: ManagerStartIntent,
+  ): Promise<string> => {
     if (
       host.processRole !== "lead" ||
       host.controllerScope?.kind !== "root" ||
@@ -11014,11 +11196,23 @@ export function createLeadRoleTransitions(
     if (!paneId || !tabId || !workspaceId)
       throw new Error("/manager requires a Herdr Lead identity");
     const sessionId = ctx.sessionManager.getSessionId();
+    if (
+      intent &&
+      (intent.sessionId !== sessionId ||
+        intent.workspaceId !== workspaceId ||
+        intent.paneId !== paneId ||
+        !sameDirectory(intent.checkoutPath, ctx.cwd) ||
+        host.sessionLeadRoleState(ctx.sessionManager.getBranch(), sessionId))
+    )
+      throw new Error(
+        "Manager startup intent does not match the current session and placement",
+      );
     let scope: Awaited<ReturnType<typeof localRepositoryScope>> | undefined;
     try {
       scope = await localRepositoryScope(host.pi, ctx, workspaceId, ctx.signal);
     } catch (error) {
       if (
+        intent ||
         !(error instanceof OperationError) ||
         error.detail.details?.herdrCode !== "not_git_worktree"
       )
@@ -11029,15 +11223,11 @@ export function createLeadRoleTransitions(
         throw new Error(
           "/manager requires interactive confirmation to initialize Git",
         );
-      const target = realpathSync(resolve(ctx.cwd));
-      const targetStat = statSync(target, { bigint: true });
-      if (
-        !targetStat.isDirectory() ||
-        targetStat.dev === 0n ||
-        targetStat.ino === 0n
-      )
-        throw new Error("Manager Git target is not a directory");
-      const verifyHerdrTarget = async () => {
+      const verifyHerdrTarget = async (target: string) => {
+        if (!sameDirectory(ctx.cwd, target))
+          throw new Error(
+            "Manager activation cancelled because the workspace changed",
+          );
         const pane = (
           await host.runHerdr(host.pi, ctx, ["pane", "get", paneId], {
             signal: ctx.signal,
@@ -11056,220 +11246,54 @@ export function createLeadRoleTransitions(
           workspace?.workspace_id !== workspaceId ||
           typeof paneCwd !== "string" ||
           !isAbsolute(paneCwd) ||
-          !sameDirectory(paneCwd, target)
+          !sameDirectory(paneCwd, target) ||
+          ctx.sessionManager.getSessionId() !== sessionId ||
+          host.identity.workspaceId !== workspaceId ||
+          host.identity.paneId !== paneId ||
+          host.identity.tabId !== tabId
         )
           throw new Error(
             "Manager activation cancelled because Herdr workspace identity does not match the approved directory",
           );
       };
-      await verifyHerdrTarget();
-      if (
-        [
-          "GIT_DIR",
-          "GIT_WORK_TREE",
-          "GIT_INDEX_FILE",
-          "GIT_COMMON_DIR",
-          "GIT_OBJECT_DIRECTORY",
-          "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-          "GIT_CEILING_DIRECTORIES",
-          "GIT_PREFIX",
-        ].some((key) => process.env[key])
-      )
-        throw new Error(
-          "Cannot initialize Git while repository-redirection environment variables are set",
-        );
-      if (
-        !skipConfirmation &&
-        !(await ctx.ui.confirm(
-          "Initialize Git repository?",
-          `Initialize ${target} with an empty initial commit, then start Manager mode? Existing files will not be committed.`,
-        ))
-      )
-        throw new Error("Manager activation cancelled.");
-      await verifyHerdrTarget();
-      if (
-        ctx.sessionManager.getSessionId() !== sessionId ||
-        host.identity.workspaceId !== workspaceId ||
-        host.identity.paneId !== paneId ||
-        host.identity.tabId !== tabId ||
-        !sameDirectory(resolve(ctx.cwd), target) ||
-        (() => {
-          const current = statSync(target, { bigint: true });
-          return (
-            current.dev !== targetStat.dev || current.ino !== targetStat.ino
+      const prepared = await ensureManagerGitRepository(host.pi, ctx.cwd, {
+        signal: ctx.signal,
+        createIfMissing: true,
+        verifyApprovedTarget: verifyHerdrTarget,
+        verifyPreparedRepository: async ({ canonicalRepoKey }) => {
+          scope = await localRepositoryScope(
+            host.pi,
+            ctx,
+            workspaceId,
+            ctx.signal,
           );
-        })()
-      )
-        throw new Error(
-          "Manager activation cancelled because the workspace changed",
-        );
-      const runGit = async (args: string[]) => {
-        const result = await host.pi.exec("git", args, {
-          cwd: target,
-          signal: ctx.signal,
-          timeout: 30_000,
-        });
-        if (result.code !== 0 || result.killed)
-          throw new Error(
-            `Git ${args[0]} failed: ${result.stderr?.trim() || "process unsuccessful"}`,
-          );
-        return result.stdout.trim();
-      };
-      const probeRoot = async (): Promise<string | undefined> => {
-        const result = await host.pi.exec(
-          "git",
-          ["rev-parse", "--show-toplevel"],
-          { cwd: target, signal: ctx.signal, timeout: 30_000 },
-        );
-        if (result.code === 0 && !result.killed)
-          return String(result.stdout ?? "").trim();
-        if (result.killed) throw new Error("Git repository inspection failed");
-        return undefined;
-      };
-      const bootstrapLock = host.acquireProcessLock(
-        join(
-          herdsmanTempRoot(),
-          "locks",
-          `manager-bootstrap-${createHash("sha256").update(target).digest("hex")}`,
-        ),
-        { name: "Manager Git bootstrap" },
-      );
-      try {
-        const hasRepositoryMetadata = () => {
-          let directory = target;
-          while (true) {
-            try {
-              lstatSync(resolve(directory, ".git"));
-              return true;
-            } catch (error) {
-              if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-                throw error;
-            }
-            const parent = dirname(directory);
-            if (parent === directory) return false;
-            directory = parent;
-          }
-        };
-        let root = await probeRoot();
-        if (!root) {
-          const bare = await host.pi.exec(
-            "git",
-            ["rev-parse", "--is-bare-repository"],
-            { cwd: target, signal: ctx.signal, timeout: 30_000 },
-          );
-          if (bare.killed)
-            throw new Error("Git repository type inspection failed");
-          const bareStatus = String(bare.stdout ?? "").trim();
-          if (bare.code === 0 && bareStatus === "true")
+          if (!scope.isPrimary || scope.canonicalRepoKey !== canonicalRepoKey)
             throw new Error(
-              "Cannot initialize Manager Git inside an existing bare repository",
+              "Manager activation could not verify the initialized repository in Herdr",
             );
-          if (bare.code === 0 && bareStatus !== "false")
-            throw new Error("Git repository type inspection failed");
-          if (hasRepositoryMetadata())
-            throw new Error(
-              "Refusing to initialize: existing Git metadata is invalid or conflicting",
-            );
-          await runGit(["init", "--initial-branch=main"]);
-          root = await probeRoot();
-        }
-        if (root && !sameDirectory(root, target))
-          throw new Error(
-            "Refusing to initialize inside an enclosing Git repository",
-          );
-        if (!root)
-          throw new Error(
-            "Git initialization could not verify its working-tree root",
-          );
-        const actualRoot = await runGit(["rev-parse", "--show-toplevel"]);
-        if (!sameDirectory(actualRoot, target))
-          throw new Error(
-            "Git repository root does not match the approved directory",
-          );
-        const inspectHead = async (): Promise<string | undefined> => {
-          const result = await host.pi.exec(
-            "git",
-            ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
-            { cwd: target, signal: ctx.signal, timeout: 30_000 },
-          );
-          if (result.code === 0 && !result.killed)
-            return String(result.stdout ?? "").trim();
-          if (result.killed || result.code !== 1)
-            throw new Error(
-              `Git HEAD inspection failed: ${String(result.stderr ?? "").trim() || "process unsuccessful"}`,
-            );
-          return undefined;
-        };
-        let head = await inspectHead();
-        let createdInitialCommit = false;
-        if (!head) {
-          const staged = await host.pi.exec(
-            "git",
-            ["diff", "--cached", "--quiet"],
-            { cwd: target, signal: ctx.signal, timeout: 30_000 },
-          );
-          const index = await runGit(["ls-files", "--stage"]);
-          if (
-            staged.killed ||
-            (staged.code !== 0 && staged.code !== 1) ||
-            index
-          )
-            throw new Error(
-              "Refusing to complete an unborn repository with an existing or unreadable index",
-            );
-          await runGit([
-            "commit",
-            "--only",
-            "--allow-empty",
-            "-m",
-            "chore: initialize repository",
-          ]);
-          createdInitialCommit = true;
-          head = await inspectHead();
-        }
-        if (!head) throw new Error("Git did not create an initial commit");
-        if (createdInitialCommit) {
-          const parents = await runGit([
-            "rev-list",
-            "--parents",
-            "-n",
-            "1",
-            "HEAD",
-          ]);
-          if (parents.trim().split(/\s+/).length !== 1)
-            throw new Error("Initial Git commit is not a root commit");
-          const tree = await runGit(["rev-parse", "HEAD^{tree}"]);
-          if (tree !== (await runGit(["mktree"])))
-            throw new Error("Initial Git commit is not empty");
-        }
-        await verifyHerdrTarget();
-        const gitCommonDir = await runGit([
-          "rev-parse",
-          "--path-format=absolute",
-          "--git-common-dir",
-        ]);
-        scope = await localRepositoryScope(
-          host.pi,
-          ctx,
-          workspaceId,
-          ctx.signal,
-        );
-        if (
-          !scope ||
-          !scope.isPrimary ||
-          !sameDirectory(scope.repoKey, gitCommonDir)
-        )
-          throw new Error(
-            "Manager activation could not verify the initialized repository in Herdr",
-          );
-      } finally {
-        bootstrapLock.release();
-      }
+        },
+        confirm: skipConfirmation
+          ? undefined
+          : (target) =>
+              ctx.ui.confirm(
+                "Initialize Git repository?",
+                `Initialize ${target} with an empty initial commit, then start Manager mode? Existing files will not be committed.`,
+              ),
+      });
+      if (!prepared) throw new Error("Manager activation cancelled.");
     }
     if (!scope)
       throw new Error("Manager workspace could not be verified in Herdr");
     if (!scope.isPrimary)
       throw new Error("/manager is available only in the primary workspace");
+    if (
+      intent &&
+      (scope.canonicalRepoKey !== intent.canonicalRepoKey ||
+        !sameDirectory(scope.checkoutPath, intent.checkoutPath))
+    )
+      throw new Error(
+        "Manager startup intent does not match the verified repository",
+      );
     if (
       !(await host.remoteChiefAgent(ctx, {
         piSessionId: sessionId,
@@ -11284,7 +11308,26 @@ export function createLeadRoleTransitions(
       throw new Error(
         "Manager activation cancelled because the session changed",
       );
+    await requireNoLiveLegacyManager(
+      host.pi,
+      host.supervisionRuntime(),
+      scope.canonicalRepoKey,
+      workspaceId,
+      ctx.signal,
+    );
+    if (ctx.sessionManager.getSessionId() !== sessionId)
+      throw new Error(
+        "Manager activation cancelled because the session changed",
+      );
     host.activationGuard(sessionId, "Manager");
+    if (intent) {
+      if (host.sessionLeadRoleState(ctx.sessionManager.getBranch(), sessionId))
+        throw new Error(
+          "Manager startup requires a session with no persisted role",
+        );
+      ctx.signal?.throwIfAborted();
+      consumeManagerStartIntent(host.supervisionRuntime(), intent);
+    }
     const profile = host.prepareSupervisoryProfile(ctx, "manager");
     host.captureInheritedTools?.();
     const previousTools =
@@ -11299,6 +11342,7 @@ export function createLeadRoleTransitions(
         tabId,
         workspaceId,
         repoKey: scope.repoKey,
+        canonicalRepoKey: scope.canonicalRepoKey,
       });
     } catch (error) {
       if (error instanceof ProcessLockOccupiedError)
@@ -11325,6 +11369,7 @@ export function createLeadRoleTransitions(
       if (
         !currentScope.isPrimary ||
         !sameDirectory(currentScope.repoKey, scope.repoKey) ||
+        currentScope.canonicalRepoKey !== scope.canonicalRepoKey ||
         !(await host.remoteChiefAgent(ctx, lease.descriptor)) ||
         ctx.sessionManager.getSessionId() !== sessionId
       )
@@ -11335,29 +11380,61 @@ export function createLeadRoleTransitions(
       host.advancePeerPresenceGeneration();
       if (host.coordinationHealthy()) await host.schedulePeerPresence(ctx);
       await host.publishLeadRole(ctx, "inactive", state.chiefModeGeneration);
-      try {
-        await reconcileCurrentManagerAssignments(ctx);
-      } catch (error) {
-        host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error);
-      }
-      return "Manager mode active.";
+      if (
+        !publishManagerRecovery(ctx, lease, !!intent) &&
+        lease.descriptor.piSessionFile
+      )
+        pendingManagerRecovery = lease;
     } catch (error) {
+      if (pendingManagerRecovery === lease) pendingManagerRecovery = undefined;
+      if (
+        state.managerLease !== lease ||
+        ctx.sessionManager.getSessionId() !== sessionId
+      )
+        throw error;
       state.controllerRole = "lead";
       state.managerLease = undefined;
       host.commitSupervisoryProfile(undefined);
       host.setLeadTools(previousTools);
       try {
         lease.release();
-      } catch {}
+      } catch (releaseError) {
+        state.managerLease = lease;
+        state.controllerRole = "manager";
+        state.roleSuspended = true;
+        host.appendDurableError(
+          host.pi,
+          ctx,
+          "pi_herdsman_role_error",
+          releaseError,
+        );
+      }
       try {
         host.persistRole("lead");
-      } catch {}
-      host.persistLeadCoordination();
+      } catch (rollbackError) {
+        state.roleSuspended = true;
+        host.appendDurableError(
+          host.pi,
+          ctx,
+          "pi_herdsman_role_error",
+          rollbackError,
+        );
+      }
+      if (state.roleSuspended) host.markLeadCoordinationUnhealthy(ctx);
+      else host.persistLeadCoordination();
       host.reconcileRoleTools();
       host.clearSupervisionUI();
       host.startNormalUI(ctx);
       throw error;
     }
+    if (!intent) {
+      try {
+        await reconcileCurrentManagerAssignments(ctx);
+      } catch (error) {
+        host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error);
+      }
+    }
+    return "Manager mode active.";
   };
   const leaveManager = async (
     ctx: ExtensionCommandContext,
@@ -11370,6 +11447,13 @@ export function createLeadRoleTransitions(
       host.persistRole("lead");
       if (!host.persistCoordinatorState())
         throw new Error("Lead coordination state could not be persisted");
+      const reference = durableManagerRecoveryReference(
+        state.managerLease.descriptor,
+        ctx.cwd,
+        "lead",
+      );
+      if (reference)
+        removeManagerRecoveryReference(host.supervisionRuntime(), reference);
     } catch (error) {
       state.controllerRole = "manager";
       try {
@@ -11389,6 +11473,7 @@ export function createLeadRoleTransitions(
       }
       throw error;
     }
+    pendingManagerRecovery = undefined;
     host.advancePeerPresenceGeneration();
     host.removePeerPresence();
     try {
@@ -11565,7 +11650,7 @@ export function createLeadRoleTransitions(
           state.managerLease &&
           host.readManagerDescriptor(
             host.supervisionRuntime(),
-            state.managerLease.descriptor.workspaceId,
+            state.managerLease.descriptor.canonicalRepoKey,
           );
         held =
           !!descriptor &&
@@ -11638,6 +11723,7 @@ export function createLeadRoleTransitions(
     ctx: ExtensionContext,
     requestedRole: SessionRole,
     optional = false,
+    reloading = false,
   ): Promise<void> => {
     const generation = state.sessionGeneration;
     const resolve = (profile?: SupervisoryProfile, commit = true) => {
@@ -11650,6 +11736,14 @@ export function createLeadRoleTransitions(
           build: host.build,
           localRepositoryScope: (workspaceId, signal) =>
             localRepositoryScope(host.pi, ctx, workspaceId, signal),
+          verifyNoLegacyManager: (canonicalRepoKey, workspaceId) =>
+            requireNoLiveLegacyManager(
+              host.pi,
+              host.supervisionRuntime(),
+              canonicalRepoKey,
+              workspaceId,
+              ctx.signal,
+            ),
           claimManagerLease: host.claimManagerLease,
           coordinationHealthy: host.coordinationHealthy,
           verifyManagerIdentity: (descriptor) =>
@@ -11680,6 +11774,26 @@ export function createLeadRoleTransitions(
       if (!commit) return pending;
       return pending.then(() => {
         if (state.sessionGeneration !== generation) return;
+        const lease = state.managerLease;
+        if (lease && requestedRole === "manager" && !state.roleSuspended) {
+          try {
+            if (!host.persistLeadCoordination())
+              throw new Error(
+                "Manager coordination state could not be persisted",
+              );
+            if (
+              !publishManagerRecovery(ctx, lease, !reloading) &&
+              lease.descriptor.piSessionFile
+            )
+              pendingManagerRecovery = lease;
+          } catch (error) {
+            state.roleSuspended = true;
+            host.markLeadCoordinationUnhealthy(ctx);
+            lease.release();
+            state.managerLease = undefined;
+            throw error;
+          }
+        }
         host.commitSupervisoryProfile(
           state.controllerRole === "manager" && !state.roleSuspended
             ? profile
@@ -11773,6 +11887,70 @@ export function createLeadRoleTransitions(
       }
     }
   };
+  const persistPendingManagerRecovery = async (
+    ctx: ExtensionContext,
+  ): Promise<void> => {
+    const lease = pendingManagerRecovery;
+    if (
+      !lease ||
+      state.roleSuspended ||
+      state.managerLease !== lease ||
+      ctx.sessionManager.getSessionId() !== lease.descriptor.piSessionId ||
+      !lease.descriptor.piSessionFile
+    )
+      return;
+    const current = () =>
+      pendingManagerRecovery === lease &&
+      state.managerLease === lease &&
+      !state.roleSuspended &&
+      ctx.sessionManager.getSessionId() === lease.descriptor.piSessionId;
+    try {
+      if (!lstatSync(lease.descriptor.piSessionFile, { throwIfNoEntry: false }))
+        return;
+      const scope = await localRepositoryScope(
+        host.pi,
+        ctx,
+        lease.descriptor.workspaceId,
+        ctx.signal,
+      );
+      if (!current()) return;
+      const status = host.readManagerDescriptorStatus(
+        host.supervisionRuntime(),
+        scope.canonicalRepoKey,
+      );
+      if (
+        !scope.isPrimary ||
+        scope.canonicalRepoKey !== lease.descriptor.canonicalRepoKey ||
+        !status?.live ||
+        !host.sameManagerDescriptor(status.descriptor, lease.descriptor) ||
+        !(await host.remoteChiefAgent(ctx, lease.descriptor))
+      )
+        throw new Error(
+          "Manager identity could not be verified before recovery publication",
+        );
+      if (!current()) return;
+      publishManagerRecovery(ctx, lease, true);
+      pendingManagerRecovery = undefined;
+    } catch (error) {
+      if (!current()) return;
+      pendingManagerRecovery = undefined;
+      state.roleSuspended = true;
+      host.markLeadCoordinationUnhealthy(ctx);
+      try {
+        lease.release();
+        state.managerLease = undefined;
+      } catch (releaseError) {
+        host.appendDurableError(
+          host.pi,
+          ctx,
+          "pi_herdsman_role_error",
+          releaseError,
+        );
+      }
+      reconcileRoleTools();
+      host.appendDurableError(host.pi, ctx, "pi_herdsman_role_error", error);
+    }
+  };
   const suspendMalformedRole = (ctx: ExtensionContext): void => {
     state.roleSuspended = true;
     try {
@@ -11793,6 +11971,14 @@ export function createLeadRoleTransitions(
     beginSessionRole,
     activateChief,
     activateManager,
+    managerStartIntent: (sessionId: string) =>
+      process.env.HERDR_SOCKET_PATH
+        ? getManagerStartIntent(host.supervisionRuntime(), sessionId)
+        : undefined,
+    activateManagerFromIntent: (
+      ctx: ExtensionContext,
+      intent: ManagerStartIntent,
+    ) => establishManager(ctx, intent),
     leaveManager,
     deactivateChief,
     leaveChief,
@@ -11801,6 +11987,7 @@ export function createLeadRoleTransitions(
     reconcileRoleTools,
     resolveControllerRole,
     finalizeOptionalManagerStartup,
+    persistPendingManagerRecovery,
     restoreChiefState: (ctx: ExtensionContext) =>
       restoreLeadChiefState(ctx, host),
     suspendMalformedRole,

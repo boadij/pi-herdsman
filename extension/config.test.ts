@@ -525,6 +525,43 @@ test("partial and complete valid configs overlay defaults", () => {
   });
 });
 
+test("projectsDirectory is a global preference with a home-relative default", () => {
+  resetConfig();
+  try {
+    assert.equal(readConfig().projectsDirectory, "~/Projects");
+    for (const path of [
+      "~/Work Repositories",
+      join(tmpdir(), "Work Repositories"),
+    ]) {
+      updateConfig("projectsDirectory", path);
+      assert.equal(readConfig().projectsDirectory, path);
+    }
+    for (const invalid of [
+      "",
+      "Work Repositories",
+      "./Projects",
+      "~/../Projects",
+    ]) {
+      assert.throws(
+        () => updateConfig("projectsDirectory", invalid),
+        /projectsDirectory.*absolute/,
+      );
+    }
+    updateConfig("projectsDirectory", undefined);
+    assert.equal(readConfig().projectsDirectory, "~/Projects");
+    realFs.mkdirSync(dirname(configPath!), { recursive: true });
+    for (const invalid of [42, "Work Repositories", "~/bad/../Projects"]) {
+      realFs.writeFileSync(
+        configPath!,
+        JSON.stringify({ projectsDirectory: invalid }),
+      );
+      assert.throws(readConfig, /projectsDirectory.*absolute/);
+    }
+  } finally {
+    resetConfig();
+  }
+});
+
 test("trusted project preferences override only the two supported global values", () => {
   const cwd = realFs.mkdtempSync(join(tmpdir(), "pi-herdsman-project-config-"));
   try {
@@ -553,6 +590,7 @@ test("trusted project preferences override only the two supported global values"
       '{"piHerdsman":{"autoActivateManager":"false"}}',
       '{"piHerdsman":{"defaultLeadExecution":"flexible"}}',
       '{"piHerdsman":{"allowAgentCwdOverride":true}}',
+      '{"piHerdsman":{"projectsDirectory":"~/Other"}}',
       "{",
     ]) {
       realFs.writeFileSync(`${cwd}/.pi/settings.json`, content);

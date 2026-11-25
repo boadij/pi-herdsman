@@ -10788,9 +10788,9 @@ test("replacement Manager wakes once for exact-assignment failure backlog only",
   try {
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
-    const manager = readManagerDescriptor(runtime, WORKSPACE)!;
+    const manager = readManagerDescriptor(runtime, repoKey)!;
     assert.ok(manager.createdAt > failure.createdAt);
-    assert.ok(realFs.existsSync(managerDescriptorPath(runtime, WORKSPACE)));
+    assert.ok(realFs.existsSync(managerDescriptorPath(runtime, repoKey)));
 
     const deliveries = (id: string) =>
       pi.sentMessageCalls.filter(

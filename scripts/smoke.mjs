@@ -15,7 +15,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
-import { homedir, tmpdir } from "node:os";
+import { homedir, tmpdir, userInfo } from "node:os";
 import {
   basename,
   dirname,
@@ -54,6 +54,7 @@ const scenarioNames = [
   "core",
   "continuation",
   "chief-tree",
+  "chief-manager",
   "supervisor-agent",
   "manager-bootstrap",
   "manager-recovery",
@@ -130,6 +131,7 @@ export function parseSmokeArgs(args) {
   if (
     !simulated &&
     [
+      "chief-manager",
       "agent-terminal-failure",
       "manager-handoff",
       "manager-merge",
@@ -5137,6 +5139,79 @@ async function runAgentTerminalFailureSmoke(ctx) {
   );
 }
 
+async function canonicalGitCommonDirectory(repository) {
+  const { stdout } = await run(
+    "git",
+    ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    { cwd: repository },
+  );
+  return realpath(stdout.trim());
+}
+
+async function smokeManagerDescriptorPath(ctx) {
+  const canonicalRepoKey = await canonicalGitCommonDirectory(ctx.rootCwd);
+  const owned = relative(await realpath(ctx.paths.root), canonicalRepoKey);
+  assert.ok(
+    owned &&
+      owned !== ".." &&
+      !owned.startsWith(`..${sep}`) &&
+      !isAbsolute(owned),
+    "Manager descriptor lookup requires an isolated scenario repository",
+  );
+  const key = createHash("sha256").update(canonicalRepoKey).digest("hex");
+  return join(
+    userInfo().homedir,
+    ".pi-herdsman",
+    "manager-authority-v1",
+    "managers",
+    `${key}.json`,
+  );
+}
+
+async function smokeRootManagerLease(ctx, managerPath) {
+  const descriptor = JSON.parse(await readFile(managerPath, "utf8"));
+  assert.equal(descriptor.paneId, ctx.rootPaneId);
+  assert.equal(descriptor.workspaceId, ctx.rootWorkspaceId);
+  const pid = descriptor.claim?.pid;
+  assert.ok(Number.isSafeInteger(pid) && pid > 0, "invalid Manager lease PID");
+  const session = await rootSessionSnapshot(ctx);
+  assert.ok(
+    session &&
+      session.path === descriptor.piSessionFile &&
+      sessionEntries(session.contents)[0]?.id === descriptor.piSessionId,
+    "Manager lease does not match the exact fixture session",
+  );
+  const info = await nestedCommand(ctx, [
+    "pane",
+    "process-info",
+    "--pane",
+    ctx.rootPaneId,
+  ]);
+  const foreground = info.process_info?.foreground_processes ?? [];
+  if (ctx.smokeRootManagerPid === undefined) {
+    const processes = candidateProcess(
+      info,
+      ctx.candidateExtension,
+      ctx.herdrStateExtension,
+    );
+    assert.deepEqual(
+      processes.map((process) => process.pid),
+      [pid],
+      "initial Manager lease does not match the exact fixture process",
+    );
+    ctx.smokeRootManagerPid = pid;
+  } else {
+    assert.equal(
+      pid,
+      ctx.smokeRootManagerPid,
+      "Manager role reentry replaced the fixture process",
+    );
+    // A live Pi can stop exposing its launch argv; the exact PID is stable.
+    if (!foreground.some((process) => process.pid === pid)) return null;
+  }
+  return descriptor.leaseId;
+}
+
 async function runManagerHandoffSmoke(ctx) {
   // Reuses the established Manager assignment and project-message paths; only the turnover under test is exercised.
   const branch = `herdsman/smoke-manager-handoff-${randomUUID()}`;
@@ -5432,11 +5507,7 @@ async function runManagerHandoffSmoke(ctx) {
     hash(repoKey),
     `${hash(branch)}.json`,
   );
-  const managerPath = join(
-    runtime,
-    "managers",
-    `${hash(ctx.rootWorkspaceId)}.json`,
-  );
+  const managerPath = await smokeManagerDescriptorPath(ctx);
   const provenancePath = join(
     ctx.paths.piAgent,
     "pi-herdsman",
@@ -5472,7 +5543,7 @@ async function runManagerHandoffSmoke(ctx) {
   };
   const initialLeadPid = assignment.initialLeadPid;
   const initialBytes = await readFile(assignmentPath, "utf8");
-  const previousLease = JSON.parse(await readFile(managerPath, "utf8")).leaseId;
+  const previousLease = await smokeRootManagerLease(ctx, managerPath);
   await submitPaneCommand(ctx, ctx.rootPaneId, "/manager-leave");
   await waitForEvidence(
     ctx,
@@ -5581,7 +5652,7 @@ async function runManagerHandoffSmoke(ctx) {
     "manager-handoff-reentered",
     async () => {
       try {
-        const lease = JSON.parse(await readFile(managerPath, "utf8")).leaseId;
+        const lease = await smokeRootManagerLease(ctx, managerPath);
         return { done: lease !== previousLease, value: lease };
       } catch (error) {
         if (error.code === "ENOENT") return { done: false };
@@ -6061,6 +6132,8 @@ export function initialPromptForScenario(scenario, ctx) {
       return "Reply exactly with PI_HERDSMAN_CHIEF_TREE_STARTUP.";
     case "supervisor-agent":
       return "Reply exactly with PI_HERDSMAN_SUPERVISOR_AGENT_STARTUP.";
+    case "chief-manager":
+      return "Reply exactly with CHIEF_MANAGER_SMOKE_STARTUP.";
     case "manager-recovery":
       return undefined;
     case "active-stop":
@@ -6091,6 +6164,8 @@ export async function runScenario(ctx, scenario) {
       return runContinuationSmoke(ctx);
     case "chief-tree":
       return runChiefTreeSmoke(ctx);
+    case "chief-manager":
+      return runChiefManagerSmoke(ctx);
     case "supervisor-agent":
       return runSupervisorAgentSmoke(ctx);
     case "manager-recovery":
@@ -7158,19 +7233,33 @@ async function runAgentCrashRecoverySmoke(ctx) {
   });
 }
 
+function isolatedSessionRoots(ctx) {
+  return [
+    ctx.paths.piSessions,
+    // Chief reserves the exact child session through Pi's SDK default,
+    // which is inside the isolated agent directory, not the CLI override.
+    ...(ctx.scenario === "chief-manager"
+      ? [join(ctx.paths.piAgent, "sessions")]
+      : []),
+  ];
+}
+
 export async function isolatedSessionDetails(ctx, agent) {
   const identity = agent?.agent_session;
   if (identity?.kind !== "path" || typeof identity.value !== "string")
     return null;
   const path = resolve(identity.value);
-  const isolatedSessions = resolve(ctx.paths.piSessions);
-  const relativePath = relative(isolatedSessions, path);
-  if (
-    !relativePath ||
-    relativePath === ".." ||
-    relativePath.startsWith(`..${sep}`) ||
-    isAbsolute(relativePath)
-  )
+  const insideSessionRoot = (candidate) =>
+    isolatedSessionRoots(ctx).some((root) => {
+      const segment = relative(root, candidate);
+      return (
+        segment &&
+        segment !== ".." &&
+        !segment.startsWith(`..${sep}`) &&
+        !isAbsolute(segment)
+      );
+    });
+  if (!insideSessionRoot(path))
     throw new Error(
       "managed Pi session path is outside the isolated session directory",
     );
@@ -7191,6 +7280,8 @@ export async function isolatedSessionDetails(ctx, agent) {
     );
   let contents;
   try {
+    if (!insideSessionRoot(await realpath(path)))
+      throw new Error("managed Pi session resolves outside isolation");
     contents = await readFile(path, "utf8");
   } catch (error) {
     if (error.code === "ENOENT") return undefined;
@@ -7205,8 +7296,19 @@ export async function isolatedSessionDetails(ctx, agent) {
 }
 
 export async function exactIsolatedSession(ctx, id) {
-  const root = ctx.paths.piSessions;
-  const entries = await readdir(root, { recursive: true, withFileTypes: true });
+  const entries = (
+    await Promise.all(
+      isolatedSessionRoots(ctx).map(async (root) => {
+        try {
+          return await readdir(root, { recursive: true, withFileTypes: true });
+        } catch (error) {
+          if (error.code !== "ENOENT" || root === ctx.paths.piSessions)
+            throw error;
+          return [];
+        }
+      }),
+    )
+  ).flat();
   const files = entries.filter(
     (entry) => entry.isFile() && entry.name.endsWith(".jsonl"),
   );
@@ -9168,6 +9270,7 @@ async function runManagerRecoverySmoke(ctx) {
     id: randomUUID(),
     repoKey,
     branch: primaryBranch,
+    checkoutPath: await realpath(ctx.primaryCheckoutPath),
     text: "unrelated primary-worktree assignment",
   };
   const unrelatedAssignmentPath = join(
@@ -9182,19 +9285,14 @@ async function runManagerRecoverySmoke(ctx) {
     `${JSON.stringify(unrelatedAssignment)}\n`,
     { flag: "wx" },
   );
-  const managerPath = join(
-    runtime,
-    "managers",
-    `${hash(ctx.rootWorkspaceId)}.json`,
-  );
+  const managerPath = await smokeManagerDescriptorPath(ctx);
   const assignmentBytes = async () => {
     const details = await lstat(assignmentPath);
     assert.ok(details.isFile() && !details.isSymbolicLink());
     assert.ok(details.size <= 16 * 1024);
     return readFile(assignmentPath, "utf8");
   };
-  const managerLease = async () =>
-    JSON.parse(await readFile(managerPath, "utf8")).leaseId;
+  const managerLease = () => smokeRootManagerLease(ctx, managerPath);
   markStage(ctx, "initial-assignment-validation");
   const initialAssignmentBytes = await assignmentBytes();
   const record = JSON.parse(initialAssignmentBytes);
@@ -9829,13 +9927,7 @@ async function runManagerRecoverySmoke(ctx) {
     resumedWorktrees[0].path ?? resumedWorktrees[0].worktree_path,
     worktreePath,
   );
-  const resumedPane = (await nestedCommand(ctx, ["pane", "list"])).panes.find(
-    (item) => item.pane_id === paneId,
-  );
-  assert.ok(resumedPane);
-  assert.equal(resumedPane.workspace_id, workspaceId);
-  assert.equal(resumedPane.tab_id, ctx.managerRecovery.tabId);
-  assert.equal(resolve(resumedPane.cwd), resolve(worktreePath));
+  markStage(ctx, "graceful-resume-placement");
   const resumedAgents = [];
   for (const agent of await agents())
     if ((await agentSessionId(ctx, agent)) === first.session)
@@ -9846,17 +9938,47 @@ async function runManagerRecoverySmoke(ctx) {
     "resume must produce exactly one live Lead for the assignment session",
   );
   const resumedAgent = resumedAgents[0];
-  assert.equal(resumedAgent.pane_id, paneId);
+  const resumedPaneId = resumedAgent.pane_id;
+  assert.ok(resumedPaneId && resumedAgent.tab_id);
   assert.equal(resumedAgent.workspace_id, workspaceId);
+  const resumedSession =
+    resumedAgent.agent_session?.kind === "path"
+      ? await isolatedSessionDetails(ctx, resumedAgent)
+      : await exactIsolatedSession(ctx, first.session);
+  assert.equal(resumedSession?.path, stoppedLeadSession.path);
+  assert.equal(resumedSession?.id, first.session);
+  const resumedPane = (await nestedCommand(ctx, ["pane", "list"])).panes.find(
+    (item) => item.pane_id === resumedPaneId,
+  );
+  assert.ok(resumedPane);
+  assert.equal(resumedPane.workspace_id, workspaceId);
+  assert.equal(resumedPane.tab_id, resumedAgent.tab_id);
+  assert.equal(await realpath(resumedPane.cwd), await realpath(worktreePath));
+  if (resumedPaneId !== paneId) {
+    assert.ok(
+      await paneExists(paneId),
+      "resume removed the stopped Lead's pane",
+    );
+    assert.deepEqual(
+      await candidatePids(paneId),
+      [],
+      "old Lead pane still runs Pi",
+    );
+  }
+  ctx.managerRecovery.resumedPaneId = resumedPaneId;
+  ctx.managerRecovery.resumedTabId = resumedPane.tab_id;
   const resumedProcesses = await waitFor(
     "graceful-resume-process",
     async () => {
       const processes = candidateProcess(
-        await paneInfo(paneId),
+        await paneInfo(resumedPaneId),
         ctx.candidateExtension,
         ctx.herdrStateExtension,
       );
-      return processes.length === 1 && processes[0].pid !== initialPid
+      return processes.length === 1 &&
+        Number.isSafeInteger(processes[0].pid) &&
+        processes[0].pid > 0 &&
+        processes[0].pid !== initialPid
         ? processes
         : null;
     },
@@ -9881,7 +10003,16 @@ async function runManagerRecoverySmoke(ctx) {
     15_000,
   );
   markStage(ctx, "manager-away-before-project-message");
-  await promptAgent(paneId, managerRecoveryPostRecoveryPrompt());
+  const senderGit = async (...args) =>
+    (await run("git", args, { cwd: worktreePath })).stdout.trim();
+  const [senderRoot, senderBranch, senderHead] = await Promise.all([
+    senderGit("rev-parse", "--show-toplevel"),
+    senderGit("symbolic-ref", "--short", "HEAD"),
+    senderGit("rev-parse", "HEAD"),
+  ]);
+  assert.equal(await realpath(senderRoot), await realpath(worktreePath));
+  assert.match(senderHead, /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u);
+  await promptAgent(resumedPaneId, managerRecoveryPostRecoveryPrompt());
   const retainedMessagesDirectory = join(
     dirname(assignmentPath),
     `${hash(branch)}.messages`,
@@ -9915,11 +10046,18 @@ async function runManagerRecoverySmoke(ctx) {
     }
   });
   assert.equal(retainedRecord.text, contextMarker);
-  assert.equal((await candidatePids(paneId)).includes(resumedPid), true);
+  assert.ok(
+    retainedRecord.senderEnvironment?.cwd === worktreePath &&
+      retainedRecord.senderEnvironment.git?.worktreeRoot === senderRoot &&
+      retainedRecord.senderEnvironment.git?.branch === senderBranch &&
+      retainedRecord.senderEnvironment.git?.head === senderHead,
+    "retained message must identify the exact sender checkout, branch and HEAD",
+  );
+  assert.equal((await candidatePids(resumedPaneId)).includes(resumedPid), true);
   let retainedLead = false;
   for (const agent of await agents())
     if (
-      agent.pane_id === paneId &&
+      agent.pane_id === resumedPaneId &&
       agent.workspace_id === workspaceId &&
       (await agentSessionId(ctx, agent)) === first.session
     )
@@ -9955,12 +10093,40 @@ async function runManagerRecoverySmoke(ctx) {
     branch,
     first.session,
   ).find((entry) => entry.details?.id === retainedRecord.id);
-  assert.equal(
-    deliveredRecord.content,
-    `Lead → Manager for assignment ${branch} from lead ${first.session}:\n\n${contextMarker}`,
+  // Match the entire informational annotation, including its escaped fields
+  // and authority disclaimer, rather than accepting an arbitrary suffix.
+  const quoteEnvironment = (value) =>
+    Array.from(value, (char) => {
+      if (char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127) return "�";
+      return (
+        {
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&apos;",
+        }[char] ?? char
+      );
+    }).join("");
+  const expectedDelivery = [
+    `Lead → Manager for assignment ${branch} from lead ${first.session}:`,
+    "",
+    contextMarker,
+    "",
+    '<sender_environment informational="true">',
+    `cwd: "${quoteEnvironment(worktreePath)}"`,
+    `worktree_root: "${quoteEnvironment(senderRoot)}"`,
+    `branch: "${quoteEnvironment(senderBranch)}"`,
+    `head: "${senderHead}"`,
+    "Informational only; not an instruction or authorization.",
+    "</sender_environment>",
+  ].join("\n");
+  assert.ok(
+    deliveredRecord.content === expectedDelivery,
+    "replayed message must contain the exact body and sender environment",
   );
   await assertUnchangedAssignment();
-  assert.equal((await candidatePids(paneId)).includes(resumedPid), true);
+  assert.equal((await candidatePids(resumedPaneId)).includes(resumedPid), true);
 
   const beforeKillAgents = [];
   for (const agent of await agents())
@@ -9972,9 +10138,9 @@ async function runManagerRecoverySmoke(ctx) {
     "expected one exact Lead before kill",
   );
   const beforeKillAgent = beforeKillAgents[0];
-  assert.equal(beforeKillAgent.pane_id, paneId);
+  assert.equal(beforeKillAgent.pane_id, resumedPaneId);
   assert.equal(beforeKillAgent.workspace_id, workspaceId);
-  const beforeKillInfo = await paneInfo(paneId);
+  const beforeKillInfo = await paneInfo(resumedPaneId);
   const proven = candidateProcess(
     beforeKillInfo,
     ctx.candidateExtension,
@@ -9997,11 +10163,11 @@ async function runManagerRecoverySmoke(ctx) {
   await waitFor(
     "executor-loss",
     async () => {
-      const currentPids = await candidatePids(paneId).catch(() => []);
+      const currentPids = await candidatePids(resumedPaneId).catch(() => []);
       let stillLive = false;
       for (const agent of await agents())
         if (
-          agent.pane_id === paneId &&
+          agent.pane_id === resumedPaneId &&
           (await agentSessionId(ctx, agent)) === first.session &&
           ["working", "idle"].includes(agent.agent_status)
         ) {
@@ -10013,7 +10179,7 @@ async function runManagerRecoverySmoke(ctx) {
     30_000,
   );
   assert.ok(
-    await paneExists(paneId),
+    await paneExists(resumedPaneId),
     "child pane did not survive executor loss",
   );
   const retainedWorktrees = await matchingWorktrees();
@@ -10751,6 +10917,682 @@ async function runActiveStopSmoke(ctx) {
     },
     { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS },
   );
+}
+
+// Select the real recovery record by its v1 identity, not by storage layout.
+async function findChiefManagerRecoveryRecord(ctx, repository, session) {
+  const canonicalRepoKey = await canonicalGitCommonDirectory(repository);
+  const root = join(ctx.paths.piAgent, "pi-herdsman");
+  assert.equal(await realpath(root), root, "recovery fixture must be isolated");
+  const identity = {
+    version: 1,
+    canonicalRepoKey,
+    piSessionId: session.id,
+    piSessionFile: session.path,
+  };
+  const entries = await readdir(root, { recursive: true, withFileTypes: true });
+  assert.ok(
+    entries.length <= 512,
+    "recovery fixture inventory exceeded its bound",
+  );
+  const matches = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    const path = join(entry.parentPath, entry.name);
+    const metadata = await lstat(path);
+    if (!metadata.isFile() || metadata.size > 16 * 1024) continue;
+    assert.equal(await realpath(path), path);
+    const original = await readFile(path, "utf8");
+    let record;
+    try {
+      record = JSON.parse(original);
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      continue;
+    }
+    if (
+      record &&
+      Object.keys(record).length === Object.keys(identity).length &&
+      Object.entries(identity).every(([key, value]) => record[key] === value)
+    )
+      matches.push({ path, original, record });
+  }
+  assert.equal(
+    matches.length,
+    1,
+    "expected one exact v1 Manager recovery record",
+  );
+  return matches[0];
+}
+
+async function runChiefManagerSmoke(ctx) {
+  const repository = await realpath(await prepareManagerRepository(ctx.paths));
+  // Approve only the owned fixture; do not bypass the child's native Pi trust.
+  new ProjectTrustStore(ctx.paths.piAgent).set(repository, true);
+  const panes = async () => (await nestedCommand(ctx, ["pane", "list"])).panes;
+  const projectPanes = async () =>
+    (await panes()).filter((pane) => pane.cwd === repository);
+  const agents = async () =>
+    (await nestedCommand(ctx, ["agent", "list"])).agents;
+  const paneProcessInfo = async (paneId) =>
+    nestedCommand(ctx, ["pane", "process-info", "--pane", paneId]);
+  const processIn = async (paneId) =>
+    candidateProcess(
+      await paneProcessInfo(paneId),
+      ctx.candidateExtension,
+      ctx.herdrStateExtension,
+    );
+  const wait = (stage, poll, timeoutMs = 90_000) =>
+    waitForEvidence(ctx, `chief-manager-${stage}`, poll, {
+      timeoutMs,
+      stallMs: timeoutMs,
+    });
+  const prompt = (pane, text) =>
+    nestedCommand(ctx, ["agent", "prompt", pane, text]);
+  let turn = 0;
+  async function lifecycle(tool, expected, stage) {
+    const request = `CHIEF_MANAGER_SMOKE ${++turn} ${tool} ${repository}`;
+    await prompt(ctx.rootPaneId, request);
+    const result = await wait(
+      stage,
+      async () => {
+        const session = await rootSessionSnapshot(ctx);
+        const turns = sessionEntries(session?.contents ?? "");
+        const index = turns.findIndex(
+          (entry) =>
+            entry.message?.role === "user" &&
+            messageText(entry.message.content) === request,
+        );
+        const messages = [];
+        for (const entry of index < 0 ? [] : turns.slice(index + 1)) {
+          if (entry.message?.role === "user") break;
+          if (entry.message) messages.push(entry.message);
+        }
+        const calls = messages.flatMap((message) =>
+          message.role === "assistant"
+            ? message.content.filter((part) => part.type === "toolCall")
+            : [],
+        );
+        assert.ok(
+          calls.length <= 1,
+          "Chief turn must not repeat a lifecycle call",
+        );
+        if (calls.length === 1) {
+          assert.equal(calls[0].name, tool);
+          assert.ok(calls[0].arguments?.repository === repository);
+        }
+        const results = messages.filter(
+          (message) =>
+            message.role === "toolResult" &&
+            message.toolCallId === calls[0]?.id,
+        );
+        assert.ok(results.length <= 1, "Chief call has duplicate results");
+        const result = results[0];
+        const targetPanes = await projectPanes();
+        const targetIds = new Set(targetPanes.map((pane) => pane.pane_id));
+        const targetAgents = (await agents()).filter((agent) =>
+          targetIds.has(agent.pane_id),
+        );
+        let savedTargetSessions = 0;
+        let savedManagerRoles = 0;
+        const roleErrors = [];
+        for (const agent of targetAgents) {
+          const id = await agentSessionId(ctx, agent);
+          const target = id && (await exactIsolatedSession(ctx, id));
+          if (!target) continue;
+          savedTargetSessions++;
+          for (const entry of sessionEntries(target.contents)) {
+            if (
+              entry.customType === "pi-herdsman-role" &&
+              entry.data?.role === "manager"
+            )
+              savedManagerRoles++;
+            if (entry.customType === "pi_herdsman_role_error") {
+              // Retain only known categories, never the message or session content.
+              const observed = JSON.stringify(entry.data ?? {});
+              const category = /startup intent/iu.test(observed)
+                ? "startup_intent"
+                : /coordination/iu.test(observed)
+                  ? "coordination"
+                  : /(?:lease|lock)/iu.test(observed)
+                    ? "lease"
+                    : /(?:chief|supervisor)/iu.test(observed)
+                      ? "chief_authority"
+                      : /(?:workspace|repository|checkout|placement)/iu.test(
+                            observed,
+                          )
+                        ? "project_identity"
+                        : "other";
+              if (!roleErrors.includes(category)) roleErrors.push(category);
+              if (!ctx.chiefManagerRoleError) {
+                const raw =
+                  typeof entry.data === "string"
+                    ? entry.data
+                    : (entry.data?.message ??
+                      entry.data?.error?.message ??
+                      entry.data?.error ??
+                      entry.data?.detail);
+                const line =
+                  typeof raw === "string" ? raw.split(/\r?\n/u, 1)[0] : "";
+                ctx.chiefManagerRoleError = sanitizeManagerBootstrapText(
+                  line,
+                  ctx,
+                )
+                  .replace(
+                    /\b[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}\b/giu,
+                    "<ID>",
+                  )
+                  .replace(/(?:https?|ssh):\/\/[^\s"'<>]+/giu, "<URL>")
+                  .replace(/(?:[A-Za-z]:[\\/]|\/)[^\s"'<>]+/gu, "<PATH>")
+                  .replace(/\s+/gu, " ")
+                  .trim()
+                  .slice(0, 500);
+              }
+            }
+          }
+        }
+        const settlement =
+          !!session &&
+          !!assistantResultForSession(
+            session,
+            request,
+            "CHIEF_MANAGER_SMOKE_SETTLED",
+          );
+        ctx.chiefManagerTurn = {
+          tool,
+          promptPersisted: index >= 0,
+          callPersisted: calls.length === 1,
+          resultPersisted: !!result,
+          settlement,
+          targetPanes: targetPanes.length,
+          targetAgents: targetAgents.length,
+          savedTargetSessions,
+          savedManagerRoles,
+          roleErrors,
+          ...(result
+            ? {
+                isError: result.isError === true,
+                status: result.details?.status ?? null,
+                stage: result.details?.stage ?? null,
+              }
+            : {}),
+        };
+        return {
+          done: !!result,
+          value: result,
+          progress: ctx.chiefManagerTurn,
+        };
+      },
+      200_000,
+    ); // Runtime bounds launch and readiness separately at 90s each.
+    if (expected) {
+      assert.equal(result.isError, false, `${stage} returned a tool error`);
+      const failure =
+        result.details?.status === "partial_failure"
+          ? ` (${result.details.stage}: ${sanitizeManagerBootstrapText(result.details.reason, ctx).slice(0, 350)})`
+          : "";
+      assert.equal(
+        result.details?.status,
+        expected,
+        `${stage} lifecycle status${failure}`,
+      );
+    } else {
+      assert.ok(
+        (result.details?.status === "partial_failure" &&
+          result.details?.stage === "recovery") ||
+          (result.isError === true &&
+            /(?:recovery|saved Manager session)/iu.test(
+              messageText(result.content),
+            ) &&
+            /(?:invalid|mismatch|does not match|foreign)/iu.test(
+              messageText(result.content),
+            )),
+        "mismatched saved session must block lifecycle action at recovery",
+      );
+    }
+    await wait(
+      `${stage}-settlement`,
+      async () => {
+        const session = await rootSessionSnapshot(ctx);
+        ctx.chiefManagerTurn.settlement =
+          !!session &&
+          !!assistantResultForSession(
+            session,
+            request,
+            "CHIEF_MANAGER_SMOKE_SETTLED",
+          );
+        return {
+          done: ctx.chiefManagerTurn.settlement && session.status === "idle",
+          progress: ctx.chiefManagerTurn,
+        };
+      },
+      15_000,
+    );
+  }
+  async function observeManager(stage) {
+    return wait(stage, async () => {
+      const project = await projectPanes();
+      const workspaceIds = new Set(project.map((pane) => pane.workspace_id));
+      if (workspaceIds.size === 0) return { done: false };
+      assert.equal(
+        workspaceIds.size,
+        1,
+        "expected one project primary workspace",
+      );
+      const listing = await agents();
+      const descriptor = JSON.parse(
+        await readFile(
+          await smokeManagerDescriptorPath({ ...ctx, rootCwd: repository }),
+          "utf8",
+        ),
+      );
+      const pane = project.find((item) => item.pane_id === descriptor.paneId);
+      assert.ok(pane, "Manager descriptor must identify a project pane");
+      assert.equal(pane.workspace_id, descriptor.workspaceId);
+      assert.equal(pane.tab_id, descriptor.tabId);
+      const pid = descriptor.claim?.pid;
+      assert.ok(
+        Number.isSafeInteger(pid) && pid > 0,
+        "invalid Manager lease PID",
+      );
+      // Herdr can report a settled Pi turn as "done" while Pi is still live.
+      // Bind the session path and lease PID to the pane independently of that status.
+      const reports = listing.filter((item) => item.pane_id === pane.pane_id);
+      assert.ok(reports.length <= 1, "ambiguous Manager agent report");
+      const agent = reports[0];
+      const session = await isolatedSessionDetails(ctx, agent);
+      const processes =
+        (await paneProcessInfo(pane.pane_id)).process_info
+          ?.foreground_processes ?? [];
+      const exactPid = processes.filter((process) => process.pid === pid);
+      const progress = {
+        sessionKind: agent?.agent_session?.kind ?? null,
+        agentStatus: agent?.agent_status ?? null,
+        isolatedSession: !!session,
+        foregroundCount: processes.length,
+        exactPidMatches: exactPid.length,
+      };
+      if (!session || exactPid.length === 0) return { done: false, progress };
+      assert.equal(exactPid.length, 1, "ambiguous Manager foreground PID");
+      assert.equal(session.id, descriptor.piSessionId);
+      assert.equal(
+        await realpath(session.path),
+        await realpath(descriptor.piSessionFile),
+      );
+      assert.equal(
+        (await exactIsolatedSession(ctx, session.id))?.path,
+        session.path,
+      );
+      for (const other of project.filter(
+        (item) => item.pane_id !== pane.pane_id,
+      )) {
+        assert.ok(
+          !listing.some(
+            (item) =>
+              item.pane_id === other.pane_id &&
+              item.agent_session?.kind === "path" &&
+              ["idle", "working"].includes(item.agent_status),
+          ),
+          "duplicate Pi agent in project",
+        );
+        assert.deepEqual(
+          await processIn(other.pane_id),
+          [],
+          "duplicate Pi process in project",
+        );
+      }
+      ctx.chiefManagerProcess = progress;
+      return { done: true, value: { pane, session, pid }, progress };
+    });
+  }
+  async function verifyManager(manager, generation) {
+    const request = `CHIEF_MANAGER_SMOKE verify ${generation}`;
+    const startsPath = join(
+      ctx.paths.piAgent,
+      "pi-herdsman",
+      "runtime",
+      "smoke-faux-session-start.jsonl",
+    );
+    // Address the exact pane, not a Herdr agent that may have a prior generation.
+    await submitPaneCommand(ctx, manager.pane.pane_id, request);
+    return wait(
+      `verified-${generation}`,
+      async () => {
+        const session = await exactIsolatedSession(ctx, manager.session.id);
+        const done =
+          !!session &&
+          !!assistantResultForSession(
+            session,
+            request,
+            "CHIEF_MANAGER_SMOKE_VERIFIED",
+          );
+        const entries = sessionEntries(session?.contents ?? "");
+        const user = entries.findIndex(
+          (entry) =>
+            entry.message?.role === "user" &&
+            messageText(entry.message.content) === request,
+        );
+        const error =
+          user >= 0 &&
+          entries
+            .slice(user + 1)
+            .some(
+              (entry) =>
+                entry.message?.role === "assistant" &&
+                entry.message.stopReason === "error",
+            );
+        const screen = done
+          ? ""
+          : await nestedPaneText(ctx, manager.pane.pane_id, "visible").catch(
+              () => null,
+            );
+        const starts = sessionEntries(await readFile(startsPath, "utf8"));
+        const start = starts.findLast(
+          (entry) =>
+            entry.sessionId === manager.session.id && entry.pid === manager.pid,
+        );
+        const progress = {
+          promptPersisted: user >= 0,
+          assistantError: error,
+          replied: done,
+          screenObserved: screen !== null,
+          paneEchoedProbe: screen?.includes(request) ?? false,
+          modelMissing:
+            /\b(?:no model selected|no models available|no api key)\b/iu.test(
+              screen ?? "",
+            ),
+          modelAtChildStart:
+            start?.chiefManagerModel ?? "provider_start_not_observed",
+          trustPrompt: /trust this|project trust|approve this/iu.test(
+            screen ?? "",
+          ),
+          confirmation: /\b(?:yes\s*\/\s*no|press enter|confirm)\b/iu.test(
+            screen ?? "",
+          ),
+        };
+        ctx.chiefManagerProbe = progress;
+        return { done, value: session, progress };
+      },
+      30_000,
+    );
+  }
+  assert.deepEqual(await projectPanes(), [], "fixture already has a workspace");
+  // Like chief-tree, establish a persisted ordinary Lead turn before /chief.
+  await wait("startup", async () => {
+    const session = await rootSessionSnapshot(ctx);
+    const answered =
+      !!session &&
+      !!assistantResultForSession(
+        session,
+        ctx.initialPrompt,
+        "CHIEF_MANAGER_SMOKE_STARTUP",
+      );
+    return {
+      done: answered && session.status === "idle",
+      progress: {
+        sessionObserved: !!session,
+        answered,
+        status: session?.status,
+      },
+    };
+  });
+  markStage(ctx, "chief-manager-activation");
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/chief");
+  await nestedCommand(ctx, [
+    "pane",
+    "wait-output",
+    ctx.rootPaneId,
+    "--match",
+    "Chief mode active.",
+    "--timeout",
+    "15000",
+  ]);
+  await wait("chief-agent", async () => ({
+    done: (await agents()).some(
+      (agent) =>
+        agent.pane_id === ctx.rootPaneId && agent.agent_status === "idle",
+    ),
+  }));
+  await lifecycle("start_manager", "started", "start");
+  const first = await observeManager("first-manager");
+  assert.notEqual(first.pane.workspace_id, ctx.rootWorkspaceId);
+  // Herdr's fresh Pi can select another default in this fixture. Explicitly
+  // select the simulated model in the verified child, not in production launch.
+  await submitPaneCommand(
+    ctx,
+    first.pane.pane_id,
+    "/model smoke-faux/chief-manager",
+  );
+  await nestedCommand(ctx, [
+    "pane",
+    "wait-output",
+    first.pane.pane_id,
+    "--match",
+    "Model: chief-manager",
+    "--timeout",
+    "15000",
+  ]);
+  await verifyManager(first, "first");
+  const originalPanes = (await projectPanes())
+    .map((pane) => pane.pane_id)
+    .sort();
+  await lifecycle("start_manager", "already_running", "repeat");
+  const repeat = await observeManager("repeated-manager");
+  assert.equal(repeat.pid, first.pid);
+  assert.equal(repeat.pane.pane_id, first.pane.pane_id);
+  assert.equal(repeat.session.id, first.session.id);
+  assert.deepEqual(
+    (await projectPanes()).map((pane) => pane.pane_id).sort(),
+    originalPanes,
+  );
+
+  const branch = `herdsman/smoke-chief-manager-${randomUUID()}`;
+  const checkout = join(ctx.paths.root, "chief-manager-worktree");
+  await nestedCommand(ctx, [
+    "worktree",
+    "create",
+    "--workspace",
+    first.pane.workspace_id,
+    "--branch",
+    branch,
+    "--base",
+    "HEAD",
+    "--path",
+    checkout,
+    "--no-focus",
+  ]);
+  const topology = () =>
+    nestedCommand(ctx, [
+      "worktree",
+      "list",
+      "--workspace",
+      first.pane.workspace_id,
+    ]);
+  const project = await topology();
+  const worktree = project.worktrees.find((item) => item.branch === branch);
+  assert.equal(worktree?.path ?? worktree?.worktree_path, checkout);
+  assert.ok(worktree.open_workspace_id && project.source?.repo_key);
+  new ProjectTrustStore(ctx.paths.piAgent).set(checkout, true);
+  const assign = `CHIEF_MANAGER_SMOKE assign ${branch}`;
+  await prompt(first.pane.pane_id, assign);
+  const assignment = await wait("assignment", async () => {
+    const session = await exactIsolatedSession(ctx, first.session.id);
+    if (!session) return { done: false };
+    assertNoFailedProjectDelegation(session.contents, branch);
+    const rows = staffDelegateResults(session.contents).filter(
+      (row) => row.branch === branch,
+    );
+    assert.ok(rows.length <= 1, "duplicate project assignment");
+    const row = rows[0];
+    return { done: !!row, value: row };
+  });
+  assert.ok(assignment.session);
+  assert.equal(assignment.workspace_id, worktree.open_workspace_id);
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  const assignmentPath = join(
+    ctx.paths.piAgent,
+    "pi-herdsman",
+    "runtime",
+    "supervision-v2",
+    hash(nestedHerdrApiSocketPath(ctx.paths, ctx.sessionName)),
+    "assignments",
+    hash(project.source.repo_key),
+    `${hash(branch)}.json`,
+  );
+  const assignmentRecord = await readFile(assignmentPath, "utf8");
+  const expectedHead = (
+    await run("git", ["rev-parse", "HEAD"], { cwd: checkout })
+  ).stdout;
+  const assignedLead = async () => {
+    const listing = (await agents()).filter(
+      (item) => item.workspace_id === assignment.workspace_id,
+    );
+    const exact = [];
+    for (const agent of listing) {
+      if ((await agentSessionId(ctx, agent)) === assignment.session)
+        exact.push(agent);
+    }
+    assert.ok(exact.length <= 1, "duplicate assigned Lead session");
+    if (exact.length !== 1) return null;
+    const processes = await processIn(exact[0].pane_id);
+    if (processes.length !== 1) return null;
+    const session = await exactIsolatedSession(ctx, assignment.session);
+    if (!session) return null;
+    const pid = processes[0].pid;
+    assert.ok(
+      Number.isSafeInteger(pid) && pid > 0,
+      "invalid assigned Lead PID",
+    );
+    return { paneId: exact[0].pane_id, pid, session };
+  };
+  const lead = await wait("assigned-lead", async () => {
+    const live = await assignedLead();
+    const done =
+      !!live &&
+      sessionEntries(live.session.contents).some(
+        (entry) =>
+          entry.message?.role === "assistant" &&
+          messageText(entry.message.content) ===
+            "CHIEF_MANAGER_SMOKE_LEAD_READY",
+      );
+    return {
+      done,
+      value: live,
+      progress: { exactLeadProcessAndSession: !!live, replied: done },
+    };
+  });
+  const assertAssignmentPreserved = async () => {
+    assert.equal(await readFile(assignmentPath, "utf8"), assignmentRecord);
+    const matches = (await topology()).worktrees.filter(
+      (item) => item.branch === branch,
+    );
+    assert.equal(matches.length, 1);
+    assert.equal(matches[0].open_workspace_id, assignment.workspace_id);
+    assert.equal(matches[0].path ?? matches[0].worktree_path, checkout);
+    assert.equal(
+      (await run("git", ["rev-parse", "HEAD"], { cwd: checkout })).stdout,
+      expectedHead,
+    );
+    const live = await assignedLead();
+    assert.equal(live?.paneId, lead.paneId);
+    assert.equal(
+      live.pid,
+      lead.pid,
+      "Manager turnover must not restart the Lead",
+    );
+    assert.equal(live.session.path, lead.session.path);
+    assert.ok(live.session.contents.startsWith(lead.session.contents));
+  };
+  const beforeStop = await verifyManager(first, "before-stop");
+
+  // Quit Pi, not the Manager role or its Herdr workspace.
+  await submitPaneCommand(ctx, first.pane.pane_id, "/quit");
+  await wait("stopped", async () => {
+    const observed = await projectPanes();
+    if (observed.some((pane) => pane.pane_id === first.pane.pane_id)) {
+      const live = (await processIn(first.pane.pane_id)).some(
+        (process) => process.pid === first.pid,
+      );
+      if (live) return { done: false };
+    }
+    try {
+      process.kill(first.pid, 0);
+      return { done: false };
+    } catch (error) {
+      if (error.code !== "ESRCH") throw error;
+    }
+    return { done: true };
+  });
+  const workspace = await nestedCommand(ctx, [
+    "workspace",
+    "get",
+    first.pane.workspace_id,
+  ]);
+  assert.equal(workspace.workspace?.workspace_id, first.pane.workspace_id);
+  const stoppedPanes = (await projectPanes())
+    .map((pane) => pane.pane_id)
+    .sort();
+  const saved = await exactIsolatedSession(ctx, first.session.id);
+  assert.equal(saved?.path, first.session.path);
+  assert.ok(
+    saved.contents.startsWith(beforeStop.contents),
+    "Manager history was lost",
+  );
+  await assertAssignmentPreserved();
+  await lifecycle("start_manager", "resume_required", "resume-required");
+  assert.deepEqual(
+    (await projectPanes()).map((pane) => pane.pane_id).sort(),
+    stoppedPanes,
+  );
+
+  const recovery = await findChiefManagerRecoveryRecord(ctx, repository, saved);
+  const wrongSession = randomUUID();
+  assert.notEqual(wrongSession, saved.id);
+  const corrupt =
+    JSON.stringify({ ...recovery.record, piSessionId: wrongSession }) + "\n";
+  try {
+    await writeFile(recovery.path, corrupt);
+    for (const tool of ["resume_manager", "start_manager"]) {
+      await lifecycle(tool, null, `blocked-${tool}`);
+      const observed = await projectPanes();
+      assert.deepEqual(
+        observed.map((pane) => pane.pane_id).sort(),
+        stoppedPanes,
+      );
+      for (const pane of observed)
+        assert.deepEqual(
+          await processIn(pane.pane_id),
+          [],
+          "blocked call started Pi",
+        );
+      assert.equal(await readFile(recovery.path, "utf8"), corrupt);
+      assert.equal(await readFile(saved.path, "utf8"), saved.contents);
+      await assertAssignmentPreserved();
+    }
+  } finally {
+    await writeFile(recovery.path, recovery.original);
+  }
+
+  await lifecycle("resume_manager", "resumed", "resume");
+  const resumed = await observeManager("resumed-manager");
+  assert.equal(resumed.pane.workspace_id, first.pane.workspace_id);
+  assert.notEqual(resumed.pid, first.pid);
+  assert.equal(resumed.session.id, first.session.id);
+  assert.equal(resumed.session.path, first.session.path);
+  const resumedHistory = await verifyManager(resumed, "resumed");
+  assert.ok(
+    resumedHistory.contents.startsWith(saved.contents),
+    "resume replaced the saved history",
+  );
+  await assertAssignmentPreserved();
+  ctx.chiefManager = {
+    assignmentPreserved: true,
+    mismatchedRecoveryBlocked: true,
+    workspaceId: first.pane.workspace_id,
+    sessionId: first.session.id,
+    firstPid: first.pid,
+    resumedPid: resumed.pid,
+  };
 }
 
 async function runChiefTreeSmoke(ctx) {
@@ -13181,6 +14023,16 @@ export function sanitizedFailureEvidence(
     ...(ctx.scenario === "core" && diagnostics?.coreDelegation
       ? { coreDelegation: sanitizedCoreDelegation(diagnostics.coreDelegation) }
       : {}),
+    ...(ctx.chiefManagerTurn ? { chiefManagerTurn: ctx.chiefManagerTurn } : {}),
+    ...(ctx.chiefManagerProcess
+      ? { chiefManagerProcess: ctx.chiefManagerProcess }
+      : {}),
+    ...(ctx.chiefManagerProbe
+      ? { chiefManagerProbe: ctx.chiefManagerProbe }
+      : {}),
+    ...(ctx.chiefManagerRoleError
+      ? { chiefManagerRoleError: ctx.chiefManagerRoleError }
+      : {}),
     lastVerified: ctx.lastVerified ?? null,
     processesVerified: ctx.coreProcessEvidence?.length ?? 0,
     sessionStartObserved: ctx.sessionStartObserved ?? false,
@@ -13539,6 +14391,24 @@ async function main() {
       );
       if (scenario === "continuation")
         await prepareContinuationFaux(paths, ctx.simulatedProviderExtension);
+      if (scenario === "chief-manager") {
+        await writeFile(
+          join(paths.piAgent, "settings.json"),
+          JSON.stringify({
+            defaultProvider: "smoke-faux",
+            defaultModel: "chief-manager",
+          }) + "\n",
+          { flag: "wx" },
+        );
+        // Bundled managed-lead uses --no-extensions. Load the isolated
+        // provider explicitly for the Lead without changing its tool policy.
+        await mkdir(join(paths.piAgent, "coordinators"), { recursive: true });
+        await writeFile(
+          join(paths.piAgent, "coordinators", "managed-lead.md"),
+          `---\nname: managed-lead\nmodel: smoke-faux/chief-manager\nextensions: [${JSON.stringify(ctx.simulatedProviderExtension)}]\n---\n`,
+          { flag: "wx" },
+        );
+      }
     }
     if (scenario === "agent-terminal-failure") {
       await mkdir(join(ctx.rootCwd, ".pi", "agents"), { recursive: true });
@@ -13737,6 +14607,8 @@ async function main() {
           result: "one final remembered-context owner result",
         })}`,
       );
+    if (scenario === "chief-manager")
+      console.log(`chief-manager: ${JSON.stringify(ctx.chiefManager)}`);
     if (scenario === "chief-tree")
       console.log(
         `chief-tree: ${JSON.stringify({

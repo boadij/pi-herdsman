@@ -15,6 +15,7 @@ import { basename, dirname, join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { lockSync } from "proper-lockfile";
 import { claimProcessLock } from "./lock.ts";
+import { resolveClonePath } from "./repository-path.ts";
 import { herdsmanConfigPath } from "./storage.ts";
 import {
   isLeadExecutionMode,
@@ -42,6 +43,7 @@ export type HerdsmanConfig = {
   peerCommunicationEnabled: boolean;
   peerFederationEnabled: boolean;
   autoActivateManager: boolean;
+  projectsDirectory: string;
   allowAgentCwdOverride: boolean;
   allowAgentModelOverrides: boolean;
   allowedAgentModels: string[];
@@ -70,6 +72,7 @@ export const DEFAULT_CONFIG: HerdsmanConfig = {
   peerCommunicationEnabled: true,
   peerFederationEnabled: true,
   autoActivateManager: false,
+  projectsDirectory: "~/Projects",
   allowAgentCwdOverride: false,
   allowAgentModelOverrides: false,
   allowedAgentModels: [],
@@ -119,6 +122,7 @@ const CONFIG_KEYS = new Set<ConfigKey>([
   "peerCommunicationEnabled",
   "peerFederationEnabled",
   "autoActivateManager",
+  "projectsDirectory",
   "allowAgentCwdOverride",
   "allowAgentModelOverrides",
   "allowedAgentModels",
@@ -135,6 +139,20 @@ function validAllowedAgentModels(value: unknown): value is string[] {
     Array.isArray(value) &&
     [...value].every((model) => typeof model === "string" && !!model.trim()) &&
     new Set(value).size === value.length
+  );
+}
+
+function validateProjectsDirectory(value: unknown): asserts value is string {
+  try {
+    if (typeof value === "string") {
+      resolveClonePath(value);
+      return;
+    }
+  } catch {
+    // Do not echo the configured path in diagnostics.
+  }
+  throw new Error(
+    "Invalid Pi Herdsman config field projectsDirectory: expected a safe absolute path or ~/ path",
   );
 }
 
@@ -227,6 +245,10 @@ function parseRawConfig(content: string): Partial<HerdsmanConfig> {
     if (typeof record.autoActivateManager !== "boolean")
       throw new Error("Invalid Pi Herdsman config field autoActivateManager");
     result.autoActivateManager = record.autoActivateManager;
+  }
+  if ("projectsDirectory" in record) {
+    validateProjectsDirectory(record.projectsDirectory);
+    result.projectsDirectory = record.projectsDirectory;
   }
   if ("allowAgentCwdOverride" in record) {
     if (typeof record.allowAgentCwdOverride !== "boolean")
@@ -663,6 +685,7 @@ export function updateConfig<K extends ConfigKey>(
         throw new Error(`Invalid Pi Herdsman config field ${key}`);
       if (key === "autoActivateManager" && typeof value !== "boolean")
         throw new Error("Invalid Pi Herdsman config field autoActivateManager");
+      if (key === "projectsDirectory") validateProjectsDirectory(value);
       if (key === "allowAgentCwdOverride" && typeof value !== "boolean")
         throw new Error(
           "Invalid Pi Herdsman config field allowAgentCwdOverride",
@@ -696,21 +719,8 @@ export function updateConfig<K extends ConfigKey>(
           "Invalid Pi Herdsman config field worktreeRemovalPreapprovedRepos",
         );
       if (
-        key !== "spawnPlacement" &&
-        key !== "statusWidgetMaxRows" &&
-        key !== "maxAgentDepth" &&
-        key !== "defaultLeadExecution" &&
-        key !== "contextRetirement" &&
-        key !== "autoActivateManager" &&
-        key !== "allowAgentCwdOverride" &&
-        key !== "allowAgentModelOverrides" &&
-        key !== "allowedAgentModels" &&
-        key !== "peerCommunicationEnabled" &&
-        key !== "peerFederationEnabled" &&
-        key !== "managerGitBootstrapWithoutConfirmation" &&
-        key !== "managerMergeEnabled" &&
-        key !== "managerMergeOverrides" &&
-        key !== "worktreeRemovalPreapprovedRepos" &&
+        (key === "inlineAttachmentLimitBytes" ||
+          key === "mailboxPayloadLimitBytes") &&
         !validByteLimit(value)
       )
         throw new Error(`Invalid Pi Herdsman config field ${key}`);

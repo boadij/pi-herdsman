@@ -599,6 +599,40 @@ export function resolveAssignmentCheckout<T extends HerdrRecord>(
   return { status: "matched", worktree: matches[0]!, path };
 }
 
+export async function gitRepositoryScope(
+  pi: Pick<ExtensionAPI, "exec">,
+  cwd: string,
+  signal?: AbortSignal,
+) {
+  const gitPath = async (argument: string) => {
+    const result = await pi.exec(
+      "git",
+      ["rev-parse", "--path-format=absolute", argument],
+      {
+        cwd,
+        signal,
+        timeout: 10_000,
+      },
+    );
+    const path = String(result.stdout ?? "").trim();
+    if (
+      result.code !== 0 ||
+      result.killed ||
+      result.stderr?.trim() ||
+      !isAbsolute(path)
+    )
+      throw new Error("Git local repository identity is unavailable");
+    return realpathSync(path);
+  };
+  const [checkoutPath, gitDir, commonDir] = await Promise.all([
+    gitPath("--show-toplevel"),
+    gitPath("--git-dir"),
+    gitPath("--git-common-dir"),
+  ]);
+  const isPrimary = sameDirectory(gitDir, commonDir);
+  return { checkoutPath, canonicalRepoKey: commonDir, isPrimary };
+}
+
 export async function localRepositoryScope(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
@@ -624,32 +658,11 @@ export async function localRepositoryScope(
     !Array.isArray(listed?.worktrees)
   )
     throw new Error("Herdr local repository identity is unavailable");
-  const gitPath = async (argument: string) => {
-    const result = await pi.exec(
-      "git",
-      ["rev-parse", "--path-format=absolute", argument],
-      {
-        cwd: ctx.cwd,
-        signal,
-        timeout: 10_000,
-      },
-    );
-    const path = String(result.stdout ?? "").trim();
-    if (
-      result.code !== 0 ||
-      result.killed ||
-      result.stderr?.trim() ||
-      !isAbsolute(path)
-    )
-      throw new Error("Git local repository identity is unavailable");
-    return realpathSync(path);
-  };
-  const [checkoutPath, gitDir, commonDir] = await Promise.all([
-    gitPath("--show-toplevel"),
-    gitPath("--git-dir"),
-    gitPath("--git-common-dir"),
-  ]);
-  const isPrimary = sameDirectory(gitDir, commonDir);
+  const {
+    checkoutPath,
+    canonicalRepoKey: commonDir,
+    isPrimary,
+  } = await gitRepositoryScope(pi, ctx.cwd, signal);
   if (!sameDirectory(commonDir, source.repo_key))
     throw new Error("Herdr repository does not match the current checkout");
   const membership = workspace.worktree;
@@ -668,6 +681,7 @@ export async function localRepositoryScope(
   return {
     repoKey: source.repo_key as string,
     repoName: source.repo_name as string,
+    canonicalRepoKey: commonDir,
     checkoutPath,
     isPrimary,
   };
@@ -798,10 +812,12 @@ export function sameCwd(observed: unknown, expected: string): boolean {
   if (typeof observed !== "string") return false;
   return canonicalCwd(observed) === canonicalCwd(expected);
 }
-function matchesAttemptTerminal(
-  pane: any,
-  attempt: StartedHerdrAgent,
-): boolean {
+type PaneIdentity = Pick<
+  StartedHerdrAgent,
+  "paneId" | "workspaceId" | "tabId" | "terminalId"
+>;
+
+function matchesAttemptTerminal(pane: any, attempt: PaneIdentity): boolean {
   return (
     pane?.pane_id === attempt.paneId &&
     pane.workspace_id === attempt.workspaceId &&
@@ -809,7 +825,10 @@ function matchesAttemptTerminal(
     pane.terminal_id === attempt.terminalId
   );
 }
-function matchesAttemptPane(pane: any, attempt: StartedHerdrAgent): boolean {
+function matchesAttemptPane(
+  pane: any,
+  attempt: PaneIdentity & { cwd: string },
+): boolean {
   return (
     matchesAttemptTerminal(pane, attempt) && sameCwd(pane.cwd, attempt.cwd)
   );
@@ -972,7 +991,13 @@ async function lockLifecycle(
   ctx: ExtensionContext,
   signal?: AbortSignal,
 ): Promise<() => void> {
-  const id = workspace(ctx);
+  return lockLifecycleForWorkspace(workspace(ctx), signal);
+}
+
+async function lockLifecycleForWorkspace(
+  id: string,
+  signal?: AbortSignal,
+): Promise<() => void> {
   // ponytail: serialize physical lifecycle mutations per workspace.
   // Split only if lifecycle throughput becomes a measured problem.
   const path = join(
@@ -1885,39 +1910,421 @@ export async function startHerdrAgent(
   }
 }
 
+type ManagerPaneOptions = {
+  repository: Readonly<{ checkoutPath: string; canonicalRepoKey: string }>;
+  assertCurrentAuthority: () => void | Promise<void>;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+};
+
+export type HerdrManagerPaneSelection = Readonly<{
+  workspaceId: string;
+  tabId: string;
+  paneId: string;
+  terminalId: string;
+  cwd: string;
+  createdWorkspace: boolean;
+  createdTab: true;
+}>;
+
+export type StartHerdrManagerInPaneOptions = ManagerPaneOptions & {
+  pane: HerdrManagerPaneSelection;
+  session: Readonly<{ id: string; path?: string }>;
+  extensionPath?: string;
+};
+
+export class HerdrManagerPreparationFailure extends Error {
+  readonly stage:
+    "workspace_create" | "workspace_verify" | "tab_create" | "pane_verify";
+  readonly placement: Readonly<{
+    workspaceId?: string;
+    tabId?: string;
+    paneId?: string;
+  }>;
+
+  constructor(
+    cause: unknown,
+    stage: HerdrManagerPreparationFailure["stage"],
+    placement: HerdrManagerPreparationFailure["placement"],
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "HerdrManagerPreparationFailure";
+    this.stage = stage;
+    this.placement = placement;
+  }
+}
+
+async function managerPrimaryWorkspace(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  options: ManagerPaneOptions,
+  deadline: number,
+): Promise<string | undefined> {
+  await options.assertCurrentAuthority();
+  const { repository, signal } = options;
+  const { checkoutPath, canonicalRepoKey } = repository;
+  if (!isAbsolute(checkoutPath) || !isAbsolute(canonicalRepoKey))
+    error("start", "verified Manager repository paths are required");
+  const local = await gitRepositoryScope(pi, checkoutPath, signal);
+  if (
+    !local.isPrimary ||
+    !sameDirectory(local.checkoutPath, checkoutPath) ||
+    !sameDirectory(local.canonicalRepoKey, canonicalRepoKey)
+  )
+    error("start", "selected checkout is not the verified primary repository");
+
+  const { workspaces, panes } = await herdrSessionSnapshot(pi, ctx, signal);
+  const candidates = workspaces.filter((item) => {
+    const membership = item?.worktree;
+    // Herdr's ordinary workspace creation does not attach worktree metadata.
+    // A pane in the exact checkout makes it a candidate, not a verified match.
+    if (membership == null)
+      return panes.some(
+        (pane) =>
+          pane?.workspace_id === item?.workspace_id &&
+          typeof pane?.cwd === "string" &&
+          isAbsolute(pane.cwd) &&
+          sameDirectory(pane.cwd, checkoutPath),
+      );
+    const sameKey =
+      typeof membership?.repo_key === "string" &&
+      sameDirectory(membership.repo_key, canonicalRepoKey);
+    const sameCheckout =
+      typeof membership?.checkout_path === "string" &&
+      sameDirectory(membership.checkout_path, checkoutPath);
+    if (!sameKey && !sameCheckout) return false;
+    if (sameKey && !sameCheckout && membership.is_linked_worktree === true)
+      return false;
+    if (
+      !sameKey ||
+      !sameCheckout ||
+      !isAbsolute(membership.repo_key) ||
+      !isAbsolute(membership.checkout_path) ||
+      membership.is_linked_worktree !== false
+    )
+      error(
+        "start",
+        "candidate Manager workspace has conflicting repository identity",
+      );
+    return true;
+  });
+  if (candidates.length > 1)
+    error("start", "duplicate primary workspaces for Manager repository");
+  if (!candidates.length) return undefined;
+  const workspaceId = candidates[0]!.workspace_id;
+  if (
+    typeof workspaceId !== "string" ||
+    !workspaceId ||
+    workspaces.filter((item) => item?.workspace_id === workspaceId).length !== 1
+  )
+    error("start", "Manager workspace identity is inconsistent");
+
+  const topology = await runHerdr(
+    pi,
+    ctx,
+    ["worktree", "list", "--workspace", workspaceId],
+    { signal, timeout: startupCallTimeout(deadline) },
+  );
+  const scope = worktreeGroupScopeFromTopology(workspaceId, topology);
+  const sourceCheckout = topology?.source?.source_checkout_path;
+  if (
+    scope.primaryWorkspaceId !== workspaceId ||
+    !sameDirectory(scope.repoKey, canonicalRepoKey) ||
+    typeof sourceCheckout !== "string" ||
+    !isAbsolute(sourceCheckout) ||
+    !sameDirectory(sourceCheckout, checkoutPath)
+  )
+    error("start", "Manager primary workspace identity changed");
+  return workspaceId;
+}
+
+function managerTabInventory(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  workspaceId: string,
+  signal: AbortSignal | undefined,
+  deadline: number,
+) {
+  const opts = { signal, timeout: startupCallTimeout(deadline) };
+  return Promise.all([
+    runHerdr(pi, ctx, ["tab", "list", "--workspace", workspaceId], opts),
+    runHerdr(pi, ctx, ["pane", "list", "--workspace", workspaceId], opts),
+  ]).then(([{ tabs }, { panes }]) => {
+    if (!Array.isArray(tabs) || !Array.isArray(panes))
+      error("start", "Manager tab or pane inventory is unavailable");
+    return { tabs, panes };
+  });
+}
+
+async function verifyManagerPane(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  target: HerdrManagerPaneSelection,
+  signal: AbortSignal | undefined,
+  deadline: number,
+): Promise<void> {
+  const [{ tabs, panes }, { agents }] = await Promise.all([
+    managerTabInventory(pi, ctx, target.workspaceId, signal, deadline),
+    runHerdr(pi, ctx, ["agent", "list"], {
+      signal,
+      timeout: startupCallTimeout(deadline),
+    }),
+  ]);
+  const tabMatches = tabs.filter((tab) => tab?.tab_id === target.tabId);
+  const paneMatches = panes.filter(
+    (pane) => pane?.pane_id === target.paneId || pane?.tab_id === target.tabId,
+  );
+  const pane = paneMatches[0];
+  if (
+    tabMatches.length !== 1 ||
+    tabMatches[0].workspace_id !== target.workspaceId ||
+    paneMatches.length !== 1 ||
+    !pane ||
+    !matchesAttemptPane(pane, target) ||
+    pane.agent != null ||
+    pane.agent_session != null ||
+    (pane.agent_status != null && pane.agent_status !== "unknown") ||
+    !Array.isArray(agents) ||
+    agents.some((agent) => agent?.pane_id === target.paneId)
+  )
+    error("start", "prepared Manager pane is occupied or its identity changed");
+}
+
+/**
+ * Select the exact primary workspace and create a dedicated Manager tab.
+ * The caller serializes preparation and launch with its repository startup lock.
+ */
+export async function prepareHerdrManagerPane(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  options: ManagerPaneOptions,
+): Promise<HerdrManagerPaneSelection> {
+  const { signal } = options;
+  const deadline =
+    Date.now() + startupTimeoutBudget(options.timeoutMs).totalTimeout;
+  const cwd = canonicalCwd(options.repository.checkoutPath);
+  const existing = await managerPrimaryWorkspace(pi, ctx, options, deadline);
+  let workspaceId = existing;
+  let tabId: string | undefined;
+  let paneId: string | undefined;
+  let stage: HerdrManagerPreparationFailure["stage"] = "workspace_create";
+  try {
+    const callOptions = () => ({
+      signal,
+      timeout: startupCallTimeout(deadline),
+    });
+    if (!workspaceId) {
+      await options.assertCurrentAuthority();
+      signal?.throwIfAborted();
+      const created = await runHerdr(
+        pi,
+        ctx,
+        ["workspace", "create", "--cwd", cwd, "--no-focus"],
+        callOptions(),
+      );
+      const id = created?.workspace?.workspace_id;
+      if (typeof id !== "string" || !id)
+        error("start", "Herdr did not return the created workspace ID");
+      workspaceId = id;
+    }
+
+    stage = "workspace_verify";
+    if (
+      (await managerPrimaryWorkspace(pi, ctx, options, deadline)) !==
+      workspaceId
+    )
+      error("start", "prepared Manager workspace identity changed");
+    const before = await managerTabInventory(
+      pi,
+      ctx,
+      workspaceId,
+      signal,
+      deadline,
+    );
+    await options.assertCurrentAuthority();
+    signal?.throwIfAborted();
+    stage = "tab_create";
+    const created = await runHerdr(
+      pi,
+      ctx,
+      [
+        "tab",
+        "create",
+        "--workspace",
+        workspaceId,
+        "--cwd",
+        cwd,
+        "--label",
+        "Manager",
+        "--no-focus",
+      ],
+      callOptions(),
+    );
+    const tab = created?.tab?.tab_id;
+    const pane = created?.root_pane?.pane_id;
+    const terminalId = created?.root_pane?.terminal_id;
+    if (
+      typeof tab !== "string" ||
+      !tab ||
+      typeof pane !== "string" ||
+      !pane ||
+      typeof terminalId !== "string" ||
+      !terminalId ||
+      before.tabs.some((item) => item?.tab_id === tab) ||
+      before.panes.some((item) => item?.pane_id === pane)
+    )
+      error("start", "Herdr did not create a dedicated Manager tab");
+    tabId = tab;
+    paneId = pane;
+    stage = "pane_verify";
+    const selection = Object.freeze({
+      workspaceId,
+      tabId,
+      paneId,
+      terminalId,
+      cwd,
+      createdWorkspace: existing === undefined,
+      createdTab: true as const,
+    });
+    await verifyManagerPane(pi, ctx, selection, signal, deadline);
+    return selection;
+  } catch (cause) {
+    // Do not clean up from an incomplete observation of creation or occupancy.
+    throw new HerdrManagerPreparationFailure(cause, stage, {
+      workspaceId,
+      tabId,
+      paneId,
+    });
+  }
+}
+
+export async function startHerdrManagerInPane(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  options: StartHerdrManagerInPaneOptions,
+): Promise<StartedHerdrAgent> {
+  const { pane, repository, assertCurrentAuthority, signal } = options;
+  const { id, path } = options.session;
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id))
+    error("start", "an exact Pi session ID is required");
+  if (path !== undefined && (!isAbsolute(path) || !statSync(path).isFile()))
+    error("start", "an exact existing Pi session file is required");
+  const file = path === undefined ? undefined : realpathSync(path);
+  if (
+    pane.createdTab !== true ||
+    !pane.workspaceId ||
+    !pane.tabId ||
+    !pane.paneId ||
+    !pane.terminalId ||
+    !sameDirectory(pane.cwd, repository.checkoutPath)
+  )
+    error(
+      "start",
+      "prepared Manager pane does not match the selected repository",
+    );
+  const verifyTarget = async (deadline: number) => {
+    if (
+      (await managerPrimaryWorkspace(pi, ctx, options, deadline)) !==
+      pane.workspaceId
+    )
+      error(
+        "start",
+        "prepared Manager primary workspace changed before launch",
+      );
+    if (file !== undefined) {
+      const header = statSync(file).isFile()
+        ? readPiSessionHeaderIdentity(file)
+        : undefined;
+      if (
+        header?.id !== id ||
+        !header.cwd ||
+        !sameDirectory(header.cwd, pane.cwd)
+      )
+        error(
+          "start",
+          "existing Pi session does not match the exact Manager session and checkout",
+        );
+    }
+  };
+  return launchPiInVerifiedPane(
+    pi,
+    ctx,
+    {
+      ...pane,
+      label: "manager",
+      runId: id,
+      timeoutMs: options.timeoutMs,
+      extensionPath: options.extensionPath,
+      signal,
+      // Let Pi determine project trust in its own checkout.
+      agentArgs:
+        file === undefined ? ["--session-id", id] : ["--session", file],
+    },
+    pane.workspaceId,
+    verifyTarget,
+    {
+      pane,
+      session: file === undefined ? { id } : { id, path: file },
+      assertCurrentAuthority,
+    },
+  );
+}
+
 export async function startHerdrAgentInPane(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   options: StartHerdrInPaneOptions,
 ): Promise<StartedHerdrAgent> {
+  const currentWorkspaceId = workspace(ctx);
+  return launchPiInVerifiedPane(
+    pi,
+    ctx,
+    options,
+    currentWorkspaceId,
+    async (deadline) => {
+      const scope = await worktreeGroupScope(
+        pi,
+        ctx,
+        currentWorkspaceId,
+        options.signal,
+        startupCallTimeout(deadline),
+      );
+      if (scope.primaryWorkspaceId !== options.primaryWorkspaceId)
+        error(
+          "start",
+          `workspace ${currentWorkspaceId} is not in primary workspace ${options.primaryWorkspaceId}'s worktree group`,
+        );
+      if (!scope.workspaceIds.includes(options.workspaceId))
+        error(
+          "start",
+          `workspace ${options.workspaceId} is not in primary workspace ${options.primaryWorkspaceId}'s worktree group`,
+        );
+    },
+  );
+}
+
+async function launchPiInVerifiedPane(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  options: Omit<StartHerdrInPaneOptions, "primaryWorkspaceId">,
+  lockId: string,
+  verifyTarget: (deadline: number) => Promise<void>,
+  manager?: {
+    pane: HerdrManagerPaneSelection;
+    session: ExpectedSession;
+    assertCurrentAuthority: ManagerPaneOptions["assertCurrentAuthority"];
+  },
+): Promise<StartedHerdrAgent> {
   const { totalTimeout, childTimeout } = startupTimeoutBudget(
     options.timeoutMs,
   );
   const deadline = Date.now() + totalTimeout;
-  const release = await lockLifecycle(ctx, options.signal);
+  const release = await lockLifecycleForWorkspace(lockId, options.signal);
   let attempt: StartedHerdrAgent | undefined;
   let retryAttempted = false;
   let stage = "topology";
   try {
-    const currentWorkspaceId = workspace(ctx);
-    const scope = await worktreeGroupScope(
-      pi,
-      ctx,
-      currentWorkspaceId,
-      options.signal,
-      startupCallTimeout(deadline),
-    );
-    if (scope.primaryWorkspaceId !== options.primaryWorkspaceId)
-      error(
-        "start",
-        `workspace ${currentWorkspaceId} is not in primary workspace ${options.primaryWorkspaceId}'s worktree group`,
-      );
-    if (!scope.workspaceIds.includes(options.workspaceId))
-      error(
-        "start",
-        `workspace ${options.workspaceId} is not in primary workspace ${options.primaryWorkspaceId}'s worktree group`,
-      );
-
+    await verifyTarget(deadline);
     const cwd = canonicalCwd(options.cwd);
     const panes =
       (
@@ -1928,8 +2335,12 @@ export async function startHerdrAgentInPane(
           { signal: options.signal, timeout: startupCallTimeout(deadline) },
         )
       ).panes ?? [];
-    const pane = panes.find((item: any) => item.pane_id === options.paneId);
+    const matches = panes.filter(
+      (item: any) => item?.pane_id === options.paneId,
+    );
+    const pane = matches[0];
     if (
+      matches.length !== 1 ||
       !pane ||
       pane.workspace_id !== options.workspaceId ||
       pane.tab_id !== options.tabId ||
@@ -1942,6 +2353,9 @@ export async function startHerdrAgentInPane(
         `pane ${options.paneId} did not include terminal identity`,
       );
 
+    if (manager && pane.terminal_id !== manager.pane.terminalId)
+      error("start", "prepared Manager terminal identity changed");
+
     attempt = {
       herdrAgent: alias(options.workspaceId, options.label, options.runId),
       workspaceId: options.workspaceId,
@@ -1949,11 +2363,31 @@ export async function startHerdrAgentInPane(
       paneId: options.paneId,
       terminalId: pane.terminal_id,
       cwd,
-      createdTab: false,
+      createdTab: manager?.pane.createdTab ?? false,
+      ...(manager ? { sessionReference: manager.session } : {}),
       launchMayHaveStarted: false,
     };
 
     stage = "pane_readiness";
+    const verifyAvailableManagerPane = async () => {
+      if (!manager) return;
+      await verifyManagerPane(pi, ctx, manager.pane, options.signal, deadline);
+      const shell = (await paneProcess(
+        pi,
+        ctx,
+        options.paneId,
+        options.signal,
+        deadline,
+        true,
+      ))!;
+      if (!settledShell(attempt?.shellProcess ?? shell, shell))
+        error(
+          "start",
+          "prepared Manager pane does not contain an available shell",
+        );
+      return shell;
+    };
+    const originalShell = await verifyAvailableManagerPane();
     try {
       await waitForShellMarker(
         pi,
@@ -1971,6 +2405,8 @@ export async function startHerdrAgentInPane(
         deadline,
         true,
       ))!;
+      if (originalShell && !settledShell(originalShell, attempt.shellProcess))
+        error("start", "prepared Manager shell changed during startup");
     } catch (failure) {
       if (failure instanceof OperationError)
         throw withStartupDiagnostic(
@@ -2003,9 +2439,16 @@ export async function startHerdrAgentInPane(
     );
     let started: any;
     for (;;) {
+      if (manager) {
+        await verifyTarget(deadline);
+        await verifyAvailableManagerPane();
+        await manager.assertCurrentAuthority();
+        options.signal?.throwIfAborted();
+      }
       const remaining = startupCallTimeout(deadline, childTimeout);
       if (remaining < HERDR_START_TIMEOUT_MIN)
         error("start", "startup deadline exhausted before agent start");
+      attempt.launchMayHaveStarted = true;
       try {
         started = await runHerdr(
           pi,
@@ -2034,12 +2477,12 @@ export async function startHerdrAgentInPane(
               Math.min(remaining, childTimeout) + START_DIAGNOSTIC_TIMEOUT,
           },
         );
-        attempt.launchMayHaveStarted = true;
         break;
       } catch (failure) {
         const busy =
           failure instanceof OperationError &&
           failure.detail.details?.herdrCode === "agent_pane_busy";
+        if (busy) attempt.launchMayHaveStarted = false;
         if (busy && Date.now() < retryDeadline) {
           retryAttempted = true;
           const observed = (
@@ -2061,7 +2504,6 @@ export async function startHerdrAgentInPane(
           if (Date.now() >= retryDeadline) throw failure;
           continue;
         }
-        if (!busy) attempt.launchMayHaveStarted = true;
         if (shouldCaptureStartupDiagnostic(failure))
           throw withStartupDiagnostic(
             failure,
@@ -2081,11 +2523,12 @@ export async function startHerdrAgentInPane(
     const agent = started.agent;
     const session = sessionIdentity(agent.agent_session);
     attempt.herdrAgent = agent.name ?? attempt.herdrAgent;
-    attempt.sessionReference = session
-      ? session.kind === "id"
-        ? { id: session.value }
-        : { path: session.value }
-      : undefined;
+    if (!manager)
+      attempt.sessionReference = session
+        ? session.kind === "id"
+          ? { id: session.value }
+          : { path: session.value }
+        : undefined;
     attempt.agent = agent;
     return attempt;
   } catch (cause) {
