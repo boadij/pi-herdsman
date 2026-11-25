@@ -1273,7 +1273,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             "Type remove to confirm.",
           ].join("\n"),
           undefined,
-          { signal: operationSignal },
+          { signal: operationSignal, blockedKind: "permission" },
         );
     operationSignal?.throwIfAborted();
     if (answer !== "remove")
@@ -1892,7 +1892,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     const answer = await ctx.ui.input(
       `Release Manager authority for ${branch}?\n\nThis removes the durable project assignment and retires its pending project messages. Git checkouts, branches, Pi conversations, processes, and Agent ownership are not changed.\n\nNo live target execution or matching branch checkout was found, but unobserved execution cannot be ruled out.\n\nType forget ${branch} to confirm.`,
       undefined,
-      { signal: operationSignal },
+      { signal: operationSignal, blockedKind: "permission" },
     );
     if (answer !== `forget ${branch}`)
       return {
