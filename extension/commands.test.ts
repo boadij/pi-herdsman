@@ -17,6 +17,7 @@ import { test, type TestContext } from "node:test";
 import {
   initTheme,
   ProjectTrustStore,
+  type ExtensionUIDialogOptions,
   type SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 
@@ -8334,7 +8335,12 @@ async function managerRemovalFixture(
   ctx.hasUI = true;
   ctx.ui.setStatus = (key: string, value: string | undefined) =>
     statusUpdates.push([key, value]);
-  ctx.ui.input = async () => {
+  ctx.ui.input = async (
+    _title: string,
+    _placeholder?: string,
+    dialogOptions?: ExtensionUIDialogOptions,
+  ) => {
+    assert.equal(dialogOptions?.blockedKind, "permission");
     assert.equal(lockCount, 0, "no operation lock may span human confirmation");
     confirmationCount++;
     if (options.replaceManagerAfterConfirmation) managerReplaced = true;
