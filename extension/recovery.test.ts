@@ -3763,14 +3763,146 @@ test("unsupported terminal result is preserved during recovery", async (t) => {
     path,
     JSON.stringify({ version: 999, runId: state.runId, requestId }),
   );
-  const entries: unknown[] = [];
+  writeOwnerMessage(mailbox, {
+    version: 5,
+    messageId: randomUUID(),
+    requestId,
+    runId: state.runId,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    piSessionId: state.piSessionId,
+    text: "Trigger owner runtime recovery.",
+    createdAt: Date.now(),
+  });
+  const entries: unknown[] = [
+    {
+      customType: "pi-herdsman-agent-result",
+      details: resultEntryDetails(state, requestId),
+    },
+  ];
   const pi = fakePi({ entries, exec: cascadeExecutor([state]).exec });
   registerExtension!(pi.pi as never);
   t.mock.timers.enable({ apis: ["setTimeout"] });
   try {
-    await pi.events.get("session_start")![0](undefined, fakeContext(entries));
+    const context = fakeContext(entries);
+    await pi.events.get("session_start")![0](undefined, context);
     assert.equal(JSON.parse(readFileSync(path, "utf8")).version, 999);
     assert.ok(readAgentState(mailbox));
+    const listCleanupError = async () => {
+      const listed = await agentTool(pi, "list").execute(
+        "list-unsupported-result",
+        {},
+        undefined,
+        undefined,
+        context,
+      );
+      return listed.details.agents.find((agent: any) => agent.agent === label)
+        ?.cleanup_error as string | undefined;
+    };
+    const firstDiagnostic = await listCleanupError();
+    assert.match(
+      firstDiagnostic ?? "",
+      /Result read failed.*Invalid mailbox protocol version or record/,
+    );
+    await pi.events.get("session_start")![0](undefined, context);
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.equal(await listCleanupError(), firstDiagnostic);
+    assert.equal(JSON.parse(readFileSync(path, "utf8")).version, 999);
+
+    writeResult(mailbox, {
+      version: 5,
+      runId: state.runId,
+      requestId,
+      ownerSessionId: state.ownerSessionId,
+      workspaceId: state.workspaceId,
+      agentLabel: state.agentLabel,
+      paneId: state.paneId,
+      status: "completed",
+      text: "Recovered after invalid result record.",
+      completedAt: Date.now(),
+    });
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.equal(await listCleanupError(), undefined);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("repeated watcher result-read failures are bounded and clear after repair", async (t) => {
+  setLeadEnvironment();
+  const label = "watcher-result-read-failure-agent";
+  const identity = recoveryIdentity(label);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  const requestId = randomUUID();
+  const state = managedState(label, requestId, identity);
+  writeAgentState(mailbox, state);
+  const path = join(mailbox, `result-${requestId}.json`);
+  writeFileSync(
+    path,
+    JSON.stringify({ version: 999, runId: state.runId, requestId }),
+  );
+  const entries: unknown[] = [];
+  const pi = fakePi({ entries, exec: cascadeExecutor([state]).exec });
+  registerExtension!(pi.pi as never);
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const context = fakeContext(entries);
+  const currentDiagnostic = async () => {
+    const listed = await agentTool(pi, "list").execute(
+      "list-watcher-result-error",
+      {},
+      undefined,
+      undefined,
+      context,
+    );
+    return listed.details.agents.find((agent: any) => agent.agent === label)
+      ?.cleanup_error as string | undefined;
+  };
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const first = await currentDiagnostic();
+    assert.match(
+      first ?? "",
+      /Result read failed.*Invalid mailbox protocol version or record/,
+    );
+    for (let attempt = 0; attempt < 3; attempt++) {
+      t.mock.timers.tick(1_000);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(await currentDiagnostic(), first);
+      assert.equal(JSON.parse(readFileSync(path, "utf8")).version, 999);
+    }
+    for (const handler of pi.events.get("before_agent_start") ?? [])
+      for (let attempt = 0; attempt < 3; attempt++)
+        await handler({ prompt: "test" }, context);
+    assert.equal(
+      entries.filter(
+        (entry: any) => entry.customType === "pi_herdsman_cleanup_error",
+      ).length,
+      0,
+    );
+    assert.equal(await currentDiagnostic(), first);
+    writeResult(mailbox, {
+      version: 5,
+      runId: state.runId,
+      requestId,
+      ownerSessionId: state.ownerSessionId,
+      workspaceId: state.workspaceId,
+      agentLabel: state.agentLabel,
+      paneId: state.paneId,
+      status: "completed",
+      text: "Repaired result.",
+      completedAt: Date.now(),
+    });
+    t.mock.timers.tick(1_000);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.doesNotMatch(
+      (await currentDiagnostic()) ?? "",
+      /Result read failed/,
+    );
+    assert.equal(readAgentState(mailbox)?.activeRequestId, requestId);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);

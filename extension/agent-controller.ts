@@ -3873,6 +3873,8 @@ export type Runtime = {
   startedAt?: number;
   contextPercent?: number;
   cleanupError?: string;
+  resultReadError?: string;
+  resultReadFailureKey?: string;
 };
 type AgentHealthDiagnostic = Awaited<ReturnType<typeof inspectHerdrAgent>>;
 
@@ -4698,7 +4700,7 @@ export function listedAgentRecord(
   const cleanupError =
     runtime &&
     dependencies.sameIdentity(dependencies.runtimeIdentityState(runtime), state)
-      ? runtime.cleanupError
+      ? (runtime.cleanupError ?? runtime.resultReadError)
       : undefined;
   return {
     ...publicAgent,
@@ -4836,6 +4838,7 @@ export function createAgentController(
     { episode: string; intervalMs: number; nextAt: number }
   >();
   const runtimes = new Map<string, Runtime>();
+  const resultReadFailures = new Map<string, string>();
   const pendingStarts = new Map<string, PendingStart>();
   const resultWatchers = new Map<string, () => void>();
   const askWatchers = new Map<string, () => void>();
@@ -6845,7 +6848,7 @@ export function createAgentController(
             current.lastAck.requestId === pending.requestId))
       )
         pendingStarts.delete(state.agentLabel);
-      invalidateRuntime(state.agentLabel, state.workspaceId);
+      invalidateRuntime(state.agentLabel, state.workspaceId, true);
       report?.onClosed?.({
         state: current,
         definition: snapshot.agentDefinition,
@@ -7181,7 +7184,11 @@ export function createAgentController(
     ownerMessageWatchers.get(runtime.mailboxPath)?.();
     ownerMessageWatchers.delete(runtime.mailboxPath);
   };
-  const invalidateRuntime = (label: string, workspaceId?: string): void => {
+  const invalidateRuntime = (
+    label: string,
+    workspaceId?: string,
+    retireResultDiagnostics = false,
+  ): void => {
     const runtime = runtimes.get(label);
     if (
       !runtime ||
@@ -7205,6 +7212,7 @@ export function createAgentController(
       resultDeliverySemanticRefs.delete(key);
     }
     runtime.startedAt = undefined;
+    if (retireResultDiagnostics) retireResultReadFailures(runtime);
     runtimes.delete(label);
   };
   const watchResult = (
@@ -7221,9 +7229,10 @@ export function createAgentController(
       if (active && context.isIdle() && runtimes.get(runtime.label) === runtime)
         try {
           const result = readResult(runtime.mailboxPath, requestId);
+          clearResultReadFailure(runtime, requestId);
           if (result) void deliverResult(runtime, context, result, signal);
         } catch (error) {
-          options.reportWatcherError(context, error);
+          reportResultReadFailure(runtime, requestId, error);
         }
     };
     const stop = observeMailbox(
@@ -7377,6 +7386,16 @@ export function createAgentController(
           thinking: presentation.thinking ?? match.listed.thinking ?? null,
           agentDefinition: match.agentDefinition,
         };
+        const persistedResultRequestId =
+          runtime.activeRequestId ?? runtime.completedRequestId;
+        if (persistedResultRequestId) {
+          const failureKey = resultReadFailureKey(
+            runtime,
+            persistedResultRequestId,
+          );
+          runtime.resultReadFailureKey = failureKey;
+          runtime.resultReadError = resultReadFailures.get(failureKey);
+        }
         if (match.presence.kind === "live") {
           validateIdentity(runtime, state, match.presence.agent);
           await validateIntegration(runtime, context, { signal });
@@ -7392,7 +7411,15 @@ export function createAgentController(
         }
         if (!runtime.completedRequestId) continue;
         const requestId = runtime.completedRequestId;
-        const result = readResult(runtime.mailboxPath, requestId);
+        let result: ResultRecord | undefined;
+        try {
+          result = readResult(runtime.mailboxPath, requestId);
+          clearResultReadFailure(runtime, requestId);
+        } catch (error) {
+          incomplete = true;
+          reportResultReadFailure(runtime, requestId, error);
+          continue;
+        }
         if (result) {
           await deliverResult(runtime, context, result, signal);
           if (signal.aborted) return;
@@ -7546,6 +7573,45 @@ export function createAgentController(
   const clearCleanupError = (runtime: Runtime, prefix?: string) => {
     if (prefix === undefined || runtime.cleanupError?.startsWith(prefix))
       runtime.cleanupError = undefined;
+  };
+  const resultReadFailureKey = (runtime: Runtime, requestId: string) =>
+    `${runtime.workspaceId}\0${runtime.label}\0${runtime.runId}\0${runtime.ownerSessionId}\0${requestId}`;
+  const reportResultReadFailure = (
+    runtime: Runtime,
+    requestId: string,
+    error: unknown,
+  ) => {
+    const message = `Result read failed for ${requestId}; retrying: ${String(error)}`;
+    const key = resultReadFailureKey(runtime, requestId);
+    if (resultReadFailures.get(key) === message) return;
+    resultReadFailures.set(key, message);
+    runtime.resultReadFailureKey = key;
+    runtime.resultReadError = message;
+    options.onChanged();
+  };
+  const clearResultReadFailure = (runtime: Runtime, requestId: string) => {
+    const key = resultReadFailureKey(runtime, requestId);
+    if (!resultReadFailures.delete(key)) return;
+    if (runtime.resultReadFailureKey === key) {
+      runtime.resultReadFailureKey = undefined;
+      runtime.resultReadError = undefined;
+    }
+    options.onChanged();
+  };
+  const retireResultReadFailures = (runtime: Runtime) => {
+    let retired = false;
+    for (const requestId of [
+      runtime.activeRequestId,
+      runtime.completedRequestId,
+    ]) {
+      if (!requestId) continue;
+      retired =
+        resultReadFailures.delete(resultReadFailureKey(runtime, requestId)) ||
+        retired;
+    }
+    runtime.resultReadFailureKey = undefined;
+    runtime.resultReadError = undefined;
+    if (retired) options.onChanged();
   };
   const cancelAskRetries = (runtime: Runtime) => {
     const prefix = `${runtime.mailboxPath}:`;
@@ -8297,9 +8363,10 @@ export function createAgentController(
       try {
         result = readResult(runtime.mailboxPath, runtime.completedRequestId);
       } catch (error) {
-        options.reportWatcherError(context, error);
+        reportResultReadFailure(runtime, runtime.completedRequestId, error);
         continue;
       }
+      clearResultReadFailure(runtime, runtime.completedRequestId);
       if (!result) continue;
       if (
         !hasDeliveredResult(entries, resultIdentity(runtime, result.requestId))
@@ -8329,6 +8396,7 @@ export function createAgentController(
       if (requestId) {
         try {
           const result = readResult(runtime.mailboxPath, requestId);
+          clearResultReadFailure(runtime, requestId);
           if (
             result &&
             (await deliverResult(
@@ -8342,7 +8410,7 @@ export function createAgentController(
           )
             submitted++;
         } catch (error) {
-          options.reportWatcherError(context, error);
+          reportResultReadFailure(runtime, requestId, error);
         }
       }
       if (phase === "settle")
@@ -12444,6 +12512,7 @@ export function createAgentController(
       submittedOwnerMessages.clear();
       resultDeliveryEvidence.clear();
       resultDeliverySemanticRefs.clear();
+      resultReadFailures.clear();
       runtimes.clear();
     },
     setRuntime(runtime: Runtime) {
