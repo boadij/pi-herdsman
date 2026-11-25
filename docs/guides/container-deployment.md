@@ -119,9 +119,9 @@ pi remove npm:pi-web-access
 The bundled researcher explicitly requests `npm:pi-web-access` even after
 `pi remove`. To opt out of that request, use a
 [researcher definition overlay](agent-definitions.md#researcher) that removes
-`npm:pi-web-access` from `extensions`. If the selected model requires ordinary
-extension discovery, also remove the ordinary installation as shown above so
-Pi does not discover it through that path.
+`npm:pi-web-access` from `extensions`. If the effective definition enables
+ordinary extension discovery, also remove the ordinary installation as shown
+above so Pi does not discover it through that path.
 
 Install or restore the ordinary Pi package, or update it when desired:
 

@@ -766,6 +766,7 @@ function projectLifecycle(options: {
   rejectAtPublication?: boolean;
   launch?: (options: any) => never;
   switchBranchOnTabCreate?: boolean;
+  inheritedModel?: { provider: string; id: string };
 }) {
   const repoKey = realFs.realpathSync(process.cwd());
   const managerCheckout = repoKey;
@@ -886,6 +887,12 @@ function projectLifecycle(options: {
           `lead-${id.slice(0, 8)}`,
           "--env",
           `PI_CODING_AGENT_DIR=${getAgentDir()}`,
+          ...(options.inheritedModel
+            ? [
+                "--env",
+                `PI_HERDSMAN_EXPECTED_STARTUP_MODEL=${JSON.stringify({ ...options.inheritedModel, requireCatalog: true })}`,
+              ]
+            : []),
           "--no-focus",
         ]);
         return {
@@ -968,6 +975,14 @@ function projectLifecycle(options: {
   } as any);
   const ctx = fakeContext() as any;
   ctx.cwd = managerCheckout;
+  if (options.inheritedModel) {
+    const model = options.inheritedModel;
+    ctx.model = model;
+    ctx.modelRegistry = {
+      find: (provider: string, id: string) =>
+        provider === model.provider && id === model.id ? model : undefined,
+    };
+  }
   ctx.sessionManager.getSessionId = () => manager.piSessionId;
   return {
     branch,
@@ -1000,12 +1015,23 @@ function projectLifecycle(options: {
 }
 
 test("fresh delegation launches in the profile-aware worktree tab", async () => {
+  const model = { provider: "extension/provider", id: "model" };
   const lifecycle = projectLifecycle({
+    inheritedModel: model,
     launch: (options) => {
       assert.equal(options.workspaceId, lifecycle.workspaceId);
       assert.equal(options.cwd, lifecycle.worktreePath);
       assert.equal(options.tabId, "lead-tab");
       assert.equal(options.paneId, "lead-pane");
+      assert.equal(options.agentArgs.includes("--no-extensions"), true);
+      assert.equal(
+        options.agentArgs[options.agentArgs.indexOf("--provider") + 1],
+        model.provider,
+      );
+      assert.equal(
+        options.agentArgs[options.agentArgs.indexOf("--model") + 1],
+        `${model.provider}/${model.id}`,
+      );
       assert.deepEqual(options.agentArgs.slice(-2), [
         "--session-id",
         lifecycle.published?.id,
@@ -1786,7 +1812,6 @@ test("resume preserves queued manager message when controlled recovery fails", a
   const ctx = fakeContext() as any;
   ctx.cwd = repoKey;
   ctx.modelRegistry = {
-    getRegisteredProviderIds: () => ["mistral-native"],
     find: () => undefined,
   };
   let launchedArgs: string[] | undefined;
@@ -2045,7 +2070,7 @@ test("resume preserves queued manager message when controlled recovery fails", a
   ]);
   assert.ok(launchedArgs);
   assert.equal(launchedArgs!.includes("--model"), false);
-  assert.equal(launchedArgs!.includes("--no-extensions"), false);
+  assert.equal(launchedArgs!.includes("--no-extensions"), true);
   assert.deepEqual(launchedArgs!.slice(-2), ["--session-id", id]);
   assert.equal(result.details.status, "recovery_unverified");
   assert.equal(result.details.message_queued, true);

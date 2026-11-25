@@ -292,9 +292,11 @@ effective `agent_definitions` roster and visible agent records.
 
 When Agent model overrides are enabled, the result also includes
 `agent_models`: entries with the exact `model` ID and its supported `thinking`
-levels. Only currently available, permitted models are listed. An eligible
-delegator receives an advisory catalog when overrides first become available
-in its session. Disabling overrides hides the catalog; re-enabling them
+levels. The catalog lists permitted choices available to the controller; it
+does not guarantee that each model is available under every child's
+[extension policy](agent-definition-schema.md#fields).
+An eligible delegator receives an advisory catalog when overrides first become
+available in its session. Disabling overrides hides the catalog; re-enabling them
 restores the same snapshot even if settings or Pi scope have changed. Use
 `list_agents` for current choices. Launch checks remain authoritative.
 

@@ -8455,6 +8455,8 @@ test("trusted same-cwd project assignment launches with native approval", async 
   registerExtension!(pi.pi as never);
   const context = fakeContext(pi.entries) as any;
   context.cwd = project;
+  const model = { provider: "extension/provider", id: "custom" };
+  context.model = model;
   try {
     await pi.events.get("session_start")![0](undefined, context);
     const result = await agentTool(pi, "delegate").execute(
@@ -8472,7 +8474,20 @@ test("trusted same-cwd project assignment launches with native approval", async 
       true,
       JSON.stringify({ result: result.details, entries: pi.entries }),
     );
-    assert.ok(startArgs[0]?.includes("--approve"));
+    const args = startArgs[0]!;
+    assert.ok(args.includes("--approve"));
+    assert.equal(args[args.indexOf("--provider") + 1], model.provider);
+    assert.equal(
+      args[args.indexOf("--model") + 1],
+      `${model.provider}/${model.id}`,
+    );
+    assert.ok(
+      pi.calls.some((args) =>
+        args.includes(
+          `PI_HERDSMAN_EXPECTED_STARTUP_MODEL=${JSON.stringify({ ...model, requireCatalog: false })}`,
+        ),
+      ),
+    );
     const tool = pi.tools.find((candidate) => candidate.name === "steer_agent");
     const rendered = tool.renderCall(
       { agent: result.details.agent, message: "Continue." },
@@ -8600,7 +8615,9 @@ test("task model overrides enforce live policy through physical launch", async (
     getAvailable: () => available,
     getAll: () => available,
     hasConfiguredAuth: () => true,
-    getRegisteredProviderIds: () => [selected.provider],
+    getRegisteredProviderIds: () => [selected.provider, pinned.provider],
+    find: (provider: string, id: string) =>
+      available.find((model) => model.provider === provider && model.id === id),
   };
   context.scopedModels = [{ model: pinned }];
   const delegate = (overrides: Record<string, string>) =>
@@ -8711,7 +8728,7 @@ test("task model overrides enforce live policy through physical launch", async (
     updateConfig("allowedAgentModels", [selectedToken]);
     realFs.writeFileSync(
       join(project, ".pi", "agents", "model-override.md"),
-      "---\nname: model-override\nmodel: SECOND/PINNED\n---\nproject",
+      '---\nname: model-override\nmodel: SECOND/PINNED\nnoExtensions: true\nextensions: ["builtin:codemode"]\n---\nproject',
     );
     disableDuringStartup = true;
     const thinkingRevoked = await delegate({ thinking: "high" });
@@ -8720,7 +8737,7 @@ test("task model overrides enforce live policy through physical launch", async (
       tabCreateArgs
         .at(-1)
         ?.includes(
-          `PI_HERDSMAN_EXPECTED_STARTUP_MODEL=${JSON.stringify([pinned.provider, pinned.id, "high"])}`,
+          `PI_HERDSMAN_EXPECTED_STARTUP_MODEL=${JSON.stringify({ provider: pinned.provider, id: pinned.id, requireCatalog: true, thinking: "high" })}`,
         ),
     );
     assert.equal(startArgs.length, 0);
@@ -8739,11 +8756,12 @@ test("task model overrides enforce live policy through physical launch", async (
       tabCreateArgs
         .at(-1)
         ?.includes(
-          `PI_HERDSMAN_EXPECTED_STARTUP_MODEL=${JSON.stringify([selected.provider, selected.id])}`,
+          `PI_HERDSMAN_EXPECTED_STARTUP_MODEL=${JSON.stringify({ ...selected, requireCatalog: true })}`,
         ),
     );
     assert.equal(args.includes("--thinking"), false);
-    assert.equal(args.includes("--no-extensions"), false);
+    assert.equal(args.includes("--no-extensions"), true);
+    assert.equal(args.includes("builtin:codemode"), true);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     startup.stopMailboxConsumer();
@@ -11671,69 +11689,84 @@ test("cross-directory continuation does not inherit parent project trust", async
   assert.equal(reused.details.agent, label);
 });
 
-test("session continuation keeps explicit definition execution overrides", async () => {
-  setLeadEnvironment();
-  nativeSessions.clear();
-  const definition = `continue-override-${randomUUID().slice(0, 8)}`;
-  const label = `${definition}-agent`;
-  const definitionPath = join(PI_AGENTS_DIR, `${definition}.md`);
-  const sourceId = randomUUID();
-  const sourcePath = join(
-    tmpdir(),
-    `session-continue-override-${sourceId}.jsonl`,
-  );
-  realFs.writeFileSync(
-    definitionPath,
-    `---\nname: ${definition}\nmodel: explicit/provider\nthinking: low\n---\ncontinue\n`,
-  );
-  realFs.writeFileSync(sourcePath, "{}", "utf8");
-  nativeSessions.set(sourceId, {
-    id: sourceId,
-    path: sourcePath,
-    cwd: "/tmp",
-    entries: [
-      {
-        type: "custom",
-        customType: "pi-herdsman-agent-definition",
-        data: { sessionId: sourceId, definition, label },
-      },
-    ],
-  });
-  const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
-  const pi = fakePi({ exec: startup.exec });
-  registerExtension!(pi.pi as never);
-  await pi.events.get("session_start")![0](undefined, fakeContext());
-  const context = fakeContext([
-    ownershipResult(sourceId, LEAD_SESSION_ID, {
-      path: sourcePath,
-      label,
-      definition,
-    }),
-  ]) as any;
-  context.model = { provider: "controller-provider", id: "controller-model" };
-  context.thinkingLevel = "high";
-  try {
-    const result = await agentTool(pi, "continue").execute(
-      "id",
-      { session: sourcePath, task: "continue" },
-      undefined,
-      undefined,
-      context,
-    );
-    assert.equal(result.details.ok, true, JSON.stringify(result.details));
-    const start = pi.calls.find(
-      (args) => args[0] === "agent" && args[1] === "start",
-    )!;
-    assert.equal(start[start.indexOf("--model") + 1], "explicit/provider");
-    assert.equal(start[start.indexOf("--thinking") + 1], "low");
-  } finally {
-    pi.events.get("session_shutdown")?.[0]();
+for (const model of ["  explicit/provider:low  ", " \t "]) {
+  test(`session continuation handles configured selector ${JSON.stringify(model)}`, async () => {
+    setLeadEnvironment();
     nativeSessions.clear();
-    resetAgentMailbox(startup.mailbox);
-    realFs.rmSync(definitionPath, { force: true });
-    realFs.rmSync(sourcePath, { force: true });
-  }
-});
+    const definition = `continue-override-${randomUUID().slice(0, 8)}`;
+    const label = `${definition}-agent`;
+    const definitionPath = join(PI_AGENTS_DIR, `${definition}.md`);
+    const sourceId = randomUUID();
+    const sourcePath = join(
+      tmpdir(),
+      `session-continue-override-${sourceId}.jsonl`,
+    );
+    realFs.writeFileSync(
+      definitionPath,
+      `---\nname: ${definition}\nmodel: ${JSON.stringify(model)}\nthinking: low\n---\ncontinue\n`,
+    );
+    realFs.writeFileSync(sourcePath, "{}", "utf8");
+    nativeSessions.set(sourceId, {
+      id: sourceId,
+      path: sourcePath,
+      cwd: "/tmp",
+      entries: [
+        {
+          type: "custom",
+          customType: "pi-herdsman-agent-definition",
+          data: { sessionId: sourceId, definition, label },
+        },
+        {
+          type: "model_change",
+          provider: "saved-provider",
+          modelId: "saved-model",
+        },
+      ],
+    });
+    const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+    const pi = fakePi({ exec: startup.exec });
+    registerExtension!(pi.pi as never);
+    await pi.events.get("session_start")![0](undefined, fakeContext());
+    const context = fakeContext([
+      ownershipResult(sourceId, LEAD_SESSION_ID, {
+        path: sourcePath,
+        label,
+        definition,
+      }),
+    ]) as any;
+    context.model = { provider: "controller-provider", id: "controller-model" };
+    context.thinkingLevel = "high";
+    try {
+      const result = await agentTool(pi, "continue").execute(
+        "id",
+        { session: sourcePath, task: "continue" },
+        undefined,
+        undefined,
+        context,
+      );
+      assert.equal(result.details.ok, true, JSON.stringify(result.details));
+      const start = pi.calls.find(
+        (args) => args[0] === "agent" && args[1] === "start",
+      )!;
+      if (model.trim())
+        assert.equal(start[start.indexOf("--model") + 1], model);
+      else assert.equal(start.includes("--model"), false);
+      assert.equal(
+        pi.calls.some((args) =>
+          args.includes("PI_HERDSMAN_RESTORE_MODEL=saved-session"),
+        ),
+        !model.trim(),
+      );
+      assert.equal(start[start.indexOf("--thinking") + 1], "low");
+    } finally {
+      pi.events.get("session_shutdown")?.[0]();
+      nativeSessions.clear();
+      resetAgentMailbox(startup.mailbox);
+      realFs.rmSync(definitionPath, { force: true });
+      realFs.rmSync(sourcePath, { force: true });
+    }
+  });
+}
 
 test("session continuation rejects label overrides and occupied inherited labels", async () => {
   setLeadEnvironment();
