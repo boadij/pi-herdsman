@@ -189,7 +189,8 @@ mutate that assignment.
 
 ### `implementer`
 
-Focused source-edit agent for an explicitly approved implementation.
+Focused source-edit agent for an explicitly approved implementation, including
+focused checks and reusable verification evidence.
 
 ### `researcher`
 
@@ -219,13 +220,16 @@ allowlist is not an operating-system sandbox.
 
 ### `reviewer`
 
-Independent read-only internal team reviewer. Findings inform the delegator's
-decisions, not user or supervisor approval.
+Independent read-only internal team reviewer. Assesses correctness and the
+adequacy of validation evidence without repeating established investigations.
+Findings inform the delegator's decisions, not user or supervisor approval.
 
 ### `ship`
 
 Executes reviewed Git commits and pushes and GitHub pull request and release
-operations. Hosting operations require an already authenticated GitHub CLI
+operations. Reuses applicable technical acceptance evidence while independently
+verifying delivery prerequisites and exact outgoing material. Hosting operations
+require an already authenticated GitHub CLI
 (`gh`); other hosting interfaces are not supported. Commit, push, PR creation,
 merge, release publication, and updates to specified release fields each
 require separate explicit authorization. The Agent uses native protections and verifies
@@ -234,9 +238,9 @@ credentials. Repository-specific shipping and release policy remains local.
 
 ### `validator`
 
-Verification-only execution of focused tests, checks, and isolated smoke
-scenarios for existing changes. It reports observed results without authoring
-fixes or reviewing design. Like `implementer` and `generalist`, it offers both
+Verification-only execution of outstanding tests, checks, and isolated smoke
+scenarios for existing changes. It distinguishes reused evidence from newly
+observed results without authoring fixes or reviewing design. Like `implementer` and `generalist`, it offers both
 Pi's `bash` and Windows-only `powershell` tools; shell execution is not a
 read-only sandbox.
 
@@ -246,11 +250,14 @@ Fast read-only codebase reconnaissance.
 
 ### `generalist`
 
-General-purpose scoped execution agent.
+General-purpose scoped execution agent for tightly coupled investigation,
+decisions, implementation, and verification.
 
 The bundled definitions are portable defaults, not required workflow stages.
-Project definitions are for repository-specific policy; global definitions are
-for user-specific final policy.
+Select Agents for remaining work and forward relevant completed results. Repeat
+work only when the evidence is insufficient or no longer applicable, or when
+independent verification is required. Project definitions are for repository-specific
+policy; global definitions are for user-specific final policy.
 
 ### Write useful descriptions
 
