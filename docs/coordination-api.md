@@ -103,10 +103,18 @@ Ordinary Leads and Managers communicate upward through
 [Supervisor tools](reference/supervisor.md).
 
 ```text
-message_supervisor
+message_manager
+message_chief
 ```
 
-Managed Leads use nonblocking `message_supervisor` for timely questions,
+Assigned Leads and Leads supervised by a verified Manager use
+`message_manager`; an ordinary Lead without an eligible Manager uses
+`message_chief` only when Chief is its verified direct supervisor. Managers
+use `message_chief`. The current turn exposes only the tool for the verified
+relationship; stale calls fail instead of being redirected. Chief and Leads
+without a verified supervisor have no upward messaging tool.
+
+Managed Leads use nonblocking `message_manager` for timely questions,
 clarifications, or warnings needed before the automatic completed-result
 handoff. Continue independently safe work while a reply is pending. Defer only
 steps that genuinely require the response; when no actionable work remains,
@@ -120,10 +128,9 @@ checkout absence also retires the assignment. Failed or ambiguous inventory
 preserves it. A retired assignment cannot be resumed, but new work may reuse
 its remaining branch.
 
-An assigned project Lead uses `message_supervisor` for timely Manager
-coordination; an ordinary Lead in a verified project worktree group routes to
-its active Manager, otherwise to Chief when verified. A Manager uses the tool
-to contact Chief. An assigned Lead never falls back to Chief.
+An assigned project Lead uses `message_manager` for timely Manager
+coordination; it remains available across Manager turnover and never falls
+back to Chief. An ordinary Lead contacts only its verified direct supervisor.
 
 ## Same-role peers
 

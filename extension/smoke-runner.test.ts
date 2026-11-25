@@ -3604,9 +3604,9 @@ test("failed Agent retirement requires absent process, pane, registration, and m
   );
 });
 
-test("manager-handoff faux Lead only calls offered message_supervisor tool", () => {
+test("manager-handoff faux Lead only calls offered message_manager tool", () => {
   const tool = {
-    name: "message_supervisor",
+    name: "message_manager",
     description: "Send a message to the verified supervisor.",
     parameters: {
       type: "object",
@@ -3627,7 +3627,7 @@ test("manager-handoff faux Lead only calls offered message_supervisor tool", () 
   const prompt = {
     role: "user" as const,
     content:
-      "Call message_supervisor exactly once with this exact text: MANAGER_HANDOFF_READY. Then end the turn.",
+      "Call message_manager exactly once with this exact text: MANAGER_HANDOFF_READY. Then end the turn.",
     timestamp: 2,
   };
   const availableMessages = [system([tool]), prompt];
@@ -3638,7 +3638,7 @@ test("manager-handoff faux Lead only calls offered message_supervisor tool", () 
   assert.equal(available.content[0]?.type, "toolCall");
   assert.equal(
     available.content[0]?.type === "toolCall" && firstToolCall(available).name,
-    "message_supervisor",
+    "message_manager",
   );
 
   const unavailableMessages = [system(), prompt];
@@ -3703,7 +3703,7 @@ test("Manager assignment diagnostics are bounded and reject a mismatched branch 
   const call = {
     type: "toolCall",
     id: "private-id",
-    name: "message_supervisor",
+    name: "message_manager",
     arguments: { message: "MANAGER_HANDOFF_READY" },
   };
   const assistant = {
@@ -3716,7 +3716,7 @@ test("Manager assignment diagnostics are bounded and reject a mismatched branch 
     type: "message",
     message: {
       role: "toolResult",
-      toolName: "message_supervisor",
+      toolName: "message_manager",
       toolCallId: "private-id",
       isError,
       content: "SECRET",
@@ -3876,7 +3876,7 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
         content: [
           {
             type: "toolCall",
-            name: "message_supervisor",
+            name: "message_manager",
             id: "PRIVATE_CALL_ID",
             arguments: {
               message: "MANAGER_HANDOFF_READY",
@@ -3890,7 +3890,7 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
       type: "message",
       message: {
         role: "toolResult",
-        toolName: "message_supervisor",
+        toolName: "message_manager",
         toolCallId: "PRIVATE_CALL_ID",
         isError: true,
         details: {
@@ -3942,7 +3942,7 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
       assert.ok(smoke && typeof smoke === "object");
       assert.ok("stage" in smoke && "lastProgress" in smoke);
       assert.equal(error.code, "SMOKE_SUPERVISOR_FAILED");
-      assert.equal(error.message, "message_supervisor failed");
+      assert.equal(error.message, "message_manager failed");
       assert.equal(smoke.stage, "manager-handoff-assignment");
       assert.deepEqual(smoke.lastProgress, failedProgress);
       const artifact = sanitizedFailureEvidence(
@@ -4234,7 +4234,7 @@ test("manager readiness correlates one active-branch call with its following res
       content: [
         {
           type: "toolCall",
-          name: "message_supervisor",
+          name: "message_manager",
           id: "FOREIGN_CALL_ID",
           arguments: {
             message: "MANAGER_HANDOFF_READY",
@@ -4245,7 +4245,7 @@ test("manager readiness correlates one active-branch call with its following res
     });
     source.appendMessage({
       role: "toolResult",
-      toolName: "message_supervisor",
+      toolName: "message_manager",
       toolCallId: "FOREIGN_CALL_ID",
       isError: false,
       content: [{ type: "text", text: "PRIVATE_SUCCESS_BODY" }],
@@ -4258,7 +4258,7 @@ test("manager readiness correlates one active-branch call with its following res
       content: [
         {
           type: "toolCall",
-          name: "message_supervisor",
+          name: "message_manager",
           id: "OLD_BRANCH_CALL_ID",
           arguments: { message: "OLDER_BRANCH_READINESS" },
         },
@@ -4266,7 +4266,7 @@ test("manager readiness correlates one active-branch call with its following res
     });
     source.appendMessage({
       role: "toolResult",
-      toolName: "message_supervisor",
+      toolName: "message_manager",
       toolCallId: "OLD_BRANCH_CALL_ID",
       isError: false,
       content: [],
@@ -4286,7 +4286,7 @@ test("manager readiness correlates one active-branch call with its following res
       content: [
         {
           type: "toolCall",
-          name: "message_supervisor",
+          name: "message_manager",
           id: "LATEST_CALL_ID",
           arguments: {
             message: "MANAGER_HANDOFF_READY",
@@ -4297,7 +4297,7 @@ test("manager readiness correlates one active-branch call with its following res
     });
     fork.appendMessage({
       role: "toolResult",
-      toolName: "message_supervisor",
+      toolName: "message_manager",
       toolCallId: "LATEST_CALL_ID",
       isError: true,
       details: {
@@ -4355,7 +4355,7 @@ test("manager readiness rejects preceding, duplicate, and ambiguous tool evidenc
     content: [
       {
         type: "toolCall" as const,
-        name: "message_supervisor",
+        name: "message_manager",
         id,
         arguments: { message: "MANAGER_HANDOFF_READY" },
       },
@@ -4363,7 +4363,7 @@ test("manager readiness rejects preceding, duplicate, and ambiguous tool evidenc
   });
   const result = (id: string) => ({
     role: "toolResult" as const,
-    toolName: "message_supervisor",
+    toolName: "message_manager",
     toolCallId: id,
     isError: false,
   });
@@ -4401,7 +4401,7 @@ test("manager readiness rejects preceding, duplicate, and ambiguous tool evidenc
         content: [
           {
             type: "toolCall",
-            name: "message_supervisor",
+            name: "message_manager",
             id: "CALL_ID",
             arguments: { message: "different message" },
           },
@@ -8241,7 +8241,7 @@ test("cleanup closes and verifies the owned parent through Herdr contracts", asy
 test("manager-recovery uses nonblocking messages only when information cannot wait for the automatic result", () => {
   const marker = "MANAGER_RECOVERY_CONTEXT_test";
   const leadPrompt = managerRecoveryPostRecoveryPrompt();
-  assert.match(leadPrompt, /message_supervisor/);
+  assert.match(leadPrompt, /message_manager/);
   assert.match(
     leadPrompt,
     /must reach the Manager before your normal result boundary/i,
@@ -8344,7 +8344,7 @@ test("manager-recovery seeds continuity only in the Lead conversation, then reca
   const recallPrompt = managerRecoveryPostRecoveryPrompt();
   assert.doesNotMatch(recallPrompt, new RegExp(marker));
   assert.match(recallPrompt, /recall the exact context marker/i);
-  assert.match(recallPrompt, /send it now with message_supervisor/i);
+  assert.match(recallPrompt, /send it now with message_manager/i);
   assert.match(recallPrompt, /automatic result handoff/i);
   assert.match(recallPrompt, /do not send it early/i);
 });
@@ -9712,7 +9712,7 @@ test("smoke branch cleanup treats only a proven absent local branch as already c
   );
 });
 
-test("Manager recovery READY requires a successful message_supervisor tool result", () => {
+test("Manager recovery READY requires a successful message_manager tool result", () => {
   const ready = "MANAGER_RECOVERY_READY";
   const promptOnly = JSON.stringify({
     type: "message",
@@ -9726,7 +9726,7 @@ test("Manager recovery READY requires a successful message_supervisor tool resul
         {
           type: "toolCall",
           id: "ready-call",
-          name: "message_supervisor",
+          name: "message_manager",
           arguments: { message: ready },
         },
       ],
@@ -9737,7 +9737,7 @@ test("Manager recovery READY requires a successful message_supervisor tool resul
       type: "message",
       message: {
         role: "toolResult",
-        toolName: "message_supervisor",
+        toolName: "message_manager",
         toolCallId: "ready-call",
         isError,
         content: "Message sent to supervisor.",

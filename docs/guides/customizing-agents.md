@@ -178,7 +178,8 @@ by default. Manager owns project supervision and assignment boundaries; the
 Lead owns technical decisions and execution orchestration.
 Herdsman automatically hands off the normal assignment response, deferring it
 until delegated Agent work settles. See [Project orchestration](project-orchestration.md)
-for the automatic result and `message_supervisor` coordination contract.
+for the automatic result and role-specific `message_manager` / `message_chief`
+coordination contract.
 Managed Leads use it to contact their assigned Manager. Other roles follow
 verified direct-supervisor routing; see
 [Supervisor tools](../reference/supervisor.md).

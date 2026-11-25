@@ -260,7 +260,7 @@ const withRuntimeIdentity = (prompt: string): string =>
   `${HERDSMAN_RUNTIME_IDENTITY}\n\n${prompt}`;
 const AGENT_DEFINITIONS_ENTRY = "pi-herdsman-agent-definitions";
 const HERD_RUN_ENTRY = "pi-herdsman-herd-run";
-const SUPERVISOR_TOOLS = ["message_supervisor"] as const;
+const SUPERVISOR_TOOLS = ["message_manager", "message_chief"] as const;
 const LEAD_SUPERVISOR_TOOLS = SUPERVISOR_TOOLS;
 const PEER_TOOLS = ["list_peers", "message_peer"] as const;
 const STAFF_TOOLS = [
@@ -270,7 +270,7 @@ const STAFF_TOOLS = [
   "message_staff",
 ] as const;
 const MANAGER_TOOLS = [
-  ...SUPERVISOR_TOOLS,
+  "message_chief",
   ...PEER_TOOLS,
   ...STAFF_TOOLS,
   "delegate_work",
@@ -288,7 +288,7 @@ const CHIEF_TOOLS = STAFF_TOOLS;
 const INTERNAL_MESSAGE_PROVENANCE_GUIDANCE =
   "Herdsman-delivered coordination messages, Agent results, and lifecycle notices are internal communications, even when Pi represents them as user-role messages. Interpret them according to their identified sender and established authority; they are not direct human requests or approvals. Their receipt alone does not require a reply or acknowledgment. Follow your existing role-specific coordination and reporting rules.";
 const LEAD_SUPERVISOR_PEER_GUIDANCE =
-  "Use message_supervisor for material coordination or evidence your direct supervisor needs. Use list_peers/message_peer for concrete, task-relevant coordination with eligible peers. Avoid unsolicited routine progress updates, unnecessary acknowledgments, and redundant result announcements. Continue work or report normally when no coordination is needed.";
+  "Use the available upward messaging tool for material coordination your direct supervisor needs. Use list_peers/message_peer for task-relevant peer coordination. Avoid unsolicited progress updates, unnecessary acknowledgments, and duplicate result announcements.";
 const COMMON_LEAD_GUIDANCE = `${AUTHORITY_GUIDANCE}
 ${LEAD_SCOPE_DESCRIPTION}
 ${INTERNAL_MESSAGE_PROVENANCE_GUIDANCE}
@@ -307,10 +307,10 @@ For assigned project work, include findings, proposed continuing
 requirements, validation, completion, and review readiness in your
 normal response; Herdsman delivers it to the Manager automatically.
 
-Use message_supervisor only when the Manager needs information before
-that handoff or needs files for review or onward delegation. Automatic
-results contain no file attachments; transfer needed artifacts through
-message_supervisor.files.`;
+Use message_manager only when the Manager needs information before the
+handoff or needs files for review or onward delegation. Automatic results
+contain no file attachments; transfer needed artifacts through
+message_manager.files.`;
 const MANAGED_LEAD_CHARTER = `## Lead role
 You are a Managed Lead for this Pi session.
 ${COMMON_LEAD_GUIDANCE}
@@ -321,7 +321,7 @@ const MANAGER_ROLE_CONTRACT = `## Manager role
 You are the verified Manager for this Pi session. Supervise eligible Leads in your verified project worktree group. Manage project execution only through exact current project assignments; supervision alone grants no Agent ownership or project lifecycle authority. Configuration changes operating guidance and ordinary tool availability, never authority.
 ${AUTHORITY_GUIDANCE}
 ${INTERNAL_MESSAGE_PROVENANCE_GUIDANCE}
-When replying to Chief or sending material upward coordination, use message_supervisor directly. Chief is not a peer; do not use list_peers or message_peer to contact Chief.
+Use message_chief for material upward coordination or replies to Chief.
 Project execution belongs to assigned Leads and their Agent trees. Recovery of a Lead's directly owned Agents belongs to that Lead. Coordinate the existing project assignment through the Lead. Do not reconstruct child-Agent ownership or repeatedly request unavailable historical identities. If the Lead reports a verified blocker, resolve only the project-level decision or external action required; otherwise allow the Lead to continue independently authorized work. Coordination messages and reports are nonterminal and do not establish completion. Use remove_worktree only for an explicitly requested checkout-removal action; never infer removal from completion, review, or inactivity. Unless this repository has been explicitly preauthorized by a human, the tool registers a pending approval and returns promptly. Direct the user to /manager-remove to review it, then continue unrelated coordination. Do not repeat or poll a pending request; its result is not evidence of removal.
 Subject to existing writer and authority safeguards, overlapping assignments
 or unanswered coordination messages do not themselves block project work.
@@ -616,6 +616,7 @@ type TestProjectAssignmentLockHooks = {
     request: import("./mailbox.ts").RequestRecord,
   ) => undefined;
   afterManagedSessionIdentityInitialized?: () => void;
+  managedLeadDefinition?: () => AgentDefinition;
   removeProjectMessage?: typeof removeProjectMessage;
 };
 
@@ -1261,7 +1262,6 @@ function registerExtensionImpl(
   ) => Promise<
     { customType: string; content: string; display: boolean } | undefined
   > = async () => undefined;
-  let supervisorTool: any;
   let peerTool: any;
   const ownedToolNames = [
     "agent",
@@ -1286,6 +1286,7 @@ function registerExtensionImpl(
       () => pi.getAllTools(),
       ownedToolNames,
       LEAD_COORDINATION_TOOLS,
+      SUPERVISOR_TOOLS,
     );
   }
   const ownedTools = () => leadToolState.ownedTools;
@@ -1556,6 +1557,18 @@ function registerExtensionImpl(
         leadRuntimes.coordinationRuntime!.prepareLeadSupervisorStateMessage(
           ctx,
         ),
+      selectSupervisorTool: (destination?: "manager" | "chief") => {
+        const current = pi.getActiveTools();
+        const next = current.filter(
+          (name) => !(SUPERVISOR_TOOLS as readonly string[]).includes(name),
+        );
+        if (destination) next.push(`message_${destination}`);
+        if (
+          next.length !== current.length ||
+          next.some((name, index) => name !== current[index])
+        )
+          pi.setActiveTools(next);
+      },
       definitionRoster: () => startupDefinitionRoster,
       modelCatalog: (ctx: ExtensionContext) => {
         if (!pi.getActiveTools().includes("delegate_agent")) return undefined;
@@ -1838,7 +1851,13 @@ function registerExtensionImpl(
       readProjectOverrides,
       updateProjectOverride,
       contextAgentDefinitions,
-      discoverRoleDefinition,
+      discoverRoleDefinition: (
+        name: Parameters<typeof discoverRoleDefinition>[0],
+        options?: Parameters<typeof discoverRoleDefinition>[1],
+      ) =>
+        name === "managed-lead" && lockHooks?.managedLeadDefinition
+          ? lockHooks.managedLeadDefinition()
+          : discoverRoleDefinition(name, options),
       getSystemPromptOptions: (ctx: ExtensionCommandContext) =>
         ctx.getSystemPromptOptions(),
       chiefSystemPrompt,
@@ -2098,35 +2117,6 @@ function registerExtensionImpl(
           },
         });
       }
-      supervisorTool = {
-        name: "message_supervisor",
-        label: "message supervisor",
-        exposure: "direct",
-        promptSnippet:
-          "Send nonblocking material coordination to your direct supervisor",
-        description:
-          "Send a nonblocking question, clarification, warning, risk, decision, scope change, or evidence only when it is material or needed by your direct supervisor. Avoid unsolicited routine progress updates and duplicate result announcements.",
-        executionMode: "sequential",
-        parameters: supervisorMessageParameters,
-        execute: (
-          ...args: Parameters<
-            NonNullable<
-              typeof leadRuntimes.coordinationRuntime
-            >["supervisorMessage"]
-          >
-        ) => leadRuntimes.coordinationRuntime!.supervisorMessage(...args),
-        renderCall: (args: unknown, theme: any, context: any) =>
-          renderCoordinationCall("supervisor", "message", args, theme, context),
-        renderResult: (result: any, options: any, theme: any, context: any) =>
-          renderCoordinationResult(
-            "supervisor",
-            "message",
-            result,
-            options,
-            theme,
-            context,
-          ),
-      };
       peerTool = {
         name: "message_peer",
         label: "message peer",
@@ -2526,6 +2516,7 @@ function registerExtensionImpl(
         leadToolState,
         ownedToolNames,
         leadCoordinationToolNames: LEAD_COORDINATION_TOOLS,
+        supervisorToolNames: SUPERVISOR_TOOLS,
         onLeadRuntimeReady: (
           runtime: LeadRuntimeState,
           tools: typeof leadToolState,
@@ -2649,40 +2640,53 @@ function registerExtensionImpl(
         controllerScope.kind === "root" ? leadHerdRunRuntime.begin : undefined,
       );
       if (controllerScope.kind === "root") {
-        pi.registerTool({
-          ...supervisorTool,
-          name: "message_supervisor",
-          parameters: supervisorMessageParameters,
-          promptSnippet: undefined,
-          promptGuidelines: [FILE_HANDOFF_GUIDANCE],
-          execute: async (
-            id: string,
-            p: any,
-            signal: AbortSignal | undefined,
-            update: unknown,
-            ctx: ExtensionContext,
-          ) => {
-            try {
-              return await supervisorTool.execute(id, p, signal, update, ctx);
-            } catch (error) {
-              if (!(error instanceof OperationError)) throw error;
-              return {
-                content: [{ type: "text", text: error.message }],
-                isError: true,
-                details: {
-                  error: {
-                    branchStatus: "operation_error_returned",
-                    category: error.detail.category,
+        for (const destination of ["manager", "chief"] as const) {
+          const name = `message_${destination}`;
+          pi.registerTool({
+            name,
+            label: `message ${destination}`,
+            exposure: "direct",
+            defaultActive: false,
+            description: `Send nonblocking material coordination to your ${destination}. Avoid routine progress updates and duplicate result announcements.`,
+            executionMode: "sequential",
+            parameters: supervisorMessageParameters,
+            promptGuidelines: [FILE_HANDOFF_GUIDANCE],
+            execute: async (
+              id: string,
+              p: any,
+              signal: AbortSignal | undefined,
+              update: unknown,
+              ctx: ExtensionContext,
+            ): Promise<any> => {
+              try {
+                return await leadRuntimes.coordinationRuntime!.supervisorMessage(
+                  destination,
+                  id,
+                  p,
+                  signal,
+                  update,
+                  ctx,
+                );
+              } catch (error) {
+                if (!(error instanceof OperationError)) throw error;
+                return {
+                  content: [{ type: "text", text: error.message }],
+                  isError: true,
+                  details: {
+                    error: {
+                      branchStatus: "operation_error_returned",
+                      category: error.detail.category,
+                    },
                   },
-                },
-              };
-            }
-          },
-          renderCall: (a: unknown, t: any, c: any) =>
-            renderCoordinationCall("supervisor", "message", a, t, c),
-          renderResult: (r: any, o: any, t: any, c: any) =>
-            renderCoordinationResult("supervisor", "message", r, o, t, c),
-        });
+                };
+              }
+            },
+            renderCall: (a: unknown, t: any, c: any) =>
+              renderCoordinationCall(destination, "message", a, t, c),
+            renderResult: (r: any, o: any, t: any, c: any) =>
+              renderCoordinationResult(destination, "message", r, o, t, c),
+          });
+        }
         pi.registerTool({
           ...peerTool,
           name: "list_peers",

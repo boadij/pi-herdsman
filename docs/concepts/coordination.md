@@ -56,7 +56,8 @@ supervision of an ordinary Lead permits bounded discovery and communication,
 including live inspection, persisted transcript access when available, and
 cooperative steering through authorized messages. It does not grant project
 execution control, Agent ownership, or automatic project-result delivery. The
-Lead may reply explicitly with `message_supervisor`. Supervision does not
+Lead may reply explicitly with `message_manager` or `message_chief`, according
+to its verified direct supervisor. Supervision does not
 grant Agent ownership: Manager and Chief can own only Agents they directly start
 from their own exact Pi session, when their effective `agents` profile permits
 it.
@@ -190,7 +191,7 @@ for the Manager role. If managed Agent work is active, the herd run owns that
 handoff until it settles, and the settled response should summarize outcome,
 validation, and important unresolved points. Routine information that can wait
 should go through the automatic result; timely questions, clarifications, or
-warnings may use nonblocking `message_supervisor`. This is ordinary
+warnings may use the available recipient-specific upward tool. This is ordinary
 coordination, not assignment state; there is no deduplication between a
 message and a later result.
 Project assignments end on successful Herdr worktree removal or verified Git
@@ -229,14 +230,14 @@ live in [Staff tools](../reference/staff.md).
 
 Coordination crosses one authority edge at a time:
 
-| Direction | Interface                                                     | Boundary                                            |
-| --------- | ------------------------------------------------------------- | --------------------------------------------------- |
-| Up        | `message_supervisor` / automatic results                      | Assigned Lead -> Manager                            |
-| Down      | `message_staff` / project operations                          | Manager -> assigned Lead                            |
-| Up        | `message_supervisor`                                          | Ordinary Lead -> Manager or Chief; Manager -> Chief |
-| Down      | `message_staff`                                               | Manager -> ordinary Lead (cooperative steering)     |
-| Sideways  | `message_peer`                                                | Lead <-> Lead or Manager <-> Manager                |
-| Ownership | Agent controls / `notify_owner`, `await_owner`, `reply_agent` | owner <-> directly owned Agent                      |
+| Direction | Interface                                                     | Boundary                                                     |
+| --------- | ------------------------------------------------------------- | ------------------------------------------------------------ |
+| Up        | `message_manager` / automatic results                         | Assigned Lead -> Manager                                     |
+| Down      | `message_staff` / project operations                          | Manager -> assigned Lead                                     |
+| Up        | `message_manager` / `message_chief`                           | Ordinary Lead -> verified Manager or Chief; Manager -> Chief |
+| Down      | `message_staff`                                               | Manager -> ordinary Lead (cooperative steering)              |
+| Sideways  | `message_peer`                                                | Lead <-> Lead or Manager <-> Manager                         |
+| Ownership | Agent controls / `notify_owner`, `await_owner`, `reply_agent` | owner <-> directly owned Agent                               |
 
 ### Coordination does not imply dependency
 
@@ -280,8 +281,8 @@ pending for a later drain. Each communication keeps its own identity, authority
 checks, and delivery receipt: a shared model request does not combine receipts,
 accept work, or complete an assignment.
 
-Leads use nonblocking `message_supervisor` for timely coordination with their
-effective supervisor; Manager uses nonblocking `message_staff` for requests,
+Leads use nonblocking `message_manager` or `message_chief` for timely
+coordination with their effective supervisor; Manager uses nonblocking `message_staff` for requests,
 clarifications, instructions, or steering. Routine information that can wait
 belongs in the automatic result. Legitimate messages and later results are not
 deduplicated. Manager has direct-report and project tools; Chief has

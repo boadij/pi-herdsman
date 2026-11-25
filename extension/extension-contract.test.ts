@@ -42,6 +42,7 @@ import {
   removeProjectMessage,
   removeChiefMessage,
   readChiefMessage,
+  readProjectAssignment,
   listProjectMessageHeaders,
   readProjectMessage,
   retireProjectAssignment,
@@ -394,7 +395,8 @@ const REGISTERED_ROLE_TOOLS = [
   "inspect_agent",
   "read_agent_transcript",
   "read_evidence",
-  "message_supervisor",
+  "message_chief",
+  "message_manager",
   "list_peers",
   "message_peer",
   "list_staff",
@@ -459,7 +461,13 @@ const SEMANTIC_TOOL_CASES = [
     ["agent"],
   ],
   [
-    "message_supervisor",
+    "message_chief",
+    { message: "progress" },
+    { message: "progress", question: "x" },
+    ["message"],
+  ],
+  [
+    "message_manager",
     { message: "progress" },
     { message: "progress", question: "x" },
     ["message"],
@@ -647,7 +655,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     ["delegate_work", ["task", "branch", "base"]],
     ["resume_work", ["branch", "message"]],
     ["remove_worktree", ["branch"]],
-    ["message_supervisor", ["message"]],
+    ["message_manager", ["message"]],
   ] as const;
   for (const [name, fields] of portableStrings) {
     const properties = tools.get(name)!.parameters.properties;
@@ -669,7 +677,8 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     stop_agent: "stop agent",
     inspect_agent: "inspect agent",
     read_agent_transcript: "read agent transcript",
-    message_supervisor: "message supervisor",
+    message_chief: "message chief",
+    message_manager: "message manager",
     list_peers: "list peers",
     message_peer: "message peer",
     list_staff: "list staff",
@@ -1126,7 +1135,6 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
       "reply_agent",
       "steer_agent",
       "read_agent_transcript",
-      "message_supervisor",
       "list_peers",
       "message_peer",
     ].sort(),
@@ -3413,14 +3421,14 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
     {
       message: {
         role: "assistant",
-        content: [{ type: "toolCall", name: "message_supervisor" }],
+        content: [{ type: "toolCall", name: "message_manager" }],
       },
     },
   ]) as any;
   try {
     await pi.events.get("session_start")![0](undefined, context);
     const tool = pi.tools.find(
-      (candidate) => candidate.name === "message_supervisor",
+      (candidate) => candidate.name === "message_manager",
     );
     assert.ok(tool);
     const result = await tool.execute(
@@ -3432,12 +3440,15 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
     );
     assert.equal(result.isError, true);
     assert.deepEqual(result.content, [
-      { type: "text", text: "No active supervisor is available" },
+      {
+        type: "text",
+        text: "Supervisor relationship changed; retry with the current tool",
+      },
     ]);
     assert.deepEqual(result.details, {
       error: {
         branchStatus: "operation_error_returned",
-        category: "target_not_found",
+        category: "invalid_request",
       },
     });
   } finally {
@@ -4607,6 +4618,14 @@ test("Lead empty allowlist hides fresh delegation and the Agent roster", async (
       systemPromptOptions: { sections: {}, contextFiles: [] },
     };
     await invokeBeforeAgentStart(pi, event, context);
+    assert.deepEqual(
+      pi.pi
+        .getActiveTools()
+        .filter(
+          (name) => name === "message_manager" || name === "message_chief",
+        ),
+      [],
+    );
     const snapshot = event.systemPromptOptions.sections.agent_definitions;
     assert.deepEqual(
       JSON.parse(
@@ -4953,11 +4972,7 @@ test("replaced Lead strategy keeps its protected charter and coordination tools"
       charter,
       /a supervisor message does not transfer it to the child/,
     );
-    for (const name of [
-      "delegate_agent",
-      "continue_agent",
-      "message_supervisor",
-    ]) {
+    for (const name of ["delegate_agent", "continue_agent"]) {
       assert.ok(pi.pi.getActiveTools().includes(name), name);
       const tool = pi.tools.find((candidate) => candidate.name === name)!;
       assert.match(
@@ -4976,6 +4991,19 @@ test("replaced Lead strategy keeps its protected charter and coordination tools"
         /For dependent work, include relevant completed-Agent result refs/,
       );
     }
+    assert.ok(
+      pi.pi
+        .getActiveTools()
+        .filter((name) => ["message_manager", "message_chief"].includes(name))
+        .length <= 1,
+    );
+    const supervisorTool = pi.tools.find(
+      (candidate) => candidate.name === "message_manager",
+    )!;
+    assert.match(
+      supervisorTool.promptGuidelines.join(" "),
+      /unless the recipient already inherits the same evidence version as required evidence\. Forward changed versions explicitly\./,
+    );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     realFs.rmSync(overlay, { force: true });
@@ -5036,9 +5064,15 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
   const promptEvent = createPromptEvent();
   const prompt = await invokeBeforeAgentStart(pi, promptEvent, context);
   assert.equal(prompt, undefined);
+  assert.deepEqual(
+    pi.pi
+      .getActiveTools()
+      .filter((name) => name === "message_manager" || name === "message_chief"),
+    [],
+  );
   assert.match(
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
-    /Use message_supervisor for material coordination or evidence your direct supervisor needs\./,
+    /Use the available upward messaging tool for material coordination your direct supervisor needs\./,
   );
   const ordinaryCharter =
     promptEvent.systemPromptOptions.sections.pi_herdsman_role;
@@ -5064,7 +5098,7 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
   );
   assert.doesNotMatch(
     ordinaryCharter,
-    /Use message_supervisor only when the Manager needs information before/,
+    /Use message_manager only when the Manager needs information before/,
   );
   assertProtectedHandoff(ordinaryCharter);
   assert.match(
@@ -5075,16 +5109,13 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
     /list_peers\/message_peer/,
   );
-  assert.match(ordinaryCharter, /Avoid unsolicited routine progress updates/);
+  assert.match(ordinaryCharter, /Avoid unsolicited progress updates/);
   assert.match(ordinaryCharter, /unnecessary acknowledgments/);
   const supervisorTool = pi.tools.find(
-    (tool) => tool.name === "message_supervisor",
+    (tool) => tool.name === "message_manager",
   );
   const peerTool = pi.tools.find((tool) => tool.name === "message_peer");
-  assert.match(
-    supervisorTool?.description ?? "",
-    /only when it is material or needed by your direct supervisor/,
-  );
+  assert.match(supervisorTool?.description ?? "", /to your manager/);
   assert.match(supervisorTool?.description ?? "", /routine progress updates/);
   assert.match(peerTool?.description ?? "", /task-relevant communication/);
   assert.match(peerTool?.description ?? "", /not routine broadcasts/);
@@ -5265,18 +5296,18 @@ test("managed Lead prompt keeps protected authority under a replacement overlay"
       /ProjectAssignment|fresh managed project execution/,
     );
     assert.match(charter, /unavailable or retired assignment state/);
-    assert.match(charter, /Avoid unsolicited routine progress updates/);
+    assert.match(charter, /Avoid unsolicited progress updates/);
     assert.match(
       charter,
       /include findings, proposed continuing\s+requirements, validation, completion, and review readiness in your\s+normal response/,
     );
     assert.match(
       charter,
-      /Use message_supervisor only when the Manager needs information before\s+that handoff or needs files/,
+      /Use message_manager only when the Manager needs information before the\s+handoff or needs files/,
     );
     assert.match(
       charter,
-      /transfer needed artifacts through\s+message_supervisor\.files/,
+      /transfer needed artifacts through\s+message_manager\.files/,
     );
     assert.doesNotMatch(
       charter,
@@ -5660,7 +5691,7 @@ test("managed Lead prompt keeps the managed charter with an assigned session", a
       charter,
       /assignment required evidence is automatically inherited/,
     );
-    assert.match(charter, /Avoid unsolicited routine progress updates/);
+    assert.match(charter, /Avoid unsolicited progress updates/);
 
     assert.doesNotMatch(charter, /You are an ordinary Lead/);
     assert.doesNotMatch(charter, /No active Herdsman role is verified/);
@@ -5714,7 +5745,7 @@ test("managed Lead prompt remains managed after its assignment is replaced", asy
       text: "replacement assignment retires the exact session",
     });
     const supervisorTool = pi.tools.find(
-      (candidate) => candidate.name === "message_supervisor",
+      (candidate) => candidate.name === "message_manager",
     );
     assert.ok(supervisorTool);
     const result = await supervisorTool.execute(
@@ -6023,9 +6054,17 @@ test("pending retirement survives branch switch in the exact assigned checkout",
     };
     await invokeBeforeAgentStart(pi, event, context);
     const prompt = event.systemPromptOptions.sections.pi_herdsman_role;
+    assert.deepEqual(
+      pi.pi
+        .getActiveTools()
+        .filter(
+          (name) => name === "message_manager" || name === "message_chief",
+        ),
+      [],
+    );
     assert.match(prompt, /You are a Managed Lead/);
     const supervisorTool = pi.tools.find(
-      (candidate) => candidate.name === "message_supervisor",
+      (candidate) => candidate.name === "message_manager",
     );
     assert.ok(supervisorTool);
     // Exercise the registered Manager staff tool while assignment A is current.
@@ -6204,7 +6243,7 @@ test("delegating agents receive their allowed roster and initialize their model 
   );
   assert.doesNotMatch(
     event.systemPromptOptions.sections.delegating_agent_role,
-    /message_supervisor/,
+    /message_manager/,
   );
   assert.match(
     event.systemPromptOptions.sections.agent_definitions,
@@ -6515,6 +6554,14 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
     };
     await invokeBeforeAgentStart(pi, event, context);
     const prompt = event.systemPromptOptions.sections.pi_herdsman_role;
+    assert.deepEqual(
+      pi.pi
+        .getActiveTools()
+        .filter(
+          (name) => name === "message_manager" || name === "message_chief",
+        ),
+      ["message_chief"],
+    );
     assertRuntimeIdentity(
       Object.values(event.systemPromptOptions.sections).join("\n"),
     );
@@ -6522,12 +6569,9 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
     assert.match(prompt, /verified Manager for this Pi session/);
     assert.match(
       prompt,
-      /When replying to Chief or sending material upward coordination, use message_supervisor directly/,
+      /Use message_chief for material upward coordination or replies to Chief\./,
     );
-    assert.match(
-      prompt,
-      /Chief is not a peer; do not use list_peers or message_peer to contact Chief/,
-    );
+    assert.match(prompt, /Use message_chief/);
     assert.match(
       prompt,
       /For a new objective requiring independent project-assignment ownership, use delegate_work when authorized/,
@@ -6577,9 +6621,8 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
       /Keep unaffected assignments progressing independently/,
     );
     assert.match(
-      pi.tools.find((tool) => tool.name === "message_supervisor")
-        ?.description ?? "",
-      /only when it is material or needed by your direct supervisor/,
+      pi.tools.find((tool) => tool.name === "message_chief")?.description ?? "",
+      /to your chief/,
     );
     assert.match(
       pi.tools.find((tool) => tool.name === "message_peer")?.description ?? "",
@@ -7511,7 +7554,7 @@ test("lead metadata failures do not escape the serialized queue", async (t) => {
     registerExtension!(pi.pi as never);
     const context = fakeContext() as any;
     await pi.events.get("session_start")![0](undefined, context);
-    assert.ok(pi.tools.some((tool) => tool.name === "message_supervisor"));
+    assert.ok(pi.tools.some((tool) => tool.name === "message_manager"));
     await pi.events.get("session_info_changed")![0]({ name: "retry" }, context);
     await t.waitFor(() => assert.equal(metadataCalls, 2));
     const errorCount = () =>
@@ -7536,7 +7579,7 @@ test("lead metadata failures do not escape the serialized queue", async (t) => {
   }
 });
 
-test("registered message_supervisor projects OperationError categories to tool results", async () => {
+test("registered message_manager projects OperationError categories to tool results", async () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
@@ -7544,7 +7587,7 @@ test("registered message_supervisor projects OperationError categories to tool r
   try {
     await pi.events.get("session_start")![0](undefined, context);
     const tool = pi.tools.find(
-      (candidate) => candidate.name === "message_supervisor",
+      (candidate) => candidate.name === "message_manager",
     );
     assert.ok(tool);
 
@@ -7567,14 +7610,14 @@ test("registered message_supervisor projects OperationError categories to tool r
     });
     assert.doesNotMatch(
       JSON.stringify(result.details),
-      /Message must|cause|message_supervisor/,
+      /Message must|cause|message_manager/,
     );
 
     const persistedResult = {
       type: "message",
       message: {
         role: "toolResult",
-        toolName: "message_supervisor",
+        toolName: "message_manager",
         toolCallId: "call-id",
         ...result,
       },
@@ -7602,7 +7645,7 @@ test("registered message_supervisor projects OperationError categories to tool r
           content: [
             {
               type: "toolCall",
-              name: "message_supervisor",
+              name: "message_manager",
               id: "call-id",
               arguments: { message: "MANAGER_HANDOFF_READY" },
             },
@@ -7658,7 +7701,7 @@ test("registered message_supervisor projects OperationError categories to tool r
         content: [
           {
             type: "toolCall",
-            name: "message_supervisor",
+            name: "message_manager",
             id: "call-id",
             arguments: { message: "MANAGER_HANDOFF_READY" },
           },
@@ -7669,7 +7712,7 @@ test("registered message_supervisor projects OperationError categories to tool r
       type: "message",
       message: {
         role: "toolResult",
-        toolName: "message_supervisor",
+        toolName: "message_manager",
         toolCallId: "call-id",
         isError: true,
         content: [{ type: "text", text: nonOperationError.message }],
@@ -7722,7 +7765,7 @@ test("registered message_supervisor projects OperationError categories to tool r
   }
 });
 
-test("registered message_supervisor publishes for a Lead initialized from its exact assignment", async () => {
+test("registered message_manager publishes for a Lead initialized from its exact assignment", async () => {
   setLeadEnvironment();
   const sessionId = randomUUID();
   const repoKey = `registered-managed-${randomUUID()}`;
@@ -7790,8 +7833,21 @@ test("registered message_supervisor publishes for a Lead initialized from its ex
       ),
       "session_start should establish Managed identity from the current assignment",
     );
+    await invokeBeforeAgentStart(
+      pi,
+      { systemPrompt: "base", systemPromptOptions: { sections: {} } },
+      context,
+    );
+    assert.deepEqual(
+      pi.pi
+        .getActiveTools()
+        .filter(
+          (name) => name === "message_manager" || name === "message_chief",
+        ),
+      ["message_manager"],
+    );
     const tool = pi.tools.find(
-      (candidate) => candidate.name === "message_supervisor",
+      (candidate) => candidate.name === "message_manager",
     );
     assert.ok(tool);
     const result = await tool.execute(
@@ -7817,6 +7873,119 @@ test("registered message_supervisor publishes for a Lead initialized from its ex
     for (const message of listProjectMessageHeaders(runtime, repoKey, branch))
       removeProjectMessage(runtime, repoKey, branch, message.id);
     removeProjectAssignment(runtime, repoKey, branch);
+    setLeadEnvironment();
+  }
+});
+
+test("Managed Lead definition-resolution failure with an exact assignment denies supervisor messaging", async () => {
+  setLeadEnvironment();
+  const cwd = realFs.mkdtempSync(join(tmpdir(), "managed-invalid-profile-"));
+  const sessionId = randomUUID();
+  const repoKey = `managed-invalid-${randomUUID()}`;
+  const branch = `managed-invalid-${randomUUID()}`;
+  process.env.HERDR_PANE_ID = "managed-invalid-profile-pane";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `managed-invalid-profile-${randomUUID()}.sock`,
+  );
+  const runtime = supervisionRuntime();
+  writeProjectAssignment(runtime, {
+    version: 2,
+    id: sessionId,
+    repoKey,
+    branch,
+    checkoutPath: cwd,
+    text: "managed invalid profile regression",
+  });
+  const pi = fakePi({
+    exec: (_command, args) =>
+      args[0] === "worktree" && args[1] === "list"
+        ? {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                source: {
+                  repo_key: repoKey,
+                  repo_name: repoKey,
+                  source_workspace_id: WORKSPACE,
+                },
+                worktrees: [
+                  {
+                    path: cwd,
+                    branch,
+                    is_linked_worktree: true,
+                    open_workspace_id: WORKSPACE,
+                  },
+                ],
+              },
+            }),
+            stderr: "",
+            code: 0,
+          }
+        : { stdout: "{}", stderr: "", code: 0 },
+  });
+  let managedDefinitionResolutionCalls = 0;
+  registerExtensionForTest!(pi.pi as never, {
+    managedLeadDefinition: () => {
+      managedDefinitionResolutionCalls++;
+      throw new Error("invalid trusted Managed Lead execution profile");
+    },
+  });
+  const context = fakeContext(pi.entries) as any;
+  context.cwd = cwd;
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => sessionId,
+  };
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.ok(
+      pi.entries.some(
+        (entry: any) =>
+          entry?.customType === "pi-herdsman-session-kind" &&
+          entry.data?.sessionId === sessionId &&
+          entry.data?.kind === "managed" &&
+          entry.data?.repoKey === repoKey &&
+          entry.data?.branch === branch,
+      ),
+      "session startup must establish the exact assigned Managed identity",
+    );
+    assert.deepEqual(
+      readProjectAssignment(runtime, repoKey, branch),
+      {
+        version: 2,
+        id: sessionId,
+        repoKey,
+        branch,
+        checkoutPath: cwd,
+        text: "managed invalid profile regression",
+      },
+      "the project assignment remains exact and valid while profile resolution fails",
+    );
+    await invokeBeforeAgentStart(
+      pi,
+      { systemPrompt: "base", systemPromptOptions: { sections: {} } },
+      context,
+    );
+    assert.ok(managedDefinitionResolutionCalls > 0);
+    assert.deepEqual(
+      pi.pi
+        .getActiveTools()
+        .filter(
+          (name) => name === "message_manager" || name === "message_chief",
+        ),
+      [],
+      "a valid assignment does not restore upward tools to invalid Managed Lead execution",
+    );
+    const blocked = await pi.events.get("tool_call")![0](
+      { toolName: "message_manager", input: { message: "must be rejected" } },
+      context,
+    );
+    assert.equal((blocked as any)?.block, true);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    removeProjectAssignment(runtime, repoKey, branch);
+    realFs.rmSync(cwd, { recursive: true, force: true });
     setLeadEnvironment();
   }
 });

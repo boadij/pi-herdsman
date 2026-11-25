@@ -831,7 +831,7 @@ export function assertNoFailedProjectDelegation(contents, branch) {
 export function assertNoFailedManagerHandoff(progress) {
   if (progress.supervisorResultState !== "error") return;
 
-  const error = new Error("message_supervisor failed");
+  const error = new Error("message_manager failed");
   error.code = "SMOKE_SUPERVISOR_FAILED";
   error.smoke = {
     stage: "manager-handoff-assignment",
@@ -979,7 +979,7 @@ export function supervisorMessageDiagnostics(path, expectedSessionId, text) {
           .filter(
             (block) =>
               block?.type === "toolCall" &&
-              block.name === "message_supervisor" &&
+              block.name === "message_manager" &&
               block.arguments?.message === text &&
               typeof block.id === "string",
           )
@@ -1016,7 +1016,7 @@ export function supervisorMessageDiagnostics(path, expectedSessionId, text) {
     : [];
   const matchingResult =
     correlatedResults.length === 1 &&
-    correlatedResults[0].message.toolName === "message_supervisor" &&
+    correlatedResults[0].message.toolName === "message_manager" &&
     correlatedResults[0].index > match.index
       ? correlatedResults[0].message
       : undefined;
@@ -1051,7 +1051,7 @@ export function supervisorMessageDiagnostics(path, expectedSessionId, text) {
         ? "abort_error"
         : /\bProcessLockOccupiedError\b/u.test(resultText)
           ? "lock_occupied"
-          : /\btool\s+["']?message_supervisor["']?\s+(?:was\s+)?not found\b|\bmessage_supervisor\b.{0,40}\b(?:not found|unavailable)\b/iu.test(
+          : /\btool\s+["']?message_manager["']?\s+(?:was\s+)?not found\b|\bmessage_manager\b.{0,40}\b(?:not found|unavailable)\b/iu.test(
                 resultText,
               )
             ? "dispatch_error"
@@ -1582,7 +1582,7 @@ export function hasSuccessfulSupervisorMessage(contents, text) {
       ? entry.message.content.filter(
           (block) =>
             block?.type === "toolCall" &&
-            block.name === "message_supervisor" &&
+            block.name === "message_manager" &&
             block.arguments?.message === text,
         )
       : [],
@@ -1592,7 +1592,7 @@ export function hasSuccessfulSupervisorMessage(contents, text) {
       (entry) =>
         entry.type === "message" &&
         entry.message?.role === "toolResult" &&
-        entry.message.toolName === "message_supervisor" &&
+        entry.message.toolName === "message_manager" &&
         entry.message.toolCallId === call.id &&
         !entry.message.isError,
     ),
@@ -1608,7 +1608,7 @@ export function supervisorMessageCallStatus(contents, text) {
       ? entry.message.content.filter(
           (block) =>
             block?.type === "toolCall" &&
-            block.name === "message_supervisor" &&
+            block.name === "message_manager" &&
             block.arguments?.message === text,
         )
       : [],
@@ -1619,7 +1619,7 @@ export function supervisorMessageCallStatus(contents, text) {
       (entry) =>
         entry.type === "message" &&
         entry.message?.role === "toolResult" &&
-        entry.message.toolName === "message_supervisor" &&
+        entry.message.toolName === "message_manager" &&
         entry.message.toolCallId === call.id,
     );
     if (result) return result.message.isError ? "error" : "success";
@@ -1637,7 +1637,7 @@ export function leadReadyCompleted(contents, text) {
           .filter(
             (block) =>
               block?.type === "toolCall" &&
-              block.name === "message_supervisor" &&
+              block.name === "message_manager" &&
               block.arguments?.message === text,
           )
           .map((block) => ({ id: block.id, index }))
@@ -1647,7 +1647,7 @@ export function leadReadyCompleted(contents, text) {
     (entry, index) =>
       entry.type === "message" &&
       entry.message?.role === "toolResult" &&
-      entry.message.toolName === "message_supervisor" &&
+      entry.message.toolName === "message_manager" &&
       !entry.message.isError &&
       calls.some(
         (call) => call.index < index && call.id === entry.message.toolCallId,
@@ -4081,7 +4081,7 @@ function continuationPrompt() {
 }
 
 export function managerRecoveryFreshPrompt(branch) {
-  return `Use delegate_work exactly once to start new project work. Set its \`task\` argument to the delegated task below and its \`branch\` argument to exactly ${branch}. Omit \`base\` and \`files\`.\n\nThe delegated task is:\n- do not modify any files;\n- immediately call message_supervisor with exactly MANAGER_RECOVERY_READY;\n- then end the turn and wait for further instruction.\n\nManager handshake: after delegate_work returns, end this turn immediately. Do not call any other tool, output any recovery marker, or send any message_staff. Wait until the exact MANAGER_RECOVERY_READY message from this Lead is delivered into your conversation; do not infer delivery from the delegate result, a Lead transcript, or other evidence. Only after that delivered message, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_READY and end the turn.`;
+  return `Use delegate_work exactly once to start new project work. Set its \`task\` argument to the delegated task below and its \`branch\` argument to exactly ${branch}. Omit \`base\` and \`files\`.\n\nThe delegated task is:\n- do not modify any files;\n- immediately call message_manager with exactly MANAGER_RECOVERY_READY;\n- then end the turn and wait for further instruction.\n\nManager handshake: after delegate_work returns, end this turn immediately. Do not call any other tool, output any recovery marker, or send any message_staff. Wait until the exact MANAGER_RECOVERY_READY message from this Lead is delivered into your conversation; do not infer delivery from the delegate result, a Lead transcript, or other evidence. Only after that delivered message, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_READY and end the turn.`;
 }
 
 export function terminalFailureEvidence(contents, branch, sessionId) {
@@ -5187,7 +5187,7 @@ async function runManagerHandoffSmoke(ctx) {
     "--timeout",
     "15000",
   ]);
-  const prompt = `Use delegate_work exactly once with branch ${branch} and task exactly "Do not modify files. Call message_supervisor with MANAGER_HANDOFF_READY, then end the turn."`;
+  const prompt = `Use delegate_work exactly once with branch ${branch} and task exactly "Do not modify files. Call message_manager with MANAGER_HANDOFF_READY, then end the turn."`;
   await submitPaneCommand(ctx, ctx.rootPaneId, prompt);
   const assignment = await waitForEvidence(
     ctx,
@@ -5511,7 +5511,7 @@ async function runManagerHandoffSmoke(ctx) {
       throw new Error("Assigned Lead workspace changed during Manager handoff");
   };
   await assertLeadContinuity();
-  const leadPrompt = `Call message_supervisor exactly once with this exact text: ${marker}. Then end the turn.`;
+  const leadPrompt = `Call message_manager exactly once with this exact text: ${marker}. Then end the turn.`;
   await nestedCommand(ctx, ["agent", "prompt", lead.pane_id, leadPrompt]);
   const messagesDir = join(dirname(assignmentPath), `${hash(branch)}.messages`);
   const retained = await waitForEvidence(
@@ -5978,7 +5978,7 @@ export function managerRecoveryRetiredResumePrompt(branch) {
 }
 
 export function managerRecoveryPostRecoveryPrompt() {
-  return "Recall the exact context marker you were instructed to remember before recovery using your prior conversation context. This information must reach the Manager before your normal result boundary, so send it now with message_supervisor. If information can wait until the normal result boundary, do not send it early; let the automatic result handoff carry it. Use exactly the recalled marker as the message and no other tool.";
+  return "Recall the exact context marker you were instructed to remember before recovery using your prior conversation context. This information must reach the Manager before your normal result boundary, so send it now with message_manager. If information can wait until the normal result boundary, do not send it early; let the automatic result handoff carry it. Use exactly the recalled marker as the message and no other tool.";
 }
 
 export function managerRecoveryLeadContextPrompt(marker) {
@@ -11162,7 +11162,7 @@ async function runSupervisorAgentSmoke(ctx) {
     "resume_work",
     "stop_lead",
     "remove_worktree",
-    "message_supervisor",
+    "message_manager",
     "list_peers",
     "message_peer",
   ])

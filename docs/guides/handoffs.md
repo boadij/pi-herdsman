@@ -42,7 +42,7 @@ source provenance, or assignment requirements. Root Lead delegation accepts
 `files` for the current handoff, without a retention parameter.
 Leads can forward findings directly for immediate correction; when findings
 should become continuing assignment requirements, send the relevant files or
-result references through `message_supervisor.files` for Manager evaluation.
+result references through `message_manager.files` for Manager evaluation.
 Ordinary delegation need not wait for that decision.
 
 On operations that support it, omitted or false `retain` leaves files as
@@ -113,8 +113,8 @@ their task and decisions; they are not expected to read every historical entry.
 Agent results preserve their existing semantic
 `result:` bindings. Historical references do not grant access by themselves,
 and internal snapshot paths are not exposed as evidence identities.
-Ordinary files supplied to `message_staff`, `message_supervisor`, or
-`message_peer` are delivered as complete supported UTF-8 text within the
+Ordinary files supplied to `message_staff`, `message_manager`,
+`message_chief`, or `message_peer` are delivered as complete supported UTF-8 text within the
 configured per-file and complete-message budgets; unsupported, changed, or
 non-fitting files reject the handoff instead of becoming path-only references.
 Other `files` operations retain their existing preparation behavior. In
@@ -144,7 +144,7 @@ Pi Herdsman has two text-file mechanisms with different purposes:
 - `files` supplies evidence to the coordination operations that accept it:
   `delegate_agent`, `continue_agent`, `steer_agent`, `interrupt_agent`,
   `reply_agent`, `delegate_work`, `message_staff`,
-  `message_supervisor`, `message_peer`, `notify_owner`, and `await_owner`.
+  `message_manager`, `message_chief`, `message_peer`, `notify_owner`, and `await_owner`.
 - whole-line body `@file` references put definition-owned text into the agent
   system prompt when a new agent generation is built.
 
@@ -236,7 +236,7 @@ markup frames evidence for the model and is not a security boundary.
 
 `files` is supported by `delegate_agent`, `continue_agent`, `steer_agent`,
 `interrupt_agent`, `reply_agent`, `delegate_work`, `message_staff`,
-`message_supervisor`, `message_peer`, `notify_owner`, and `await_owner`. For controller actions,
+`message_manager`, `message_chief`, `message_peer`, `notify_owner`, and `await_owner`. For controller actions,
 relative paths resolve from the calling controller's cwd; for `await_owner`, they
 resolve from the managed agent's cwd. Accepted ordinary filesystem paths retain
 canonical absolute-path names; semantic and canonical result refs retain the
@@ -253,7 +253,7 @@ is then exceeded, `delegate` with `definition` returns `invalid_request` without
 rolls back the exact startup attempt (`rollbackOccurred: true` when
 applicable).
 
-For ordinary coordination messages (`message_staff`, `message_supervisor`,
+For ordinary coordination messages (`message_staff`, `message_manager`, `message_chief`,
 and `message_peer`):
 
 - complete strict UTF-8 text is embedded only when the per-file
@@ -402,7 +402,7 @@ result reference is resolvable when the branch contains its direct Agent
 completion or an explicitly imported binding; already-supplied canonical result
 references may also be passed through. A Lead that needs to provide an artifact
 for review or onward delegation explicitly sends the evidence through
-`message_supervisor.files`.
+`message_manager.files`.
 
 A direct-agent completion that has a reusable persisted result exposes an exact
 ref such as `result:global-peer-fix#1`. Pass relevant direct-agent results

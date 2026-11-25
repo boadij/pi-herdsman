@@ -278,6 +278,7 @@ test("Managed supervisor messages never fall through when the active role is not
 
   await assert.rejects(
     runtime.supervisorMessage(
+      "chief",
       "message",
       { message: "must not route through Chief" },
       undefined,
@@ -295,6 +296,7 @@ test("supervisor message authority and transitions", async (t) => {
   for (const scenario of [
     "manager",
     "lead",
+    "recipient-changed",
     "manager-preparation",
     "chief-preparation",
     "role-preparation",
@@ -306,9 +308,13 @@ test("supervisor message authority and transitions", async (t) => {
       const chiefLeaseId = randomUUID();
       const sessionId = randomUUID();
       const chiefSessionId = randomUUID();
-      let role = scenario === "lead" ? "lead" : "manager";
+      let role =
+        scenario === "lead" || scenario === "recipient-changed"
+          ? "lead"
+          : "manager";
       let manager = { leaseId: managerLeaseId };
       let chief = { leaseId: chiefLeaseId, piSessionId: chiefSessionId };
+      let currentRecipient = chief;
       const prepared: any[] = [];
       const written: any[] = [];
       const context = fakeContext([
@@ -340,7 +346,18 @@ test("supervisor message authority and transitions", async (t) => {
               manager = { leaseId: randomUUID() };
               leadRuntime.managerLease.descriptor = manager;
             }
-            return chief;
+            if (scenario === "recipient-changed" && supervisorCalls === 2)
+              currentRecipient = {
+                leaseId: randomUUID(),
+                piSessionId: randomUUID(),
+              };
+            return currentRecipient;
+          },
+          workspaceId: () => "workspace",
+          resolveEffectiveSupervisor: async () => {
+            if (role === "manager") return { kind: "none" as const };
+            const resolvedChief = chief;
+            return { kind: "chief" as const, chief: resolvedChief };
           },
           currentManager: async () => manager,
           supervisionRuntime: () => ({}),
@@ -359,8 +376,10 @@ test("supervisor message authority and transitions", async (t) => {
               manager = { leaseId: randomUUID() };
               leadRuntime.managerLease.descriptor = manager;
             }
-            if (scenario === "chief-preparation")
+            if (scenario === "chief-preparation") {
               chief = { leaseId: randomUUID(), piSessionId: randomUUID() };
+              currentRecipient = chief;
+            }
             if (scenario === "role-preparation") role = "lead";
             return { inline: { bytes: 100000 }, mailbox: { bytes: 100000 } };
           },
@@ -395,16 +414,21 @@ test("supervisor message authority and transitions", async (t) => {
               null,
             )
           : runtime.supervisorMessage(
+              "chief",
               "message",
               { message: "hello" },
               undefined,
               undefined,
               context,
             );
-      if (scenario.includes("preparation") || scenario === "manager-queue") {
+      if (
+        scenario.includes("preparation") ||
+        scenario === "manager-queue" ||
+        scenario === "recipient-changed"
+      ) {
         await assert.rejects(
           operation,
-          /lease is no longer active|Supervisor authority is no longer active|Coordinator role changed/,
+          /lease is no longer active|Supervisor authority is no longer active|Coordinator role changed|Supervisor relationship changed/,
         );
         assert.equal(written.length, 0);
         return;
@@ -425,7 +449,7 @@ test("supervisor message authority and transitions", async (t) => {
         assert.equal(prepared[0].kind, written[0].kind);
         assert.equal(prepared[0].leaseId, written[0].leaseId);
         assert.ok("content" in result);
-        assert.match(result.content[0].text, /Message queued for supervisor/);
+        assert.match(result.content[0].text, /Message queued for chief/);
       }
     });
   }

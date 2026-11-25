@@ -2878,7 +2878,7 @@ test("coordination prose source mapping covers agent, chief, and staff actions",
       { action: "reply", agent: "researcher", message: "reply message" },
       "reply message",
     ],
-    ["supervisor", "message", { message: "chief message" }, "chief message"],
+    ["chief", "message", { message: "chief message" }, "chief message"],
     [
       "staff",
       "message",
@@ -2915,7 +2915,8 @@ test("coordination call titles use action-first natural targets", () => {
     ["staff", "stop", "stop lead"],
     ["peer", "list", "list peers"],
     ["peer", "message", "message peer"],
-    ["supervisor", "message", "message supervisor"],
+    ["manager", "message", "message manager"],
+    ["chief", "message", "message chief"],
   ] as const;
   for (const [tool, action, expected] of cases)
     assert.equal(
@@ -3310,7 +3311,7 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
   assert.match(expandedError, /message: \*\* FAILED \*\* `steering`/);
   const plainError = renderedText(
     renderCoordinationResult(
-      "supervisor",
+      "chief",
       "message",
       {
         content: [{ type: "text", text: "Chief lease is no longer active" }],
@@ -3324,7 +3325,7 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
   assert.match(plainError, /Chief lease is no longer active/);
   const plainStringError = renderedText(
     renderCoordinationResult(
-      "supervisor",
+      "chief",
       "message",
       { content: "Chief lease is no longer active", details: {} },
       {},
@@ -3370,13 +3371,13 @@ test("chief and staff coordination renderers share semantic status language", ()
   assert.equal(
     renderedText(
       renderCoordinationCall(
-        "supervisor",
+        "chief",
         "message",
         { action: "message", message: "TASK-84 is complete" },
         presentationTheme,
       ),
     ),
-    "message supervisor\n  TASK-84 is complete",
+    "message chief\n  TASK-84 is complete",
   );
   assert.equal(
     renderedText(
@@ -3422,7 +3423,7 @@ test("chief and staff coordination renderers share semantic status language", ()
 
   const chiefMessage = renderedText(
     renderCoordinationResult(
-      "supervisor",
+      "chief",
       "message",
       {
         details: {
@@ -6868,7 +6869,7 @@ test("Capability summaries preserve deterministic tool and skill policy output",
       [
         "wildcard exclusion matches explicit tools",
         {
-          tools: ["read", "bash", "message_supervisor"],
+          tools: ["read", "bash", "message_manager"],
           excludeTools: ["mess*", "b*"],
         },
         "read",

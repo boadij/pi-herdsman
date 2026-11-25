@@ -270,7 +270,7 @@ function call(name, arguments_) {
 
 export function managerHandoffSupervisorToolAvailable(messages) {
   return getCurrentTools(messages).some(
-    (tool) => tool.name === "message_supervisor",
+    (tool) => tool.name === "message_manager",
   );
 }
 
@@ -870,24 +870,24 @@ export function decide(model, context) {
   if (model === "manager-handoff-lead") {
     if (prompt.includes("MANAGER_HANDOFF_READY")) {
       if (
-        correlatedCall(messages, "message_supervisor")?.call.arguments
-          ?.message === "MANAGER_HANDOFF_READY"
+        correlatedCall(messages, "message_manager")?.call.arguments?.message ===
+        "MANAGER_HANDOFF_READY"
       )
         return fauxAssistantMessage("MANAGER_HANDOFF_READY");
       if (!managerHandoffSupervisorToolAvailable(messages))
         throw new Error(MANAGER_HANDOFF_SUPERVISOR_TOOL_NOT_OFFERED);
-      return call("message_supervisor", { message: "MANAGER_HANDOFF_READY" });
+      return call("message_manager", { message: "MANAGER_HANDOFF_READY" });
     }
     const marker = prompt.match(/MANAGER_HANDOFF_PENDING_[0-9a-f-]+/)?.[0];
     if (!marker) throw new Error("Unexpected manager-handoff-lead transcript");
     if (
-      correlatedCall(messages, "message_supervisor")?.call.arguments
-        ?.message === marker
+      correlatedCall(messages, "message_manager")?.call.arguments?.message ===
+      marker
     )
       return fauxAssistantMessage("MANAGER_HANDOFF_SENT");
     if (!managerHandoffSupervisorToolAvailable(messages))
       throw new Error(MANAGER_HANDOFF_SUPERVISOR_TOOL_NOT_OFFERED);
-    return call("message_supervisor", { message: marker });
+    return call("message_manager", { message: marker });
   }
   if (model === "manager-merge-lead") {
     const command =
@@ -1343,7 +1343,7 @@ export function decide(model, context) {
         );
       return call("delegate_work", {
         branch,
-        task: "PEER_E2E_LOCAL_TASK: read the forwarded spec and canonical result artifacts, then message_supervisor with PEER_E2E_LOCAL_RESULT.",
+        task: "PEER_E2E_LOCAL_TASK: read the forwarded spec and canonical result artifacts, then message_manager with PEER_E2E_LOCAL_RESULT.",
         files: refs,
       });
     }
@@ -1405,9 +1405,9 @@ export function decide(model, context) {
     const resultMarker = isBTask
       ? "PEER_E2E_LOCAL_RESULT"
       : "PEER_E2E_A_FORWARDED";
-    if (correlatedCall(messages, "message_supervisor"))
+    if (correlatedCall(messages, "message_manager"))
       return fauxAssistantMessage(resultMarker);
-    return call("message_supervisor", {
+    return call("message_manager", {
       message: `${resultMarker}: inspected forwarded files and result evidence.`,
     });
   }
@@ -1680,7 +1680,7 @@ export default function install(pi) {
           "runtime",
           "smoke-faux-attempts.jsonl",
         ),
-        `${JSON.stringify({ model: model.id, prompt: text(latestUser).match(/MANAGER_MERGE_[A-Z_]+/)?.[0] ?? "other", tools: tools.filter((name) => ["bash", "delegate_work", "integrate_branch", "message_staff", "message_supervisor"].includes(name)), priorCalls: context.messages.filter((message) => message.role === "toolResult" && ["bash", "message_staff", "message_supervisor", "integrate_branch"].includes(message.toolName)).map((message) => message.toolName) })}\n`,
+        `${JSON.stringify({ model: model.id, prompt: text(latestUser).match(/MANAGER_MERGE_[A-Z_]+/)?.[0] ?? "other", tools: tools.filter((name) => ["bash", "delegate_work", "integrate_branch", "message_staff", "message_manager"].includes(name)), priorCalls: context.messages.filter((message) => message.role === "toolResult" && ["bash", "message_staff", "message_manager", "integrate_branch"].includes(message.toolName)).map((message) => message.toolName) })}\n`,
       );
     }
     if (!recordedSessions.has(currentSessionId)) {
