@@ -33,6 +33,7 @@ import {
   sameDirectory,
   sameObservedSessionPath,
   resolveAssignmentCheckout,
+  requireHerdrPiIntegration,
 } from "../herdr.ts";
 import { readResult, unacknowledgedRequestExists } from "../mailbox.ts";
 import { claimSessionActivationLock } from "../lock.ts";
@@ -3929,6 +3930,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     };
     if (branchWorktrees[0]?.open_workspace_id)
       await assertUnoccupied(branchWorktrees[0].open_workspace_id);
+    const agentDir = resolve(getAgentDir());
+    if (operation.action === "delegate" && branchWorktrees.length === 0)
+      requireHerdrPiIntegration(agentDir);
     let assignment: ProjectAssignment;
     const evidenceScope =
       operation.action === "resume"
@@ -4360,6 +4364,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         if (!piAlreadyRunning) {
           await assertResumePlacement();
           await assertUnoccupied(workspaceId!);
+          requireHerdrPiIntegration(agentDir);
           const projectTrusted = ctx.isProjectTrusted();
           effectiveProjectTrusted = projectTrusted;
           if (operation.action === "resume") {
@@ -4459,7 +4464,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               "--label",
               label,
               "--env",
-              `PI_CODING_AGENT_DIR=${getAgentDir()}`,
+              `PI_CODING_AGENT_DIR=${agentDir}`,
               "--no-focus",
             ],
             { signal },
@@ -4507,6 +4512,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           )?.instanceId;
           leadStartupStartedAt = Date.now();
           await startHerdrAgentInPane(pi, ctx, {
+            agentDir,
             primaryWorkspaceId,
             workspaceId,
             tabId,

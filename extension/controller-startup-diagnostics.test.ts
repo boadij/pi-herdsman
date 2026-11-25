@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { join } from "node:path";
 import test from "node:test";
 import { performance } from "node:perf_hooks";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -6,6 +7,10 @@ import {
   AGENT_ID,
   DEFAULT_PI_SESSION_ID,
   LEAD_SESSION_ID,
+  MANAGED_AGENT_BOOTSTRAP_EVENT,
+  PI_AGENT_ROOT,
+  WORKSPACE,
+  agentMailboxPath,
   fakeContext,
   fakePi,
   isPaneClose,
@@ -81,6 +86,77 @@ function safeHerdrOperation(
     }[operation] ?? undefined
   );
 }
+
+test("missing Herdr integration rejects before launch preparation", async () => {
+  setLeadEnvironment();
+  const label = "missing-herdr-integration";
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  const record = join(mailbox, "bootstrap.json");
+  const evidence = '{"prior":"bootstrap evidence"}\n';
+  realFs.mkdirSync(mailbox, { recursive: true });
+  realFs.writeFileSync(record, evidence);
+  // A transient startup claim would still update the mailbox directory mtime.
+  realFs.utimesSync(mailbox, 1, 1);
+  const mailboxMtime = realFs.statSync(mailbox).mtimeMs;
+  const integration = join(PI_AGENT_ROOT, "extensions", "herdr-agent-state.ts");
+  const pi = fakePi();
+  let bootstrapPreparations = 0;
+  pi.pi.events.on(MANAGED_AGENT_BOOTSTRAP_EVENT, () => bootstrapPreparations++);
+  registerExtension!(pi.pi as never);
+  pi.entries.push(...startupRoleHistory());
+  const context = fakeContext(pi.entries);
+  await pi.events.get("session_start")![0](undefined, context);
+  const evidenceStoreEntries = () =>
+    ["evidence", "evidence-ref-reservations"].map((name) => {
+      const dir = join(PI_AGENT_ROOT, "pi-herdsman", name);
+      return realFs.existsSync(dir)
+        ? realFs.readdirSync(dir, { recursive: true }).sort()
+        : undefined;
+    });
+  const evidenceBefore = evidenceStoreEntries();
+  const integrationSource = realFs.readFileSync(integration);
+  realFs.unlinkSync(integration);
+  try {
+    const callsBefore = pi.calls.length;
+    const delegate = pi.tools.find((tool) => tool.name === "delegate_agent")!;
+    const result = await delegate.execute(
+      "id",
+      { definition: "agent", label, task: "test launch preflight" },
+      undefined,
+      undefined,
+      context,
+    );
+
+    const error = result.details.error;
+    assert.equal(error.category, "invalid_request");
+    assert.equal(error.operation, "preflight");
+    assert.ok(error.message.includes(integration));
+    assert.match(error.nextAction, /herdr integration install pi/);
+    assert.ok(error.nextAction.includes(PI_AGENT_ROOT));
+    assert.ok(error.message.includes(error.nextAction));
+    assert.equal(error.rollbackOccurred, false);
+    assert.equal(error.retryAttempted, false);
+    assert.equal(bootstrapPreparations, 0);
+    assert.equal(
+      pi.calls
+        .slice(callsBefore)
+        .some(([area, action]) =>
+          ["agent start", "pane split", "tab create"].includes(
+            `${area} ${action}`,
+          ),
+        ),
+      false,
+    );
+    assert.deepEqual(realFs.readdirSync(mailbox), ["bootstrap.json"]);
+    assert.equal(realFs.readFileSync(record, "utf8"), evidence);
+    assert.equal(realFs.statSync(mailbox).mtimeMs, mailboxMtime);
+    assert.deepEqual(evidenceStoreEntries(), evidenceBefore);
+  } finally {
+    realFs.writeFileSync(integration, integrationSource);
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
 
 for (const scenario of [
   "failed",
