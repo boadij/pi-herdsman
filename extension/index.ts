@@ -1818,7 +1818,6 @@ function registerExtensionImpl(
     };
     let leadCommandRuntime: any;
     const leadCommandHost = {
-      pi,
       reviewPendingRemoval,
       persistStopClosures: (
         ctx: ExtensionContext,

@@ -672,17 +672,6 @@ export function buildStatusRows(
   });
 }
 
-export function renderRunningOptions(rows: readonly StatusRow[]): string[] {
-  const definitionWidth = Math.max(
-    0,
-    ...rows.map((row) => visibleWidth(row.definition)),
-  );
-  return rows.map(
-    (row) =>
-      `${row.tree}${padVisible(row.definition, definitionWidth)}  ${row.agentLabel}  ${row.state}`,
-  );
-}
-
 export type StatusDisplayRow = Pick<
   StatusRow,
   "label" | "paneId" | "sessionId"
