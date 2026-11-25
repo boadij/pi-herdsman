@@ -54,6 +54,7 @@ schema is:
   "spawnPlacement": "subtree",
   "contextRetirement": true,
   "autoActivateManager": false,
+  "projectsDirectory": "~/Projects",
   "peerCommunicationEnabled": true,
   "peerFederationEnabled": true,
   "managerGitBootstrapWithoutConfirmation": false,
@@ -78,6 +79,7 @@ An absent file means these defaults:
 | `spawnPlacement`                         |          `subtree` | `tab`, `subtree`, `split`                                                     |
 | `contextRetirement`                      |               true | boolean                                                                       |
 | `autoActivateManager`                    |              false | boolean                                                                       |
+| `projectsDirectory`                      |       `~/Projects` | safe absolute or home-relative path; global-only                              |
 | `peerCommunicationEnabled`               |               true | boolean; global-only                                                          |
 | `peerFederationEnabled`                  |               true | boolean; global-only                                                          |
 | `managerGitBootstrapWithoutConfirmation` |              false | boolean; global-only, skips confirmation only for explicit Manager start      |
@@ -170,6 +172,13 @@ its Herdr primary workspace. Linked workspaces, unavailable eligibility
 evidence, or an existing Manager leave it as an ordinary Lead. The preference
 does not persist Manager role intent and changing it does not affect the current
 session.
+
+`projectsDirectory` sets the default local root for repositories the Chief
+clones from a remote. It defaults to `~/Projects` and cannot be overridden in
+project settings. Use a fully absolute path for the host platform or a path
+starting with `~/`. Other relative paths are not resolved against the Chief's
+working directory. An explicit `destination` specifies the clone path for that
+call instead, without changing the global setting.
 
 `managerGitBootstrapWithoutConfirmation` is a global-only preference, off by
 default. When enabled, it skips the confirmation for Git initialization only

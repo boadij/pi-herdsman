@@ -28,7 +28,8 @@ const {
 } = await import("./project.ts");
 const { readProjectAssignment, writeProjectAssignment } =
   await import("../supervision.ts");
-const { claimManagerLease } = await import("../supervision.ts");
+const { claimManagerLease, supervisionRuntime } =
+  await import("../supervision.ts");
 const { getAgentDir } = await import("@earendil-works/pi-coding-agent");
 const { herdrAgentAlias } = await import("../herdr.ts");
 
@@ -802,14 +803,15 @@ function projectLifecycle(options: {
   let checkoutBranch = branch;
   let worktreeCreates = 0;
   const supervision = {
+    ...supervisionRuntime(WORKSPACE),
     root: assignmentRoot,
     assignments,
-    managers: join(assignments, "managers"),
   };
   const managerLease = claimManagerLease(
     {
       build: HERDSMAN_BUILD,
       repoKey,
+      canonicalRepoKey: join(tmpdir(), "mock-manager-repo"),
       workspaceId: WORKSPACE,
       paneId: "manager-pane",
       tabId: "manager-tab",
@@ -1569,8 +1571,9 @@ test("resume revalidates checkout placement after async preparation", async () =
       tabId: "manager-tab",
       workspaceId: WORKSPACE,
       repoKey,
+      canonicalRepoKey: join(tmpdir(), "mock-manager-repo"),
     },
-    { managers: join(assignmentRoot, "managers") } as any,
+    { ...supervisionRuntime(WORKSPACE), root: assignmentRoot },
   );
   const manager = managerLease.descriptor;
   const assignment = {
@@ -1586,9 +1589,9 @@ test("resume revalidates checkout placement after async preparation", async () =
     assignment as any,
   );
   const supervision = {
+    ...supervisionRuntime(WORKSPACE),
     root: assignmentRoot,
     assignments: assignmentRoot,
-    managers: join(assignmentRoot, "managers"),
   };
   let writes = 0;
   let launches = 0;

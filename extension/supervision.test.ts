@@ -12,12 +12,12 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import support, { PI_AGENT_ROOT, realFs } from "./support.ts";
-import { acquireProcessLock } from "./lock.ts";
+import { acquireProcessLock, ProcessLockOccupiedError } from "./lock.ts";
 import { test } from "node:test";
 import { readPeerPolicy, updateConfig } from "./config.ts";
 const {
@@ -30,6 +30,10 @@ const {
   chiefLeaseIsHeld,
   claimChiefLease,
   claimManagerLease,
+  claimManagerStartupLock,
+  writeManagerRecoveryReference,
+  readManagerRecoveryReference,
+  removeManagerRecoveryReference,
   managerDescriptorPath,
   readManagerDescriptor,
   readManagerDescriptorStatus,
@@ -1485,6 +1489,26 @@ test("peer receiver authorization rejects a self-addressed record", async () => 
   );
   assert.deepEqual(sent, []);
   assert.deepEqual(listCoordinationMessagePaths(runtime, "lead-self"), []);
+});
+
+test("ordinary Lead coordination works when Manager account authority is unavailable", (t) => {
+  const account = os.userInfo();
+  const lookup = t.mock.method(os, "userInfo", () => ({
+    ...account,
+    homedir: "not-an-absolute-account-home",
+  }));
+  const runtime = supervisionRuntime(socket());
+  const value = state("lead");
+  writeLeadCoordinationState(runtime, value);
+  assert.deepEqual(readLeadCoordinationState(runtime, "lead"), value);
+  assert.equal(lookup.mock.callCount(), 0);
+
+  const repo = join(tmpdir(), "manager-repository");
+  const unavailable =
+    /Unable to verify the OS account home for Manager authority/;
+  assert.throws(() => readManagerDescriptorStatus(runtime, repo), unavailable);
+  assert.throws(() => claimManagerStartupLock(runtime, repo), unavailable);
+  assert.throws(() => listManagerDescriptors(runtime), unavailable);
 });
 
 test("lead coordination state is strict, private, bounded, and atomic", () => {
@@ -3185,7 +3209,227 @@ test("coordinator state and peer presence admit only Lead or Manager roles", () 
   }
 });
 
-test("Manager leases are exclusive per root and fail closed on stale descriptor generations", () => {
+test("Manager authority and startup serialize across local sockets; discovery stays socket scoped", () => {
+  const local = supervisionRuntime(socket());
+  const foreign = supervisionRuntime(socket());
+  const canonicalRepoKey = join(tmpdir(), id());
+  const otherRepoKey = join(tmpdir(), id());
+  const identity = {
+    build: BUILD,
+    piSessionId: id(),
+    piSessionFile: join(tmpdir(), "manager-session.jsonl"),
+    paneId: "same-pane",
+    tabId: "same-tab",
+    workspaceId: "same-workspace",
+    repoKey: "same-repo-key",
+    canonicalRepoKey,
+  };
+  const authorityRoot = join(
+    realFs.realpathSync.native(PI_AGENT_ROOT),
+    ".pi-herdsman",
+    "manager-authority-v1",
+  );
+  const key = createHash("sha256").update(canonicalRepoKey).digest("hex");
+  const path = join(authorityRoot, "managers", key + ".json");
+  assert.notEqual(local.root, foreign.root);
+  assert.equal(managerDescriptorPath(local, canonicalRepoKey), path);
+  assert.equal(managerDescriptorPath(foreign, canonicalRepoKey), path);
+  const startup = claimManagerStartupLock(local, canonicalRepoKey);
+  const lease = claimManagerLease(identity, local);
+  const otherStartup = claimManagerStartupLock(foreign, otherRepoKey);
+  const other = claimManagerLease(
+    { ...identity, canonicalRepoKey: otherRepoKey },
+    foreign,
+  );
+  const recovery = {
+    version: 1 as const,
+    canonicalRepoKey,
+    piSessionId: identity.piSessionId,
+    piSessionFile: identity.piSessionFile,
+  };
+  try {
+    assert.ok(statSync(path).isFile());
+    assert.ok(statSync(path + ".lock").isDirectory());
+    assert.ok(statSync(path + ".startup.lock").isDirectory());
+    assert.throws(
+      () => claimManagerLease(identity, foreign),
+      ProcessLockOccupiedError,
+    );
+    assert.throws(
+      () => claimManagerStartupLock(foreign, canonicalRepoKey),
+      ProcessLockOccupiedError,
+    );
+    assert.throws(
+      () => readManagerDescriptorStatus(foreign, canonicalRepoKey),
+      /active Manager on another Herdr socket/,
+    );
+    assert.deepEqual(listManagerDescriptors(local, true), [lease.descriptor]);
+    assert.deepEqual(listManagerDescriptors(foreign, true), [other.descriptor]);
+    writeManagerRecoveryReference(local, recovery);
+    assert.ok(statSync(join(local.managerRecovery, key + ".json")).isFile());
+    assert.deepEqual(
+      readManagerRecoveryReference(foreign, canonicalRepoKey),
+      recovery,
+    );
+  } finally {
+    removeManagerRecoveryReference(foreign, recovery);
+    other.release();
+    otherStartup.release();
+    lease.release();
+    startup.release();
+  }
+  assert.equal(
+    readManagerDescriptorStatus(foreign, canonicalRepoKey),
+    undefined,
+  );
+});
+
+test("Manager authority spans profiles and repository aliases, but discovery and recovery stay profile scoped", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "manager-profiles-"));
+  const env = ["PI_CODING_AGENT_DIR", "HOME", "USERPROFILE"] as const;
+  const before = env.map((key) => process.env[key]);
+  t.after(() => {
+    env.forEach((key, index) => {
+      const value = before[index];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    });
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const sharedSocket = socket();
+  const profile = (name: string) => {
+    const path = join(directory, name);
+    mkdirSync(path);
+    for (const key of env) process.env[key] = path;
+    return supervisionRuntime(sharedSocket);
+  };
+  const first = profile("first");
+  const second = profile("second");
+  const repository = (name: string) => {
+    const checkout = join(directory, name);
+    mkdirSync(checkout);
+    const git = spawnSync("git", ["init", "--quiet"], {
+      cwd: checkout,
+      encoding: "utf8",
+    });
+    assert.equal(git.status, 0, git.stderr);
+    return checkout;
+  };
+  const checkout = repository("repo");
+  const alias = join(directory, "repo-alias");
+  symlinkSync(
+    checkout,
+    alias,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  const { gitRepositoryScope } = await import("./herdr.ts");
+  const pi: Parameters<typeof gitRepositoryScope>[0] = {
+    async exec(command, args, options) {
+      const result = spawnSync(command, args, {
+        cwd: options?.cwd,
+        encoding: "utf8",
+      });
+      return {
+        stdout: result.stdout ?? "",
+        stderr: result.stderr ?? "",
+        code: result.status ?? -1,
+        killed: !!result.signal,
+        truncated: false,
+      };
+    },
+  };
+  const { canonicalRepoKey } = await gitRepositoryScope(pi, checkout);
+  const { canonicalRepoKey: aliasKey } = await gitRepositoryScope(pi, alias);
+  const { canonicalRepoKey: otherKey } = await gitRepositoryScope(
+    pi,
+    repository("other-repo"),
+  );
+  assert.equal(
+    canonicalRepoKey,
+    realFs.realpathSync.native(join(checkout, ".git")),
+  );
+  assert.equal(aliasKey, canonicalRepoKey);
+  const identity = {
+    build: BUILD,
+    canonicalRepoKey,
+    repoKey: canonicalRepoKey,
+    piSessionId: id(),
+    piSessionFile: join(directory, "first", "session.jsonl"),
+    workspaceId: "workspace",
+    paneId: "pane",
+    tabId: "tab",
+  };
+  assert.equal(
+    managerDescriptorPath(first, canonicalRepoKey),
+    managerDescriptorPath(second, aliasKey),
+  );
+  const startup = claimManagerStartupLock(first, canonicalRepoKey);
+  t.after(startup.release);
+  const lease = claimManagerLease(identity, first);
+  t.after(lease.release);
+  assert.throws(
+    () => claimManagerStartupLock(second, aliasKey),
+    ProcessLockOccupiedError,
+  );
+  assert.throws(
+    () =>
+      claimManagerLease({ ...identity, canonicalRepoKey: aliasKey }, second),
+    ProcessLockOccupiedError,
+  );
+  assert.throws(
+    () => readManagerDescriptorStatus(second, canonicalRepoKey),
+    /another Pi profile/,
+  );
+  assert.deepEqual(listManagerDescriptors(second, true), []);
+  const other = claimManagerLease(
+    { ...identity, canonicalRepoKey: otherKey },
+    second,
+  );
+  t.after(other.release);
+  const otherStartup = claimManagerStartupLock(second, otherKey);
+  t.after(otherStartup.release);
+  assert.deepEqual(listManagerDescriptors(first, true), [lease.descriptor]);
+  assert.deepEqual(listManagerDescriptors(second, true), [other.descriptor]);
+  const reference = {
+    version: 1 as const,
+    canonicalRepoKey,
+    piSessionId: identity.piSessionId,
+    piSessionFile: identity.piSessionFile,
+  };
+  writeManagerRecoveryReference(first, reference);
+  assert.equal(
+    readManagerRecoveryReference(second, canonicalRepoKey),
+    undefined,
+  );
+  assert.equal(removeManagerRecoveryReference(second, reference), false);
+  assert.deepEqual(
+    readManagerRecoveryReference(first, canonicalRepoKey),
+    reference,
+  );
+});
+
+test("Manager authority rejects a redirected account authority directory", (t) => {
+  const runtime = supervisionRuntime(socket());
+  const target = mkdtempSync(join(tmpdir(), "manager-authority-target-"));
+  const profile = mkdtempSync(join(tmpdir(), "manager-authority-link-"));
+  t.after(() => {
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(target, { recursive: true, force: true });
+  });
+  const link = join(profile, ".pi-herdsman");
+  symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+  const redirected = {
+    ...runtime,
+    managers: join(link, "manager-authority-v1", "managers"),
+  };
+  assert.throws(
+    () => claimManagerStartupLock(redirected, join(target, ".git")),
+    /Unsafe private Manager authority directory/,
+  );
+  assert.deepEqual(readdirSync(target), []);
+});
+
+test("Manager leases are exclusive per physical repository and fail closed on stale descriptor generations", () => {
   const runtime = supervisionRuntime(socket());
   const identity = {
     build: BUILD,
@@ -3195,15 +3439,23 @@ test("Manager leases are exclusive per root and fail closed on stale descriptor 
     tabId: "tab",
     workspaceId: "root",
     repoKey: "repo",
+    canonicalRepoKey: join(tmpdir(), "repo"),
   };
   const first = claimManagerLease(identity, runtime);
   const second = claimManagerLease(
-    { ...identity, workspaceId: "other" },
+    {
+      ...identity,
+      workspaceId: "other",
+      canonicalRepoKey: join(tmpdir(), "other"),
+    },
     runtime,
   );
   try {
     assert.throws(() =>
-      claimManagerLease({ ...identity, piSessionId: id() }, runtime),
+      claimManagerLease(
+        { ...identity, workspaceId: "third", piSessionId: id() },
+        runtime,
+      ),
     );
     assert.deepEqual(
       new Set(
@@ -3211,12 +3463,12 @@ test("Manager leases are exclusive per root and fail closed on stale descriptor 
       ),
       new Set(["root", "other"]),
     );
-    assert.deepEqual(readManagerDescriptor(runtime, "root"), first.descriptor);
-    assert.equal(first.descriptor.piSessionFile, identity.piSessionFile);
-    const path = join(
-      runtime.managers,
-      `${createHash("sha256").update("root").digest("hex")}.json`,
+    assert.deepEqual(
+      readManagerDescriptor(runtime, identity.canonicalRepoKey),
+      first.descriptor,
     );
+    assert.equal(first.descriptor.piSessionFile, identity.piSessionFile);
+    const path = managerDescriptorPath(runtime, identity.canonicalRepoKey);
     writeFileSync(
       path,
       JSON.stringify({
@@ -3225,7 +3477,7 @@ test("Manager leases are exclusive per root and fail closed on stale descriptor 
       }),
     );
     assert.throws(
-      () => readManagerDescriptor(runtime, "root"),
+      () => readManagerDescriptor(runtime, identity.canonicalRepoKey),
       /generation changed/,
     );
     assert.equal(
@@ -3240,6 +3492,7 @@ test("Manager leases are exclusive per root and fail closed on stale descriptor 
     );
     first.release();
     assert.equal(statSync(path).isFile(), true);
+    unlinkSync(path);
     assert.equal(
       sameManagerDescriptor(first.descriptor, {
         ...first.descriptor,
@@ -3263,7 +3516,11 @@ test("Manager leases are exclusive per root and fail closed on stale descriptor 
 test("Manager descriptor status distinguishes live, incomplete, and absent authority", () => {
   const runtime = supervisionRuntime(socket());
   const workspaceId = "root";
-  assert.equal(readManagerDescriptorStatus(runtime, workspaceId), undefined);
+  const canonicalRepoKey = join(tmpdir(), "repo");
+  assert.equal(
+    readManagerDescriptorStatus(runtime, canonicalRepoKey),
+    undefined,
+  );
   const lease = claimManagerLease(
     {
       build: BUILD,
@@ -3271,24 +3528,28 @@ test("Manager descriptor status distinguishes live, incomplete, and absent autho
       paneId: "pane",
       tabId: "tab",
       workspaceId,
+      canonicalRepoKey,
       repoKey: "repo",
     },
     runtime,
   );
   try {
-    assert.deepEqual(readManagerDescriptorStatus(runtime, workspaceId), {
+    assert.deepEqual(readManagerDescriptorStatus(runtime, canonicalRepoKey), {
       descriptor: lease.descriptor,
       live: true,
     });
-    unlinkSync(managerDescriptorPath(runtime, workspaceId));
+    unlinkSync(managerDescriptorPath(runtime, canonicalRepoKey));
     assert.throws(
-      () => readManagerDescriptorStatus(runtime, workspaceId),
+      () => readManagerDescriptorStatus(runtime, canonicalRepoKey),
       /Unable to verify Manager descriptor/,
     );
   } finally {
     lease.release();
   }
-  assert.equal(readManagerDescriptorStatus(runtime, workspaceId), undefined);
+  assert.equal(
+    readManagerDescriptorStatus(runtime, canonicalRepoKey),
+    undefined,
+  );
 });
 
 test("project assignments are scoped by repository and branch, strict, and removable", () => {
@@ -3745,7 +4006,7 @@ test("global assignment authority finds cross-socket matches and serializes the 
           "--experimental-strip-types",
           "--input-type=module",
           "-e",
-          `import { acquireProcessLock } from ${JSON.stringify(lockModule.href)}; try { const lease = acquireProcessLock(process.argv[1], { name: "project assignment authority" }); lease.release(); console.log("acquired"); } catch (error) { console.log(error.message); }`,
+          `import { acquireProcessLock, ProcessLockOccupiedError } from ${JSON.stringify(lockModule.href)}; try { const lease = acquireProcessLock(process.argv[1], { name: "project assignment authority" }); lease.release(); console.log("acquired"); } catch (error) { console.log(error.message); }`,
           lockPath,
         ],
         { encoding: "utf8", timeout: 10_000 },

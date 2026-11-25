@@ -353,8 +353,10 @@ A native name replaces Pi's first-message preview in the session selector.
 ## Project Manager and Chief
 
 By default, a session starts as a Lead. A Lead in an ordinary Git primary Herdr
-workspace can use `/manager` to claim the exclusive Manager lease for its
-Herdsman project scope and enter the Manager profile. No prior chat turn or
+workspace can use `/manager` to claim the exclusive Manager lease for the
+physical Git repository and enter the Manager profile. This lease is shared
+across local Pi profiles and Herdr sockets under the same OS account; see
+[Chief project lifecycle](staff.md#chief-project-lifecycle). No prior chat turn or
 existing linked worktree is required; the first project delegation can create
 the first linked worktree. Leads in linked-worktree workspaces cannot enter
 Manager mode. If another live Manager
@@ -373,10 +375,17 @@ does not abandon the session's directly owned Agent work.
 
 A restored Manager uses the same profile,
 supervision UI, context, and applicable ownership/recovery access as explicit
-activation. `/manager-leave` preserves project work
+activation. A successfully persisted explicit Manager role (from `/manager`
+or Chief startup) saves an exact-session recovery reference once the session
+file and authority are verified. Stopping Pi retains that reference in the
+originating Pi profile; another profile cannot use it to recover that session. A
+restored role must reestablish live authority; conflicting authority can
+leave Manager mode suspended rather than grant Manager tools.
+`/manager-leave` preserves project work
 and is refused only when a Lead is waiting for this Manager's answer or the
 Manager's own ask to Chief remains pending; otherwise it
-relinquishes the lease and restores the exact Lead tool baseline, including
+clears only the matching session's recovery reference, relinquishes the
+lease, and restores the exact Lead tool baseline, including
 `agent`, and Lead instruction profile. Invoking `/manager` while already active
 opens the overview without refreshing the profile or waiting for the current
 turn to become idle. `/manager-refresh` revalidates and applies the active
@@ -396,8 +405,9 @@ attempt that same Manager startup when it has no persisted role intent and
 starts in the project's primary workspace. A trusted project value can
 override the global default. Explicit persisted Lead, Manager, or Chief intent
 takes precedence. Ineligible or contended optional startup remains an ordinary
-Lead; successful automatic startup does not persist Manager intent. Changing
-the setting affects only a later `session_start`, not the running role.
+Lead; successful automatic startup does not persist Manager intent or create
+a recovery reference. Changing the setting affects only a later
+`session_start`, not the running role.
 Automatic startup and Manager restoration do not initialize Git or ask for
 confirmation; Git initialization is limited to explicit Manager activation.
 The Manager overview lists branch-based work, including paused work whose Lead
@@ -487,7 +497,9 @@ waiting for the current turn to become idle. `/chief-refresh` revalidates and
 applies the active Chief definition after the current turn becomes idle; a
 failed refresh keeps the previous profile. Refresh requires active Chief mode.
 Chief accepts global definition overrides only and defaults to staff
-coordination tools. `/chief-leave` exits the mode.
+coordination and [Chief project lifecycle tools](staff.md#chief-project-lifecycle).
+`/chief-leave` exits the mode without stopping Managers or changing project
+assignments.
 A Manager cannot activate Chief. Chief's staff roster contains active
 Managers and ordinary Leads without an active project Manager. Ordinary Leads
 in a Manager's verified worktree group appear under that Manager instead. A

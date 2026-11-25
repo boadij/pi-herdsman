@@ -37,6 +37,7 @@ const modelIds = [
   "continuation",
   "deep-chain",
   "chief-tree",
+  "chief-manager",
   "supervisor-agent",
   "terminal-failure",
   "terminal-error",
@@ -1467,6 +1468,63 @@ export function decide(model, context) {
       task: "Wait for the controlled terminal model failure.",
     });
   }
+  if (model === "chief-manager") {
+    if (prompt === "Reply exactly with CHIEF_MANAGER_SMOKE_STARTUP.") {
+      if (
+        !getCurrentSystemPrompt(messages).includes(
+          "You are an ordinary Lead for this Pi session.",
+        )
+      )
+        throw new Error("Chief Manager startup lacked ordinary Lead context");
+      return fauxAssistantMessage("CHIEF_MANAGER_SMOKE_STARTUP");
+    }
+    const request = prompt.match(
+      /^CHIEF_MANAGER_SMOKE \d+ (start_manager|resume_manager) (.+)$/u,
+    );
+    if (request) {
+      if (
+        !getCurrentSystemPrompt(messages).includes(
+          "You are the verified workspace-neutral Chief",
+        )
+      )
+        throw new Error("Lifecycle tool prompt lacked verified Chief context");
+      const [, tool, repository] = request;
+      const turn = currentTurn(messages);
+      const result = turn.find(
+        (message) => message.role === "toolResult" && message.toolName === tool,
+      );
+      return result
+        ? fauxAssistantMessage("CHIEF_MANAGER_SMOKE_SETTLED")
+        : call(tool, { repository });
+    }
+    const assignment = prompt.match(/^CHIEF_MANAGER_SMOKE assign (\S+)$/u);
+    if (assignment) {
+      const result = successfulCallCount(
+        currentTurn(messages),
+        "delegate_work",
+      );
+      return result
+        ? fauxAssistantMessage("CHIEF_MANAGER_SMOKE_ASSIGNED")
+        : call("delegate_work", {
+            branch: assignment[1],
+            task: "CHIEF_MANAGER_SMOKE_LEAD_TASK: Do not modify files. Reply with CHIEF_MANAGER_SMOKE_LEAD_READY.",
+          });
+    }
+    if (prompt.includes("CHIEF_MANAGER_SMOKE_LEAD_TASK"))
+      return fauxAssistantMessage("CHIEF_MANAGER_SMOKE_LEAD_READY");
+    if (prompt.startsWith("CHIEF_MANAGER_SMOKE verify ")) {
+      if (
+        !getCurrentSystemPrompt(messages).includes(
+          "You are the verified Manager for this Pi session.",
+        )
+      )
+        throw new Error(
+          "Manager verification prompt lacked verified Manager context",
+        );
+      return fauxAssistantMessage("CHIEF_MANAGER_SMOKE_VERIFIED");
+    }
+    throw new Error("Unexpected chief-manager request");
+  }
   if (model === "chief-tree") {
     const marker = prompt.match(
       /PI_HERDSMAN_CHIEF_TREE_(?:STARTUP|POST_CHIEF|FOLLOWUP)/,
@@ -1935,6 +1993,11 @@ export default function install(pi) {
   pi.registerProvider(faux.provider);
   pi.on("session_start", (_event, ctx) => {
     sessionId = ctx.sessionManager.getSessionId();
+    const chiefManagerModel = !ctx.model
+      ? "missing"
+      : ctx.model.provider === "smoke-faux" && ctx.model.id === "chief-manager"
+        ? "selected"
+        : "other";
     const evidenceDir = join(
       process.env.PI_CODING_AGENT_DIR,
       "pi-herdsman",
@@ -1942,7 +2005,7 @@ export default function install(pi) {
     );
     appendFileSync(
       join(evidenceDir, "smoke-faux-session-start.jsonl"),
-      `${JSON.stringify({ sessionId, pid: process.pid })}\n`,
+      `${JSON.stringify({ sessionId, pid: process.pid, chiefManagerModel })}\n`,
     );
   });
   pi.on("agent_settled", (event, ctx) => {

@@ -15,6 +15,7 @@ import { basename, dirname, join, resolve, toNamespacedPath } from "node:path";
 import { tmpdir } from "node:os";
 import { test, type TestContext } from "node:test";
 import {
+  CURRENT_SESSION_VERSION,
   initTheme,
   ProjectTrustStore,
   type ExtensionUIDialogOptions,
@@ -44,6 +45,9 @@ import {
   readChiefMessage,
   readProjectAssignment,
   readManagerDescriptor,
+  readManagerRecoveryReference,
+  getManagerStartIntent,
+  writeManagerStartIntent,
   peerLeadLockPath,
   peerRuntime,
   readPeerLeadRecord,
@@ -173,6 +177,7 @@ test("Manager Required evidence route removes persisted evidence and cancellatio
       paneId: "manager-ui-pane",
       tabId: "manager-ui-tab",
       repoKey: assignment.repoKey,
+      canonicalRepoKey: join(tmpdir(), "mock-manager-repo"),
       workspaceId: WORKSPACE,
     },
     runtimeStorage,
@@ -709,7 +714,13 @@ const chiefCoordinationTools = [
   "read_staff_transcript",
   "message_staff",
 ];
-const chiefTools = [...chiefCoordinationTools, "load_skill"];
+const chiefTools = [
+  ...chiefCoordinationTools,
+  "clone_repository",
+  "start_manager",
+  "resume_manager",
+  "load_skill",
+];
 
 const sessionLeadExecutionState = (
   entries: readonly unknown[],
@@ -2953,6 +2964,8 @@ test("Manager peer messages deliver to a live Manager without changing its role"
     manager: (typeof managers)[number],
     recipient: boolean,
   ) => {
+    const checkout = realFs.mkdtempSync(join(tmpdir(), "peer-manager-repo-"));
+    t.after(() => realFs.rmSync(checkout, { recursive: true, force: true }));
     const identity = {
       pane_id: manager.paneId,
       tab_id: manager.tabId,
@@ -2964,42 +2977,46 @@ test("Manager peer messages deliver to a live Manager without changing its role"
         value: manager.sessionId,
       },
     };
-    const pi = fakeRepositoryChiefPi({
-      entries: recipient ? recipientEntries : undefined,
-      activeTools: ["read", "bash"],
-      exec: (_command, args) =>
-        args[0] === "workspace" && args[1] === "get"
-          ? respond({
-              workspace: { worktree: { repo_key: "/tmp" } },
-            })
-          : args[0] === "worktree" && args[1] === "list"
+    const pi = fakeRepositoryChiefPi(
+      {
+        entries: recipient ? recipientEntries : undefined,
+        activeTools: ["read", "bash"],
+        exec: (_command, args) =>
+          args[0] === "workspace" && args[1] === "get"
             ? respond({
-                source: {
-                  source_workspace_id: manager.workspaceId,
-                  repo_key: "/tmp",
-                  repo_name: manager.workspaceId,
-                  source_checkout_path: manager.workspaceId,
-                },
-                worktrees: [],
+                workspace: { worktree: { repo_key: checkout } },
               })
-            : isAgentList(args)
-              ? respond({ agents: [identity] })
-              : args[0] === "agent" && args[1] === "get"
-                ? respond({ agent: identity })
-                : isApiSnapshot(args)
-                  ? respond({
-                      snapshot: { agents: [], panes: [], workspaces: [] },
-                    })
-                  : respond({}),
-      ...(recipient
-        ? {
-            sendMessage: (message: unknown) => {
-              recipientEntries.push(message);
-            },
-          }
-        : {}),
-    });
+            : args[0] === "worktree" && args[1] === "list"
+              ? respond({
+                  source: {
+                    source_workspace_id: manager.workspaceId,
+                    repo_key: checkout,
+                    repo_name: manager.workspaceId,
+                    source_checkout_path: checkout,
+                  },
+                  worktrees: [],
+                })
+              : isAgentList(args)
+                ? respond({ agents: [identity] })
+                : args[0] === "agent" && args[1] === "get"
+                  ? respond({ agent: identity })
+                  : isApiSnapshot(args)
+                    ? respond({
+                        snapshot: { agents: [], panes: [], workspaces: [] },
+                      })
+                    : respond({}),
+        ...(recipient
+          ? {
+              sendMessage: (message: unknown) => {
+                recipientEntries.push(message);
+              },
+            }
+          : {}),
+      },
+      checkout,
+    );
     const context = fakeContext(pi.entries) as any;
+    context.cwd = checkout;
     const notices: string[] = [];
     context.ui.notify = (message: string) => notices.push(message);
     context.sessionManager = {
@@ -3140,8 +3157,13 @@ test("Manager restoration does not claim a lease when identity changes during di
     build: HERDSMAN_BUILD,
     localRepositoryScope: async () => {
       identityCurrent = false;
-      return { isPrimary: true, repoKey: "repo" };
+      return {
+        isPrimary: true,
+        repoKey: "repo",
+        canonicalRepoKey: join(tmpdir(), "repo"),
+      };
     },
+    verifyNoLegacyManager: async () => {},
     claimManagerLease: (() => {
       claims++;
       throw new Error("unexpected claim");
@@ -3194,7 +3216,9 @@ test("superseded Manager restoration releases its lease without replacing curren
         localRepositoryScope: async () => ({
           isPrimary: true,
           repoKey: "repo",
+          canonicalRepoKey: join(tmpdir(), "repo"),
         }),
+        verifyNoLegacyManager: async () => {},
         claimManagerLease: (() => ({
           descriptor: { piSessionId: sessionId },
           release: () => released.add(sessionId),
@@ -3959,6 +3983,38 @@ test("session stats marks malformed owned completed results incomplete", async (
     await pi.events.get("session_shutdown")?.[0]();
   }
 });
+function writeManagerRoleFixture(
+  path: string,
+  cwd: string,
+  sessionId: string,
+  entries: readonly unknown[],
+): void {
+  const timestamp = new Date().toISOString();
+  const roles = entries.filter(
+    (entry) => isRecord(entry) && entry.customType === "pi-herdsman-role",
+  );
+  writeFileSync(
+    path,
+    [
+      {
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: sessionId,
+        cwd,
+        timestamp,
+      },
+      ...roles.map((entry, index) => ({
+        ...(entry as object),
+        id: `role-${index}`,
+        parentId: index ? `role-${index - 1}` : null,
+        timestamp,
+      })),
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n") + "\n",
+  );
+}
+
 function managerAgentIdentity() {
   return {
     pane_id: process.env.HERDR_PANE_ID,
@@ -4100,15 +4156,18 @@ function nonGitWorkspaceResponse() {
     code: 1,
   };
 }
-function fakeRepositoryChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
+function fakeRepositoryChiefPi(
+  options: Parameters<typeof fakePi>[0] = {},
+  gitRepoKey = "/tmp",
+) {
   return fakeChiefPi({
     ...options,
     exec: async (command, args, extra: CommandTestExecOptions | undefined) => {
       if (command === "git" && args[0] === "rev-parse")
         return {
           stdout: args.includes("--show-toplevel")
-            ? (extra?.cwd ?? "/tmp")
-            : "/tmp",
+            ? (extra?.cwd ?? gitRepoKey)
+            : gitRepoKey,
           stderr: "",
           code: 0,
         };
@@ -4232,6 +4291,9 @@ function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
 
 test("root Lead explicitly enters Manager; a competing root session stays Lead", async (t) => {
   setLeadEnvironment();
+  const projectCwd = realFs.mkdtempSync(
+    join(tmpdir(), "herdsman-root-manager-project-"),
+  );
   const managerOverride = join(PI_AGENT_ROOT, "coordinators", "manager.md");
   mkdirSync(dirname(managerOverride), { recursive: true });
   const outsideDefinition = join(PI_AGENTS_DIR, "generalist.md");
@@ -4345,14 +4407,14 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
       return respond({
         workspace: {
-          worktree: { repo_key: "/tmp", is_linked_worktree: false },
+          worktree: { repo_key: projectCwd, is_linked_worktree: false },
         },
       });
     if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
       return respond({
         source: {
           source_workspace_id: WORKSPACE,
-          repo_key: "/tmp",
+          repo_key: projectCwd,
           repo_name: "project",
         },
         worktrees: [],
@@ -4383,24 +4445,45 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       return respond({ snapshot: { agents: [], panes: [], workspaces: [] } });
     return respond({});
   };
-  const first = fakeRepositoryChiefPi({
-    entries: [
-      {
-        type: "custom",
-        customType: "pi-herdsman-role",
-        data: { sessionId: LEAD_SESSION_ID, role: "lead", leadTools: ["read"] },
-      },
-    ],
-    activeTools: ["read"],
-    exec,
-    sessionName: "current lead name",
-  });
-  const second = fakeRepositoryChiefPi({ activeTools: ["read"], exec });
-  const projectCwd = realFs.mkdtempSync(
-    join(tmpdir(), "herdsman-root-manager-project-"),
+  const first = fakeRepositoryChiefPi(
+    {
+      entries: [
+        {
+          type: "custom",
+          customType: "pi-herdsman-role",
+          data: {
+            sessionId: LEAD_SESSION_ID,
+            role: "lead",
+            leadTools: ["read"],
+          },
+        },
+      ],
+      activeTools: ["read"],
+      exec,
+      sessionName: "current lead name",
+    },
+    projectCwd,
+  );
+  const second = fakeRepositoryChiefPi(
+    { activeTools: ["read"], exec },
+    projectCwd,
   );
   const ctx1 = fakeContext(first.entries) as any;
   ctx1.cwd = projectCwd;
+  const sessionFile = join(projectCwd, "manager-session.jsonl");
+  ctx1.sessionManager.getSessionFile = () => sessionFile;
+  const flushRole = () =>
+    writeManagerRoleFixture(
+      sessionFile,
+      projectCwd,
+      LEAD_SESSION_ID,
+      first.entries,
+    );
+  const appendEntry = first.pi.appendEntry;
+  first.pi.appendEntry = (type, data) => {
+    appendEntry(type, data);
+    if (type === "pi-herdsman-role" && existsSync(sessionFile)) flushRole();
+  };
   const managerNotices: string[] = [];
   ctx1.ui.notify = (message: string, level?: string) => {
     if (level === "error") managerNotices.push(message);
@@ -4508,7 +4591,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       ),
     );
     assert.equal(
-      readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.piSessionId,
+      readManagerDescriptor(
+        supervisionRuntime(),
+        realFs.realpathSync.native(projectCwd),
+      )?.piSessionId,
       ctx1.sessionManager.getSessionId(),
     );
     assert.equal(
@@ -4533,6 +4619,15 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
         (entry: any) => entry.customType === "pi_herdsman_state_error",
       ),
     );
+    const runtime = supervisionRuntime();
+    const repo = realFs.realpathSync.native(projectCwd);
+    assert.equal(readManagerRecoveryReference(runtime, repo), undefined);
+    flushRole();
+    await invokeEventHandlers(first, "turn_end")({}, ctx1);
+    assert.equal(
+      readManagerRecoveryReference(runtime, repo)?.piSessionFile,
+      sessionFile,
+    );
     await first.events.get("session_start")![0](undefined, ctx1);
     await t.waitFor(() =>
       assert.ok(tabRenames.includes("Manager"), JSON.stringify(first.calls)),
@@ -4547,6 +4642,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       .handler("", ctx1);
     await t.waitFor(() => assert.equal(deferredLeadRenameDidStart, true));
     await leaveWithDelayedRename;
+    assert.equal(readManagerRecoveryReference(runtime, repo), undefined);
     const reenterManager = first.commandOptions
       .get("manager")
       .handler("", ctx1);
@@ -4760,7 +4856,12 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
       "manager",
     );
-    assert.ok(readManagerDescriptor(supervisionRuntime(), WORKSPACE));
+    assert.ok(
+      readManagerDescriptor(
+        supervisionRuntime(),
+        realFs.realpathSync.native(projectCwd),
+      ),
+    );
     await first.commandOptions.get("chief").handler("", ctx1);
     assert.ok(
       managerNotices.some((message) =>
@@ -4803,38 +4904,46 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     identitySessionId = LEAD_SESSION_ID;
 
-    persistedManager = fakeRepositoryChiefPi({
-      activeTools: ["read"],
-      entries: [
+    const newPersistedManager = () =>
+      fakeRepositoryChiefPi(
         {
-          type: "custom",
-          customType: "pi-herdsman-role",
-          data: {
-            sessionId: LEAD_SESSION_ID,
-            role: "manager",
-            leadTools: ["read"],
+          activeTools: ["read"],
+          entries: [
+            {
+              type: "custom",
+              customType: "pi-herdsman-role",
+              data: {
+                sessionId: LEAD_SESSION_ID,
+                role: "manager",
+                leadTools: ["read"],
+              },
+            },
+          ],
+          exec: (command, args) => {
+            if (
+              command === "herdr" &&
+              (isAgentList(args) || (args[0] === "agent" && args[1] === "get"))
+            ) {
+              const agent = {
+                ...managerAgentIdentity(),
+                agent_session: {
+                  ...managerAgentIdentity().agent_session,
+                  value: persistedManagerSessionId,
+                },
+              };
+              return respond(
+                isAgentList(args) ? { agents: [agent] } : { agent },
+              );
+            }
+            return exec(command, args);
           },
         },
-      ],
-      exec: (command, args) => {
-        if (
-          command === "herdr" &&
-          (isAgentList(args) || (args[0] === "agent" && args[1] === "get"))
-        ) {
-          const agent = {
-            ...managerAgentIdentity(),
-            agent_session: {
-              ...managerAgentIdentity().agent_session,
-              value: persistedManagerSessionId,
-            },
-          };
-          return respond(isAgentList(args) ? { agents: [agent] } : { agent });
-        }
-        return exec(command, args);
-      },
-    });
+        projectCwd,
+      );
+    persistedManager = newPersistedManager();
     registerExtension!(persistedManager.pi as never);
     persistedManagerContext = fakeContext(persistedManager.entries) as any;
+    persistedManagerContext.cwd = projectCwd;
     persistedManagerSessionId = `restored-manager-${randomUUID()}`;
     persistedManagerContext.sessionManager.getSessionId = () =>
       persistedManagerSessionId;
@@ -4875,7 +4984,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     const managerLeaseId = readManagerDescriptor(
       supervisionRuntime(),
-      WORKSPACE,
+      realFs.realpathSync.native(projectCwd),
     )?.leaseId;
     const activeManagerTools = first.pi.getActiveTools();
     let overviewOpened = false;
@@ -4898,7 +5007,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     await first.commandOptions.get("manager").handler("", ctx1);
     assert.equal(overviewOpened, true);
     assert.equal(
-      readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.leaseId,
+      readManagerDescriptor(
+        supervisionRuntime(),
+        realFs.realpathSync.native(projectCwd),
+      )?.leaseId,
       managerLeaseId,
     );
     assert.deepEqual(first.pi.getActiveTools(), activeManagerTools);
@@ -4938,18 +5050,32 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       "---\nname: generalist\n---\ngeneralist\n",
     );
     await persistedManager.events.get("session_shutdown")?.[0]();
+    persistedManager = newPersistedManager();
+    registerExtension!(persistedManager.pi as never);
     persistedManagerContext = fakeContext(persistedManager.entries) as any;
+    persistedManagerContext.cwd = projectCwd;
     persistedManagerSessionId = `restored-manager-${randomUUID()}`;
     persistedManagerContext.sessionManager.getSessionId = () =>
       persistedManagerSessionId;
     (persistedManager.entries[0] as any).data.sessionId =
       persistedManagerSessionId;
+    const restoredFile = join(projectCwd, "restored-manager-session.jsonl");
+    persistedManagerContext.sessionManager.getSessionFile = () => restoredFile;
+    writeManagerRoleFixture(
+      restoredFile,
+      persistedManagerContext.cwd,
+      persistedManagerSessionId,
+      persistedManager.entries,
+    );
     await persistedManager.events.get("session_start")![0](
       undefined,
       persistedManagerContext,
     );
     assert.equal(
-      readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.piSessionId,
+      readManagerDescriptor(
+        supervisionRuntime(),
+        realFs.realpathSync.native(projectCwd),
+      )?.piSessionId,
       persistedManagerSessionId,
       "the restored Manager holds the verified workspace lease",
     );
@@ -5008,12 +5134,24 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       createTabsBeforeDenied,
       "a definition outside agents: [agent] is denied before Herdr launch",
     );
-    await persistedManager?.events.get("session_shutdown")?.[0]();
+    await persistedManager.events.get("session_shutdown")?.[0]();
+    assert.equal(
+      readManagerDescriptor(
+        supervisionRuntime(),
+        realFs.realpathSync.native(projectCwd),
+      ),
+      undefined,
+      "the restored process releases the repository lease on shutdown",
+    );
     await first.events.get("session_shutdown")![0]();
-    const replacement = fakeRepositoryChiefPi({ activeTools: ["read"], exec });
+    const replacement = fakeRepositoryChiefPi(
+      { activeTools: ["read"], exec },
+      projectCwd,
+    );
     registerExtension!(replacement.pi as never);
     try {
       const replacementContext = fakeContext() as any;
+      replacementContext.cwd = projectCwd;
       const replacementSessionId = `lead-${randomUUID()}`;
       replacementContext.sessionManager.getSessionId = () =>
         replacementSessionId;
@@ -5030,10 +5168,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     }
   } finally {
     updateConfig("autoActivateManager", undefined);
-    realFs.rmSync(projectCwd, { recursive: true, force: true });
     await second.events.get("session_shutdown")?.[0]();
     await first.events.get("session_shutdown")?.[0]();
     await persistedManager?.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(projectCwd, { recursive: true, force: true });
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_PANE_ID;
@@ -5194,7 +5332,7 @@ test("Manager leave retains its lease and role when persistence fails", async ()
     await pi.commandOptions.get("manager").handler("", ctx);
     const leaseId = readManagerDescriptor(
       supervisionRuntime(),
-      WORKSPACE,
+      realFs.realpathSync.native("/tmp"),
     )?.leaseId;
     assert.ok(leaseId);
     const pendingRequest = {
@@ -5222,7 +5360,10 @@ test("Manager leave retains its lease and role when persistence fails", async ()
       ),
     );
     assert.equal(
-      readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.leaseId,
+      readManagerDescriptor(
+        supervisionRuntime(),
+        realFs.realpathSync.native("/tmp"),
+      )?.leaseId,
       leaseId,
     );
     assert.equal(
@@ -5251,7 +5392,10 @@ test("Manager leave retains its lease and role when persistence fails", async ()
         ),
       );
       assert.equal(
-        readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.leaseId,
+        readManagerDescriptor(
+          supervisionRuntime(),
+          realFs.realpathSync.native("/tmp"),
+        )?.leaseId,
         leaseId,
       );
       assert.equal(
@@ -5262,7 +5406,10 @@ test("Manager leave retains its lease and role when persistence fails", async ()
     }
     await pi.commandOptions.get("manager-leave").handler("", ctx);
     assert.equal(
-      readManagerDescriptor(supervisionRuntime(), WORKSPACE),
+      readManagerDescriptor(
+        supervisionRuntime(),
+        realFs.realpathSync.native("/tmp"),
+      ),
       undefined,
     );
     assert.equal(
@@ -5272,7 +5419,7 @@ test("Manager leave retains its lease and role when persistence fails", async ()
     await pi.commandOptions.get("manager").handler("", ctx);
     const suspendedLease = readManagerDescriptor(
       supervisionRuntime(),
-      WORKSPACE,
+      realFs.realpathSync.native("/tmp"),
     )?.leaseId;
     assert.ok(suspendedLease);
     pi.pi.appendEntry = (type: string, data: unknown) => {
@@ -5283,7 +5430,10 @@ test("Manager leave retains its lease and role when persistence fails", async ()
     await pi.commandOptions.get("manager-leave").handler("", ctx);
     pi.pi.appendEntry = originalAppend;
     assert.equal(
-      readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.leaseId,
+      readManagerDescriptor(
+        supervisionRuntime(),
+        realFs.realpathSync.native("/tmp"),
+      )?.leaseId,
       suspendedLease,
     );
     assert.equal(
@@ -5300,8 +5450,12 @@ test("Manager leave retains its lease and role when persistence fails", async ()
   }
 });
 
-test("Manager leave suspends authority when lease release fails", async () => {
+test("Manager leave suspends authority when lease release fails", async (t) => {
   setLeadEnvironment();
+  const projectCwd = realFs.mkdtempSync(
+    join(tmpdir(), "manager-release-project-"),
+  );
+  t.after(() => realFs.rmSync(projectCwd, { recursive: true, force: true }));
   process.env.HERDR_PANE_ID = "manager-pane";
   process.env.HERDR_TAB_ID = "manager-tab";
   process.env.HERDR_SOCKET_PATH = join(
@@ -5313,31 +5467,35 @@ test("Manager leave suspends authority when lease release fails", async () => {
     stderr: "",
     code: 0,
   });
-  const pi = fakeRepositoryChiefPi({
-    activeTools: ["read"],
-    exec: (_command, args) =>
-      args[0] === "workspace" && args[1] === "get"
-        ? respond({ workspace: { worktree: { repo_key: "/tmp" } } })
-        : args[0] === "worktree" && args[1] === "list"
-          ? respond({
-              source: {
-                source_workspace_id: WORKSPACE,
-                repo_key: "/tmp",
-                repo_name: "project",
-              },
-              worktrees: [],
-            })
-          : isAgentList(args)
-            ? respond({ agents: [managerAgentIdentity()] })
-            : args[0] === "agent" && args[1] === "get"
-              ? respond({ agent: managerAgentIdentity() })
-              : isApiSnapshot(args)
-                ? respond({
-                    snapshot: { agents: [], panes: [], workspaces: [] },
-                  })
-                : respond({}),
-  });
+  const pi = fakeRepositoryChiefPi(
+    {
+      activeTools: ["read"],
+      exec: (_command, args) =>
+        args[0] === "workspace" && args[1] === "get"
+          ? respond({ workspace: { worktree: { repo_key: projectCwd } } })
+          : args[0] === "worktree" && args[1] === "list"
+            ? respond({
+                source: {
+                  source_workspace_id: WORKSPACE,
+                  repo_key: projectCwd,
+                  repo_name: "project",
+                },
+                worktrees: [],
+              })
+            : isAgentList(args)
+              ? respond({ agents: [managerAgentIdentity()] })
+              : args[0] === "agent" && args[1] === "get"
+                ? respond({ agent: managerAgentIdentity() })
+                : isApiSnapshot(args)
+                  ? respond({
+                      snapshot: { agents: [], panes: [], workspaces: [] },
+                    })
+                  : respond({}),
+    },
+    projectCwd,
+  );
   const ctx = fakeContext() as any;
+  ctx.cwd = projectCwd;
   const notices: string[] = [];
   ctx.ui.notify = (message: string) => notices.push(message);
   const ownerMailbox = agentMailboxPath(WORKSPACE, "manager-owned-agent");
@@ -5348,10 +5506,14 @@ test("Manager leave suspends authority when lease release fails", async () => {
   });
   registerExtension!(pi.pi as never);
   const runtime = supervisionRuntime();
+  const descriptorPath = managerDescriptorPath(
+    runtime,
+    realFs.realpathSync.native(projectCwd),
+  );
   try {
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
-    const lock = `${managerDescriptorPath(runtime, WORKSPACE)}.lock`;
+    const lock = `${managerDescriptorPath(runtime, realFs.realpathSync.native(projectCwd))}.lock`;
     const owner = realFs.readdirSync(lock)[0];
     assert.ok(owner);
     const originalAppend = pi.pi.appendEntry;
@@ -5396,6 +5558,8 @@ test("Manager leave suspends authority when lease release fails", async () => {
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(ownerMailbox);
+    realFs.rmSync(descriptorPath, { force: true });
+    realFs.rmSync(`${descriptorPath}.lock`, { recursive: true, force: true });
     realFs.rmSync(runtime.root, { recursive: true, force: true });
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_TAB_ID;
@@ -5404,134 +5568,248 @@ test("Manager leave suspends authority when lease release fails", async () => {
   }
 });
 
-test("restored Manager registers supervision tools and restores Manager tools", async () => {
-  setLeadEnvironment();
-  updateConfig("autoActivateManager", true);
-  const sessionId = `manager-${randomUUID()}`;
-  process.env.HERDR_PANE_ID = "manager-pane";
-  process.env.HERDR_TAB_ID = "manager-tab";
-  process.env.HERDR_SOCKET_PATH = join(
-    tmpdir(),
-    `restored-manager-${randomUUID()}.sock`,
-  );
-  const respond = (result: unknown) => ({
-    stdout: JSON.stringify({ id: AGENT_ID, result }),
-    stderr: "",
-    code: 0,
-  });
-  const pi = fakeChiefPi({
-    activeTools: ["read"],
-    entries: [
-      {
-        type: "custom",
-        customType: "pi-herdsman-role",
-        data: {
-          sessionId: LEAD_SESSION_ID,
-          role: "manager",
-          leadTools: ["read"],
-        },
-      },
-    ],
-    exec: (command, args) => {
-      if (command === "git" && args[0] === "rev-parse")
-        return { stdout: "/tmp", stderr: "", code: 0 };
-      if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
-        return respond({
-          workspace: {
-            workspace_id: WORKSPACE,
-            worktree: null,
-          },
-        });
-      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
-        return respond({
-          source: {
-            source_workspace_id: WORKSPACE,
-            repo_key: "/tmp",
-            repo_name: "project",
-          },
-          worktrees: [],
-        });
-      const agent = {
-        ...managerAgentIdentity(),
-        agent_session: {
-          ...managerAgentIdentity().agent_session,
-          value: sessionId,
-        },
-      };
-      if (command === "herdr" && isAgentList(args))
-        return respond({ agents: [agent] });
-      if (command === "herdr" && args[0] === "agent" && args[1] === "get")
-        return respond({ agent });
-      if (command === "herdr" && isApiSnapshot(args))
-        return respond({ snapshot: { agents: [], panes: [], workspaces: [] } });
-      return respond({});
-    },
-  });
-  registerExtension!(pi.pi as never);
-  try {
-    const context = fakeContext(pi.entries) as any;
-    context.sessionManager.getSessionId = () => sessionId;
-    for (const entry of pi.entries as any[])
-      if (entry.customType === "pi-herdsman-role")
-        entry.data.sessionId = sessionId;
-    await pi.events.get("session_start")![0](undefined, context);
-    assert.deepEqual(pi.pi.getActiveTools(), managerTools);
-    assert.ok(
-      pi.tools.some(
-        (tool) =>
-          typeof tool === "object" &&
-          tool !== null &&
-          "name" in tool &&
-          tool.name === "delegate_work",
-      ),
-    );
-    assert.equal(pi.pi.getActiveTools().includes("delegate_agent"), false);
-    assert.equal(
-      pi.calls.some((args) => args[0] === "agent" && args[1] === "list"),
-      true,
-    );
-    assert.equal(
-      pi.entries
-        .filter(
-          (
-            entry: unknown,
-          ): entry is { customType: unknown; data: Record<string, unknown> } =>
-            isRecord(entry) &&
-            entry.customType === "pi-herdsman-role" &&
-            isRecord(entry.data),
-        )
-        .at(-1)?.data.role,
-      "manager",
-    );
-    const managerMetadata = pi.calls
-      .slice()
-      .reverse()
-      .find(
-        (args) =>
-          args[0] === "pane" &&
-          args[1] === "report-metadata" &&
-          args.includes("pi_herdsman_role=manager"),
-      );
-    assert.ok(managerMetadata);
-    for (const token of [
-      "pi_herdsman_name",
-      "pi_herdsman_ask",
-      "pi_herdsman_herd_run_started_at",
-      "pi_herdsman_context_percent",
-    ])
-      assert.ok(
-        managerMetadata.includes(token),
-        `Manager metadata clears ${token}`,
-      );
-  } finally {
-    await pi.events.get("session_shutdown")?.[0]();
-    updateConfig("autoActivateManager", undefined);
-    delete process.env.HERDR_SOCKET_PATH;
-    delete process.env.HERDR_TAB_ID;
-    delete process.env.HERDR_PANE_ID;
+for (const scenario of [
+  "restored Manager registers supervision tools and restores Manager tools",
+  "fresh Manager startup consumes the exact intent and publishes recovery",
+  "foreign Manager startup intent blocks optional activation",
+  "Manager startup rejects Herdr reporting a different session path",
+  "Manager startup with failed recovery persistence releases authority",
+] as const)
+  test(scenario, async (t) => {
+    const restored = scenario.startsWith("restored");
+    const foreign = scenario.startsWith("foreign");
+    const failed = scenario.includes("failed recovery");
+    const wrongSession = scenario.includes("different session path");
+    let reportedSessionPath: string | undefined;
     setLeadEnvironment();
-  }
-});
+    updateConfig("autoActivateManager", true);
+    const sessionId = randomUUID();
+    const checkout = realFs.realpathSync.native(
+      mkdtempSync(join(tmpdir(), "manager-startup-session-")),
+    );
+    t.after(() => rmSync(checkout, { recursive: true, force: true }));
+    const repo = join(checkout, ".git");
+    mkdirSync(repo);
+    process.env.HERDR_PANE_ID = "manager-pane";
+    process.env.HERDR_TAB_ID = "manager-tab";
+    process.env.HERDR_SOCKET_PATH = join(
+      tmpdir(),
+      `restored-manager-${randomUUID()}.sock`,
+    );
+    const respond = (result: unknown) => ({
+      stdout: JSON.stringify({ id: AGENT_ID, result }),
+      stderr: "",
+      code: 0,
+    });
+    const pi = fakeChiefPi({
+      activeTools: ["read"],
+      entries: restored
+        ? [
+            {
+              type: "custom",
+              customType: "pi-herdsman-role",
+              data: {
+                sessionId: LEAD_SESSION_ID,
+                role: "manager",
+                leadTools: ["read"],
+              },
+            },
+          ]
+        : [],
+      exec: (command, args) => {
+        if (command === "git" && args[0] === "rev-parse")
+          return {
+            stdout: args.includes("--show-toplevel") ? checkout : repo,
+            stderr: "",
+            code: 0,
+          };
+        if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
+          return respond({
+            workspace: {
+              workspace_id: WORKSPACE,
+              worktree: null,
+            },
+          });
+        if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+          return respond({
+            source: {
+              source_workspace_id: WORKSPACE,
+              repo_key: repo,
+              repo_name: "project",
+            },
+            worktrees: [],
+          });
+        const agent = {
+          ...managerAgentIdentity(),
+          agent_session: {
+            ...managerAgentIdentity().agent_session,
+            kind: "path",
+            value: reportedSessionPath,
+          },
+        };
+        if (command === "herdr" && isAgentList(args))
+          return respond({ agents: reportedSessionPath ? [agent] : [] });
+        if (command === "herdr" && args[0] === "agent" && args[1] === "get")
+          return respond({ agent: reportedSessionPath ? agent : undefined });
+        if (command === "herdr" && isApiSnapshot(args))
+          return respond({
+            snapshot: { agents: [], panes: [], workspaces: [] },
+          });
+        return respond({});
+      },
+    });
+    registerExtension!(pi.pi as never);
+    try {
+      const context = fakeContext(pi.entries) as any;
+      context.cwd = checkout;
+      context.sessionManager.getSessionId = () => sessionId;
+      for (const entry of pi.entries as any[])
+        if (entry.customType === "pi-herdsman-role")
+          entry.data.sessionId = sessionId;
+      const sessionFile = join(checkout, "manager.jsonl");
+      context.sessionManager.getSessionFile = () => sessionFile;
+      const flushRole = () =>
+        writeManagerRoleFixture(
+          sessionFile,
+          context.cwd,
+          sessionId,
+          pi.entries,
+        );
+      flushRole();
+      const appendEntry = pi.pi.appendEntry;
+      pi.pi.appendEntry = (type, data) => {
+        appendEntry(type, data);
+        if (type === "pi-herdsman-role") flushRole();
+      };
+      const runtime = supervisionRuntime();
+      const intent = {
+        version: 1 as const,
+        sessionId,
+        canonicalRepoKey: repo,
+        checkoutPath: context.cwd,
+        workspaceId: WORKSPACE,
+        paneId: restored || foreign ? "other-pane" : "manager-pane",
+        createdAt: Date.now(),
+      };
+      if (failed) {
+        const key = createHash("sha256").update(repo).digest("hex");
+        const directory = runtime.managerRecovery;
+        mkdirSync(directory, { recursive: true });
+        writeFileSync(join(directory, key + ".json"), "{}");
+      }
+      writeManagerStartIntent(runtime, intent);
+      await pi.events.get("session_start")![0]({ reason: "startup" }, context);
+      assert.equal(readManagerDescriptor(runtime, repo), undefined);
+      assert.equal(pi.pi.getActiveTools().includes("delegate_work"), false);
+      assert.equal(
+        readLeadRoleState(pi.entries, sessionId)?.role,
+        restored ? "manager" : undefined,
+      );
+      assert.deepEqual(getManagerStartIntent(runtime, sessionId), intent);
+      // With explicit CLI extension ordering, Herdr reports the Pi path in a later session_start handler.
+      reportedSessionPath = wrongSession
+        ? join(checkout, "other.jsonl")
+        : sessionFile;
+      if (wrongSession)
+        writeManagerRoleFixture(
+          reportedSessionPath,
+          context.cwd,
+          sessionId,
+          pi.entries,
+        );
+      await invokeEventHandlers(pi, "resources_discover")({}, context);
+      assert.deepEqual(
+        getManagerStartIntent(runtime, sessionId),
+        restored || foreign || wrongSession ? intent : undefined,
+      );
+      if (foreign || failed || wrongSession) {
+        assert.equal(
+          pi.pi
+            .getActiveTools()
+            .some((tool: string) => managerTools.includes(tool)),
+          false,
+        );
+        assert.equal(readManagerDescriptor(runtime, repo), undefined);
+        if (!failed)
+          assert.equal(readManagerRecoveryReference(runtime, repo), undefined);
+        else {
+          assert.throws(
+            () => readManagerRecoveryReference(runtime, repo),
+            /Invalid Manager recovery reference/,
+          );
+          assert.equal(readLeadRoleState(pi.entries, sessionId)?.role, "lead");
+        }
+        return;
+      }
+      assert.deepEqual(pi.pi.getActiveTools(), managerTools);
+      assert.equal(
+        readManagerRecoveryReference(runtime, repo)?.piSessionFile,
+        sessionFile,
+      );
+      assert.ok(
+        pi.tools.some(
+          (tool) =>
+            typeof tool === "object" &&
+            tool !== null &&
+            "name" in tool &&
+            tool.name === "delegate_work",
+        ),
+      );
+      assert.equal(pi.pi.getActiveTools().includes("delegate_agent"), false);
+      assert.equal(
+        pi.calls.some((args) => args[0] === "agent" && args[1] === "list"),
+        true,
+      );
+      assert.equal(
+        pi.entries
+          .filter(
+            (
+              entry: unknown,
+            ): entry is {
+              customType: unknown;
+              data: Record<string, unknown>;
+            } =>
+              isRecord(entry) &&
+              entry.customType === "pi-herdsman-role" &&
+              isRecord(entry.data),
+          )
+          .at(-1)?.data.role,
+        "manager",
+      );
+      const managerMetadata = pi.calls
+        .slice()
+        .reverse()
+        .find(
+          (args) =>
+            args[0] === "pane" &&
+            args[1] === "report-metadata" &&
+            args.includes("pi_herdsman_role=manager"),
+        );
+      assert.ok(managerMetadata);
+      for (const token of [
+        "pi_herdsman_name",
+        "pi_herdsman_ask",
+        "pi_herdsman_herd_run_started_at",
+        "pi_herdsman_context_percent",
+      ])
+        assert.ok(
+          managerMetadata.includes(token),
+          `Manager metadata clears ${token}`,
+        );
+      await pi.events.get("session_shutdown")?.[0]();
+      assert.equal(
+        readManagerRecoveryReference(runtime, repo)?.piSessionFile,
+        sessionFile,
+      );
+    } finally {
+      await pi.events.get("session_shutdown")?.[0]();
+      updateConfig("autoActivateManager", undefined);
+      delete process.env.HERDR_SOCKET_PATH;
+      delete process.env.HERDR_TAB_ID;
+      delete process.env.HERDR_PANE_ID;
+      setLeadEnvironment();
+    }
+  });
 
 test("Manager's lightweight redraw requests rendering without refreshing supervision", async (t) => {
   setLeadEnvironment();
@@ -5597,6 +5875,16 @@ test("Manager's lightweight redraw requests rendering without refreshing supervi
   });
   registerExtension!(pi.pi as never);
   const context = fakeContext(pi.entries) as any;
+  const directory = mkdtempSync(join(tmpdir(), "manager-redraw-session-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const sessionFile = join(directory, "manager.jsonl");
+  context.sessionManager.getSessionFile = () => sessionFile;
+  writeManagerRoleFixture(
+    sessionFile,
+    context.cwd,
+    LEAD_SESSION_ID,
+    pi.entries,
+  );
   context.mode = "tui";
   context.hasUI = true;
   context.ui.setWidget = (_key: string, factory: unknown) => {
@@ -5661,13 +5949,20 @@ async function checkManagerAutoStart(
     code: 0,
   });
   const sessionId = `verified-auto-manager-${randomUUID()}`;
+  const sessionFile = join(projectCwd, "manager.jsonl");
+  const repoKey = realFs.realpathSync.native(projectCwd);
+  let reportedSession = sessionId;
   const agent = {
     ...managerAgentIdentity(),
     agent_session: {
       source: "herdr:pi",
       agent: "pi",
-      kind: "id",
-      value: sessionId,
+      get kind() {
+        return reportedSession === sessionId ? "id" : "path";
+      },
+      get value() {
+        return reportedSession;
+      },
     },
   };
   let healthyLeadCoordinationBeforeIdentityCheck = false;
@@ -5676,14 +5971,14 @@ async function checkManagerAutoStart(
     if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
       return respond({
         workspace: {
-          worktree: { repo_key: "/tmp", is_linked_worktree: false },
+          worktree: { repo_key: repoKey, is_linked_worktree: false },
         },
       });
     if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
       return respond({
         source: {
           source_workspace_id: WORKSPACE,
-          repo_key: "/tmp",
+          repo_key: repoKey,
           repo_name: "project",
         },
         worktrees: [],
@@ -5697,10 +5992,10 @@ async function checkManagerAutoStart(
         ) &&
         readLeadCoordinationState(supervisionRuntime(), sessionId)?.role ===
           "lead";
-      return respond({ agents: [agent] });
+      return respond({ agents: reportedSession ? [agent] : [] });
     }
     if (command === "herdr" && args[0] === "agent" && args[1] === "get")
-      return respond({ agent });
+      return respond({ agent: reportedSession ? agent : undefined });
     if (command === "herdr" && isApiSnapshot(args))
       return respond({ snapshot: { agents: [], panes: [], workspaces: [] } });
     return respond({});
@@ -5723,23 +6018,27 @@ async function checkManagerAutoStart(
     ],
     parent: [],
   };
-  pi = fakeRepositoryChiefPi({
-    activeTools: ["read"],
-    entries: [
-      ...historyEntries[history],
-      {
-        type: "custom",
-        customType: "pi-herdsman-lead-state",
-        data: { pendingAsk: {} },
-      },
-    ],
-    exec,
-  });
+  pi = fakeRepositoryChiefPi(
+    {
+      activeTools: ["read"],
+      entries: [
+        ...historyEntries[history],
+        {
+          type: "custom",
+          customType: "pi-herdsman-lead-state",
+          data: { pendingAsk: {} },
+        },
+      ],
+      exec,
+    },
+    repoKey,
+  );
   registerExtension!(pi.pi as never);
   try {
     const context = fakeContext(pi.entries) as any;
     context.cwd = projectCwd;
     context.sessionManager.getSessionId = () => sessionId;
+    context.sessionManager.getSessionFile = () => sessionFile;
     let rolePersistenceAttempted = false;
     if (failManagerRolePersistence) {
       const originalAppend = pi.pi.appendEntry;
@@ -5776,7 +6075,7 @@ async function checkManagerAutoStart(
       ),
     );
     assert.equal(
-      readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.workspaceId,
+      readManagerDescriptor(supervisionRuntime(), repoKey)?.workspaceId,
       expectManager ? WORKSPACE : undefined,
     );
     assert.equal(
@@ -5804,7 +6103,7 @@ async function checkManagerAutoStart(
     if (failManagerRolePersistence) {
       assert.equal(rolePersistenceAttempted, true);
       assert.equal(
-        readManagerDescriptor(supervisionRuntime(), WORKSPACE),
+        readManagerDescriptor(supervisionRuntime(), repoKey),
         undefined,
       );
       assert.ok(
@@ -5824,7 +6123,7 @@ async function checkManagerAutoStart(
       );
       await pi.events.get("session_shutdown")?.[0]();
       assert.equal(
-        readManagerDescriptor(supervisionRuntime(), WORKSPACE),
+        readManagerDescriptor(supervisionRuntime(), repoKey),
         undefined,
       );
       const savedEntries = pi.entries.slice();
@@ -5836,22 +6135,39 @@ async function checkManagerAutoStart(
         join(projectCwd, ".pi", "settings.json"),
         JSON.stringify({ piHerdsman: { autoActivateManager: false } }),
       );
-      restoredPi = fakeRepositoryChiefPi({
-        activeTools: ["read"],
-        entries: savedEntries,
-        exec,
-      });
+      writeManagerRoleFixture(sessionFile, projectCwd, sessionId, savedEntries);
+      reportedSession = continuationReason === "startup" ? "" : sessionFile;
+      restoredPi = fakeRepositoryChiefPi(
+        {
+          activeTools: ["read"],
+          entries: savedEntries,
+          exec,
+        },
+        repoKey,
+      );
       registerExtension!(restoredPi.pi as never);
       const restoredContext = fakeContext(savedEntries) as any;
       restoredContext.cwd = projectCwd;
       restoredContext.sessionManager.getSessionId = () => sessionId;
+      restoredContext.sessionManager.getSessionFile = () => sessionFile;
       await restoredPi.events.get("session_start")![0](
         { type: "session_start", reason: continuationReason },
         restoredContext,
       );
+      if (continuationReason === "startup") {
+        assert.equal(
+          readManagerDescriptor(supervisionRuntime(), repoKey),
+          undefined,
+        );
+        reportedSession = sessionFile;
+        await invokeEventHandlers(restoredPi, "resources_discover")(
+          {},
+          restoredContext,
+        );
+      }
       assert.deepEqual(restoredPi.pi.getActiveTools(), managerTools);
       assert.equal(
-        readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.piSessionId,
+        readManagerDescriptor(supervisionRuntime(), repoKey)?.piSessionId,
         sessionId,
       );
       assert.equal(
@@ -6312,7 +6628,7 @@ function managerBootstrapLockPath(cwd: string): string {
   return join(
     herdsmanTempRoot(),
     "locks",
-    `manager-bootstrap-${createHash("sha256").update(realFs.realpathSync(cwd)).digest("hex")}`,
+    `manager-bootstrap-${createHash("sha256").update(realFs.realpathSync.native(cwd)).digest("hex")}`,
   );
 }
 
@@ -6597,7 +6913,10 @@ test("Manager activation from an unassociated workspace inherited from a linked 
     "manager",
   );
   assert.equal(
-    readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.repoKey,
+    readManagerDescriptor(
+      supervisionRuntime(),
+      realFs.realpathSync.native(join(current, ".git")),
+    )?.repoKey,
     join(current, ".git"),
   );
   assert.equal(harness.git(["rev-parse", "HEAD"], origin).stdout, originHead);
@@ -7211,7 +7530,10 @@ test("Manager auto-start rejects mismatched Herdr identity and releases its leas
     assert.equal(coordinationRestoredBeforeIdentityCheck, true);
     assert.deepEqual(pi.pi.getActiveTools(), ["read", ...leadToolsWithSkill]);
     assert.equal(
-      readManagerDescriptor(supervisionRuntime(), WORKSPACE),
+      readManagerDescriptor(
+        supervisionRuntime(),
+        realFs.realpathSync.native("/tmp"),
+      ),
       undefined,
     );
     assert.equal(
@@ -7261,46 +7583,55 @@ test("Manager auto-start suspends and invalidates Lead when identity cleanup rel
       value: sessionId,
     },
   };
-  const pi = fakeRepositoryChiefPi({
-    activeTools: ["read"],
-    entries: [
-      {
-        type: "custom",
-        customType: "pi-herdsman-lead-state",
-        data: { pendingAsk: {} },
+  const pi = fakeRepositoryChiefPi(
+    {
+      activeTools: ["read"],
+      entries: [
+        {
+          type: "custom",
+          customType: "pi-herdsman-lead-state",
+          data: { pendingAsk: {} },
+        },
+      ],
+      exec: (command, args) => {
+        if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
+          return respond({ workspace: { worktree: { repo_key: projectCwd } } });
+        if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+          return respond({
+            source: {
+              source_workspace_id: WORKSPACE,
+              repo_key: projectCwd,
+              repo_name: "project",
+            },
+            worktrees: [],
+          });
+        if (command === "herdr" && isAgentList(args)) {
+          const lock = `${managerDescriptorPath(supervisionRuntime(), realFs.realpathSync.native(projectCwd))}.lock`;
+          if (!realFs.existsSync(lock))
+            return respond({ agents: [{ ...agent, pane_id: "manager-pane" }] });
+          const owner = realFs.readdirSync(lock)[0];
+          assert.ok(owner);
+          realFs.writeFileSync(join(lock, owner), "{}");
+          return respond({ agents: [agent] });
+        }
+        if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
+          return respond({ agent: { ...agent, pane_id: "manager-pane" } });
+        }
+        if (command === "herdr" && isApiSnapshot(args))
+          return respond({
+            snapshot: { agents: [], panes: [], workspaces: [] },
+          });
+        return respond({});
       },
-    ],
-    exec: (command, args) => {
-      if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
-        return respond({ workspace: { worktree: { repo_key: "/tmp" } } });
-      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
-        return respond({
-          source: {
-            source_workspace_id: WORKSPACE,
-            repo_key: "/tmp",
-            repo_name: "project",
-          },
-          worktrees: [],
-        });
-      if (command === "herdr" && isAgentList(args)) {
-        const lock = `${managerDescriptorPath(supervisionRuntime(), WORKSPACE)}.lock`;
-        if (!realFs.existsSync(lock))
-          return respond({ agents: [{ ...agent, pane_id: "manager-pane" }] });
-        const owner = realFs.readdirSync(lock)[0];
-        assert.ok(owner);
-        realFs.writeFileSync(join(lock, owner), "{}");
-        return respond({ agents: [agent] });
-      }
-      if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
-        return respond({ agent: { ...agent, pane_id: "manager-pane" } });
-      }
-      if (command === "herdr" && isApiSnapshot(args))
-        return respond({ snapshot: { agents: [], panes: [], workspaces: [] } });
-      return respond({});
     },
-  });
+    projectCwd,
+  );
   registerExtension!(pi.pi as never);
   const runtime = supervisionRuntime();
+  const descriptorPath = managerDescriptorPath(
+    runtime,
+    realFs.realpathSync.native(projectCwd),
+  );
   try {
     const context = fakeContext(pi.entries) as any;
     context.cwd = projectCwd;
@@ -7327,6 +7658,8 @@ test("Manager auto-start suspends and invalidates Lead when identity cleanup rel
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(descriptorPath, { force: true });
+    realFs.rmSync(`${descriptorPath}.lock`, { recursive: true, force: true });
     realFs.rmSync(runtime.root, { recursive: true, force: true });
     updateConfig("autoActivateManager", undefined);
     realFs.rmSync(projectCwd, { recursive: true, force: true });
@@ -7427,7 +7760,10 @@ test("malformed Lead coordination blocks Manager auto-start", async () => {
     assert.deepEqual(pi.pi.getActiveTools(), ["read"]);
     assert.equal(topologyLookups, 0);
     assert.equal(
-      readManagerDescriptor(supervisionRuntime(), WORKSPACE),
+      readManagerDescriptor(
+        supervisionRuntime(),
+        realFs.realpathSync.native("/tmp"),
+      ),
       undefined,
     );
     assert.ok(
@@ -7493,7 +7829,10 @@ test("malformed Lead coordination skips fallback topology restoration when auto-
     assert.deepEqual(pi.pi.getActiveTools(), ["read"]);
     assert.equal(topologyLookups, 0);
     assert.equal(
-      readManagerDescriptor(supervisionRuntime(), WORKSPACE),
+      readManagerDescriptor(
+        supervisionRuntime(),
+        realFs.realpathSync.native("/tmp"),
+      ),
       undefined,
     );
     assert.equal(readPeerLeadRecord(peerRuntime(), LEAD_SESSION_ID), undefined);
@@ -12000,7 +12339,10 @@ async function managerDelegateAssignmentTest(
       process.env.HERDR_WORKSPACE_ID = WORKSPACE;
       await pi.commandOptions.get("manager-leave").handler("", ctx);
       assert.equal(
-        readManagerDescriptor(supervisionRuntime(), WORKSPACE),
+        readManagerDescriptor(
+          supervisionRuntime(),
+          realFs.realpathSync.native(gitRepoPath),
+        ),
         undefined,
       );
       assert.equal(
@@ -12165,6 +12507,7 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
     tabId: incompatibleManager.tab_id,
     workspaceId: incompatibleWorkspace,
     repoKey: "/var",
+    canonicalRepoKey: join(tmpdir(), "incompatible-manager-repository"),
   });
   writeLeadCoordinationState(supervisionRuntime(), {
     version: 1,
@@ -12829,11 +13172,11 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
       }
       const descriptorPath = managerDescriptorPath(
         supervisionRuntime(),
-        incompatibleWorkspace,
+        join(tmpdir(), "incompatible-manager-repository"),
       );
       const converged = readManagerDescriptor(
         supervisionRuntime(),
-        incompatibleWorkspace,
+        join(tmpdir(), "incompatible-manager-repository"),
       )!;
       writeFileSync(
         descriptorPath,
@@ -13473,7 +13816,7 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
     repoALocalScopeQueries = 0;
     const managerDescriptor = readManagerDescriptor(
       supervisionRuntime(),
-      WORKSPACE,
+      realFs.realpathSync.native("/tmp"),
     );
     assert.ok(managerDescriptor);
     const crossRepositoryUplink = {
@@ -13574,6 +13917,7 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
       tabId: "competing-manager-tab",
       workspaceId: `competing-${randomUUID()}`,
       repoKey: "/tmp",
+      canonicalRepoKey: join(tmpdir(), "competing-manager-repo"),
     });
     writeLeadCoordinationState(supervisionRuntime(), {
       version: 1,
@@ -13871,6 +14215,7 @@ test("Manager-to-ordinary-Lead inbox rechecks authority before importing result 
     tabId: managerTab,
     workspaceId: WORKSPACE,
     repoKey: "/tmp",
+    canonicalRepoKey: realFs.realpathSync.native("/tmp"),
   });
   writeLeadCoordinationState(supervisionRuntime(), {
     version: 1,
@@ -14051,10 +14396,11 @@ test("a Lead without a Manager routes upward to Chief and keeps peer presence", 
     tabId: "dead-manager-tab",
     workspaceId: "root-workspace",
     repoKey: "repo-key",
+    canonicalRepoKey: join(tmpdir(), "mock-manager-repo"),
   });
   const managerDescriptor = managerDescriptorPath(
     supervisionRuntime(),
-    "root-workspace",
+    join(tmpdir(), "mock-manager-repo"),
   );
   const managerLock = `${managerDescriptor}.lock`;
   const deadPid = 2147483647;
@@ -15444,15 +15790,16 @@ test("Chief accepts a recorded Manager sender independently of source workspace"
     tabId: sender.tab_id,
     workspaceId: sender.workspace_id,
     repoKey: "/tmp",
+    canonicalRepoKey: realFs.realpathSync.native("/tmp"),
   });
   const managerRuntime = supervisionRuntime();
   const selectedDescriptorPath = managerDescriptorPath(
     managerRuntime,
-    sender.workspace_id,
+    realFs.realpathSync.native("/tmp"),
   );
   const unrelatedMalformedPath = managerDescriptorPath(
     managerRuntime,
-    "unrelated-malformed-manager",
+    join(tmpdir(), "unrelated-malformed-manager"),
   );
   try {
     writeLeadCoordinationState(supervisionRuntime(), {
@@ -23581,6 +23928,7 @@ test("managed Lead sampler requires a verified assignment, caches its sample, an
     tabId: managerTabId,
     workspaceId: WORKSPACE,
     repoKey,
+    canonicalRepoKey: realFs.realpathSync.native(repoKey),
   };
   let managerLease = claimManagerLease({
     ...managerIdentity,

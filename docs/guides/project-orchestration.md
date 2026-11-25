@@ -392,9 +392,10 @@ Run:
 /manager-leave
 ```
 
-Leaving Manager mode preserves project assignments. Current Herdr topology is
-derived again when work is observed or resumed. A later Manager can continue
-the same repository and branch-based work.
+Leaving Manager mode intentionally clears that session's recovery reference
+but preserves project assignments. A later Manager can continue the same
+repository and branch-based work. To keep the Manager conversation recoverable,
+quit Pi without leaving Manager mode instead.
 
 ## Use Chief only for the next supervision layer
 
@@ -417,6 +418,33 @@ the current exact `ProjectAssignment` establishes Manager control (see
 
 See [Coordination](../concepts/coordination.md) and
 [Commands](../reference/commands.md).
+
+## Open or recover a project from Chief
+
+In an active `/chief` session, ask Chief to start a Manager for an explicit
+local primary checkout or a remote Git repository. To provision a local clone
+without starting a Manager, ask Chief to clone it only. Review any Git
+initialization prompt for the exact directory, and handle Pi's native project
+trust in the target workspace. An untrusted target does not inherit Chief's
+trust.
+
+If the Manager is already running in Chief's Pi profile and Herdr socket,
+Chief uses the verified instance instead of starting another. Manager
+authority and launch serialization are shared across local Pi profiles under
+the same OS account, so a detected conflict blocks a second launch even when
+the other Manager is outside Chief's supervision scope. If Chief reports
+`resume_required`, ask it to resume using the reported local path in the Pi
+profile that saved the Manager session. Chief cannot resume or supervise a
+Manager from another profile. Recovery opens the same Pi session and history
+in a new process, not a copy or a new conversation.
+It preserves project assignments, worktrees, and subordinate sessions without
+automatically restarting Leads or Agents.
+
+If Chief reports a recovery mismatch or unsettled launch, inspect the reported
+repository and, where available, the exact session and Herdr pane. Don't start
+a replacement to work around uncertain authority. See the
+[Chief project lifecycle tool reference](../reference/staff.md#chief-project-lifecycle)
+for inputs, outcomes, and recovery limits.
 
 ## Reference
 

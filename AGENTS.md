@@ -129,10 +129,11 @@ components are added or removed. When an entry is found to be stale or missing,
 verify the relevant source and correct it. Reviewers check affected entries.
 Group routine tests by area rather than enumerating every test file.
 
-- `extension/index.ts`: Pi extension composition, shared registration, and runtime selection.
+- `extension/index.ts`: Pi extension composition, shared registration (including Chief project tools), and runtime selection.
+- `extension/chief-project.ts`: Chief project provisioning and exact Manager start/resume orchestration, including unsettled launch reservations.
 - `extension/agent-controller.ts`: Shared owner-side Agent delegation, control, recovery, and result lifecycle.
 - `extension/managed-agent-runtime.ts`: Managed-Agent request, result, context, metadata, and nested-delegation runtime.
-- `extension/lead-runtime.ts`: Lead lifecycle, role composition, supervision, and project integration wiring.
+- `extension/lead-runtime.ts`: Lead lifecycle, role composition, supervision, project integration wiring, and Manager activation and persisted-role restoration.
 - `extension/lead/commands.ts`: Lead command menus, settings UI, and command dispatch.
 - `extension/lead/project.ts`: Managed project work operations and Git worktree inspection.
 - `extension/lead/coordination.ts`: Lead coordination, peer messaging, and session discovery.
@@ -140,7 +141,10 @@ Group routine tests by area rather than enumerating every test file.
 - `extension/agents/`: Bundled delegable Agent definitions.
 - `extension/coordinators/`: Bundled Lead, Manager, and Chief Coordinator profiles.
 - `extension/coordinator-target.ts`: Coordinator target identity and session bindings.
-- `extension/herdr.ts`: Herdr topology, startup, shutdown, and process ownership.
+- `extension/herdr.ts`: Herdr topology, verified Git checkout identity, workspace and pane preparation, and process launch and ownership.
+- `extension/manager-git.ts`: Shared Manager Git bootstrap and checks for conflicting legacy Manager authority.
+- `extension/repository.ts`: Repository source validation, local directory preparation, and native Git clone verification.
+- `extension/repository-path.ts`: Safe clone destination path and segment validation.
 - `extension/mailbox.ts`: Durable mailbox protocol and record persistence.
 - `extension/peer-transport.ts`: Remote peer transport, delivery, and retry handling.
 - `extension/peer-correspondence.ts`: Durable peer correspondence, replies, and evidence exchange.
@@ -152,7 +156,7 @@ Group routine tests by area rather than enumerating every test file.
 - `extension/lock.ts`: Process-lock ownership.
 - `extension/presentation.ts`: Model, TUI, and status presentation.
 - `extension/config.ts`: Flat Pi Herdsman configuration.
-- `extension/supervision.ts`: Chief, Manager, and Lead authority, leases, supervision state, and staff tool contracts.
+- `extension/supervision.ts`: Chief, Manager, and Lead authority, leases, supervision state, and staff tool contracts; repository-scoped Manager lifecycle coordination records.
 - `extension/support.ts`: Shared extension integration-test mocks and fixtures.
 - `extension/*.test.ts`, `extension/lead/*.test.ts`: Extension runtime, command, and integration tests.
 - `bin/*.test.ts`, `scripts/*.test.mjs`: Peer bridge and development tooling tests.

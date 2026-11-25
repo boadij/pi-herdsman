@@ -4193,7 +4193,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 const currentLease = host.managerLease();
                 const liveManager = readManagerDescriptor(
                   runtime,
-                  manager.workspaceId,
+                  manager.canonicalRepoKey,
                 );
                 if (
                   host.activeRole() !== "manager" ||
@@ -5874,7 +5874,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               const currentLease = host.managerLease();
               const liveManager = readManagerDescriptor(
                 runtime,
-                managerAuthority.workspaceId,
+                managerAuthority.canonicalRepoKey,
               );
               if (
                 host.activeRole() !== "manager" ||

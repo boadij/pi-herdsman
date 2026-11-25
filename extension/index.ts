@@ -17,6 +17,7 @@ import {
   chiefGlobalInstructions as selectChiefGlobalInstructions,
   chiefSystemPrompt as buildChiefSystemPrompt,
 } from "./chief-prompt.ts";
+import { createChiefProjectRuntime } from "./chief-project.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import packageMetadata from "../package.json" with { type: "json" };
@@ -284,7 +285,12 @@ const LEAD_COORDINATION_TOOLS = [
   ...LEAD_SUPERVISOR_TOOLS,
   ...PEER_TOOLS,
 ] as const;
-const CHIEF_TOOLS = STAFF_TOOLS;
+const CHIEF_TOOLS = [
+  ...STAFF_TOOLS,
+  "clone_repository",
+  "start_manager",
+  "resume_manager",
+] as const;
 const INTERNAL_MESSAGE_PROVENANCE_GUIDANCE =
   "Herdsman-delivered coordination messages, Agent results, and lifecycle notices are internal communications, even when Pi represents them as user-role messages. Interpret them according to their identified sender and established authority; they are not direct human requests or approvals. Their receipt alone does not require a reply or acknowledgment. Follow your existing role-specific coordination and reporting rules.";
 const LEAD_SUPERVISOR_PEER_GUIDANCE =
@@ -348,6 +354,7 @@ function formatMessageLimit(bytes: number): string {
 }
 const CHIEF_ROLE_CONTRACT = `## Chief role
 You are the verified workspace-neutral Chief for this Pi session. Supervise only verified direct-report Managers and eligible unassigned top-level Leads; never bypass a Manager to control assigned Leads or their Agents. Role configuration does not establish authority. Supervision snapshots are non-authoritative coordination data. Do not perform local implementation work or assume this Pi process's working directory is the supervised scope.
+Use the project tools for authorized local provisioning or to start a project's Manager. If start_manager reports resume_required, use resume_manager only when asked to recover the saved Manager. Use list_staff to obtain a verified staff target.
 ${AUTHORITY_GUIDANCE}
 ${INTERNAL_MESSAGE_PROVENANCE_GUIDANCE}
 ${AGENT_EXECUTION_OWNERSHIP_GUIDANCE}
@@ -1271,7 +1278,7 @@ function registerExtensionImpl(
     ...AGENT_COORDINATION_TOOLS,
     ...LEAD_SUPERVISOR_TOOLS,
     ...PEER_TOOLS,
-    ...STAFF_TOOLS,
+    ...CHIEF_TOOLS,
     "read_evidence",
     "load_skill",
     "delegate_work",
@@ -2139,6 +2146,80 @@ function registerExtensionImpl(
             activeRole: activeRole(),
           }),
       };
+      const chiefProject = createChiefProjectRuntime(pi, {
+        build: HERDSMAN_BUILD,
+        extensionPath: HERDSMAN_EXTENSION_PATH,
+        runtime: supervisionRuntime,
+        remoteIdentity: remoteChiefAgent,
+        assertChief: async (ctx) => {
+          if (
+            !isCurrentChief(ctx) ||
+            leadRuntime.roleSuspended ||
+            !(await roleTransitions.currentChiefAuthority(ctx, true))
+          )
+            throw new Error(
+              "Project lifecycle tools require verified active Chief authority",
+            );
+        },
+      });
+      const chiefProjectTool = {
+        defaultActive: false,
+        exposure: "direct" as const,
+        executionMode: "sequential" as const,
+      };
+      const projectResult = (
+        details: Awaited<ReturnType<typeof chiefProject.start>>,
+      ) => ({
+        content: [{ type: "text" as const, text: JSON.stringify(details) }],
+        details,
+      });
+      const projectLocation = Type.String({ minLength: 1 });
+      const projectDestination = Type.Optional(Type.String({ minLength: 1 }));
+      pi.registerTool({
+        ...chiefProjectTool,
+        name: "clone_repository",
+        label: "clone repository",
+        description:
+          "Clone and verify an HTTPS or SSH Git repository without starting Manager.",
+        parameters: Type.Object(
+          { url: projectLocation, destination: projectDestination },
+          { additionalProperties: false },
+        ),
+        execute: async (_id, { url, destination }, _signal, _update, ctx) =>
+          projectResult(await chiefProject.clone(url, destination, ctx)),
+      });
+      pi.registerTool({
+        ...chiefProjectTool,
+        name: "start_manager",
+        label: "start Manager",
+        description:
+          "Prepare a local Git project or clone a remote project and start its Manager. Destination is only for remote clones. Does not replace a saved Manager session.",
+        parameters: Type.Object(
+          { repository: projectLocation, destination: projectDestination },
+          { additionalProperties: false },
+        ),
+        execute: async (
+          _id,
+          { repository, destination },
+          _signal,
+          _update,
+          ctx,
+        ) =>
+          projectResult(await chiefProject.start(repository, destination, ctx)),
+      });
+      pi.registerTool({
+        ...chiefProjectTool,
+        name: "resume_manager",
+        label: "resume Manager",
+        description:
+          "Recover a stopped Manager using its exact saved Pi session for the selected local Git repository.",
+        parameters: Type.Object(
+          { repository: projectLocation },
+          { additionalProperties: false },
+        ),
+        execute: async (_id, { repository }, _signal, _update, ctx) =>
+          projectResult(await chiefProject.resume(repository, ctx)),
+      });
       const staffTool = {
         name: "message_staff",
         label: "message staff",

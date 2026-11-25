@@ -18,16 +18,19 @@ import {
   decide as decideSmokeFaux,
   managerHandoffSupervisorToolAvailable,
 } from "../scripts/smoke-faux.mjs";
-import {
+import fs, {
   copyFile,
   mkdir,
   mkdtemp,
   readFile,
   realpath,
+  rename,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import {
   basename,
@@ -10083,6 +10086,116 @@ test("ID-only Lead identity resolves only exact bounded isolated session", async
     );
   } finally {
     await rm(piSessions, { recursive: true, force: true });
+  }
+});
+
+test("managed Pi session isolation accepts a temp parent alias but rejects symlink escapes", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "pi-herdsman-session-alias-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const physical = join(root, "physical");
+  const alias = join(root, "alias");
+  const outside = join(root, "outside");
+  await mkdir(physical);
+  await mkdir(outside);
+  await symlink(physical, alias, "junction");
+  const piSessions = join(alias, "pi-sessions");
+  const piAgent = join(alias, "pi-agent");
+  const sdkSessions = join(piAgent, "sessions");
+  const ctx = { scenario: "chief-manager", paths: { piSessions, piAgent } };
+  const sessionAt = (value: string) =>
+    isolatedSessionDetails(ctx, { agent_session: { kind: "path", value } });
+
+  await mkdir(piSessions);
+  assert.equal(await exactIsolatedSession(ctx, "missing"), undefined);
+  await mkdir(sdkSessions, { recursive: true });
+  for (const [dir, id] of [
+    [piSessions, "cli"],
+    [sdkSessions, "sdk"],
+  ] as const) {
+    const path = join(dir, "session.jsonl");
+    const contents = JSON.stringify({ type: "session", id });
+    const expected = { path, id, contents };
+    await writeFile(path, contents);
+    assert.notEqual(await realpath(path), path);
+    assert.deepEqual(await sessionAt(path), expected);
+    assert.deepEqual(await exactIsolatedSession(ctx, id), expected);
+  }
+
+  const outsideSession = join(outside, "session.jsonl");
+  await writeFile(
+    outsideSession,
+    JSON.stringify({ type: "session", id: "foreign" }),
+  );
+  await assert.rejects(sessionAt(outsideSession), /path is outside/);
+  const escape = join(piSessions, "escape");
+  await symlink(outside, escape, "junction");
+  await assert.rejects(sessionAt(escape), /not a bounded regular/);
+  await assert.rejects(
+    sessionAt(join(escape, "session.jsonl")),
+    /resolves outside isolation/,
+  );
+  await rm(escape, { recursive: true });
+  await rm(sdkSessions, { recursive: true });
+  await symlink(outside, sdkSessions, "junction");
+  await assert.rejects(
+    sessionAt(join(sdkSessions, "session.jsonl")),
+    /resolves outside isolation/,
+  );
+  await assert.rejects(
+    exactIsolatedSession(ctx, "foreign"),
+    /resolves outside isolation/,
+  );
+});
+
+test("managed Pi session isolation rejects a session root redirected after inspection", async (t) => {
+  for (const replacement of ["junction", "directory"] as const) {
+    await t.test(replacement, async (t) => {
+      const root = await realpath(
+        await mkdtemp(join(tmpdir(), "pi-herdsman-session-swap-")),
+      );
+      t.after(() => rm(root, { recursive: true, force: true }));
+      const piSessions = join(root, "sessions");
+      const outside = join(root, "outside");
+      const name = "session.jsonl";
+      await mkdir(piSessions);
+      await mkdir(outside);
+      await writeFile(
+        join(piSessions, name),
+        JSON.stringify({ type: "session", id: "owned" }),
+      );
+      await writeFile(
+        join(outside, name),
+        JSON.stringify({ type: "session", id: "foreign" }),
+      );
+      let swapped = false;
+      const resolvePath = realpath;
+      t.mock.method(fs, "realpath", async (path: string) => {
+        if (path === piSessions && !swapped) {
+          await rename(piSessions, join(root, "original"));
+          if (replacement === "junction")
+            await symlink(outside, piSessions, "junction");
+          else await rename(outside, piSessions);
+          swapped = true;
+        }
+        return resolvePath(path);
+      });
+      syncBuiltinESMExports();
+      try {
+        const ctx = { paths: { root, piSessions } };
+        await assert.rejects(
+          replacement === "junction"
+            ? isolatedSessionDetails(ctx, {
+                agent_session: { kind: "path", value: join(piSessions, name) },
+              })
+            : exactIsolatedSession(ctx, "foreign"),
+          /resolves outside isolation/,
+        );
+        assert.equal(swapped, true);
+      } finally {
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+      }
+    });
   }
 });
 

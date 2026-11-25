@@ -8,8 +8,9 @@ is available when persisted session evidence is available. Manager and Chief
 have the same direct-report observation and communication capabilities.
 Manager additionally has
 the branch-based project operations `delegate_work`, `resume_work`,
-`stop_lead`, `remove_worktree`, and `integrate_branch`. Chief has no
-project-operation tools.
+`stop_lead`, `remove_worktree`, and `integrate_branch`. Chief instead has
+[project provisioning and Manager lifecycle tools](#chief-project-lifecycle),
+which grant no control over a Manager's assigned Leads or owned Agents.
 
 Managers select assigned Leads by the original assignment `branch`; ordinary
 supervised Leads and Chief's actionable direct reports use the stable `target`
@@ -25,6 +26,59 @@ target cannot be resolved in the current history, the operation rejects it;
 rediscover the report with `list_staff` or the supervision context before
 acting. Do the same when identity or eligibility is uncertain. Presentation
 labels are not targets.
+
+## Chief project lifecycle
+
+These sequential tools require current, verified Chief authority when called.
+
+| Tool               | Parameters                                        | Behavior                                                                                                                                                |
+| ------------------ | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `clone_repository` | `url`, optional `destination`                     | Clone and verify an HTTPS or SSH Git remote without launching Pi.                                                                                       |
+| `start_manager`    | `repository`, optional `destination` for a remote | Prepare a local project or clone a remote. Reuse the verified primary Herdr workspace or create one if absent, then start a Manager in a dedicated tab. |
+| `resume_manager`   | `repository` (local primary checkout)             | Verify and reopen the exact saved Manager Pi session in a dedicated tab. Does not initialize Git.                                                       |
+
+Local paths must be absolute or start with `~/`. Remote sources support
+`https://`, `ssh://`, and SSH `user@host:path` forms. Clone destinations
+must be safe, unoccupied paths; see
+[Configuration](configuration.md) for the default clone root. Native Git handles
+authentication and host verification; Pi applies its own project trust to the
+target checkout. Chief's trust does not carry over.
+
+If local preparation needs to create a directory or initialize Git, Chief
+requires native confirmation naming the exact path, unless the global Git
+initialization confirmation requirement has been explicitly disabled. Declining
+returns `cancelled` without initializing Git or activating Manager.
+
+The Manager lease and Chief launch serialization are shared across local Pi
+profiles and Herdr sockets under the same OS account, keyed by the verified
+physical repository's canonical Git common directory. Separate clones of the
+same remote are independent; linked worktrees share authority but cannot host
+Manager mode. This coordination does not extend across OS accounts or hosts.
+
+Recovery stays private to the Pi profile that saved the Manager session.
+Workspace placement and supervision are scoped to the current profile and
+Herdr socket. A detected conflict blocks a competing launch; Chief does not
+adopt another profile's session history or supervise its Manager.
+
+`cloned` returns the verified local checkout path. `started` and `resumed`
+require verified Manager readiness. `already_running`
+does not launch another Pi process. `resume_required` means a verified saved
+session exists in this Pi profile: use `resume_manager` with the returned local
+repository path.
+A missing reference blocks resume, and an invalid or mismatched reference
+blocks recovery rather than creating a replacement conversation. Use
+`list_staff` to discover a current Manager target; the returned repository path
+is not a staff selector.
+
+A `partial_failure` identifies the affected path, stage, and reason. Inspect
+what remains before retrying; a partial clone can leave its destination, and
+a failed launch can leave Herdr resources. At `unsettled_launch`, inspect the
+exact Pi session and pane in the initiating Herdr runtime as reported. Later
+calls can recognize the exact live, ready Manager, but do not launch a
+duplicate or automatically expire the reservation, even if the earlier call was
+cancelled after launch may have begun. If readiness cannot be
+verified, an operator must reconcile the retained record with Herdr state
+before retrying.
 
 ## Direct-report projection
 

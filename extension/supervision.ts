@@ -6,6 +6,7 @@ import {
   lstatSync,
   fstatSync,
   readdirSync,
+  realpathSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -16,7 +17,15 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { basename, dirname, isAbsolute, join, normalize } from "node:path";
+import os from "node:os";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  normalize,
+  resolve,
+} from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
   acquireProcessLock,
@@ -28,6 +37,7 @@ import {
 } from "./lock.ts";
 import {
   herdsmanDataRoot,
+  nodeOnlyAgentDir,
   isIncidentalMetadata,
   isResultBinding,
   isRequiredEvidence,
@@ -165,6 +175,8 @@ export type SupervisionRuntime = {
   inbox: string;
   coordinators: string;
   managers: string;
+  managerRecovery: string;
+  managerProfileKey: string;
   assignments: string;
   /** Old caller spelling until the integration lane switches to coordinators. */
   leads: string;
@@ -1644,15 +1656,42 @@ function socketPath(): string {
   return value;
 }
 
+function managerAccountHome(): string {
+  const { homedir, uid } = os.userInfo();
+  if (!isAbsolute(homedir))
+    throw new Error(
+      "Unable to verify the OS account home for Manager authority",
+    );
+  const home = realpathSync.native(homedir);
+  const stat = lstatSync(home);
+  if (
+    !stat.isDirectory() ||
+    (process.platform !== "win32" &&
+      (stat.uid !== uid || (stat.mode & 0o022) !== 0))
+  )
+    throw new Error(
+      "Unable to verify the OS account home for Manager authority",
+    );
+  return home;
+}
+
+function canonicalProfileDirectory(path = resolve(nodeOnlyAgentDir())): string {
+  try {
+    return realpathSync.native(path);
+  } catch (error) {
+    const parent = dirname(path);
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" || parent === path)
+      throw error;
+    return join(canonicalProfileDirectory(parent), basename(path));
+  }
+}
+
 export function supervisionRuntime(socket = socketPath()): SupervisionRuntime {
   if (!socket) throw new Error("HERDR_SOCKET_PATH is required");
   const runtimeHash = createHash("sha256").update(socket).digest("hex");
-  const root = join(
-    herdsmanDataRoot(),
-    "runtime",
-    "supervision-v2",
-    runtimeHash,
-  );
+  const runtimeRoot = join(herdsmanDataRoot(), "runtime");
+  const root = join(runtimeRoot, "supervision-v2", runtimeHash);
+  const profile = canonicalProfileDirectory();
   return {
     root,
     lock: join(root, "chief.lock"),
@@ -1660,7 +1699,23 @@ export function supervisionRuntime(socket = socketPath()): SupervisionRuntime {
     inbox: join(root, "inbox"),
     coordinators: join(root, "coordinators"),
     leads: join(root, "coordinators"),
-    managers: join(root, "managers"),
+    // Ordinary coordination does not depend on the account-level authority tree.
+    get managers() {
+      return join(
+        managerAccountHome(),
+        ".pi-herdsman",
+        "manager-authority-v1",
+        "managers",
+      );
+    },
+    managerRecovery: join(
+      profile,
+      "pi-herdsman",
+      "runtime",
+      "manager-authority-v1",
+      "manager-recovery",
+    ),
+    managerProfileKey: createHash("sha256").update(profile).digest("hex"),
     assignments: join(root, "assignments"),
   };
 }
@@ -1789,6 +1844,8 @@ export function peerRuntime(_socket?: string): PeerRuntime {
     coordinators: join(root, "coordinators"),
     leads: join(root, "coordinators"),
     managers: join(root, "managers"),
+    managerRecovery: join(root, "manager-recovery"),
+    managerProfileKey: "",
     assignments: join(root, "assignments"),
     peers: join(root, "peers"),
   };
@@ -2258,7 +2315,10 @@ export type ManagerDescriptor = {
   paneId: string;
   tabId: string;
   workspaceId: string;
+  socketKey: string;
+  profileKey: string;
   repoKey: string;
+  canonicalRepoKey: string;
   createdAt: number;
 };
 export type ManagerIdentity = Pick<
@@ -2269,6 +2329,7 @@ export type ManagerIdentity = Pick<
   | "tabId"
   | "workspaceId"
   | "repoKey"
+  | "canonicalRepoKey"
 > & { build: RuntimeBuild; createdAt?: number };
 export type ManagerLease = {
   descriptor: ManagerDescriptor;
@@ -2280,19 +2341,373 @@ export type ManagerDescriptorStatus = Readonly<{
   live: boolean;
 }>;
 
-export function managerDescriptorPath(
-  runtime: SupervisionRuntime,
-  workspaceId: string,
-): string {
-  if (!validNativeIdentity(workspaceId))
-    throw new Error("Invalid Manager workspace ID");
-  return join(
-    runtime.managers,
-    `${createHash("sha256").update(workspaceId).digest("hex")}.json`,
+type LegacyManagerDescriptor = Omit<
+  ManagerDescriptor,
+  "canonicalRepoKey" | "socketKey" | "profileKey"
+>;
+
+function validCanonicalRepoKey(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    isAbsolute(value) &&
+    !value.includes("\0") &&
+    normalize(value) === value
   );
 }
 
+function managerIdentityPath(directory: string, key: string): string {
+  return join(
+    directory,
+    `${createHash("sha256").update(key).digest("hex")}.json`,
+  );
+}
+
+function checkManagerAuthorityDirectory(
+  runtime: SupervisionRuntime,
+  create = false,
+): void {
+  const authority = dirname(runtime.managers);
+  for (const path of [dirname(authority), authority, runtime.managers]) {
+    let stat = lstatSync(path, { throwIfNoEntry: false });
+    if (!stat && create) {
+      try {
+        mkdirSync(path, { mode: 0o700 });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+      stat = lstatSync(path);
+    }
+    if (!stat) return;
+    if (
+      !stat.isDirectory() ||
+      (process.getuid &&
+        (stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0))
+    )
+      throw new Error("Unsafe private Manager authority directory");
+  }
+}
+
+export function managerDescriptorPath(
+  runtime: SupervisionRuntime,
+  canonicalRepoKey: string,
+): string {
+  if (!validCanonicalRepoKey(canonicalRepoKey))
+    throw new Error("Invalid Manager repository key");
+  checkManagerAuthorityDirectory(runtime);
+  return managerIdentityPath(runtime.managers, canonicalRepoKey);
+}
+
+export type ManagerRecoveryReference = Readonly<{
+  version: 1;
+  canonicalRepoKey: string;
+  piSessionId: string;
+  piSessionFile: string;
+}>;
+
+export type ManagerStartIntent = Readonly<{
+  version: 1;
+  sessionId: string;
+  canonicalRepoKey: string;
+  checkoutPath: string;
+  workspaceId: string;
+  paneId: string;
+  createdAt: number;
+}>;
+
+const MANAGER_START_INTENT_TTL_MS = 10 * 60 * 1000;
+const MANAGER_LIFECYCLE_MAX_BYTES = 8192;
+
+/** Serializes Chief startup decisions, independently of the Manager's lease. */
+export function claimManagerStartupLock(
+  runtime: SupervisionRuntime,
+  canonicalRepoKey: string,
+): ReturnType<typeof acquireProcessLock> {
+  const path = managerDescriptorPath(runtime, canonicalRepoKey);
+  checkManagerAuthorityDirectory(runtime, true);
+  return acquireProcessLock(`${path}.startup.lock`, {
+    name: "Manager startup lock",
+  });
+}
+
+function managerLifecyclePath(
+  runtime: SupervisionRuntime,
+  directory: "manager-start-intents",
+  identity: string,
+): string {
+  return join(
+    runtime.root,
+    directory,
+    `${createHash("sha256").update(identity).digest("hex")}.json`,
+  );
+}
+
+function readManagerLifecycleRecord(path: string): unknown {
+  let fd: number;
+  try {
+    fd = openSync(
+      path,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | constants.O_NONBLOCK,
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > MANAGER_LIFECYCLE_MAX_BYTES)
+      throw new Error("Unsafe Manager lifecycle record");
+    const buffer = Buffer.alloc(MANAGER_LIFECYCLE_MAX_BYTES + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const count = readSync(fd, buffer, length, buffer.length - length, null);
+      if (!count) break;
+      length += count;
+    }
+    if (length > MANAGER_LIFECYCLE_MAX_BYTES)
+      throw new Error("Manager lifecycle record is too large");
+    return JSON.parse(buffer.toString("utf8", 0, length)) as unknown;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function withManagerLifecycleLock<T>(path: string, operation: () => T): T {
+  const directory = dirname(path);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  chmodSync(directory, 0o700);
+  const lock = acquireProcessLock(`${path}.lock`, {
+    name: "Manager lifecycle record lock",
+  });
+  try {
+    return operation();
+  } finally {
+    lock.release();
+  }
+}
+
+function publishManagerLifecycleRecord(path: string, value: object): void {
+  const content = `${JSON.stringify(value)}\n`;
+  if (Buffer.byteLength(content) > MANAGER_LIFECYCLE_MAX_BYTES)
+    throw new Error("Manager lifecycle record is too large");
+  publishRecord(path, content);
+}
+
+function unlinkManagerLifecycleRecord(path: string): void {
+  unlinkSync(path);
+  fsyncDirectory(dirname(path));
+}
+
+function managerRecoveryPath(
+  runtime: SupervisionRuntime,
+  canonicalRepoKey: string,
+): string {
+  if (!validCanonicalRepoKey(canonicalRepoKey))
+    throw new Error("Invalid Manager repository key");
+  return managerIdentityPath(runtime.managerRecovery, canonicalRepoKey);
+}
+
+function validManagerRecoveryReference(
+  value: unknown,
+): value is ManagerRecoveryReference {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).length === 4 &&
+    record.version === 1 &&
+    validCanonicalRepoKey(record.canonicalRepoKey) &&
+    validSession(record.piSessionId) &&
+    validCanonicalRepoKey(record.piSessionFile)
+  );
+}
+
+/** Durable exact-session metadata, not evidence of a live Manager lease. */
+export function readManagerRecoveryReference(
+  runtime: SupervisionRuntime,
+  canonicalRepoKey: string,
+): ManagerRecoveryReference | undefined {
+  const value = readManagerLifecycleRecord(
+    managerRecoveryPath(runtime, canonicalRepoKey),
+  );
+  if (value === undefined) return undefined;
+  if (
+    !validManagerRecoveryReference(value) ||
+    value.canonicalRepoKey !== canonicalRepoKey
+  )
+    throw new Error("Invalid Manager recovery reference");
+  return value;
+}
+
+export function writeManagerRecoveryReference(
+  runtime: SupervisionRuntime,
+  reference: ManagerRecoveryReference,
+): void {
+  if (!validManagerRecoveryReference(reference))
+    throw new Error("Invalid Manager recovery reference");
+  const path = managerRecoveryPath(runtime, reference.canonicalRepoKey);
+  withManagerLifecycleLock(path, () => {
+    // Never overwrite unreadable state: it may be the only exact-session reference.
+    readManagerRecoveryReference(runtime, reference.canonicalRepoKey);
+    publishManagerLifecycleRecord(path, reference);
+  });
+}
+
+export function removeManagerRecoveryReference(
+  runtime: SupervisionRuntime,
+  reference: ManagerRecoveryReference,
+): boolean {
+  if (!validManagerRecoveryReference(reference))
+    throw new Error("Invalid Manager recovery reference");
+  const path = managerRecoveryPath(runtime, reference.canonicalRepoKey);
+  if (!lstatSync(path, { throwIfNoEntry: false })) return false;
+  return withManagerLifecycleLock(path, () => {
+    const current = readManagerRecoveryReference(
+      runtime,
+      reference.canonicalRepoKey,
+    );
+    if (
+      !current ||
+      current.piSessionId !== reference.piSessionId ||
+      current.piSessionFile !== reference.piSessionFile
+    )
+      return false;
+    unlinkManagerLifecycleRecord(path);
+    return true;
+  });
+}
+
+function managerStartIntentPath(
+  runtime: SupervisionRuntime,
+  sessionId: string,
+): string {
+  if (!validSession(sessionId))
+    throw new Error("Invalid Manager startup session ID");
+  return managerLifecyclePath(runtime, "manager-start-intents", sessionId);
+}
+
+function validManagerStartIntent(value: unknown): value is ManagerStartIntent {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).length === 7 &&
+    record.version === 1 &&
+    validSession(record.sessionId) &&
+    validCanonicalRepoKey(record.canonicalRepoKey) &&
+    validCanonicalRepoKey(record.checkoutPath) &&
+    validNativeIdentity(record.workspaceId) &&
+    validNativeIdentity(record.paneId) &&
+    typeof record.createdAt === "number" &&
+    Number.isSafeInteger(record.createdAt) &&
+    record.createdAt >= 0
+  );
+}
+
+function readManagerStartIntent(
+  path: string,
+  sessionId: string,
+): ManagerStartIntent | undefined {
+  const value = readManagerLifecycleRecord(path);
+  if (value === undefined) return undefined;
+  if (!validManagerStartIntent(value) || value.sessionId !== sessionId)
+    throw new Error("Invalid Manager startup intent");
+  return value;
+}
+
+function assertManagerStartIntentFresh(intent: ManagerStartIntent): void {
+  const age = Date.now() - intent.createdAt;
+  if (age < 0 || age > MANAGER_START_INTENT_TTL_MS)
+    throw new Error(
+      "Manager startup intent is expired or has an invalid timestamp",
+    );
+}
+
+export function writeManagerStartIntent(
+  runtime: SupervisionRuntime,
+  intent: ManagerStartIntent,
+): void {
+  if (!validManagerStartIntent(intent))
+    throw new Error("Invalid Manager startup intent");
+  assertManagerStartIntentFresh(intent);
+  const path = managerStartIntentPath(runtime, intent.sessionId);
+  withManagerLifecycleLock(path, () => {
+    if (lstatSync(path, { throwIfNoEntry: false }))
+      throw new Error("Manager startup intent already exists for this session");
+    publishManagerLifecycleRecord(path, intent);
+  });
+}
+
+/** A matching ID alone cannot authorize consumption: verify the target first. */
+export function getManagerStartIntent(
+  runtime: SupervisionRuntime,
+  sessionId: string,
+): ManagerStartIntent | undefined {
+  const intent = readManagerStartIntent(
+    managerStartIntentPath(runtime, sessionId),
+    sessionId,
+  );
+  if (intent) assertManagerStartIntentFresh(intent);
+  return intent;
+}
+
+export function consumeManagerStartIntent(
+  runtime: SupervisionRuntime,
+  expected: ManagerStartIntent,
+): void {
+  const path = managerStartIntentPath(runtime, expected.sessionId);
+  withManagerLifecycleLock(path, () => {
+    const intent = getManagerStartIntent(runtime, expected.sessionId);
+    if (!isDeepStrictEqual(intent, expected))
+      throw new Error("Manager startup intent changed before consumption");
+    unlinkManagerLifecycleRecord(path);
+  });
+}
+
+export function removeManagerStartIntent(
+  runtime: SupervisionRuntime,
+  sessionId: string,
+): boolean {
+  const path = managerStartIntentPath(runtime, sessionId);
+  if (!lstatSync(path, { throwIfNoEntry: false })) return false;
+  return withManagerLifecycleLock(path, () => {
+    if (!readManagerStartIntent(path, sessionId)) return false;
+    unlinkManagerLifecycleRecord(path);
+    return true;
+  });
+}
+
 function validManagerDescriptor(value: unknown): value is ManagerDescriptor {
+  if (!value || typeof value !== "object" || !Object.hasOwn(value, "socketKey"))
+    return false;
+  const { socketKey, profileKey, ...descriptor } = value as ManagerDescriptor;
+  return (
+    validNativeIdentity(socketKey) &&
+    typeof profileKey === "string" &&
+    /^[0-9a-f]{64}$/.test(profileKey) &&
+    validRepositoryManagerDescriptor(descriptor)
+  );
+}
+
+function validRepositoryManagerDescriptor(
+  value: unknown,
+): value is Omit<ManagerDescriptor, "socketKey" | "profileKey"> {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !Object.hasOwn(value, "canonicalRepoKey")
+  )
+    return false;
+  const { canonicalRepoKey, ...descriptor } = value as Omit<
+    ManagerDescriptor,
+    "socketKey" | "profileKey"
+  >;
+  return (
+    validCanonicalRepoKey(canonicalRepoKey) &&
+    validLegacyManagerDescriptor(descriptor)
+  );
+}
+
+function validLegacyManagerDescriptor(
+  value: unknown,
+): value is LegacyManagerDescriptor {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const r = value as Record<string, unknown>;
   const keys = [
@@ -2342,16 +2757,22 @@ export function sameManagerDescriptor(
     actual.paneId === expected.paneId &&
     actual.tabId === expected.tabId &&
     actual.workspaceId === expected.workspaceId &&
+    actual.socketKey === expected.socketKey &&
+    actual.profileKey === expected.profileKey &&
     actual.repoKey === expected.repoKey &&
+    actual.canonicalRepoKey === expected.canonicalRepoKey &&
     actual.createdAt === expected.createdAt
   );
 }
 
+/** Strict by default. Startup readiness may observe a valid live lock during
+ * descriptor publication, but must independently verify the claim's process. */
 export function readManagerDescriptorStatus(
   runtime: SupervisionRuntime,
-  workspaceId: string,
+  canonicalRepoKey: string,
+  onPendingPublication?: (claim: ProcessLockClaim) => void,
 ): ManagerDescriptorStatus | undefined {
-  const path = managerDescriptorPath(runtime, workspaceId);
+  const path = managerDescriptorPath(runtime, canonicalRepoKey);
   const lockPath = `${path}.lock`;
   let content: string;
   try {
@@ -2362,6 +2783,16 @@ export function readManagerDescriptorStatus(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       try {
         if (!statSync(lockPath, { throwIfNoEntry: false })) return undefined;
+        if (onPendingPublication) {
+          const { claim, live } = readProcessLockStatus(
+            lockPath,
+            "Manager supervision lease",
+          );
+          if (live) {
+            onPendingPublication(claim);
+            return undefined;
+          }
+        }
       } catch (lockError) {
         throw new Error("Unable to verify Manager descriptor", {
           cause: lockError,
@@ -2378,7 +2809,7 @@ export function readManagerDescriptorStatus(
   }
   if (
     !validManagerDescriptor(descriptor) ||
-    descriptor.workspaceId !== workspaceId
+    descriptor.canonicalRepoKey !== canonicalRepoKey
   )
     throw new Error("Unable to verify Manager descriptor");
   let status: ReturnType<typeof readProcessLockStatus>;
@@ -2390,58 +2821,189 @@ export function readManagerDescriptorStatus(
   if (
     status.claim.pid !== descriptor.claim.pid ||
     status.claim.id !== descriptor.claim.id
-  )
+  ) {
+    if (onPendingPublication && status.live) {
+      onPendingPublication(status.claim);
+      return undefined;
+    }
     throw new Error("Manager process-lock generation changed");
+  }
+  if (descriptor.profileKey !== runtime.managerProfileKey) {
+    if (status.live)
+      throw new Error(
+        "This repository already has an active Manager in another Pi profile; use that profile or stop its Manager first",
+      );
+    return undefined;
+  }
+  if (descriptor.socketKey !== basename(runtime.root)) {
+    if (status.live)
+      throw new Error(
+        "This repository already has an active Manager on another Herdr socket; use that socket or stop its Manager first",
+      );
+    return undefined;
+  }
   return { descriptor, live: status.live };
 }
 
 export function readManagerDescriptor(
   runtime: SupervisionRuntime,
-  workspaceId: string,
+  canonicalRepoKey: string,
 ): ManagerDescriptor | undefined {
-  const status = readManagerDescriptorStatus(runtime, workspaceId);
+  const status = readManagerDescriptorStatus(runtime, canonicalRepoKey);
   if (!status) return undefined;
   if (!status.live)
     throw new Error("Unable to verify Manager supervision lease");
   return status.descriptor;
 }
 
-export function listManagerDescriptors(
-  runtime = supervisionRuntime(),
-  strict = false,
-): ManagerDescriptor[] {
-  let entries: string[];
+function managerDescriptorEntries(directory: string): string[] {
   try {
-    entries = readdirSync(runtime.managers);
+    return readdirSync(directory)
+      .filter((entry) => /^[0-9a-f]{64}\.json$/.test(entry))
+      .sort();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
-  return entries
-    .filter((entry) => /^[0-9a-f]{64}\.json$/.test(entry))
-    .sort()
-    .flatMap((entry) => {
+}
+
+export function listLiveLegacyManagers(
+  runtime: SupervisionRuntime,
+  canonicalRepoKey: string,
+  workspaceId?: string,
+): Array<
+  LegacyManagerDescriptor & { canonicalRepoKey?: string; localSocket: boolean }
+> {
+  // Only the selected and native default profiles are known to this process.
+  const defaultRuntimeRoot = join(
+    managerAccountHome(),
+    ".pi",
+    "agent",
+    "pi-herdsman",
+    "runtime",
+  );
+  const profileRoots = new Set([
+    dirname(dirname(runtime.root)),
+    defaultRuntimeRoot,
+  ]);
+  const socketRoots = [...profileRoots].flatMap((root) => {
+    const path = managerIdentityPath(
+      join(root, "manager-authority-v1", "managers"),
+      canonicalRepoKey,
+    );
+    const conflict = () =>
+      new Error(
+        "Unable to rule out legacy Manager authority; stop or reconcile the existing Manager before retrying",
+      );
+    if (lstatSync(`${path}.unsettled`, { throwIfNoEntry: false }))
+      throw conflict();
+    for (const lock of [`${path}.lock`, `${path}.startup.lock`]) {
+      if (!lstatSync(lock, { throwIfNoEntry: false })) continue;
       try {
-        const path = join(runtime.managers, entry);
+        if (!readProcessLockStatus(lock).live) continue;
+      } catch (error) {
+        throw new Error(conflict().message, { cause: error });
+      }
+      throw conflict();
+    }
+    const parent = join(root, "supervision-v2");
+    try {
+      return readdirSync(parent, { withFileTypes: true })
+        .filter(
+          (entry) => entry.isDirectory() && /^[0-9a-f]{64}$/.test(entry.name),
+        )
+        .map((entry) => join(parent, entry.name));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+  });
+  return socketRoots.flatMap((root) => {
+    const localSocket = root === runtime.root;
+    const directory = join(root, "managers");
+    const correlatedPaths = new Set([
+      managerIdentityPath(directory, canonicalRepoKey),
+    ]);
+    if (localSocket && workspaceId !== undefined)
+      correlatedPaths.add(managerIdentityPath(directory, workspaceId));
+    const paths = new Set([
+      ...managerDescriptorEntries(directory).map((entry) =>
+        join(directory, entry),
+      ),
+      ...correlatedPaths,
+    ]);
+    return [...paths].flatMap((path) => {
+      const lockPath = `${path}.lock`;
+      try {
+        if (!statSync(lockPath, { throwIfNoEntry: false })) return [];
+        let live = true;
+        try {
+          live = readProcessLockStatus(
+            lockPath,
+            "Manager supervision lease",
+          ).live;
+        } catch {
+          // An unreadable lock is uncertain. Still check a correlatable descriptor.
+        }
+        if (!live) return [];
         if (statSync(path).size > CHIEF_DESCRIPTOR_MAX_BYTES)
           throw new Error("Manager descriptor too large");
         const candidate: unknown = JSON.parse(readFileSync(path, "utf8"));
         if (
-          !validManagerDescriptor(candidate) ||
-          basename(managerDescriptorPath(runtime, candidate.workspaceId)) !==
-            entry
+          validRepositoryManagerDescriptor(candidate) &&
+          managerIdentityPath(directory, candidate.canonicalRepoKey) === path
         )
-          throw new Error("Invalid Manager descriptor");
-        const status = readManagerDescriptorStatus(
-          runtime,
-          candidate.workspaceId,
-        );
-        return status?.live ? [status.descriptor] : [];
+          return [{ ...candidate, localSocket }];
+        if (
+          validLegacyManagerDescriptor(candidate) &&
+          managerIdentityPath(directory, candidate.workspaceId) === path
+        )
+          return [{ ...candidate, localSocket }];
+        throw new Error("Invalid Manager descriptor");
       } catch (error) {
-        if (strict) throw error;
+        if (correlatedPaths.has(path))
+          throw new Error(
+            "Unable to rule out legacy Manager authority; stop or restart the existing Manager",
+            { cause: error },
+          );
         return [];
       }
     });
+  });
+}
+
+export function listManagerDescriptors(
+  runtime = supervisionRuntime(),
+  strict = false,
+): ManagerDescriptor[] {
+  checkManagerAuthorityDirectory(runtime);
+  return managerDescriptorEntries(runtime.managers).flatMap((entry) => {
+    try {
+      const path = join(runtime.managers, entry);
+      if (statSync(path).size > CHIEF_DESCRIPTOR_MAX_BYTES)
+        throw new Error("Manager descriptor too large");
+      const candidate: unknown = JSON.parse(readFileSync(path, "utf8"));
+      if (
+        !validManagerDescriptor(candidate) ||
+        basename(managerDescriptorPath(runtime, candidate.canonicalRepoKey)) !==
+          entry
+      )
+        throw new Error("Invalid Manager descriptor");
+      if (
+        candidate.profileKey !== runtime.managerProfileKey ||
+        candidate.socketKey !== basename(runtime.root)
+      )
+        return [];
+      const status = readManagerDescriptorStatus(
+        runtime,
+        candidate.canonicalRepoKey,
+      );
+      return status?.live ? [status.descriptor] : [];
+    } catch (error) {
+      if (strict) throw error;
+      return [];
+    }
+  });
 }
 
 export function claimManagerLease(
@@ -2459,13 +3021,13 @@ export function claimManagerLease(
     !validNativeIdentity(identity.tabId) ||
     !validNativeIdentity(identity.workspaceId) ||
     !validNativeIdentity(identity.repoKey) ||
+    !validCanonicalRepoKey(identity.canonicalRepoKey) ||
     (identity.createdAt !== undefined &&
       (!Number.isInteger(identity.createdAt) || identity.createdAt < 0))
   )
     throw new Error("Invalid Manager identity");
-  mkdirSync(runtime.managers, { recursive: true, mode: 0o700 });
-  chmodSync(runtime.managers, 0o700);
-  const path = managerDescriptorPath(runtime, identity.workspaceId);
+  checkManagerAuthorityDirectory(runtime, true);
+  const path = managerDescriptorPath(runtime, identity.canonicalRepoKey);
   const lease = acquireProcessLock(`${path}.lock`, {
     name: "Manager supervision lease",
   });
@@ -2481,7 +3043,10 @@ export function claimManagerLease(
     paneId: identity.paneId,
     tabId: identity.tabId,
     workspaceId: identity.workspaceId,
+    socketKey: basename(runtime.root),
+    profileKey: runtime.managerProfileKey,
     repoKey: identity.repoKey,
+    canonicalRepoKey: identity.canonicalRepoKey,
     createdAt: identity.createdAt ?? Date.now(),
   };
   try {
@@ -2498,7 +3063,10 @@ export function claimManagerLease(
       if (released) return;
       released = true;
       try {
-        const current = readManagerDescriptor(runtime, identity.workspaceId);
+        const current = readManagerDescriptor(
+          runtime,
+          identity.canonicalRepoKey,
+        );
         if (current && sameManagerDescriptor(current, descriptor)) {
           unlinkSync(path);
           fsyncDirectory(runtime.managers);

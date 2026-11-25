@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
 import { mock } from "node:test";
 import { fileURLToPath } from "node:url";
 import type { Component, TUI } from "@earendil-works/pi-tui";
@@ -166,6 +166,9 @@ export const PI_AGENT_ROOT = realFs.mkdtempSync(
   join(systemTmpDir, "pi-herdsman-pi-agent-"),
 );
 process.env.TMPDIR = testTmpRoot;
+// Keep account-scoped Manager authority isolated in each test-file process.
+const testAccount = os.userInfo();
+mock.method(os, "userInfo", () => ({ ...testAccount, homedir: PI_AGENT_ROOT }));
 const {
   Key: tuiKey,
   fuzzyFilter: tuiFuzzyFilter,

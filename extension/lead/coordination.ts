@@ -1,5 +1,9 @@
 import { readPeerPolicy } from "../config.ts";
-import { readSessionKind } from "../supervision.ts";
+import {
+  listManagerDescriptors,
+  readSessionKind,
+  sameManagerDescriptor,
+} from "../supervision.ts";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -229,7 +233,17 @@ export function readRootOwners(
     /* Unavailable authority remains unknown. */
   }
   try {
-    manager = dependencies.readManagerDescriptor(runtime, workspaceId);
+    const candidates = listManagerDescriptors(runtime).filter(
+      (candidate) => candidate.workspaceId === workspaceId,
+    );
+    if (candidates.length === 1) {
+      const candidate = candidates[0]!;
+      const live = dependencies.readManagerDescriptor(
+        runtime,
+        candidate.canonicalRepoKey,
+      );
+      if (live && sameManagerDescriptor(live, candidate)) manager = live;
+    }
   } catch {
     /* Unavailable authority remains unknown. */
   }
@@ -283,7 +297,12 @@ export function readRootOwners(
         ownerSessionId,
       );
       if (manager?.piSessionId === ownerSessionId) {
-        if (matchesPhysicalOwner(manager) && state?.role === "manager")
+        if (
+          matchesPhysicalOwner(manager) &&
+          ownerAgent.workspace_id === manager.workspaceId &&
+          ownerPanes[0]?.tab_id === manager.tabId &&
+          state?.role === "manager"
+        )
           rootOwners.push({ sessionId: ownerSessionId, role: "manager" });
         continue;
       }

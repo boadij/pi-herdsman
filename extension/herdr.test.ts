@@ -44,6 +44,8 @@ import {
   requireHerdrPiIntegration,
   startHerdrAgent,
   startHerdrAgentInPane,
+  prepareHerdrManagerPane,
+  startHerdrManagerInPane,
   matchesExpectedSession,
   readPiSessionHeaderId,
   sameObservedSessionPath,
@@ -7613,6 +7615,281 @@ test("existing-pane startup waits for shell readiness before starting Pi", async
   } finally {
     if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
     else environment.HERDR_WORKSPACE_ID = previousWorkspace;
+  }
+});
+
+test("Chief prepares and launches an exact Manager pane across workspaces", async (t) => {
+  for (const scenario of [
+    "reuse",
+    "create",
+    "resume",
+    "wrong session",
+    "duplicates",
+    "conflict",
+    "wrong workspace checkout",
+    "occupied",
+    "changed terminal",
+    "foreground job",
+    "authority lost",
+    "uncertain",
+  ] as const) {
+    await t.test(scenario, async (t) => {
+      const cwd = realpathSync(mkdtempSync(join(tmpdir(), "herdr-manager-")));
+      t.after(() => rmSync(cwd, { recursive: true, force: true }));
+      const commonDir = join(cwd, "git-common");
+      fs.mkdirSync(commonDir);
+      const workspaceId = "manager-workspace";
+      const tabId = "manager-tab";
+      const paneId = "manager-pane";
+      const sessionId = randomUUID();
+      const path = join(cwd, "manager.jsonl");
+      writeFileSync(
+        path,
+        JSON.stringify({ type: "session", id: sessionId, cwd }) + "\n",
+      );
+      let hasWorkspace = scenario !== "create";
+      let hasTab = false;
+      let markerSeen = false;
+      const worktree = {
+        checkout_path: cwd,
+        repo_key: scenario === "conflict" ? cwd : commonDir,
+        is_linked_worktree: false,
+      };
+      const pane = {
+        pane_id: paneId,
+        tab_id: tabId,
+        workspace_id: workspaceId,
+        terminal_id: "manager-terminal",
+        cwd,
+      };
+      const mutations: string[] = [];
+      let startedArgs: string[] | undefined;
+      let authorityLost = false;
+      const response = (result: unknown) => ({
+        code: 0,
+        stdout: JSON.stringify({ id: 1, result }),
+        stderr: "",
+      });
+      const pi = {
+        exec: async (
+          command: string,
+          args: string[],
+          opts: { cwd: string },
+        ) => {
+          if (command === "git") {
+            assert.equal(opts.cwd, cwd);
+            const value = args.at(-1) === "--show-toplevel" ? cwd : commonDir;
+            return { code: 0, stdout: value, stderr: "" };
+          }
+          const key = args.slice(0, 2).join(" ");
+          switch (key) {
+            case "api snapshot":
+              return response({
+                snapshot: {
+                  agents: [],
+                  panes: [
+                    ...(hasWorkspace
+                      ? [{ workspace_id: workspaceId, cwd }]
+                      : []),
+                    ...(scenario === "duplicates"
+                      ? [{ workspace_id: "duplicate", cwd }]
+                      : []),
+                  ],
+                  workspaces: [
+                    {
+                      workspace_id: "chief-workspace",
+                      worktree: { repo_key: "stale" },
+                    },
+                    ...(hasWorkspace
+                      ? [
+                          {
+                            workspace_id: workspaceId,
+                            ...([
+                              "create",
+                              "resume",
+                              "wrong workspace checkout",
+                            ].includes(scenario)
+                              ? {}
+                              : { worktree }),
+                          },
+                        ]
+                      : []),
+                    ...(scenario === "duplicates"
+                      ? [{ workspace_id: "duplicate" }]
+                      : []),
+                  ],
+                },
+              });
+            case "workspace create":
+              assert.equal(args.length, 5);
+              assert.equal(args[2], "--cwd");
+              assert.ok(sameDirectory(args[3]!, cwd));
+              assert.equal(args[4], "--no-focus");
+              mutations.push(key);
+              hasWorkspace = true;
+              return response({ workspace: { workspace_id: workspaceId } });
+            case "worktree list":
+              assert.deepEqual(args.slice(2), ["--workspace", workspaceId]);
+              return response({
+                source: {
+                  repo_key: commonDir,
+                  repo_name: "project",
+                  source_workspace_id: workspaceId,
+                  source_checkout_path:
+                    scenario === "wrong workspace checkout" ? commonDir : cwd,
+                },
+                worktrees: [],
+              });
+            case "tab create":
+              assert.equal(args[3], workspaceId);
+              mutations.push(key);
+              hasTab = true;
+              return response({ tab: { tab_id: tabId }, root_pane: pane });
+            case "tab list":
+              return response({
+                tabs: hasTab
+                  ? [{ workspace_id: workspaceId, tab_id: tabId }]
+                  : [],
+              });
+            case "pane list":
+              return response({ panes: hasTab ? [pane] : [] });
+            case "agent list":
+              return response({
+                agents:
+                  authorityLost && scenario === "occupied"
+                    ? [{ pane_id: paneId }]
+                    : [],
+              });
+            case "pane process-info":
+              return response({
+                process_info: {
+                  pane_id: paneId,
+                  shell_pid: 12,
+                  foreground_process_group_id: 12,
+                  foreground_processes:
+                    scenario === "foreground job"
+                      ? [{ pid: 99, argv0: "editor" }]
+                      : [{ pid: 12, argv0: "/bin/sh" }],
+                },
+              });
+            case "pane run":
+              markerSeen = true;
+              return response({});
+            case "pane wait-output":
+              return response({});
+            case "pane get":
+              if (scenario === "authority lost") authorityLost = true;
+              return response({ pane });
+            case "agent start":
+              startedArgs = args;
+              if (scenario === "uncertain")
+                throw new Error("lost launch acknowledgement");
+              return response({ agent: { name: args[2] } });
+            default:
+              throw new Error(`unexpected Herdr call: ${args.join(" ")}`);
+          }
+        },
+      } as any;
+      const ctx = { cwd: tmpdir() } as any;
+      const options = {
+        agentDir: TEST_AGENT_DIR,
+        repository: { canonicalRepoKey: commonDir, checkoutPath: cwd },
+        assertCurrentAuthority: async () => {
+          if (scenario === "authority lost" && authorityLost)
+            throw new Error("Chief authority lost");
+        },
+      };
+      if (
+        scenario === "duplicates" ||
+        scenario === "conflict" ||
+        scenario === "wrong workspace checkout"
+      ) {
+        await assert.rejects(
+          prepareHerdrManagerPane(pi, ctx, options),
+          scenario === "duplicates"
+            ? /duplicate primary/
+            : scenario === "conflict"
+              ? /conflicting repository/
+              : /primary workspace identity changed/,
+        );
+        assert.deepEqual(mutations, []);
+        return;
+      }
+      const prepared = await prepareHerdrManagerPane(pi, ctx, options);
+      assert.equal(prepared.createdWorkspace, scenario === "create");
+      assert.deepEqual(
+        mutations,
+        scenario === "create"
+          ? ["workspace create", "tab create"]
+          : ["tab create"],
+      );
+      assert.equal(prepared.workspaceId, workspaceId);
+      assert.equal(prepared.tabId, tabId);
+      assert.equal(prepared.paneId, paneId);
+      assert.equal(prepared.terminalId, pane.terminal_id);
+      if (scenario === "occupied") authorityLost = true;
+      if (scenario === "changed terminal") pane.terminal_id = "replacement";
+      const session =
+        scenario === "resume" || scenario === "wrong session"
+          ? { id: scenario === "resume" ? sessionId : randomUUID(), path }
+          : { id: sessionId };
+      const launching = startHerdrManagerInPane(pi, ctx, {
+        ...options,
+        pane: prepared,
+        session,
+      });
+      switch (scenario) {
+        case "wrong session":
+        case "changed terminal":
+          await assert.rejects(
+            launching,
+            scenario === "wrong session"
+              ? /does not match the exact Manager session/
+              : /terminal identity changed/,
+          );
+          assert.equal(markerSeen, false);
+          assert.equal(startedArgs, undefined);
+          break;
+        case "occupied":
+        case "foreground job":
+        case "authority lost":
+          await assert.rejects(launching, (error: unknown) => {
+            assert.ok(error instanceof HerdrStartFailure);
+            assert.equal(error.attempt.launchMayHaveStarted, false);
+            assert.match(
+              error.message,
+              /occupied|terminal identity changed|available shell|authority lost/,
+            );
+            return true;
+          });
+          assert.equal(markerSeen, scenario === "authority lost");
+          assert.equal(startedArgs, undefined);
+          break;
+        case "uncertain":
+          await assert.rejects(launching, (error: unknown) => {
+            assert.ok(error instanceof HerdrStartFailure);
+            assert.equal(error.attempt.launchMayHaveStarted, true);
+            assert.deepEqual(error.attempt.sessionReference, session);
+            return true;
+          });
+          break;
+        default: {
+          const started = await launching;
+          assert.equal(started.launchMayHaveStarted, true);
+          assert.equal(started.createdTab, true);
+          assert.equal(markerSeen, true);
+          assert.deepEqual(started.sessionReference, session);
+          assert.deepEqual(
+            startedArgs?.slice(-2),
+            scenario === "resume"
+              ? ["--session", path]
+              : ["--session-id", sessionId],
+          );
+          assert.ok(!startedArgs?.some((arg) => arg.includes("--trust")));
+          break;
+        }
+      }
+    });
   }
 });
 
