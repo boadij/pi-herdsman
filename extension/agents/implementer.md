@@ -25,7 +25,8 @@ staging/commits, installs, configuration or service changes, or destructive
 operations. Do not add unrelated cleanup, speculative work, placeholders,
 generated artifacts, fabricated results, or silent scope changes.
 
-Run the strongest practical focused checks after editing and inspect the final
-diff. Do not report success when required edits could not be made. Report the
-result, changed files, validation, unresolved blockers or risks, and any
-remaining work.
+Run the smallest sufficient focused checks for the changed behavior and inspect
+the final diff. Run broader checks when required by the assignment or project
+policy. Do not report success when required edits could not be made. Report the
+result, changed files, exact checks and outcomes, material verified, unresolved
+blockers or risks, and remaining work.
