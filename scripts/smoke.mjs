@@ -11825,9 +11825,17 @@ async function runChiefManagerSmoke(ctx) {
   assert.equal(repeat.pid, first.pid);
   assert.equal(repeat.pane.pane_id, first.pane.pane_id);
   assert.equal(repeat.session.id, first.session.id);
-  assert.deepEqual(
-    (await projectPanes()).map((pane) => pane.pane_id).sort(),
-    originalPanes,
+  // The completed Agent generation is cleaned after result delivery.
+  const repeatedPanes = (await projectPanes())
+    .map((pane) => pane.pane_id)
+    .sort();
+  assert.ok(
+    repeatedPanes.every((pane) => originalPanes.includes(pane)),
+    "repeated Manager start added a project pane",
+  );
+  assert.ok(
+    originalPanes.length - repeatedPanes.length <= 1,
+    "repeated Manager start removed more than the completed Agent pane",
   );
 
   const branch = `herdsman/smoke-chief-manager-${randomUUID()}`;
@@ -14214,25 +14222,7 @@ export function sanitizedFailureEvidence(
   const chiefManagerProgress =
     ctx.scenario === "chief-manager"
       ? {
-          managerSessionId:
-            ctx.chiefManagerDelegationProgress?.managerSessionId ??
-            ctx.chiefManagerDelegationIdentity?.managerSessionId ??
-            null,
-          promptMarker:
-            ctx.chiefManagerDelegationProgress?.promptMarker ??
-            ctx.chiefManagerDelegationIdentity?.promptMarker ??
-            null,
-          providerEntryLogStatus:
-            ctx.chiefManagerProviderEntryLogStatus ?? "not_read",
-          providerEntries: ctx.chiefManagerProviderEntries ?? [],
-          managerSessionProviderEntries: (
-            ctx.chiefManagerProviderEntries ?? []
-          ).filter(
-            (entry) =>
-              entry.sessionId ===
-              (ctx.chiefManagerDelegationProgress?.managerSessionId ??
-                ctx.chiefManagerDelegationIdentity?.managerSessionId),
-          ),
+          ...chiefManagerSuccessEvidence(ctx.chiefManagerDelegationProgress),
           promptDispatchAttempted:
             ctx.chiefManagerDelegationProgress?.promptDispatchAttempted ?? null,
           workingObserved:
@@ -14241,14 +14231,10 @@ export function sanitizedFailureEvidence(
             ctx.chiefManagerDelegationProgress?.promptObserved ?? null,
           toolCallObserved:
             ctx.chiefManagerDelegationProgress?.toolCallObserved ?? null,
-          toolCallId: ctx.chiefManagerDelegationProgress?.toolCallId ?? null,
           toolResultObserved:
             ctx.chiefManagerDelegationProgress?.toolResultObserved ?? null,
           toolResultError:
             ctx.chiefManagerDelegationProgress?.toolResultError ?? null,
-          requestId: ctx.chiefManagerDelegationProgress?.requestId ?? null,
-          childSessionId:
-            ctx.chiefManagerDelegationProgress?.childSessionId ?? null,
           handoffObserved:
             ctx.chiefManagerDelegationProgress?.handoffObserved ?? null,
           fauxInvocationObserved: ctx.chiefManagerInvocationObserved === true,
