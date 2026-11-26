@@ -945,7 +945,7 @@ test("Chief activation exposes only semantic staff and project tools", async (t)
     },
   ];
   const projectsDirectory = realFs.mkdtempSync(
-    join(tmpdir(), "chief-projects-"),
+    join(realFs.realpathSync.native(tmpdir()), "chief-projects-"),
   );
   const checkout = join(
     projectsDirectory,
