@@ -24,6 +24,7 @@ import type {
   ExtensionContext,
   SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
+import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import {
   getSelectListTheme,
   parseSessionEntries,
@@ -153,6 +154,10 @@ import {
 import {
   AGENT_COORDINATION_TOOLS,
   configuredModel,
+  configuredThinking,
+  coordinatorLaunchConfiguration,
+  EXPECTED_COORDINATOR_LAUNCH_ENV,
+  VALID_THINKING_LEVELS,
   configuredToolPolicy,
   notifyDefinitionWarning,
   discoverRoleDefinitions,
@@ -1363,6 +1368,7 @@ export function createLeadSessionStartRuntime(host: {
     ctx: ExtensionContext,
     signal: AbortSignal,
   ): Promise<void>;
+  attestCoordinatorLaunch?(ctx: ExtensionContext): void;
   rejectNativeAgentRestore?(ctx: ExtensionContext): boolean;
   quarantineNativeAgentRestore?(ctx: ExtensionContext): void;
   resetNativeAgentRestoreQuarantine?(ctx: ExtensionContext): void;
@@ -1680,6 +1686,14 @@ export function createLeadSessionStartRuntime(host: {
             malformedRole,
             definitionSnapshot?.roleDefinitions,
           );
+          if (!sessionSignal.aborted && !malformedRole) {
+            try {
+              host.attestCoordinatorLaunch?.(ctx);
+            } catch (error) {
+              host.appendRoleError(ctx, error);
+              throw error;
+            }
+          }
         } finally {
           if (!sessionSignal.aborted) {
             host.setLeadExecutionPending(false);
@@ -2098,13 +2112,11 @@ export function registerLeadRuntime(
             sessionId,
           )
         : undefined;
-    if (binding && binding.category !== "manager")
-      throw new Error(
-        "Saved Coordinator definition is not a Manager definition",
-      );
     const name =
       role === "manager"
-        ? (binding?.name ?? MANAGER_DEFINITION_NAME)
+        ? binding?.category === "manager"
+          ? binding.name
+          : MANAGER_DEFINITION_NAME
         : CHIEF_DEFINITION_NAME;
     const definition = options.commandHost.resolveDefinition(role, name, {
       ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
@@ -4554,25 +4566,22 @@ export function registerLeadRuntime(
       ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
       onWarning: (message) => notifyDefinitionWarning(ctx, message),
     });
-  const verifyManagedLeadModelRestoration = async (
+  const attestStartupModel = (
     ctx: ExtensionContext,
-    signal: AbortSignal,
-  ): Promise<void> => {
-    if (sessionKind?.kind !== "managed") return;
-    coordinationRuntime.invalidateStartupCoordinationState(
-      ctx.sessionManager.getSessionId(),
-    );
-    const definition = managedLeadDefinition(ctx);
-    if (signal.aborted) return;
+    definition: AgentDefinition,
+    launchConfiguration?: string,
+  ): void => {
     const saved = resolveSavedSessionModelSelection(
       ctx.sessionManager,
       (provider, modelId) => ctx.modelRegistry.find(provider, modelId),
     );
     const explicitModelOverride =
       configuredModel(definition.frontmatter) !== undefined;
+    const role =
+      launchConfiguration === undefined ? "Managed Lead" : "Coordinator";
     if (saved.kind === "unresolved" && !explicitModelOverride)
       throw new Error(
-        `Managed Lead model restoration failed: saved selection is ambiguous (${saved.candidates.map(({ provider, modelId }) => `${provider}/${modelId}`).join(" vs ")}).`,
+        `${role} model restoration failed: saved selection is ambiguous (${saved.candidates.map(({ provider, modelId }) => `${provider}/${modelId}`).join(" vs ")}).`,
       );
     if (saved.kind === "resolved") {
       const actual = ctx.model
@@ -4590,6 +4599,7 @@ export function registerLeadRuntime(
       kind: "model_restore" as const,
       assignmentId: ctx.sessionManager.getSessionId(),
       generation: leadRuntime.instanceId,
+      ...(launchConfiguration === undefined ? {} : { launchConfiguration }),
       result: explicitModelOverride
         ? ("definition_override" as const)
         : saved.kind === "none"
@@ -4601,6 +4611,61 @@ export function registerLeadRuntime(
         "Managed Lead model restoration was verified, but its fresh startup attestation could not be published",
       );
     if (expected) delete process.env[EXPECTED_STARTUP_MODEL_ENV];
+  };
+  const verifyManagedLeadModelRestoration = async (
+    ctx: ExtensionContext,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    if (sessionKind?.kind !== "managed") return;
+    coordinationRuntime.invalidateStartupCoordinationState(
+      ctx.sessionManager.getSessionId(),
+    );
+    const definition = managedLeadDefinition(ctx);
+    if (!signal.aborted) attestStartupModel(ctx, definition);
+  };
+  const attestCoordinatorLaunch = (ctx: ExtensionContext): void => {
+    const expected = process.env[EXPECTED_COORDINATOR_LAUNCH_ENV];
+    if (expected === undefined) return;
+    delete process.env[EXPECTED_COORDINATOR_LAUNCH_ENV];
+    const profile =
+      leadRuntime.controllerRole === "manager"
+        ? supervisoryProfile
+        : leadExecution;
+    const actual = profile?.valid
+      ? coordinatorLaunchConfiguration(profile.definition, ctx.cwd)
+      : undefined;
+    if (actual !== expected || !profile?.valid)
+      throw new Error(
+        "Coordinator launch configuration differs from the effective definition. Verify target project trust and definition overrides before retrying.",
+      );
+    const model = ctx.model;
+    const explicitModel = configuredModel(profile.definition.frontmatter);
+    // Pi resolves explicit CLI model references (including fuzzy matches and
+    // shorthand) before startup. Unlike saved model restoration, an invalid
+    // explicit selection does not fall back to an unrelated default.
+    if (explicitModel && !model)
+      throw new Error(
+        "Pi did not select a model for the Coordinator definition.",
+      );
+    const savedThinking = explicitModel
+      ? undefined
+      : [...ctx.sessionManager.getBranch()]
+          .reverse()
+          .find((entry) => entry.type === "thinking_level_change")
+          ?.thinkingLevel;
+    const thinking =
+      configuredThinking(profile.definition) ??
+      VALID_THINKING_LEVELS.find((level) => level === savedThinking);
+    if (thinking !== undefined) {
+      const expectedThinking = model
+        ? clampThinkingLevel(model, thinking)
+        : "off";
+      if (ctx.thinkingLevel !== expectedThinking)
+        throw new Error(
+          `Expected Coordinator startup thinking level ${expectedThinking}, but Pi selected ${ctx.thinkingLevel ?? "no level"}.`,
+        );
+    }
+    attestStartupModel(ctx, profile.definition, actual);
   };
   const prepareLeadExecution = async (
     ctx: ExtensionContext,
@@ -5021,6 +5086,7 @@ export function registerLeadRuntime(
     },
     initializeSessionKind,
     verifyManagedLeadModelRestoration,
+    attestCoordinatorLaunch,
     quarantineNativeAgentRestore: (ctx: ExtensionContext) => {
       quarantinedSessionId = ctx.sessionManager.getSessionId();
       roleTransitions.suspendMalformedRole(ctx);

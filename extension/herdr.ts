@@ -1951,7 +1951,10 @@ type PrimaryWorkspaceOptions = {
   timeoutMs?: number;
 };
 
-type ManagerPaneOptions = PrimaryWorkspaceOptions & { agentDir: string };
+type ManagerPaneOptions = PrimaryWorkspaceOptions & {
+  agentDir: string;
+  env?: string[];
+};
 
 export type HerdrManagerPaneSelection = Readonly<{
   workspaceId: string;
@@ -2333,6 +2336,7 @@ export async function prepareHerdrManagerPane(
     cwd,
     label: "Manager",
     agentDir: options.agentDir,
+    env: options.env,
     signal,
     timeoutMs: options.timeoutMs,
     assertCurrentAuthority: options.assertCurrentAuthority,

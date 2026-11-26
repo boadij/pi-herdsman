@@ -4457,6 +4457,7 @@ export type LeadStartupAttestation = {
   assignmentId: string;
   generation: string;
   result: "verified" | "definition_override" | "no_saved_model";
+  launchConfiguration?: string;
 };
 
 export type CoordinatorState = {
@@ -4882,13 +4883,28 @@ function validLeadState(value: unknown): value is CoordinatorState {
     (!!attestation &&
       typeof attestation === "object" &&
       !Array.isArray(attestation) &&
-      Object.keys(attestation).length === 4 &&
+      Object.keys(attestation).every((key) =>
+        [
+          "kind",
+          "assignmentId",
+          "generation",
+          "result",
+          "launchConfiguration",
+        ].includes(key),
+      ) &&
       (attestation as any).kind === "model_restore" &&
       (attestation as any).assignmentId === r.piSessionId &&
       (attestation as any).generation === r.instanceId &&
       ["verified", "definition_override", "no_saved_model"].includes(
         (attestation as any).result,
-      ));
+      ) &&
+      ((attestation as LeadStartupAttestation).launchConfiguration ===
+        undefined ||
+        (typeof (attestation as LeadStartupAttestation).launchConfiguration ===
+          "string" &&
+          /^[0-9a-f]{64}$/u.test(
+            (attestation as LeadStartupAttestation).launchConfiguration!,
+          ))));
   return (
     r.version === 1 &&
     (r.build === undefined || isRuntimeBuild(r.build)) &&

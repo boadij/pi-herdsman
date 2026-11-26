@@ -7,6 +7,7 @@ import os, { tmpdir } from "node:os";
 import { mock } from "node:test";
 import { fileURLToPath } from "node:url";
 import type { Component, TUI } from "@earendil-works/pi-tui";
+import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import {
   Theme as PiTheme,
   resolveCliModel,
@@ -668,6 +669,7 @@ mock.module("@earendil-works/pi-tui", {
 });
 mock.module("@earendil-works/pi-ai", {
   namedExports: {
+    clampThinkingLevel,
     contentText: (
       content: string | readonly { type: string; text: string }[],
       separator = "\n",
