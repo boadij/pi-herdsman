@@ -217,7 +217,7 @@ exactly-once delivery for both completed and failed terminal results.
 
 Agent cleanup does not delete the Pi session. To continue completed or
 deliberately abandoned context,
-use the exact returned session with `continue_agent`; Pi Herdsman starts a new agent
+use the exact returned session with `resume_agent`; Pi Herdsman starts a new agent
 generation for the new assignment. The continuation uses the saved cwd, session
 history, definition, and logical label together with the current effective
 authorized definition configuration. Its omitted model and thinking fields

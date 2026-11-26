@@ -111,7 +111,7 @@ project settings, so deeper nesting is always an explicit user-level opt-in. It
 is also available under `/herdsman` → `Settings` → `Delegation options` →
 `Agent nesting limit`.
 
-The limit is read when `delegate_agent` or `continue_agent` prepares a launch
+The limit is read when `delegate_agent` or `resume_agent` prepares a launch
 and checked again immediately before the agent starts; a launch whose limit
 changed in between is rejected and can be retried. `PI_HERDSMAN_DEPTH`, which
 the launching controller sets in an agent's environment, is only a startup

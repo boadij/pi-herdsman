@@ -882,10 +882,10 @@ test("an Agent at or beyond the limit is advertised no definitions", () => {
   );
 });
 
-test("continue_agent applies the same depth policy as delegate_agent", async () => {
+test("resume_agent applies the same depth policy as delegate_agent", async () => {
   for (const [action, tool, args] of [
     ["delegate", "delegate_agent", { definition: "worker", task: "go" }],
-    ["continue", "continue_agent", { session: randomUUID(), task: "go" }],
+    ["continue", "resume_agent", { session: randomUUID(), task: "go" }],
   ] as const) {
     writeMaxAgentDepth(2);
     const parentLabel = `depth-continue-${randomUUID().slice(0, 6)}`;

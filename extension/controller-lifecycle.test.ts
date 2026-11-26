@@ -1239,7 +1239,7 @@ test("parent delegates two same-definition children with exact ownership", async
       .find((tool) => tool.name === "list_agents")!
       .promptGuidelines!.join(" ");
     for (const phrase of [
-      "When delegating a bounded task, prefer continue_agent if a known exact historical managed-Agent Pi session carries substantial context relevant to that task and remains eligible; otherwise use delegate_agent to start fresh from a definition.",
+      "When delegating a bounded task, prefer resume_agent if a known exact historical managed-Agent Pi session carries substantial context relevant to that task and remains eligible; otherwise use delegate_agent to start fresh from a definition.",
       "Retired sessions cannot be continued while context retirement is enabled. If further work is needed, delegate a fresh Agent with the prior handoff and relevant files.",
       "Each live Agent generation exists for one assignment; after its terminal result is delivered, Herdsman cleans up that generation.",
       "Agent labels identify the current live generation; exact Pi sessions identify historical context and continuation.",
@@ -1421,7 +1421,7 @@ const registeredAgentTool = (
         {
           list: "list_agents",
           delegate: "delegate_agent",
-          continue: "continue_agent",
+          continue: "resume_agent",
           steer: "steer_agent",
           interrupt: "interrupt_agent",
           reply: "reply_agent",
@@ -12621,7 +12621,7 @@ test("historical session with its inherited label rejects an active managed repr
     const controllerContext = fakeContext();
     controllerContext.sessionManager.getSessionId = () => session.id;
     const ownSession = await pi.tools
-      .find((tool) => tool.name === "continue_agent")!
+      .find((tool) => tool.name === "resume_agent")!
       .execute(
         "controller-session",
         {
@@ -12635,7 +12635,7 @@ test("historical session with its inherited label rejects an active managed repr
     assert.equal(ownSession.details.error.category, "invalid_request");
     const before = pi.calls.length;
     const result = await pi.tools
-      .find((tool) => tool.name === "continue_agent")!
+      .find((tool) => tool.name === "resume_agent")!
       .execute(
         "id",
         { session: session.path, task: "must wait" },
@@ -14523,7 +14523,7 @@ async function exerciseManagedParentResume(depth: number) {
       (tool) => tool.name === "delegate_agent",
     );
     const continuation = parentPi.tools.find(
-      (tool) => tool.name === "continue_agent",
+      (tool) => tool.name === "resume_agent",
     );
     const persistToolResult = (
       toolName: string,
@@ -14755,7 +14755,7 @@ async function exerciseManagedParentResume(depth: number) {
       parentContext,
     );
     assert.equal(resumed.details.ok, true, JSON.stringify(resumed.details));
-    persistToolResult("continue_agent", resumed);
+    persistToolResult("resume_agent", resumed);
     assert.equal(resumed.details.session_id, childSessionId);
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.ok(accepted);
@@ -15579,7 +15579,7 @@ async function continueAfterTerminalResult(
       type: "message",
       message: {
         role: "toolResult",
-        toolName: "continue_agent",
+        toolName: "resume_agent",
         details: {
           ok: true,
           owner_session_id: state.ownerSessionId,
