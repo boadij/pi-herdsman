@@ -176,7 +176,7 @@ side effects.
 The available scenarios are `core` (nested delegation and candidate-extension
 propagation), `continuation` (persisted Pi-session continuation across managed
 generations), `chief-tree` (current Chief/session_tree behavior),
-`chief-manager` (Chief starts and recovers a Manager),
+`chief-manager` (Chief starts and recovers a Manager and shuts down staff),
 `supervisor-agent` (Chief direct Agent delegation, completed result delivery,
 and role exit), `manager-bootstrap` (real confirmation of Git initialization in
 a disposable non-Git primary workspace followed by first delegation and
@@ -212,15 +212,17 @@ branch restores ordinary Lead tools. It does not
 replace the broader manual Chief supervision checks below.
 
 `chief-manager` requires `--simulated`: model responses are scripted, but Pi,
-Herdsman, Herdr, and Git run for real in isolation. It exercises Chief startup
-in a project without a workspace, a repeat start without a duplicate pane or
-process, and `resume_required` after quitting Manager Pi. It checks that a
-mismatched saved session reference blocks both startup and resume, then
-reopens the original session file and history under a new PID. The scenario
-checks persisted conversational replies from the Manager and verifies that an
-existing assignment, worktree, and live Lead session and PID survive the
-turnover. It does not test remote cloning, interactive Git bootstrap, or
-live-model decisions.
+Herdsman, Herdr, and Git run for real in isolation. Chief starts a Manager in
+a project without a workspace and repeats the start without creating another
+pane or process. The scenario uses `stop_hierarchy` to stop that Manager and
+its assigned Lead while an ordinary Lead in another project stays running.
+It checks that the assignment, worktree, and saved Lead history survive, and
+that a mismatched Manager recovery reference blocks both startup and resume.
+Exact Manager recovery must reopen the original history under a new PID.
+Staff shutdown must stop the resumed Manager and ordinary Lead but leave Chief
+running. After recovering the Manager again, the scenario requests complete
+shutdown and checks externally that both Manager and Chief exit. It does not
+test remote cloning, interactive Git bootstrap, or live-model decisions.
 
 For runtime changes to settlement or tool selection, verify cancellation does
 not deliver partial assistant text as a successful result and verify the

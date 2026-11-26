@@ -733,6 +733,8 @@ test("Lead startup requests status refresh after execution profile initializatio
     roleTransitions: {
       beginSessionRole: () => ({}),
       reconcileRoleTools: () => calls.push("reconcile"),
+      coordinatorStartIntent: () => undefined,
+      suspendMalformedRole() {},
       canRestoreChiefState: () => false,
       async resolveControllerRole() {},
       shouldRestoreChief: () => false,

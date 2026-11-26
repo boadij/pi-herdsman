@@ -38,6 +38,7 @@ These sequential tools require current, verified Chief authority when called.
 | `start_manager`    | `repository`, optional `destination` for a remote, optional Manager `definition` | Prepare a local project or clone a remote. Reuse the verified primary Herdr workspace or create one if absent, then start a Manager in a dedicated tab. |
 | `resume_manager`   | `repository` (local primary checkout)                                            | Verify and reopen the exact saved Manager Pi session in a dedicated tab. Does not initialize Git.                                                       |
 | `start_lead`       | exact `workspace`, optional `definition` and `message`                           | Start an ordinary Lead in a verified current Herdr workspace without creating a project assignment or starting a Manager.                               |
+| `stop_hierarchy`   | explicit `scope`; `target` only for `manager`                                    | Stop one verified Manager subtree, all Chief-supervised staff, or that staff scope followed by a graceful Chief shutdown request.                       |
 
 `start_manager` defaults to the `manager` definition. Named Manager
 definitions use the `coordinators/managers/` category. The selected definition
@@ -116,6 +117,41 @@ duplicate or automatically expire the reservation, even if the earlier call was
 cancelled after launch may have begun. If readiness cannot be
 verified, an operator must reconcile the retained record with Herdr state
 before retrying.
+
+## Hierarchical shutdown
+
+`stop_hierarchy` is Chief-only and requires an explicit discriminated request:
+
+```json
+{"scope":"manager","target":"<current Manager target>"}
+{"scope":"staff"}
+{"scope":"all"}
+```
+
+The Manager target must be the stable target from current staff discovery.
+The `staff` and `all` scopes reject a target. Shutdown stops verified children
+before their owning Coordinator, including each Coordinator's own Agent tree.
+Chief may stop an eligible ordinary Lead only as a current direct report or
+within the selected verified Manager subtree; this does not make Chief the
+Lead's assignment authority or Agent owner. Assigned Leads without current
+verified Manager authority do not become Chief targets.
+
+Results distinguish `complete`, `partial`, `blocked`, and
+`shutdown_requested`. Partial or blocked results mean selected execution may
+remain; an unknown report, unsettled startup, or incompatible identity is not
+proof of absence. Stopping preserves assignments, Git branches, worktrees,
+Pi session history, and Manager recovery references. It does not restart
+execution or remove project data. `all` uses Pi's graceful `ctx.shutdown()`
+only after descendants settle. Its result records the request, not external
+confirmation that Chief's process exited; Pi may defer exit until queued work
+and the active operation finish. Print mode is rejected because its native
+shutdown call is a no-op.
+
+Coordinator startup/recovery, role activation, staff delegation/recovery, and
+Agent delegation/continuation share a profile-and-socket-scoped admission
+lock. A concurrent admission returns busy rather than being queued to run
+after shutdown. The lock may temporarily block unrelated launches in the same
+runtime, but does not stop or otherwise mutate unrelated running work.
 
 ## Direct-report projection
 

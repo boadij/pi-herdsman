@@ -84,6 +84,7 @@ import {
   consumeCoordinatorStartIntent,
   getManagerStartIntent,
   getCoordinatorStartIntent,
+  readManagerRecoveryReference,
   removeManagerRecoveryReference,
   writeManagerRecoveryReference,
 } from "./supervision.ts";
@@ -110,7 +111,12 @@ import {
   worktreeGroupScopeFromTopology,
   runHerdr,
 } from "./herdr.ts";
-import { ProcessLockOccupiedError } from "./lock.ts";
+import {
+  acquireCoordinatorAdmission,
+  coordinatorAdmissionClaimIsCurrent,
+  ProcessLockOccupiedError,
+  type ProcessLockClaim,
+} from "./lock.ts";
 import {
   DEFAULT_STATUS_WIDGET_MAX_ROWS,
   readConfig,
@@ -1509,7 +1515,7 @@ export function createLeadSessionStartRuntime(host: {
         let leadStateRestored = false;
         let leadStateValid = true;
         let startupIntent: CoordinatorStartIntent | undefined;
-        if (freshSession && !hasPersistedRole && !malformedRole) {
+        if (!malformedRole) {
           try {
             startupIntent =
               host.roleTransitions.coordinatorStartIntent(sessionId);
@@ -1517,7 +1523,12 @@ export function createLeadSessionStartRuntime(host: {
             malformedRole = true;
             await host.failClosedRole(ctx, error);
           }
-          if (!startupIntent && !malformedRole) {
+          if (
+            freshSession &&
+            !hasPersistedRole &&
+            !startupIntent &&
+            !malformedRole
+          ) {
             try {
               optionalManager = host.autoActivateManager(ctx);
             } catch (error) {
@@ -1548,13 +1559,32 @@ export function createLeadSessionStartRuntime(host: {
                 "lead",
                 false,
                 reason === "reload",
+                startupIntent.admission,
               );
-            } else if (startupIntent)
-              await host.roleTransitions.activateManagerFromIntent(
+            } else if (startupIntent?.role === "assigned-lead") {
+              await host.roleTransitions.activateAssignedLeadFromIntent(
                 ctx,
-                startupIntent as ManagerStartIntent,
+                startupIntent,
               );
-            else
+              await host.roleTransitions.resolveControllerRole(
+                ctx,
+                "lead",
+                false,
+                reason === "reload",
+                startupIntent.admission,
+              );
+            } else if (startupIntent) {
+              if (startupIntent.recoverySessionFile)
+                await host.roleTransitions.restoreManagerFromIntent(
+                  ctx,
+                  startupIntent,
+                );
+              else
+                await host.roleTransitions.activateManagerFromIntent(
+                  ctx,
+                  startupIntent as ManagerStartIntent,
+                );
+            } else
               await host.roleTransitions.resolveControllerRole(
                 ctx,
                 persistedRole,
@@ -1566,7 +1596,9 @@ export function createLeadSessionStartRuntime(host: {
           if (sessionSignal.aborted) return;
           if (startupIntent) {
             malformedRole = true;
-            await host.failClosedRole(ctx, error);
+            if (startupIntent.recoverySessionFile)
+              host.appendRoleError(ctx, error);
+            else await host.failClosedRole(ctx, error);
           } else host.appendRoleError(ctx, error);
         }
         if (sessionSignal.aborted) return;
@@ -11263,14 +11295,71 @@ export function createLeadRoleTransitions(
   const activateChief = async (
     ...args: ChiefActivationArgs
   ): Promise<string> => {
-    const [ctx, resumed] = args;
+    const ctx = args[0];
+    const refreshSnapshot =
+      !args[1] && state.chiefMode === "active" && host.isCurrentChief(ctx)
+        ? {
+            sessionId: ctx.sessionManager.getSessionId(),
+            lease: state.chiefLease,
+            generation: state.chiefModeGeneration,
+          }
+        : undefined;
+    if (refreshSnapshot) {
+      await (ctx as ExtensionCommandContext).waitForIdle();
+      if (
+        ctx.sessionManager.getSessionId() !== refreshSnapshot.sessionId ||
+        state.chiefMode !== "active" ||
+        state.roleSuspended ||
+        !refreshSnapshot.lease ||
+        state.chiefLease !== refreshSnapshot.lease ||
+        state.chiefModeGeneration !== refreshSnapshot.generation ||
+        !host.isCurrentChief(ctx)
+      )
+        throw new Error("Chief mode changed during profile refresh");
+    }
+    let admission: ReturnType<typeof acquireCoordinatorAdmission>;
+    try {
+      admission = acquireCoordinatorAdmission();
+    } catch (error) {
+      if (!(error instanceof ProcessLockOccupiedError)) {
+        state.roleSuspended = true;
+        host.markLeadCoordinationUnhealthy(ctx);
+        reconcileRoleTools();
+      }
+      throw error;
+    }
+    try {
+      return await activateChiefUnderAdmission(
+        args[0],
+        args[1],
+        refreshSnapshot,
+      );
+    } finally {
+      admission.release();
+    }
+  };
+  const activateChiefUnderAdmission = async (
+    ctx: ExtensionContext,
+    resumed: boolean | undefined,
+    refreshSnapshot?: {
+      sessionId: string;
+      lease: typeof state.chiefLease;
+      generation: number;
+    },
+  ): Promise<string> => {
     if (host.processRole !== "lead")
       throw new Error("Only a lead can activate chief");
-    if (!resumed && state.chiefMode === "active" && host.isCurrentChief(ctx)) {
-      const sessionId = ctx.sessionManager.getSessionId();
-      const lease = state.chiefLease;
-      const generation = state.chiefModeGeneration;
-      await ctx.waitForIdle();
+    if (
+      refreshSnapshot ||
+      (!resumed && state.chiefMode === "active" && host.isCurrentChief(ctx))
+    ) {
+      const sessionId =
+        refreshSnapshot?.sessionId ?? ctx.sessionManager.getSessionId();
+      const lease = refreshSnapshot?.lease ?? state.chiefLease;
+      const generation =
+        refreshSnapshot?.generation ?? state.chiefModeGeneration;
+      if (!refreshSnapshot)
+        await (ctx as ExtensionCommandContext).waitForIdle();
       if (
         ctx.sessionManager.getSessionId() !== sessionId ||
         state.chiefMode !== "active" ||
@@ -11485,6 +11574,37 @@ export function createLeadRoleTransitions(
     return establishManager(ctx);
   };
   const establishManager = async (
+    ctx: ExtensionCommandContext,
+    intent?: ManagerStartIntent,
+  ): Promise<string> => {
+    if (intent) {
+      if (
+        !intent.admission ||
+        !coordinatorAdmissionClaimIsCurrent(intent.admission)
+      )
+        throw new Error(
+          "Manager startup intent has no current Coordinator admission claim",
+        );
+      return establishManagerUnderAdmission(ctx, intent);
+    }
+    let admission: ReturnType<typeof acquireCoordinatorAdmission>;
+    try {
+      admission = acquireCoordinatorAdmission();
+    } catch (error) {
+      if (!(error instanceof ProcessLockOccupiedError)) {
+        state.roleSuspended = true;
+        host.markLeadCoordinationUnhealthy(ctx);
+        reconcileRoleTools();
+      }
+      throw error;
+    }
+    try {
+      return await establishManagerUnderAdmission(ctx);
+    } finally {
+      admission.release();
+    }
+  };
+  const establishManagerUnderAdmission = async (
     ctx: ExtensionContext,
     intent?: ManagerStartIntent,
   ): Promise<string> => {
@@ -11767,6 +11887,16 @@ export function createLeadRoleTransitions(
   const leaveManager = async (
     ctx: ExtensionCommandContext,
   ): Promise<string> => {
+    const admission = acquireCoordinatorAdmission();
+    try {
+      return await leaveManagerUnderAdmission(ctx);
+    } finally {
+      admission.release();
+    }
+  };
+  const leaveManagerUnderAdmission = async (
+    ctx: ExtensionCommandContext,
+  ): Promise<string> => {
     if (state.controllerRole !== "manager" || !state.managerLease)
       throw new Error("Manager mode is not active");
     host.invalidateManagerRemovalRequests?.(ctx);
@@ -11850,7 +11980,14 @@ export function createLeadRoleTransitions(
       )
         return "Chief leave cancelled.";
     }
-    if (ctx) await deactivateChief(ctx);
+    if (ctx) {
+      const admission = acquireCoordinatorAdmission();
+      try {
+        await deactivateChief(ctx);
+      } finally {
+        admission.release();
+      }
+    }
     return "Chief mode left.";
   };
   const failClosedRole = async (
@@ -12052,8 +12189,84 @@ export function createLeadRoleTransitions(
     requestedRole: SessionRole,
     optional = false,
     reloading = false,
+    admittedClaim?: ProcessLockClaim,
+  ): Promise<void> => {
+    if (admittedClaim) {
+      if (!coordinatorAdmissionClaimIsCurrent(admittedClaim))
+        throw new Error("Coordinator admission claim changed during startup");
+      return resolveControllerRoleUnderAdmission(
+        ctx,
+        requestedRole,
+        optional,
+        reloading,
+      );
+    }
+    let admission: ReturnType<typeof acquireCoordinatorAdmission>;
+    try {
+      admission = acquireCoordinatorAdmission();
+    } catch (error) {
+      if (!(error instanceof ProcessLockOccupiedError)) {
+        state.roleSuspended = true;
+        host.markLeadCoordinationUnhealthy(ctx);
+        reconcileRoleTools();
+      }
+      throw error;
+    }
+    try {
+      return resolveControllerRoleUnderAdmission(
+        ctx,
+        requestedRole,
+        optional,
+        reloading,
+      ).finally(() => admission.release());
+    } catch (error) {
+      admission.release();
+      throw error;
+    }
+  };
+  const resolveControllerRoleUnderAdmission = (
+    ctx: ExtensionContext,
+    requestedRole: SessionRole,
+    optional = false,
+    reloading = false,
+    recoveryIntent?: ManagerStartIntent,
   ): Promise<void> => {
     const generation = state.sessionGeneration;
+    const assertRecoveryIntent = () => {
+      if (!recoveryIntent) return;
+      const runtime = host.supervisionRuntime();
+      const { sessionId, canonicalRepoKey, recoverySessionFile, admission } =
+        recoveryIntent;
+      const file = ctx.sessionManager.getSessionFile();
+      const reference = canonicalRepoKey
+        ? readManagerRecoveryReference(runtime, canonicalRepoKey)
+        : undefined;
+      ctx.signal?.throwIfAborted();
+      if (
+        recoveryIntent.role !== "manager" ||
+        !admission ||
+        !coordinatorAdmissionClaimIsCurrent(admission) ||
+        ctx.sessionManager.getSessionId() !== sessionId ||
+        host.sessionLeadRoleState(ctx.sessionManager.getBranch(), sessionId)
+          ?.role !== "manager" ||
+        !file ||
+        !recoverySessionFile ||
+        !sameObservedSessionPath(file, recoverySessionFile) ||
+        reference?.piSessionId !== sessionId ||
+        !sameObservedSessionPath(
+          reference.piSessionFile,
+          recoverySessionFile,
+        ) ||
+        recoveryIntent.workspaceId !== host.identity.workspaceId ||
+        recoveryIntent.paneId !== host.identity.paneId ||
+        recoveryIntent.tabId !== host.identity.tabId ||
+        !sameDirectory(recoveryIntent.checkoutPath, ctx.cwd)
+      )
+        throw new Error(
+          "Manager recovery intent does not match current admission, session, and placement",
+        );
+    };
+    assertRecoveryIntent();
     const resolve = (profile?: SupervisoryProfile, commit = true) => {
       const pending = resolveLeadControllerRole(
         state,
@@ -12062,8 +12275,38 @@ export function createLeadRoleTransitions(
         {
           identity: host.identity,
           build: host.build,
-          localRepositoryScope: (workspaceId, signal) =>
-            localRepositoryScope(host.pi, ctx, workspaceId, signal),
+          localRepositoryScope: async (workspaceId, signal) => {
+            try {
+              const scope = await localRepositoryScope(
+                host.pi,
+                ctx,
+                workspaceId,
+                signal,
+              );
+              if (
+                recoveryIntent &&
+                (!scope.isPrimary ||
+                  scope.canonicalRepoKey !== recoveryIntent.canonicalRepoKey ||
+                  !sameDirectory(
+                    scope.checkoutPath,
+                    recoveryIntent.checkoutPath,
+                  ))
+              )
+                throw new Error(
+                  "Manager recovery intent does not match the verified repository",
+                );
+              return scope;
+            } catch (error) {
+              if (!recoveryIntent) throw error;
+              // Explicit recovery refusal must not rewrite the saved role.
+              throw new Error(
+                "Manager recovery repository verification failed",
+                {
+                  cause: error,
+                },
+              );
+            }
+          },
           verifyNoLegacyManager: (canonicalRepoKey, workspaceId) =>
             requireNoLiveLegacyManager(
               host.pi,
@@ -12072,12 +12315,21 @@ export function createLeadRoleTransitions(
               workspaceId,
               ctx.signal,
             ),
-          claimManagerLease: host.claimManagerLease,
+          claimManagerLease: (descriptor) => {
+            if (recoveryIntent) {
+              assertRecoveryIntent();
+              consumeManagerStartIntent(
+                host.supervisionRuntime(),
+                recoveryIntent,
+              );
+            }
+            return host.claimManagerLease(descriptor);
+          },
           coordinationHealthy: host.coordinationHealthy,
           verifyManagerIdentity: (descriptor) =>
             host.remoteChiefAgent(ctx, descriptor),
-          verifyCurrentIdentity: () =>
-            host.remoteChiefAgent(ctx, {
+          verifyCurrentIdentity: async () => {
+            const identity = await host.remoteChiefAgent(ctx, {
               piSessionId: ctx.sessionManager.getSessionId(),
               piSessionFile: ctx.sessionManager.getSessionFile(),
               ...host.identity,
@@ -12088,7 +12340,10 @@ export function createLeadRoleTransitions(
               | "paneId"
               | "tabId"
               | "workspaceId"
-            >),
+            >);
+            assertRecoveryIntent();
+            return identity;
+          },
           unresolvedManagerLease: () => {
             host.markLeadCoordinationUnhealthy(ctx);
             reconcileRoleTools();
@@ -12295,6 +12550,13 @@ export function createLeadRoleTransitions(
   ): Promise<void> => {
     const sessionId = ctx.sessionManager.getSessionId();
     if (
+      !intent.admission ||
+      !coordinatorAdmissionClaimIsCurrent(intent.admission)
+    )
+      throw new Error(
+        "Ordinary Lead startup intent has no current Coordinator admission claim",
+      );
+    if (
       intent.role !== "lead" ||
       intent.sessionId !== sessionId ||
       !intent.tabId ||
@@ -12319,7 +12581,9 @@ export function createLeadRoleTransitions(
       current.workspaceId !== intent.workspaceId ||
       current.paneId !== intent.paneId ||
       current.checkoutPath !== intent.checkoutPath ||
-      current.definition !== intent.definition
+      current.definition !== intent.definition ||
+      current.admission?.pid !== intent.admission.pid ||
+      current.admission?.id !== intent.admission.id
     )
       throw new Error("Ordinary Lead startup intent changed before activation");
     const binding = readCoordinatorDefinitionBinding(
@@ -12347,6 +12611,64 @@ export function createLeadRoleTransitions(
     consumeCoordinatorStartIntent(host.supervisionRuntime(), intent);
     host.persistRole("lead");
   };
+  const activateAssignedLeadFromIntent = async (
+    ctx: ExtensionContext,
+    intent: CoordinatorStartIntent,
+  ): Promise<void> => {
+    const sessionId = ctx.sessionManager.getSessionId();
+    if (
+      intent.role !== "assigned-lead" ||
+      intent.sessionId !== sessionId ||
+      !intent.admission ||
+      !coordinatorAdmissionClaimIsCurrent(intent.admission) ||
+      !intent.assignmentRepoKey ||
+      !intent.branch ||
+      !intent.tabId ||
+      intent.workspaceId !== host.identity.workspaceId ||
+      intent.paneId !== host.identity.paneId ||
+      intent.tabId !== host.identity.tabId ||
+      !sameDirectory(intent.checkoutPath, ctx.cwd) ||
+      !host.isManagedSession?.()
+    )
+      throw new Error(
+        "Assigned Lead startup intent does not match the admitted session and placement",
+      );
+    const runtime = host.supervisionRuntime();
+    const current = getCoordinatorStartIntent(runtime, sessionId);
+    if (
+      !current ||
+      current.role !== "assigned-lead" ||
+      current.assignmentRepoKey !== intent.assignmentRepoKey ||
+      current.branch !== intent.branch ||
+      current.canonicalRepoKey !== intent.canonicalRepoKey ||
+      current.workspaceId !== intent.workspaceId ||
+      current.paneId !== intent.paneId ||
+      current.tabId !== intent.tabId ||
+      current.admission?.pid !== intent.admission.pid ||
+      current.admission?.id !== intent.admission.id
+    )
+      throw new Error("Assigned Lead startup intent changed before activation");
+    const assignments = host.findProjectAssignmentBySession(
+      runtime,
+      intent.assignmentRepoKey,
+      sessionId,
+    );
+    if (
+      assignments.length !== 1 ||
+      assignments[0]!.repoKey !== intent.assignmentRepoKey ||
+      assignments[0]!.branch !== intent.branch ||
+      assignments[0]!.id !== sessionId ||
+      (assignments[0]!.checkoutPath !== undefined &&
+        !sameDirectory(assignments[0]!.checkoutPath, intent.checkoutPath))
+    )
+      throw new Error(
+        "Assigned Lead startup intent no longer matches its exact project assignment",
+      );
+    // initializeSessionKind has already resolved the assigned session against
+    // the current verified worktree scope; the admitted launch binds the exact
+    // session, checkout, placement, and assignment generation here.
+    consumeCoordinatorStartIntent(runtime, intent);
+  };
   return {
     beginShutdownRole,
     shutdownRole,
@@ -12372,10 +12694,16 @@ export function createLeadRoleTransitions(
         ? getCoordinatorStartIntent(host.supervisionRuntime(), sessionId)
         : undefined,
     activateLeadFromIntent,
+    activateAssignedLeadFromIntent,
     activateManagerFromIntent: (
       ctx: ExtensionContext,
       intent: ManagerStartIntent,
-    ) => establishManager(ctx, intent),
+    ) => establishManager(ctx as ExtensionCommandContext, intent),
+    restoreManagerFromIntent: (
+      ctx: ExtensionContext,
+      intent: ManagerStartIntent,
+    ) =>
+      resolveControllerRoleUnderAdmission(ctx, "manager", false, false, intent),
     leaveManager,
     deactivateChief,
     leaveChief,

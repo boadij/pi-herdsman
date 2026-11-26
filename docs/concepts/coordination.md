@@ -122,7 +122,12 @@ start its own Agents using definitions in its effective `agents` profile; that
 direct ownership is separate from supervision and does not include staff
 Agents.
 
-Chief can observe bounded descendant summaries but acts only on direct reports.
+Chief can observe bounded descendant summaries and ordinarily acts only on
+direct reports. The explicit `stop_hierarchy` operation may stop the verified
+child-first subtree of one selected Manager, including eligible ordinary Leads
+supervised by that Manager, without changing project assignments or acquiring
+Agent ownership. Global staff shutdown keeps Chief running; complete shutdown
+requests Pi's native graceful exit after verified descendants settle.
 Its reserved `chief` definition customizes instructions and ordinary tool
 selection, not its workspace-neutral scope or supervision authority. Chief
 definitions accept global customization only; project-local policy does not

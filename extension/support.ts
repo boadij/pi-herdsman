@@ -1301,9 +1301,12 @@ export function setLeadEnvironment(): void {
     "PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS",
     "PI_HERDSMAN_DEPTH",
     "HERDR_PANE_ID",
-    "HERDR_SOCKET_PATH",
   ])
     delete process.env[key];
+  process.env.HERDR_SOCKET_PATH = join(
+    testTmpRoot,
+    `herdr-${randomUUID()}.sock`,
+  );
 }
 
 export function setAgentEnvironment(
@@ -1325,6 +1328,11 @@ export function setAgentEnvironment(
   const mailbox = agentMailboxPath(workspace, label);
   process.env.HERDR_ENV = "1";
   process.env.HERDR_WORKSPACE_ID = workspace;
+  if (!process.env.HERDR_SOCKET_PATH)
+    process.env.HERDR_SOCKET_PATH = join(
+      testTmpRoot,
+      `herdr-${randomUUID()}.sock`,
+    );
   process.env.PI_HERDSMAN_MAILBOX = mailbox;
   process.env.PI_HERDSMAN_RUN_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
   process.env.PI_HERDSMAN_OWNER_SESSION_ID =

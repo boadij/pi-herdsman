@@ -99,6 +99,75 @@ import { supervisorMessageDiagnostics } from "../scripts/smoke.mjs";
 
 const { AUTHORITY_GUIDANCE } = await import("./agent-controller.ts");
 
+test("hierarchy traversal stops every child first and preserves owner on failure", async () => {
+  // Load through the module graph initialized by support.ts after installing mocks.
+  const { stopCoordinatorChildrenFirst } = await import("./index.ts");
+  const events: string[] = [];
+  const outcome = await stopCoordinatorChildrenFirst(
+    ["lead-a", "lead-b"],
+    async (child) => {
+      events.push(child);
+      if (child === "lead-b") throw new Error("child stop unverified");
+    },
+    async () => {
+      events.push("manager");
+    },
+  );
+  assert.deepEqual(events, ["lead-a", "lead-b"]);
+  assert.deepEqual(outcome.failedChildren, [
+    { child: "lead-b", reason: "Error: child stop unverified" },
+  ]);
+  assert.equal(outcome.ownerError, undefined);
+
+  const settled: string[] = [];
+  const complete = await stopCoordinatorChildrenFirst(
+    ["lead-a", "lead-b"],
+    async (child) => {
+      settled.push(child);
+    },
+    async () => {
+      settled.push("manager");
+    },
+  );
+  assert.deepEqual(settled, ["lead-a", "lead-b", "manager"]);
+  assert.deepEqual(complete, { failedChildren: [] });
+
+  const hierarchyEvents: string[] = [];
+  const manager = {
+    leads: [
+      { session: "lead-a", agents: ["agent-a1", "agent-a2"] },
+      { session: "lead-b", agents: ["agent-b1"] },
+    ],
+  };
+  const nested = await stopCoordinatorChildrenFirst(
+    manager.leads,
+    async (lead) => {
+      const outcome = await stopCoordinatorChildrenFirst(
+        lead.agents,
+        async (agent) => {
+          hierarchyEvents.push(agent);
+        },
+        async () => {
+          hierarchyEvents.push(lead.session);
+        },
+      );
+      assert.deepEqual(outcome, { failedChildren: [] });
+    },
+    async () => {
+      hierarchyEvents.push("manager");
+    },
+  );
+  assert.deepEqual(nested, { failedChildren: [] });
+  assert.deepEqual(hierarchyEvents, [
+    "agent-a1",
+    "agent-a2",
+    "lead-a",
+    "agent-b1",
+    "lead-b",
+    "manager",
+  ]);
+});
+
 const peerTopology = () => ({
   stdout: JSON.stringify({
     id: AGENT_ID,
@@ -391,6 +460,7 @@ const CHIEF_PROJECT_TOOLS = [
   "start_manager",
   "resume_manager",
   "start_lead",
+  "stop_hierarchy",
 ];
 
 const REGISTERED_ROLE_TOOLS = [
@@ -703,6 +773,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     clone_repository: "clone repository",
     start_manager: "start Manager",
     resume_manager: "resume Manager",
+    stop_hierarchy: "stop hierarchy",
   };
   for (const legacy of ["agent", "chief", "peer", "staff"])
     assert.equal(tools.has(legacy), false, `legacy tool remains: ${legacy}`);
@@ -1005,7 +1076,9 @@ test("Chief activation exposes only semantic staff and project tools", async (t)
             ? {}
             : name === "start_lead"
               ? { workspace: "workspace-1" }
-              : { repository: "/project" };
+              : name === "stop_hierarchy"
+                ? { scope: "staff" }
+                : { repository: "/project" };
       assertPortableToolSchema(tool);
       assert.equal(tool.defaultActive, false);
       assert.equal(tool.executionMode, "sequential");
@@ -1014,10 +1087,37 @@ test("Chief activation exposes only semantic staff and project tools", async (t)
         Value.Check(tool.parameters, { ...args, unexpected: true }),
         false,
       );
-      await assert.rejects(
-        tool.execute("not-chief", args, undefined, undefined, context),
-        /verified active Chief/,
-      );
+      if (name === "stop_hierarchy") {
+        const outcome = await tool.execute(
+          "not-chief",
+          args,
+          undefined,
+          undefined,
+          context,
+        );
+        assert.equal((outcome as any).details.status, "blocked");
+        for (const invalid of [
+          { scope: "manager" },
+          { scope: "staff", target: "manager:0123456789" },
+        ]) {
+          const rejected = await tool.execute(
+            "invalid-scope",
+            invalid,
+            undefined,
+            undefined,
+            context,
+          );
+          assert.match(
+            (rejected as any).details.reason,
+            /manager scope requires exactly one verified staff target/,
+          );
+        }
+      } else {
+        await assert.rejects(
+          tool.execute("not-chief", args, undefined, undefined, context),
+          /verified active Chief/,
+        );
+      }
     }
     await chief.events.get("session_start")![0](undefined, context);
     assert.equal(chief.pi.getSessionName(), "Chief");
@@ -8292,6 +8392,11 @@ test("managed non-TUI agents do not receive the widget", async () => {
 });
 
 test("delegating managed agents refresh their status widget after controller changes", async (t) => {
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  process.env.HERDR_SOCKET_PATH = join(
+    testTmpRoot,
+    `status-${randomUUID()}.sock`,
+  );
   const label = "status-delegating-agent";
   const mailbox = setAgentEnvironment(label, ["child"]);
   const sessionFile = join(
@@ -8366,6 +8471,8 @@ test("delegating managed agents refresh their status widget after controller cha
     resetAgentMailbox(mailbox);
     realFs.rmSync(sessionFile, { force: true });
     setLeadEnvironment();
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
   });
   registerExtension!(pi.pi as never);
   for (const start of pi.events.get("session_start") ?? [])
@@ -8861,6 +8968,24 @@ test("registered inspect agent exposes process and recent activity evidence", as
   setLeadEnvironment();
   const label = "inspect-agent";
   const identity = recoveryIdentity(label);
+  realFs.writeFileSync(
+    identity.piSessionFile,
+    [
+      JSON.stringify({
+        type: "session",
+        version: 3,
+        id: identity.piSessionId,
+        timestamp: new Date().toISOString(),
+        cwd: "/tmp",
+      }),
+      JSON.stringify({
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId: identity.piSessionId, definition: "agent", label },
+      }),
+    ].join("\n") + "\n",
+    "utf8",
+  );
   const mailbox = agentMailboxPath(WORKSPACE, label);
   const state = managedState(label, undefined, identity);
   writeAgentState(mailbox, state);
@@ -8942,6 +9067,7 @@ test("registered inspect agent exposes process and recent activity evidence", as
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
+    realFs.rmSync(identity.piSessionFile, { force: true });
     setLeadEnvironment();
   }
 });
@@ -9054,6 +9180,11 @@ test("delivered owner asks retain the question in visible message details", asyn
 
 test("registered delegate rejects binary evidence without path-only delivery", async () => {
   setLeadEnvironment();
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  process.env.HERDR_SOCKET_PATH = join(
+    testTmpRoot,
+    `evidence-${randomUUID()}.sock`,
+  );
   const label = "mixed-files-agent";
   const textPath = join(testTmpRoot, `${label}.md`);
   const binaryPath = join(testTmpRoot, `${label}.bin`);
@@ -9096,5 +9227,7 @@ test("registered delegate rejects binary evidence without path-only delivery", a
     resetAgentMailbox(startup.mailbox);
     realFs.rmSync(textPath, { force: true });
     realFs.rmSync(binaryPath, { force: true });
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
   }
 });
