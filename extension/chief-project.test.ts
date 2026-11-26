@@ -39,6 +39,10 @@ import {
   writeManagerRecoveryReference,
 } from "./supervision.ts";
 
+test.before(() => {
+  process.env.HERDR_SOCKET_PATH = join(PI_AGENT_ROOT, "test-herdr.sock");
+});
+
 test("Chief clone provisions only a verified primary workspace", async (t) => {
   for (const scenario of [
     "create",
