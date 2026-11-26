@@ -1550,6 +1550,67 @@ export function decide(model, context) {
         );
       return fauxAssistantMessage("CHIEF_MANAGER_SMOKE_VERIFIED");
     }
+    if (prompt === "CHIEF_MANAGER_SMOKE delegate") {
+      appendFileSync(
+        join(
+          process.env.PI_CODING_AGENT_DIR,
+          "pi-herdsman",
+          "runtime",
+          "smoke-chief-manager-invocations.jsonl",
+        ),
+        `${JSON.stringify({ sessionId: currentSessionId, promptMarker: prompt })}\n`,
+      );
+      console.error(
+        JSON.stringify({
+          smokeDiagnostic: "chief-manager-agent",
+          event: "prompt_received",
+          exactMatch: true,
+        }),
+      );
+      if (
+        !getCurrentSystemPrompt(messages).includes(
+          "You are the verified Manager for this Pi session.",
+        )
+      )
+        throw new Error("Named Manager delegation lacked Manager context");
+      const existing = correlatedCall(messages, "delegate_agent");
+      console.error(
+        JSON.stringify({
+          smokeDiagnostic: "chief-manager-agent",
+          event: existing ? "tool_result_received" : "branch_selected",
+          delegateToolAvailable: getCurrentTools(messages).some(
+            (tool) => tool.name === "delegate_agent",
+          ),
+          resultError: existing?.result?.isError ?? null,
+        }),
+      );
+      if (existing) {
+        const result = text(existing.result);
+        const requestId = result.match(/^Request: ([^\n]+)$/m)?.[1];
+        const sessionId = result.match(/^Session: ([^\n]+)$/m)?.[1];
+        const delivered =
+          requestId &&
+          sessionId &&
+          messages.some(
+            (message) =>
+              message.role === "user" &&
+              message.details?.requestId === requestId &&
+              message.details?.piSessionId === sessionId &&
+              message.details?.status === "completed" &&
+              text(message).includes("CHIEF_MANAGER_AGENT_COMPLETED"),
+          );
+        return delivered
+          ? fauxAssistantMessage("CHIEF_MANAGER_AGENT_RESULT_DELIVERED")
+          : waitForResult("Waiting for the delegated Agent result.");
+      }
+      return call("delegate_agent", {
+        definition: "smoke-agent",
+        label: "chief-manager-smoke-agent",
+        task: "Return CHIEF_MANAGER_AGENT_COMPLETED.",
+      });
+    }
+    if (prompt.includes("CHIEF_MANAGER_AGENT_COMPLETED"))
+      return fauxAssistantMessage("CHIEF_MANAGER_AGENT_COMPLETED");
     throw new Error("Unexpected chief-manager request");
   }
   if (model === "chief-tree") {

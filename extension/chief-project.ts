@@ -77,6 +77,7 @@ import {
   type CoordinatorStartIntent,
 } from "./supervision.ts";
 import {
+  AGENT_COORDINATION_TOOLS,
   agentLaunchArgs,
   coordinatorLaunchConfiguration,
   EXPECTED_COORDINATOR_LAUNCH_ENV,
@@ -764,7 +765,12 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
           );
         const launchArgs = agentLaunchArgs(definition, {
           cwd: repositoryPath,
-          requiredTools: host.managerTools ?? [],
+          // Pi's native allowlist filters registration. The runtime decides
+          // which Agent tools to expose from the role policy and owned work.
+          requiredTools: [
+            ...(host.managerTools ?? []),
+            ...AGENT_COORDINATION_TOOLS,
+          ],
           nativeCoordinatorDefaults: true,
           omitBodyPrompt: true,
         });
