@@ -31,7 +31,8 @@ const { readProjectAssignment, writeProjectAssignment } =
 const { claimManagerLease, supervisionRuntime } =
   await import("../supervision.ts");
 const { getAgentDir } = await import("@earendil-works/pi-coding-agent");
-const { herdrAgentAlias } = await import("../herdr.ts");
+const { herdrAgentAlias, herdrSessionId, sessionIdentity } =
+  await import("../herdr.ts");
 
 const lifecycleStop = "stop after assignment publication";
 
@@ -788,12 +789,14 @@ function projectLifecycle(options: {
   rejectEvidence?: boolean;
   rejectAtPublication?: boolean;
   launch?: (options: any) => never;
+  completeLaunch?: boolean;
   switchBranchOnTabCreate?: boolean;
   inheritedModel?: { provider: string; id: string };
   base?: string;
   existingBranch?: boolean;
   existingComparison?: string;
   failComparisonWrite?: boolean;
+  baseLookupFailure?: "killed" | "truncated";
 }) {
   const repoKey = realFs.realpathSync(process.cwd());
   const managerCheckout = repoKey;
@@ -808,6 +811,9 @@ function projectLifecycle(options: {
   let worktreeCreates = 0;
   const gitCommands: string[][] = [];
   let comparisonValues = options.existingComparison;
+  let lead: Record<string, unknown> | undefined;
+  let leadState: Record<string, unknown> | undefined;
+  const simulateLaunch = options.launch || options.completeLaunch;
   const supervision = {
     ...supervisionRuntime(WORKSPACE),
     root: assignmentRoot,
@@ -871,6 +877,9 @@ function projectLifecycle(options: {
             stdout: ref ? `${ref}\n` : "",
             stderr: "",
             code: ref ? 0 : 1,
+            ...(options.baseLookupFailure
+              ? { [options.baseLookupFailure]: true }
+              : {}),
           };
         }
         if (args[0] === "config" && args.includes("--get-all"))
@@ -929,9 +938,9 @@ function projectLifecycle(options: {
           tab: { tab_id: "tab" },
           worktree: { path: worktreePath, branch },
         };
-      if (options.launch && args[0] === "pane" && args[1] === "process-info")
+      if (simulateLaunch && args[0] === "pane" && args[1] === "process-info")
         return { process_info: { foreground_processes: [] } };
-      if (options.launch && args[0] === "tab" && args[1] === "create") {
+      if (simulateLaunch && args[0] === "tab" && args[1] === "create") {
         if (options.switchBranchOnTabCreate) checkoutBranch = "feature/other";
         const id = readProjectAssignment(
           supervision as any,
@@ -971,13 +980,48 @@ function projectLifecycle(options: {
       throw new Error(`Unexpected Herdr request: ${args.join(" ")}`);
     },
     herdrSessionSnapshot: async () => {
-      if (options.launch) return { agents: [] };
+      if (simulateLaunch) return { agents: lead ? [lead] : [] };
       throw new Error(lifecycleStop);
     },
     scanAgentStates: () => ({ states: [] }),
-    readLeadCoordinationState: () => undefined,
-    startHerdrAgentInPane: async (_pi: unknown, _ctx: unknown, launch: any) =>
-      options.launch?.(launch),
+    readLeadCoordinationState: (_runtime: unknown, id: string) =>
+      leadState?.piSessionId === id ? leadState : undefined,
+    startHerdrAgentInPane: async (_pi: unknown, _ctx: unknown, launch: any) => {
+      options.launch?.(launch);
+      const id = launch.agentArgs.at(-1);
+      const instanceId = randomUUID();
+      lead = {
+        workspace_id: launch.workspaceId,
+        tab_id: launch.tabId,
+        pane_id: launch.paneId,
+        agent_session: {
+          source: "herdr:pi",
+          agent: "pi",
+          kind: "id",
+          value: id,
+        },
+      };
+      leadState = {
+        role: "lead",
+        piSessionId: id,
+        build: HERDSMAN_BUILD,
+        instanceId,
+        updatedAt: Date.now(),
+        startupAttestation: {
+          kind: "model_restore",
+          assignmentId: id,
+          generation: instanceId,
+          result: "verified",
+        },
+      };
+    },
+    isPiAgent: (candidate: any) => Boolean(candidate.agent_session),
+    sessionIdentity,
+    herdrSessionId,
+    liveLead: async () => (lead ? [lead] : []),
+    requireCompatibleBuild: () => {},
+    supervisedSessionFile: () => undefined,
+    writeChiefMessage: () => {},
     liveAgent: async () => [],
     messageLimits: async () => ({
       inline: { bytes: 1000 },
@@ -1157,21 +1201,33 @@ test("fresh delegation initializes comparison metadata only for a new branch wit
   await assert.rejects(implicitBase.activate(), /launch observed/);
   assert.equal(implicitBase.comparisonValues, undefined);
 
-  const shaBase = projectLifecycle({ base: "a1b2c3d", launch });
-  await assert.rejects(shaBase.activate(), /launch observed/);
-  assert.equal(shaBase.comparisonValues, undefined);
-
-  const failedWrite = projectLifecycle({
-    base: "feature/parent",
-    failComparisonWrite: true,
-    launch,
-  });
-  await assert.rejects(failedWrite.activate(), /launch observed/);
-  assert.equal(
-    failedWrite.gitCommands.some((args) => args.includes("--add")),
-    true,
-    "metadata write failure does not prevent reaching Lead startup",
-  );
+  for (const scenario of [
+    { base: "a1b2c3d" },
+    { base: "feature/parent", failComparisonWrite: true },
+    { base: "feature/parent", baseLookupFailure: "killed" },
+    { base: "feature/parent", baseLookupFailure: "truncated" },
+  ] as const) {
+    const lifecycle = projectLifecycle({ ...scenario, completeLaunch: true });
+    const result = await lifecycle.activate();
+    assert.equal(lifecycle.comparisonValues, undefined);
+    assert.equal(
+      lifecycle.gitCommands.some((args) => args.includes("--add")),
+      "failComparisonWrite" in scenario,
+    );
+    const warning =
+      scenario.base === "feature/parent"
+        ? "Could not initialize the branch comparison target."
+        : undefined;
+    const rendered = JSON.parse(result.content[0].text);
+    for (const response of [result.details, rendered]) {
+      assert.equal(response.ok, true);
+      assert.equal(
+        response.comparison_warning,
+        warning,
+        JSON.stringify(scenario),
+      );
+    }
+  }
 });
 
 test("fresh delegation rejects missing Herdr integration before creating worktree or evidence", async (t) => {

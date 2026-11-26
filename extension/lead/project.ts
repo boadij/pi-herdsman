@@ -4123,13 +4123,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 ],
                 { cwd: localScope.checkoutPath, signal, timeout: 3_000 },
               );
+              signal?.throwIfAborted();
+              if (base.killed || base.truncated)
+                throw new Error("comparison base lookup unavailable");
               const ref = String(base.stdout ?? "").trim();
               const refs = ref ? ref.split(/\r?\n/u) : [];
               const shortName = ref.replace(/^refs\/(?:heads|remotes)\//u, "");
               if (
                 base.code === 0 &&
-                !base.killed &&
-                !base.truncated &&
                 !base.stderr?.trim() &&
                 refs.length === 1 &&
                 /^refs\/(?:heads|remotes)\/.+$/u.test(ref) &&
