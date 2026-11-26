@@ -3317,9 +3317,47 @@ test("Coordinator launch policy preserves native Pi context and skills", () => {
         ...definition,
         frontmatter: { noSkills: true, inheritProjectContext: false },
       },
-      { nativeCoordinatorDefaults: true, omitBodyPrompt: true },
+      {
+        nativeCoordinatorDefaults: true,
+        omitBodyPrompt: true,
+        loadProjectContextFiles: () => [],
+      },
     ),
     ["--no-context-files", "--no-skills"],
+  );
+});
+
+test("Coordinator launch excludes only global context when configured", () => {
+  const global = join(tmpdir(), "coordinator-global");
+  const ancestor = join(tmpdir(), "AGENTS.md");
+  const project = join(tmpdir(), "coordinator-project", "AGENTS.md");
+  assert.deepEqual(
+    withPiAgentDir(global, () =>
+      agentLaunchArgs(
+        {
+          category: "manager",
+          name: "custom-manager",
+          path: "/manager.md",
+          frontmatter: { inheritGlobalContext: false },
+          body: "",
+        },
+        {
+          nativeCoordinatorDefaults: true,
+          loadProjectContextFiles: () =>
+            [join(global, "AGENTS.md"), ancestor, project].map((path) => ({
+              path,
+              content: path,
+            })),
+        },
+      ),
+    ),
+    [
+      "--no-context-files",
+      "--append-system-prompt",
+      ancestor,
+      "--append-system-prompt",
+      project,
+    ],
   );
 });
 

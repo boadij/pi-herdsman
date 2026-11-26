@@ -21,6 +21,7 @@ import {
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { createChiefProjectRuntime } from "./chief-project.ts";
+import { EXPECTED_COORDINATOR_LAUNCH_ENV } from "./agent-definitions.ts";
 import { fakeContext, PI_AGENT_ROOT } from "./support.ts";
 import {
   COORDINATOR_DEFINITION_ENTRY,
@@ -299,6 +300,7 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
     "malformed",
     "foreign",
     "named",
+    "conflicting configuration",
   ] as const) {
     await t.test(scenario, async (t) => {
       const root = realpathSync.native(
@@ -345,6 +347,7 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         rmSync(root, { force: true, recursive: true });
       });
       let tabCreated = false;
+      let launchConfiguration: string | undefined;
       const placementCalls: string[] = [];
       let denyChief = false;
       let observedPid = process.pid;
@@ -389,13 +392,31 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
           },
           runtime,
         );
+        const instanceId = randomUUID();
         writeLeadCoordinationState(runtime, {
           version: 1,
           role: "manager",
           piSessionId,
           build,
-          instanceId: randomUUID(),
+          instanceId,
           updatedAt: Date.now(),
+          ...(launchConfiguration
+            ? {
+                startupAttestation: {
+                  kind: "model_restore",
+                  assignmentId: piSessionId,
+                  generation: instanceId,
+                  result:
+                    scenario === "named"
+                      ? "definition_override"
+                      : "no_saved_model",
+                  launchConfiguration:
+                    scenario === "conflicting configuration"
+                      ? "0".repeat(64)
+                      : launchConfiguration,
+                },
+              }
+            : {}),
         });
       }
       const response = (result: unknown) => ({
@@ -448,6 +469,12 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
                 args[args.indexOf("--env") + 1],
                 `PI_CODING_AGENT_DIR=${agentDir}`,
               );
+              launchConfiguration = args
+                .find((arg) =>
+                  arg.startsWith(`${EXPECTED_COORDINATOR_LAUNCH_ENV}=`),
+                )
+                ?.split("=")[1];
+              assert.match(launchConfiguration ?? "", /^[0-9a-f]{64}$/);
               tabCreated = true;
               return response({
                 tab: { tab_id: pane.tab_id },
@@ -626,6 +653,14 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         managerTools: ["delegate_work"],
       });
       const ctx = fakeContext();
+      if (scenario === "named") {
+        await assert.rejects(
+          chief.startLead("workspace", "managed-lead", undefined, ctx),
+          /managed-lead is reserved for assigned Leads/,
+        );
+        assert.deepEqual(placementCalls, []);
+        assert.deepEqual(remainingIntents(), []);
+      }
       const start = () =>
         scenario === "named"
           ? chief.startNamed(repository, undefined, "custom-manager", ctx)
@@ -699,6 +734,13 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         return;
       }
       assert.ok(file && id);
+      if (scenario === "conflicting configuration") {
+        assert.equal(first.status, "partial_failure");
+        assert.ok("stage" in first && first.stage === "readiness");
+        assert.match(first.reason, /different launch configuration/);
+        assert.ok(existsSync(guardPath));
+        return;
+      }
       if (scenario === "uncertain" || scenario === "uncertain resume") {
         assert.equal(first.status, "partial_failure");
         assert.equal(existsSync(guardPath), true);

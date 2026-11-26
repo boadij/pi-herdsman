@@ -11,7 +11,7 @@ import {
   realpathSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import {
   basename,
@@ -1506,15 +1506,18 @@ export function resolveChildModel(input: {
   return { kind: "none" };
 }
 
-function configuredThinking(agent: AgentDefinition): string | undefined {
+export function configuredThinking(
+  agent: AgentDefinition,
+): (typeof VALID_THINKING_LEVELS)[number] | undefined {
   const configured = agent.frontmatter.thinking;
   if (configured === false) return "off";
   if (typeof configured !== "string") return undefined;
-  if (!THINKING_LEVELS.has(configured))
+  const level = VALID_THINKING_LEVELS.find((level) => level === configured);
+  if (!level)
     throw new Error(
       `agent ${agent.name} has invalid thinking level: ${JSON.stringify(configured)}`,
     );
-  return configured;
+  return level;
 }
 
 export function writePrivatePromptSnapshots(
@@ -1717,8 +1720,8 @@ export function selectedAgentContextFiles(
   definition: AgentDefinition,
   cwd: string,
   loader: typeof loadProjectContextFiles = loadProjectContextFiles,
+  inheritance = contextInheritance(definition),
 ) {
-  const inheritance = contextInheritance(definition);
   if (!inheritance.global && !inheritance.ancestor && !inheritance.project)
     return [];
   const agentDir = getAgentDir();
@@ -1736,6 +1739,28 @@ export function selectedAgentContextFiles(
       ? inheritance.project
       : inheritance.ancestor;
   });
+}
+
+export const EXPECTED_COORDINATOR_LAUNCH_ENV =
+  "PI_HERDSMAN_EXPECTED_COORDINATOR_LAUNCH";
+
+export function coordinatorLaunchConfiguration(
+  definition: AgentDefinition,
+  cwd: string,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        definition.category,
+        definition.name,
+        agentLaunchArgs(definition, {
+          cwd,
+          nativeCoordinatorDefaults: true,
+          omitBodyPrompt: true,
+        }),
+      ]),
+    )
+    .digest("hex");
 }
 
 export type AgentLaunchOptions = {
@@ -1839,6 +1864,7 @@ export function agentLaunchArgs(
       agent,
       cwd,
       options.loadProjectContextFiles ?? loadProjectContextFiles,
+      inheritance,
     ))
       args.push("--append-system-prompt", context.path);
   }

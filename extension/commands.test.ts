@@ -34,6 +34,7 @@ import {
 } from "./lock.ts";
 import {
   claimChiefLease as claimChiefLeaseRaw,
+  COORDINATOR_DEFINITION_ENTRY,
   globalProjectAssignmentSnapshot,
   listPendingRetirements,
   listProjectAssignments,
@@ -72,6 +73,9 @@ import {
 } from "./coordinator-target.ts";
 import {
   AGENT_COORDINATION_TOOLS,
+  coordinatorLaunchConfiguration,
+  EXPECTED_COORDINATOR_LAUNCH_ENV,
+  resolveDefinition,
   type AgentDefinition,
 } from "./agent-definitions.ts";
 import { herdsmanTempRoot, readRequiredEvidenceSnapshot } from "./storage.ts";
@@ -6841,6 +6845,143 @@ test("Manager activation of an existing Git primary does not initialize Git", as
     readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
     "manager",
     harness.notices.join("\n"),
+  );
+});
+
+test("a named ordinary Lead can enter, restore and leave default Manager mode", async (t) => {
+  const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-lead-binding-"));
+  const harness = managerBootstrapHarness(cwd);
+  updateConfig("autoActivateManager", false);
+  t.after(async () => {
+    delete process.env[EXPECTED_COORDINATOR_LAUNCH_ENV];
+    updateConfig("autoActivateManager", undefined);
+    await harness.cleanup();
+  });
+  assert.equal(harness.git(["init"]).status, 0);
+  assert.equal(
+    harness.git(["commit", "--allow-empty", "-m", "initial"]).status,
+    0,
+  );
+  const leads = join(cwd, ".pi", "coordinators", "leads");
+  mkdirSync(leads, { recursive: true });
+  writeFileSync(
+    join(leads, "custom-lead.md"),
+    "---\nname: custom-lead\n---\nCustom Lead profile",
+  );
+  harness.pi.pi.appendEntry(COORDINATOR_DEFINITION_ENTRY, {
+    version: 1,
+    sessionId: LEAD_SESSION_ID,
+    category: "lead",
+    name: "custom-lead",
+  });
+  const start = async () =>
+    harness.pi.events.get("session_start")![0](undefined, harness.context);
+  const assertLeadProfile = async () => {
+    const event = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await invokeEventHandlers(harness.pi, "before_agent_start")(
+      event,
+      harness.context,
+    );
+    assert.match(
+      (event.systemPromptOptions.sections as Record<string, string>)
+        .pi_herdsman_lead_execution!,
+      /Custom Lead profile/,
+    );
+  };
+  await start();
+  await assertLeadProfile();
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+    "manager",
+    harness.notices.join("\n"),
+  );
+
+  const choices = ["Project management  Active", "Leave Manager mode"];
+  harness.context.ui.select = async (_title: string, options: string[]) => {
+    const choice = choices.shift();
+    return options.find((option) => option === choice);
+  };
+  await harness.pi.commandOptions.get("herdsman")!.handler("", harness.context);
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+    "lead",
+    harness.notices.join("\n"),
+  );
+  await assertLeadProfile();
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+
+  const expected = coordinatorLaunchConfiguration(
+    resolveDefinition("manager", "manager"),
+    cwd,
+  );
+  const sessionFile = join(cwd, "manager.jsonl");
+  writeFileSync(
+    sessionFile,
+    [
+      {
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: LEAD_SESSION_ID,
+        cwd,
+      },
+      {
+        type: "custom",
+        customType: "pi-herdsman-role",
+        id: "1234abcd",
+        parentId: null,
+        data: {
+          sessionId: LEAD_SESSION_ID,
+          role: "manager",
+          leadTools: ["read"],
+        },
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n") + "\n",
+  );
+  harness.context.sessionManager.getSessionFile = () => sessionFile;
+  harness.pi.entries.push({
+    type: "model_change",
+    provider: "test-provider",
+    modelId: "saved",
+  });
+  process.env[EXPECTED_COORDINATOR_LAUNCH_ENV] = expected;
+  harness.context.model = { provider: "test-provider", id: "fallback" };
+  await assert.rejects(
+    start(),
+    /saved model test-provider\/saved was not restored/,
+  );
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)
+      ?.startupAttestation,
+    undefined,
+  );
+
+  process.env[EXPECTED_COORDINATOR_LAUNCH_ENV] = expected;
+  harness.context.model = { provider: "test-provider", id: "saved" };
+  await start();
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)
+      ?.startupAttestation?.launchConfiguration,
+    expected,
+  );
+
+  const managers = join(cwd, ".pi", "coordinators", "managers");
+  mkdirSync(managers, { recursive: true });
+  writeFileSync(
+    join(managers, "manager.md"),
+    "---\nname: manager\nmodel: different/model\n---\nProject Manager",
+  );
+  process.env[EXPECTED_COORDINATOR_LAUNCH_ENV] = expected;
+  await assert.rejects(start(), /differs from the effective definition/);
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)
+      ?.startupAttestation,
+    undefined,
   );
 });
 

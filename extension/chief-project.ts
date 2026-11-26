@@ -78,6 +78,8 @@ import {
 } from "./supervision.ts";
 import {
   agentLaunchArgs,
+  coordinatorLaunchConfiguration,
+  EXPECTED_COORDINATOR_LAUNCH_ENV,
   notifyDefinitionWarning,
   resolveDefinition,
   type AgentDefinition,
@@ -99,6 +101,7 @@ type LaunchGuard = {
   terminalId: string;
   previousCoordinator?: string;
   definition?: string;
+  launchConfiguration?: string;
 };
 const LAUNCH_GUARD_MAX_BYTES = 8192;
 
@@ -130,7 +133,10 @@ function readLaunchGuard(path: string): LaunchGuard | undefined {
     !identity(record.terminalId) ||
     (record.previousCoordinator !== undefined &&
       !identity(record.previousCoordinator)) ||
-    (record.definition !== undefined && !identity(record.definition))
+    (record.definition !== undefined && !identity(record.definition)) ||
+    (record.launchConfiguration !== undefined &&
+      (typeof record.launchConfiguration !== "string" ||
+        !/^[0-9a-f]{64}$/u.test(record.launchConfiguration)))
   )
     throw new Error("Invalid unsettled Manager launch record");
   return record as LaunchGuard;
@@ -464,6 +470,17 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
       readSavedRole(session, repository.checkoutPath) !== "manager"
     )
       return false;
+    if (
+      guard.launchConfiguration !== undefined &&
+      coordinator.startupAttestation?.launchConfiguration !==
+        guard.launchConfiguration
+    ) {
+      if (coordinator.startupAttestation?.launchConfiguration !== undefined)
+        throw new Error(
+          "Manager startup attested a different launch configuration",
+        );
+      return false;
+    }
     await verifyActive(ctx, runtime, repository, descriptor, guard.terminalId);
     const confirmed = currentRecovery();
     if (!confirmed || !matchesSession(confirmed, session))
@@ -649,9 +666,11 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
                     { checkout: repositoryPath },
                   ).definition
                 : undefined;
-            if ((binding?.name ?? "manager") !== definitionName)
+            const name =
+              binding?.category === "manager" ? binding.name : "manager";
+            if (name !== definitionName)
               throw new Error(
-                `An active Manager uses definition ${binding?.name ?? "manager"}; it cannot be replaced with ${definitionName}`,
+                `An active Manager uses definition ${name}; it cannot be replaced with ${definitionName}`,
               );
           }
           return { status: "already_running", repository: repositoryPath };
@@ -689,7 +708,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
           }).definition;
           if (
             definitionName &&
-            binding?.name &&
+            binding?.category === "manager" &&
             definitionName !== binding.name
           )
             throw new Error(
@@ -698,7 +717,9 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
           return {
             status: "resume_required",
             repository: repositoryPath,
-            ...(binding?.name ? { definition: binding.name } : {}),
+            ...(binding?.category === "manager"
+              ? { definition: binding.name }
+              : {}),
           };
         }
 
@@ -722,11 +743,10 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
           ? readSavedManagerSession(session, { checkout: repositoryPath })
               .definition
           : undefined;
-        if (savedBinding && savedBinding.category !== "manager")
-          throw new Error(
-            "Saved Coordinator definition is not a Manager definition",
-          );
-        const selectedName = savedBinding?.name ?? definitionName ?? "manager";
+        const managerBinding =
+          savedBinding?.category === "manager" ? savedBinding : undefined;
+        const selectedName =
+          managerBinding?.name ?? definitionName ?? "manager";
         const definition = managerDefinition(
           selectedName,
           repositoryPath,
@@ -734,9 +754,13 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
           ctx,
           host,
         );
-        if (session && definitionName && savedBinding?.name !== definitionName)
+        if (
+          session &&
+          definitionName &&
+          managerBinding?.name !== definitionName
+        )
           throw new Error(
-            `Manager session is bound to ${savedBinding?.name ?? "manager"}; it cannot be replaced with ${definitionName}`,
+            `Manager session is bound to ${managerBinding?.name ?? "manager"}; it cannot be replaced with ${definitionName}`,
           );
         const launchArgs = agentLaunchArgs(definition, {
           cwd: repositoryPath,
@@ -744,6 +768,10 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
           nativeCoordinatorDefaults: true,
           omitBodyPrompt: true,
         });
+        const launchConfiguration = coordinatorLaunchConfiguration(
+          definition,
+          repositoryPath,
+        );
         requireHerdrPiIntegration(agentDir);
         stage = "workspace";
         const assertCurrentAuthority = () => host.assertChief(ctx);
@@ -753,6 +781,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
           signal,
           assertCurrentAuthority,
           timeoutMs: STARTUP_TIMEOUT_MS,
+          env: [`${EXPECTED_COORDINATOR_LAUNCH_ENV}=${launchConfiguration}`],
         };
         const pane = await prepareHerdrManagerPane(pi, ctx, options);
         preparationChanged = true;
@@ -799,6 +828,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
             runtime,
             launchSession.id,
           )?.instanceId,
+          launchConfiguration,
         };
         try {
           await startHerdrManagerInPane(pi, ctx, {
@@ -900,7 +930,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
           await delay(100, undefined, { signal });
         }
         throw new Error(
-          "Manager did not reach verified readiness before the startup deadline",
+          "Manager did not reach verified readiness before the startup deadline. Inspect the exact session for startup definition, project trust, or model selection errors.",
         );
       } catch (error) {
         if (hasIntent && session && !launchMayHaveStarted) {
@@ -938,6 +968,10 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
     ctx: ExtensionContext,
   ): Promise<ProjectResult> => {
     await host.assertChief(ctx);
+    if (requestedDefinition === "managed-lead")
+      throw new Error(
+        "managed-lead is reserved for assigned Leads and cannot be used for an ordinary Lead",
+      );
     const signal = ctx.signal;
     if (!workspaceId.trim() || workspaceId.includes("\0"))
       throw new Error("workspace must be an exact Herdr workspace ID");
@@ -1081,6 +1115,10 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
       nativeCoordinatorDefaults: true,
       omitBodyPrompt: true,
     });
+    const launchConfiguration = coordinatorLaunchConfiguration(
+      definition,
+      checkout,
+    );
     const session = reserveCoordinatorSession(checkout, "lead");
     let pane: HerdrManagerPaneSelection | undefined;
     try {
@@ -1090,6 +1128,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
         agentDir,
         label: "Lead",
         signal,
+        env: [`${EXPECTED_COORDINATOR_LAUNCH_ENV}=${launchConfiguration}`],
         assertCurrentAuthority: () => host.assertChief(ctx),
       });
       await host.assertChief(ctx);
@@ -1167,6 +1206,8 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
           state.piSessionId === session.id &&
           state.updatedAt >= startedAt &&
           state.instanceId !== previousInstance &&
+          state.startupAttestation?.launchConfiguration ===
+            launchConfiguration &&
           isRuntimeBuild(state.build) &&
           sameRuntimeBuild(state.build, host.build) &&
           (await host.remoteIdentity(ctx, {
@@ -1184,7 +1225,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
       }
       if (!freshLeadReady)
         throw new Error(
-          `Ordinary Lead ${session.id} in pane ${pane.paneId} did not reach exact fresh readiness; the launch intent is retained and automatic retry is disabled`,
+          `Ordinary Lead ${session.id} in pane ${pane.paneId} did not reach exact fresh readiness; inspect the exact session for startup definition, project trust, or model selection errors before retrying`,
         );
       await host.assertChief(ctx);
       let initialMessage: "not_requested" | "queued" | "not_queued" =
