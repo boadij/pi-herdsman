@@ -1581,7 +1581,7 @@ export function decide(model, context) {
           "runtime",
           "smoke-chief-manager-invocations.jsonl",
         ),
-        `${JSON.stringify({ sessionId: currentSessionId, promptMarker: prompt })}\n`,
+        `${JSON.stringify({ sessionId: context.sessionId, promptMarker: prompt })}\n`,
       );
       console.error(
         JSON.stringify({
