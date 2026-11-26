@@ -113,7 +113,6 @@ import {
 import { requireCompatibleBuild, type RuntimeBuild } from "./compatibility.ts";
 import { DEFAULT_STATUS_WIDGET_MAX_ROWS, readConfig } from "./config.ts";
 import {
-  acquireCoordinatorAdmission,
   claimAssignmentLock as claimManagedAssignmentLock,
   claimProcessLock,
   claimSessionActivationLock as claimExactSessionActivationLock,
@@ -4726,6 +4725,8 @@ export type AgentControllerOptions = {
   managedAgentState?(ctx: ExtensionContext): ManagedAgentState;
   /** Current verified root-role delegation policy; managed-Agent scope ignores it. */
   rootDelegationPolicy?(): RootDelegationPolicy;
+  /** Local root shutdown gate, checked under that owner's delegation lock. */
+  rootAgentAdmissionBlocked?(): boolean;
   /** Stable authority/profile generation captured across assignment preflight. */
   rootDelegationGeneration?(): RootDelegationGeneration;
   projectEvidence?(
@@ -11323,18 +11324,6 @@ export function createAgentController(
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>> => {
     const scope = options.scope;
-    const acquireAdmissionOrFail = () => {
-      try {
-        return acquireCoordinatorAdmission();
-      } catch (error) {
-        if (error instanceof ProcessLockOccupiedError)
-          fail("agent_busy", error.message, "lifecycle", {
-            nextAction:
-              "Retry after the current Coordinator admission or hierarchy shutdown settles",
-          });
-        throw error;
-      }
-    };
     const actionUnsafeWithRetentionOutcome = async () => {
       try {
         return await actionUnsafe(ctx, params, signal);
@@ -11376,17 +11365,20 @@ export function createAgentController(
       )
         return controlAction(ctx, params, signal);
       if (params.action === "delegate" || params.action === "continue") {
-        const admission = acquireAdmissionOrFail();
-        let release: (() => void) | undefined;
+        const release = claimDelegationLock(
+          options.workspaceId(),
+          ctx.sessionManager.getSessionId(),
+        );
         try {
-          release = claimDelegationLock(
-            options.workspaceId(),
-            ctx.sessionManager.getSessionId(),
-          );
+          if (options.rootAgentAdmissionBlocked?.())
+            fail(
+              "agent_busy",
+              "Chief hierarchy shutdown is in progress",
+              "lifecycle",
+            );
           return await actionUnsafeWithRetentionOutcome();
         } finally {
-          release?.();
-          admission.release();
+          release();
         }
       }
       return actionUnsafeWithRetentionOutcome();
@@ -11407,16 +11399,11 @@ export function createAgentController(
         : params.action === "inspect"
           ? controlAction(ctx, params, signal)
           : transcriptAction(ctx, params.agent, signal);
-    const admission =
-      params.action === "delegate" || params.action === "continue"
-        ? acquireAdmissionOrFail()
-        : undefined;
-    let release: (() => void) | undefined;
+    const release = claimDelegationLock(
+      options.workspaceId(),
+      ctx.sessionManager.getSessionId(),
+    );
     try {
-      release = claimDelegationLock(
-        options.workspaceId(),
-        ctx.sessionManager.getSessionId(),
-      );
       if (params.action === "stop")
         return await closeAction(ctx, params.agent, signal);
       if (
@@ -11427,8 +11414,7 @@ export function createAgentController(
         return await controlAction(ctx, params, signal);
       return await actionUnsafeWithRetentionOutcome();
     } finally {
-      release?.();
-      admission?.release();
+      release();
     }
   };
   const attentionDue = (

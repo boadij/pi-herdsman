@@ -2561,16 +2561,17 @@ async function launchPiInVerifiedPane(
     assertCurrentAuthority: ManagerPaneOptions["assertCurrentAuthority"];
   },
 ): Promise<StartedHerdrAgent> {
-  const herdrStateExtension = requireHerdrPiIntegration(options.agentDir);
   const { totalTimeout, childTimeout } = startupTimeoutBudget(
     options.timeoutMs,
   );
   const deadline = Date.now() + totalTimeout;
-  const release = await lockLifecycleForWorkspace(lockId, options.signal);
+  let release: (() => void) | undefined;
   let attempt: StartedHerdrAgent | undefined;
   let retryAttempted = false;
   let stage = "topology";
   try {
+    const herdrStateExtension = requireHerdrPiIntegration(options.agentDir);
+    release = await lockLifecycleForWorkspace(lockId, options.signal);
     await verifyTarget(deadline);
     const cwd = canonicalCwd(options.cwd);
     const panes =
@@ -2779,11 +2780,20 @@ async function launchPiInVerifiedPane(
     attempt.agent = agent;
     return attempt;
   } catch (cause) {
+    // The prepared Coordinator identity is available even if topology
+    // validation fails before an observed attempt can be constructed.
+    if (!attempt && manager)
+      attempt = {
+        ...manager.pane,
+        herdrAgent: alias(options.workspaceId, options.label, options.runId),
+        sessionReference: manager.session,
+        launchMayHaveStarted: false,
+      };
     if (attempt)
       throw new HerdrStartFailure(cause, stage, attempt, retryAttempted);
     throw cause;
   } finally {
-    release();
+    release?.();
   }
 }
 

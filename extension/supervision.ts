@@ -2832,7 +2832,21 @@ export function getManagerStartIntent(
 export const writeCoordinatorStartIntent = writeManagerStartIntent;
 export const getCoordinatorStartIntent = getManagerStartIntent;
 export const consumeCoordinatorStartIntent = consumeManagerStartIntent;
-export const removeCoordinatorStartIntent = removeManagerStartIntent;
+
+/** Discard only the exact attempt that the launcher proved was not dispatched. */
+export function removeCoordinatorStartIntent(
+  runtime: SupervisionRuntime,
+  expected: CoordinatorStartIntent,
+): void {
+  const path = managerStartIntentPath(runtime, expected.sessionId);
+  withManagerLifecycleLock(path, () => {
+    const intent = readManagerStartIntent(path, expected.sessionId);
+    if (!intent) return;
+    if (!isDeepStrictEqual(intent, expected))
+      throw new Error("Coordinator startup intent changed before removal");
+    unlinkManagerLifecycleRecord(path);
+  });
+}
 
 /** Bounded read-only inventory used to prevent retrying unsettled ordinary starts. */
 export function listCoordinatorStartIntents(runtime: SupervisionRuntime): {

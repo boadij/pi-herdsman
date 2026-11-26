@@ -147,11 +147,14 @@ confirmation that Chief's process exited; Pi may defer exit until queued work
 and the active operation finish. Print mode is rejected because its native
 shutdown call is a no-op.
 
-Coordinator startup/recovery, role activation, staff delegation/recovery, and
-Agent delegation/continuation share a profile-and-socket-scoped admission
-lock. A concurrent admission returns busy rather than being queued to run
-after shutdown. The lock may temporarily block unrelated launches in the same
-runtime, but does not stop or otherwise mutate unrelated running work.
+Coordinator startup/recovery, role activation, and staff delegation/recovery
+share a profile-and-socket-scoped admission lock. It can temporarily block
+unrelated Coordinator launches in the same runtime but does not stop or
+otherwise mutate unrelated running work. Agent delegation and continuation use
+per-owner locks; shutdown holds those locks through cleanup of the selected
+Agent trees. Chief cannot start or continue its own Agents during `staff` or
+`all` shutdown, including while its graceful exit is pending. Excluded
+admissions return busy rather than being queued.
 
 ## Direct-report projection
 
