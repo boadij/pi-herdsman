@@ -11727,6 +11727,8 @@ async function runChiefManagerSmoke(ctx) {
   };
   ctx.chiefManagerDelegationProgress = {
     ...ctx.chiefManagerDelegationIdentity,
+    promptDispatchAttempted: false,
+    workingObserved: false,
     promptObserved: false,
     toolCallObserved: false,
     toolCallId: null,
@@ -11736,7 +11738,19 @@ async function runChiefManagerSmoke(ctx) {
     childSessionId: null,
     handoffObserved: false,
   };
-  await prompt(first.pane.pane_id, delegationPrompt);
+  ctx.chiefManagerDelegationProgress.promptDispatchAttempted = true;
+  await nestedCommand(ctx, [
+    "agent",
+    "prompt",
+    first.pane.pane_id,
+    delegationPrompt,
+    "--wait",
+    "--until",
+    "working",
+    "--timeout",
+    "90000",
+  ]);
+  ctx.chiefManagerDelegationProgress.workingObserved = true;
   const delegation = await wait("delegation", async () => {
     const progress = ctx.chiefManagerDelegationProgress;
     const session = await exactIsolatedSession(ctx, first.session.id);
@@ -14194,6 +14208,10 @@ export function sanitizedFailureEvidence(
             ctx.chiefManagerDelegationProgress?.promptMarker ??
             ctx.chiefManagerDelegationIdentity?.promptMarker ??
             null,
+          promptDispatchAttempted:
+            ctx.chiefManagerDelegationProgress?.promptDispatchAttempted ?? null,
+          workingObserved:
+            ctx.chiefManagerDelegationProgress?.workingObserved ?? null,
           promptObserved:
             ctx.chiefManagerDelegationProgress?.promptObserved ?? null,
           toolCallObserved:
