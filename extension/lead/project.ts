@@ -4033,6 +4033,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       let initialPaneId: string | undefined;
       let initialTabId: string | undefined;
       let cwd: string | undefined;
+      let comparisonTarget: string | undefined;
+      let comparisonWarning: string | undefined;
       const assignedPlacement =
         operation.action === "resume"
           ? resolveAssignmentCheckout(
@@ -4092,6 +4094,56 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       } else {
         if (operation.action === "resume")
           throw new Error("The existing project checkout is unavailable");
+        if (operation.action === "delegate" && operation.base) {
+          const destinationRef = `refs/heads/${assignment.branch}`;
+          try {
+            const destination = await pi.exec(
+              "git",
+              ["for-each-ref", "--format=%(refname)", destinationRef],
+              { cwd: localScope.checkoutPath, signal, timeout: 3_000 },
+            );
+            if (
+              destination.code !== 0 ||
+              destination.killed ||
+              destination.truncated
+            )
+              throw new Error("branch lookup unavailable");
+            const branchExists = String(destination.stdout ?? "")
+              .split(/\r?\n/u)
+              .includes(destinationRef);
+            if (!branchExists) {
+              const base = await pi.exec(
+                "git",
+                [
+                  "rev-parse",
+                  "--symbolic-full-name",
+                  "--verify",
+                  "--end-of-options",
+                  operation.base,
+                ],
+                { cwd: localScope.checkoutPath, signal, timeout: 3_000 },
+              );
+              const ref = String(base.stdout ?? "").trim();
+              const refs = ref ? ref.split(/\r?\n/u) : [];
+              const shortName = ref.replace(/^refs\/(?:heads|remotes)\//u, "");
+              if (
+                base.code === 0 &&
+                !base.killed &&
+                !base.truncated &&
+                !base.stderr?.trim() &&
+                refs.length === 1 &&
+                /^refs\/(?:heads|remotes)\/.+$/u.test(ref) &&
+                (operation.base === ref || operation.base === shortName) &&
+                ref !== destinationRef
+              )
+                comparisonTarget = ref;
+            }
+          } catch {
+            if (signal?.aborted) throw signal.reason;
+            comparisonWarning =
+              "Could not initialize the branch comparison target.";
+          }
+        }
         const args = [
           "worktree",
           "create",
@@ -4268,6 +4320,83 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         if (!fresh || !sameManagerDescriptor(fresh, manager))
           throw new Error("Manager changed during project activation");
       };
+      if (operation.action === "delegate" && comparisonTarget) {
+        await assertManagerCurrent();
+        await assertAssignedGitCheckout(cwd!);
+        try {
+          const key = `branch.${assignment.branch}.herdsman-base`;
+          const existing = await pi.exec(
+            "git",
+            ["config", "--local", "--no-includes", "--null", "--get-all", key],
+            { cwd: localScope.checkoutPath, signal, timeout: 3_000 },
+          );
+          if (
+            existing.code === 1 &&
+            !existing.killed &&
+            !existing.truncated &&
+            !String(existing.stdout ?? "") &&
+            !existing.stderr?.trim()
+          ) {
+            // The project work lock serializes Herdsman operations; external Git edits are not coordinated.
+            const written = await pi.exec(
+              "git",
+              [
+                "config",
+                "--local",
+                "--no-includes",
+                "--add",
+                key,
+                comparisonTarget,
+              ],
+              { cwd: localScope.checkoutPath, signal, timeout: 3_000 },
+            );
+            if (
+              written.code !== 0 ||
+              written.killed ||
+              written.truncated ||
+              written.stderr?.trim()
+            )
+              throw new Error("comparison target write failed");
+            const readback = await pi.exec(
+              "git",
+              [
+                "config",
+                "--local",
+                "--no-includes",
+                "--null",
+                "--get-all",
+                key,
+              ],
+              { cwd: localScope.checkoutPath, signal, timeout: 3_000 },
+            );
+            const values = String(readback.stdout ?? "").split("\0");
+            if (
+              readback.code !== 0 ||
+              readback.killed ||
+              readback.truncated ||
+              readback.stderr?.trim() ||
+              values.length !== 2 ||
+              values[0] !== comparisonTarget ||
+              values[1] !== ""
+            )
+              throw new Error("comparison target verification failed");
+          } else if (
+            existing.code !== 0 ||
+            existing.killed ||
+            existing.truncated ||
+            existing.stderr?.trim() ||
+            !String(existing.stdout ?? "")
+          ) {
+            throw new Error("comparison target lookup failed");
+          }
+        } catch {
+          if (signal?.aborted) throw signal.reason;
+          await assertManagerCurrent();
+          await assertAssignedGitCheckout(cwd!);
+          comparisonWarning =
+            "Could not initialize the branch comparison target.";
+        }
+      }
       const verifyLeadCandidate = (candidate: any): boolean => {
         const reported = sessionIdentity(candidate?.agent_session);
         if (!reported) return false;
@@ -4750,6 +4879,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               session: leadSessionId,
               workspace_id: workspaceId,
               branch: assignment.branch,
+              ...(comparisonWarning
+                ? { comparison_warning: comparisonWarning }
+                : {}),
               ...(effectiveProjectTrusted === undefined
                 ? {}
                 : {
@@ -4774,6 +4906,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           session: leadSessionId,
           workspace_id: workspaceId,
           branch: assignment.branch,
+          ...(comparisonWarning
+            ? { comparison_warning: comparisonWarning }
+            : {}),
           ...(effectiveProjectTrusted === undefined
             ? {}
             : {

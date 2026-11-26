@@ -168,6 +168,18 @@ clean. A changed-file count such as `2f` is used when files changed without
 textual line counts, such as binary-only changes. These are net worktree
 contents, not cumulative effort or proof of merge readiness.
 
+For an attached branch, both Manager rows and verified managed Lead headers
+first use the repository-local `branch.<name>.herdsman-base` target when it
+contains exactly one valid `refs/heads/...` or `refs/remotes/...` ref. The
+target is resolved at each sample, so parent advances, rebases, and local
+retargeting take effect without changing assignment identity. If the setting
+is absent, Manager comparisons use the observed primary-checkout revision and
+managed Lead comparisons use `main-worktree/HEAD`; detached HEAD uses the same
+defaults. A configured target that is malformed, duplicated, self-referencing,
+missing, or otherwise unavailable suppresses numeric totals rather than
+falling back. Branch and dirty-state indicators remain available. This
+comparison metadata is advisory and never controls integration or removal.
+
 Unavailable or ambiguous ancestry suppresses numeric totals. If a Lead switches
 branches in its assigned worktree, `↪` followed
 by the checked-out branch distinguishes that mutable Git branch from the
@@ -221,8 +233,9 @@ snapshots hide it. Under width pressure, complete managed totals are preserved
 before attempting a recognizable truncated branch; the optional suffix is
 omitted if it cannot fit without displacing required header information.
 
-Manager and managed Lead widgets share the same merge-base and net working-tree
-comparison semantics, but sample independently in their own processes. Their
+Manager and managed Lead widgets share the same branch-specific target
+resolution, merge-base, and net working-tree comparison semantics, but sample
+independently in their own processes. Their
 separate caches and schedules may therefore show temporarily different
 observations. Lead sampling is triggered by the existing status reconciliation
 and has a minimum interval of 30 seconds; it adds no timer or filesystem
