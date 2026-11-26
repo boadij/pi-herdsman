@@ -5174,6 +5174,52 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       createTabsBeforeDenied,
       "a definition outside agents: [agent] is denied before Herdr launch",
     );
+    const ownedLabel = `manager-policy-${randomUUID().slice(0, 8)}`;
+    const ownedMailbox = agentMailboxPath(WORKSPACE, ownedLabel);
+    resetAgentMailbox(ownedMailbox);
+    t.after(() => resetAgentMailbox(ownedMailbox));
+    writeAgentState(ownedMailbox, {
+      ...managedState(ownedLabel),
+      ownerSessionId: persistedManagerSessionId,
+    });
+    for (const agents of ["", "agents: []\n"]) {
+      writeFileSync(
+        managerOverride,
+        `---\nname: manager\ntools: []\n${agents}---\n`,
+      );
+      await persistedManager.commandOptions
+        .get("manager-refresh")
+        .handler("", persistedManagerContext);
+      const active = persistedManager.pi.getActiveTools();
+      for (const name of ["list_agents", "inspect_agent", "stop_agent"])
+        assert.ok(active.includes(name), name);
+      for (const name of ["delegate_agent", "resume_agent", "read"])
+        assert.ok(!active.includes(name), name);
+      const denied: any = await agentTool(persistedManager, "delegate").execute(
+        "restored-manager-opted-out",
+        { definition: "agent", task: "not permitted after opt-out" },
+        undefined,
+        undefined,
+        persistedManagerContext,
+      );
+      assert.equal(denied.details.error.category, "invalid_request");
+      const listed: any = await agentTool(persistedManager, "list").execute(
+        "restored-manager-owned",
+        {},
+        undefined,
+        undefined,
+        persistedManagerContext,
+      );
+      assert.equal(listed.details.ok, true, JSON.stringify(listed.details));
+      assert.ok(
+        listed.details.agents.some(
+          (agent: { agent?: string; available_tools?: string[] }) =>
+            agent.agent === ownedLabel &&
+            agent.available_tools?.includes("stop_agent"),
+        ),
+        JSON.stringify(listed.details),
+      );
+    }
     await persistedManager.events.get("session_shutdown")?.[0]();
     assert.equal(
       readManagerDescriptor(

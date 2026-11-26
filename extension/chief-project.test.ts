@@ -21,7 +21,10 @@ import {
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { createChiefProjectRuntime } from "./chief-project.ts";
-import { EXPECTED_COORDINATOR_LAUNCH_ENV } from "./agent-definitions.ts";
+import {
+  AGENT_COORDINATION_TOOLS,
+  EXPECTED_COORDINATOR_LAUNCH_ENV,
+} from "./agent-definitions.ts";
 import { fakeContext, PI_AGENT_ROOT } from "./support.ts";
 import {
   COORDINATOR_DEFINITION_ENTRY,
@@ -317,13 +320,20 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
           readFileSync(join(PI_AGENT_ROOT, hook)),
         );
       }
-      if (scenario === "named") {
-        const definitions = join(agentDir, "coordinators", "managers");
-        mkdirSync(definitions, { recursive: true });
+      const namedDefinition = join(
+        agentDir,
+        "coordinators",
+        "managers",
+        "custom-manager.md",
+      );
+      const writeNamedDefinition = (toolPolicy: string) =>
         writeFileSync(
-          join(definitions, "custom-manager.md"),
-          "---\nname: custom-manager\nmodel: test-provider/test-model\nthinking: high\n---\nCustom manager profile body",
+          namedDefinition,
+          `---\nname: custom-manager\nmodel: test-provider/test-model\nthinking: high\n${toolPolicy}\n---\nCustom manager profile body`,
         );
+      if (scenario === "named") {
+        mkdirSync(dirname(namedDefinition), { recursive: true });
+        writeNamedDefinition("tools: [codemode]\nagents: [scout]");
       }
       const gitDirectory = join(root, "project", ".git");
       mkdirSync(gitDirectory, { recursive: true });
@@ -524,6 +534,15 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
                 assert.ok(args.includes("test-provider/test-model"));
                 assert.ok(args.includes("--thinking"));
                 assert.ok(args.includes("high"));
+                const tools =
+                  args[args.indexOf("--tools") + 1]?.split(",") ?? [];
+                for (const name of [
+                  ...AGENT_COORDINATION_TOOLS,
+                  "delegate_work",
+                ])
+                  assert.ok(tools.includes(name), name);
+                assert.equal(tools.includes("codemode"), launches === 1);
+                assert.equal(args.includes("--no-tools"), launches === 2);
               }
               assert.ok(!args.includes("--no-skills"));
               assert.ok(!args.includes("--no-context-files"));
@@ -875,6 +894,7 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         ...(scenario === "named" ? { definition: "custom-manager" } : {}),
       });
       assert.equal(readFileSync(file, "utf8"), expectedHistoryAtLaunch);
+      if (scenario === "named") writeNamedDefinition("tools: []\nagents: []");
       assert.deepEqual(await chief.resume(repository, ctx), {
         status: "resumed",
         repository,

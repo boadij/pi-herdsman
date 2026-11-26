@@ -304,6 +304,7 @@ jobs:
             core \
             continuation \
             chief-tree \
+            chief-manager \
             supervisor-agent \
             terminal-failure \
             agent-terminal-failure \

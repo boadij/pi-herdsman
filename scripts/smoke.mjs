@@ -11201,6 +11201,18 @@ async function findChiefManagerRecoveryRecord(ctx, repository, session) {
 
 async function runChiefManagerSmoke(ctx) {
   const repository = await realpath(await prepareManagerRepository(ctx.paths));
+  const managerDirectory = join(repository, ".pi", "coordinators", "managers");
+  const agentDirectory = join(repository, ".pi", "agents");
+  await mkdir(managerDirectory, { recursive: true });
+  await mkdir(agentDirectory, { recursive: true });
+  await writeFile(
+    join(managerDirectory, "smoke-manager.md"),
+    `---\nname: smoke-manager\nmodel: smoke-faux/chief-manager\ntools: [codemode]\nagents: [smoke-agent]\nextensions: [${JSON.stringify(ctx.simulatedProviderExtension)}]\n---\n`,
+  );
+  await writeFile(
+    join(agentDirectory, "smoke-agent.md"),
+    `---\nname: smoke-agent\nmodel: smoke-faux/chief-manager\nextensions: [${JSON.stringify(ctx.simulatedProviderExtension)}]\n---\nReturn CHIEF_MANAGER_AGENT_COMPLETED.\n`,
+  );
   // Approve only the owned fixture; do not bypass the child's native Pi trust.
   new ProjectTrustStore(ctx.paths.piAgent).set(repository, true);
   const url = `https://smoke.invalid/${randomUUID()}/project.git`;
@@ -11685,7 +11697,10 @@ async function runChiefManagerSmoke(ctx) {
   );
   assert.equal(matches[0].managerStatus, "none");
   assert.ok(ordinaryLeadStart, "Chief start_lead result was not persisted");
-  await lifecycle("start_manager", "started", "start");
+  await lifecycle("start_manager", "started", "start", {
+    repository,
+    definition: "smoke-manager",
+  });
   const first = await observeManager("first-manager");
   assert.notEqual(first.pane.workspace_id, ctx.rootWorkspaceId);
   // Herdr's fresh Pi can select another default in this fixture. Explicitly
@@ -11705,6 +11720,82 @@ async function runChiefManagerSmoke(ctx) {
     "15000",
   ]);
   await verifyManager(first, "first");
+  const delegationPrompt = "CHIEF_MANAGER_SMOKE delegate";
+  ctx.chiefManagerDelegationIdentity = {
+    managerSessionId: first.session.id,
+    promptMarker: delegationPrompt,
+  };
+  ctx.chiefManagerDelegationProgress = {
+    ...ctx.chiefManagerDelegationIdentity,
+    promptObserved: false,
+    toolCallObserved: false,
+    toolCallId: null,
+    toolResultObserved: false,
+    toolResultError: null,
+    requestId: null,
+    childSessionId: null,
+    handoffObserved: false,
+  };
+  await prompt(first.pane.pane_id, delegationPrompt);
+  const delegation = await wait("delegation", async () => {
+    const progress = ctx.chiefManagerDelegationProgress;
+    const session = await exactIsolatedSession(ctx, first.session.id);
+    if (!session) return { done: false };
+    const entries = sessionEntries(session.contents);
+    const promptIndex = entries.findIndex(
+      (entry) =>
+        entry.message?.role === "user" &&
+        messageText(entry.message.content) === delegationPrompt,
+    );
+    if (promptIndex < 0) return { done: false };
+    progress.promptObserved = true;
+    const call = entries
+      .slice(promptIndex + 1)
+      .flatMap((entry) =>
+        entry.message?.role === "assistant"
+          ? entry.message.content.filter(
+              (part) =>
+                part.type === "toolCall" &&
+                part.name === "delegate_agent" &&
+                part.arguments?.definition === "smoke-agent",
+            )
+          : [],
+      )[0];
+    if (!call) return { done: false };
+    progress.toolCallObserved = true;
+    progress.toolCallId = call.id;
+    const result = entries.find(
+      (entry) =>
+        entry.message?.role === "toolResult" &&
+        entry.message.toolCallId === call.id,
+    );
+    progress.toolResultObserved = Boolean(result);
+    progress.toolResultError = result ? Boolean(result.message.isError) : null;
+    if (result?.message.isError)
+      throw new Error("Named Manager Agent delegation failed");
+    const resultText = result && messageText(result.message.content);
+    if (!resultText?.includes("Request: ")) return { done: false };
+    const requestId = resultText.match(/^Request: ([^\n]+)$/m)?.[1];
+    const childSessionId = resultText.match(/^Session: ([^\n]+)$/m)?.[1];
+    if (!requestId || !childSessionId) return { done: false };
+    progress.requestId = requestId;
+    progress.childSessionId = childSessionId;
+    const handoff = entries.find(
+      (entry) =>
+        entry.message?.customType === "pi-herdsman-agent-result" &&
+        entry.message.details?.requestId === requestId &&
+        entry.message.details?.piSessionId === childSessionId &&
+        entry.message.details?.status === "completed" &&
+        messageText(entry.message.content).includes(
+          "CHIEF_MANAGER_AGENT_COMPLETED",
+        ),
+    );
+    progress.handoffObserved = Boolean(handoff);
+    return handoff
+      ? { done: true, value: { requestId, childSessionId } }
+      : { done: false };
+  });
+  ctx.chiefManagerDelegation = delegation;
   const originalPanes = (await projectPanes())
     .map((pane) => pane.pane_id)
     .sort();
@@ -14092,6 +14183,35 @@ export function sanitizedFailureEvidence(
     failure?.error?.smoke?.stage === "terminal-failure-report"
       ? failure.error.smoke.lastProgress
       : null;
+  const chiefManagerProgress =
+    ctx.scenario === "chief-manager"
+      ? {
+          managerSessionId:
+            ctx.chiefManagerDelegationProgress?.managerSessionId ??
+            ctx.chiefManagerDelegationIdentity?.managerSessionId ??
+            null,
+          promptMarker:
+            ctx.chiefManagerDelegationProgress?.promptMarker ??
+            ctx.chiefManagerDelegationIdentity?.promptMarker ??
+            null,
+          promptObserved:
+            ctx.chiefManagerDelegationProgress?.promptObserved ?? null,
+          toolCallObserved:
+            ctx.chiefManagerDelegationProgress?.toolCallObserved ?? null,
+          toolCallId: ctx.chiefManagerDelegationProgress?.toolCallId ?? null,
+          toolResultObserved:
+            ctx.chiefManagerDelegationProgress?.toolResultObserved ?? null,
+          toolResultError:
+            ctx.chiefManagerDelegationProgress?.toolResultError ?? null,
+          requestId: ctx.chiefManagerDelegationProgress?.requestId ?? null,
+          childSessionId:
+            ctx.chiefManagerDelegationProgress?.childSessionId ?? null,
+          handoffObserved:
+            ctx.chiefManagerDelegationProgress?.handoffObserved ?? null,
+          fauxInvocationObserved:
+            ctx.chiefManagerInvocationObserved === true,
+        }
+      : null;
   const terminalFailureProgress = progress
     ? {
         requestCount: Number.isSafeInteger(progress.requestCount)
@@ -14304,6 +14424,9 @@ export function sanitizedFailureEvidence(
         ? failure.error.code.slice(0, 80)
         : undefined,
     ...(terminalFailureProgress ? { terminalFailureProgress } : {}),
+    ...(ctx.scenario === "chief-manager"
+      ? { chiefManagerDelegationProgress: chiefManagerProgress }
+      : {}),
     ...(coreObservation ? { coreObservation } : {}),
     ...(smoke?.stage === "candidate-start"
       ? {
@@ -15011,6 +15134,38 @@ async function main() {
           .filter(Boolean).length;
       } catch {}
       ctx.sessionStartObserved = Boolean(ctx.sessionStarts);
+      if (ctx.scenario === "chief-manager") {
+        try {
+          const invocationLog = await readFile(
+            join(
+              paths.piAgent,
+              "pi-herdsman",
+              "runtime",
+              "smoke-chief-manager-invocations.jsonl",
+            ),
+            "utf8",
+          );
+          const { managerSessionId, promptMarker } =
+            ctx.chiefManagerDelegationProgress ??
+            ctx.chiefManagerDelegationIdentity ?? {};
+          ctx.chiefManagerInvocationObserved = invocationLog
+            .trim()
+            .split(/\r?\n/)
+            .some((line) => {
+              try {
+                const receipt = JSON.parse(line);
+                return (
+                  receipt.sessionId === managerSessionId &&
+                  receipt.promptMarker === promptMarker
+                );
+              } catch {
+                return false;
+              }
+            });
+        } catch {
+          ctx.chiefManagerInvocationObserved = false;
+        }
+      }
       try {
         const provenance = await readFile(
           join(
