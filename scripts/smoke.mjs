@@ -14208,8 +14208,7 @@ export function sanitizedFailureEvidence(
             ctx.chiefManagerDelegationProgress?.childSessionId ?? null,
           handoffObserved:
             ctx.chiefManagerDelegationProgress?.handoffObserved ?? null,
-          fauxInvocationObserved:
-            ctx.chiefManagerInvocationObserved === true,
+          fauxInvocationObserved: ctx.chiefManagerInvocationObserved === true,
         }
       : null;
   const terminalFailureProgress = progress
@@ -15147,7 +15146,8 @@ async function main() {
           );
           const { managerSessionId, promptMarker } =
             ctx.chiefManagerDelegationProgress ??
-            ctx.chiefManagerDelegationIdentity ?? {};
+            ctx.chiefManagerDelegationIdentity ??
+            {};
           ctx.chiefManagerInvocationObserved = invocationLog
             .trim()
             .split(/\r?\n/)
