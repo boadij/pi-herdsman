@@ -140,7 +140,7 @@ request still advertised it. Project settings cannot enable it.
 Lead session that has no persisted execution choice. Its values select
 `flexible-lead` or `orchestrator-lead`; it does not change a running session,
 and an existing session choice takes precedence. Manager-created assigned Leads
-use `managed-lead` instead.
+use their assigned launch profile instead.
 
 `inlineAttachmentLimitBytes` applies per file. In ordinary coordination
 messages, supported complete strict UTF-8 text is delivered only when both

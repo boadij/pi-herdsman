@@ -4144,6 +4144,7 @@ async function runManagerStartupScenario(
   let createCalls = 0;
   let openCalls = 0;
   let startCalls = 0;
+  const staleId = randomUUID();
   const gitInventories: string[] = [];
   let aliasedCheckoutDeleted = false;
   let gitListOutput = "";
@@ -4723,6 +4724,11 @@ async function runManagerStartupScenario(
         supervisionRuntime(),
         repoKey,
       )[0]!;
+      const historical = starting.id === staleId;
+      assert.equal(
+        starting.definition,
+        historical ? undefined : "managed-lead",
+      );
       if (largeEvidence) {
         assert.match(starting.text, /<file name=.*>/);
         if (limits?.inlineAttachmentLimitBytes !== undefined) {
@@ -4773,6 +4779,7 @@ async function runManagerStartupScenario(
         "branch",
         ...(starting.checkoutPath ? ["checkoutPath"] : []),
         ...(starting.currentEvidenceIds ? ["currentEvidenceIds"] : []),
+        ...(!historical ? ["definition"] : []),
         "id",
         ...(["active-missing", "active-missing-legacy"].includes(mode)
           ? ["piSessionFile"]
@@ -5405,7 +5412,6 @@ async function runManagerStartupScenario(
     }
     const staff = pi.tools.find((tool) => tool.name === "delegate_work")!;
     const staffResume = pi.tools.find((tool) => tool.name === "resume_work")!;
-    const staleId = randomUUID();
     if (mode === "active-live") {
       const messageStaff = pi.tools.find(
         (tool) => tool.name === "message_staff",
@@ -6144,9 +6150,14 @@ async function runManagerStartupScenario(
           ...assignment,
           piSessionFile: conflictingPath,
         });
+        const queued = listChiefMessagePaths(supervisionRuntime(), staleId);
         await assert.rejects(
           execute(),
-          /conflicts with persisted project identity/,
+          /Saved Lead session restoration failed.*mismatched session ID/,
+        );
+        assert.deepEqual(
+          listChiefMessagePaths(supervisionRuntime(), staleId),
+          queued,
         );
         realFs.rmSync(conflictingPath, { force: true });
       } else if (
@@ -6938,6 +6949,7 @@ async function runManagerStartupScenario(
         "branch",
         "checkoutPath",
         ...(assignment.currentEvidenceIds ? ["currentEvidenceIds"] : []),
+        "definition",
         "id",
         "repoKey",
         ...(assignment.requiredEvidence ? ["requiredEvidence"] : []),
@@ -7014,6 +7026,7 @@ async function runManagerStartupScenario(
         "branch",
         "checkoutPath",
         ...(assignment.currentEvidenceIds ? ["currentEvidenceIds"] : []),
+        "definition",
         "id",
         "repoKey",
         ...(assignment.requiredEvidence ? ["requiredEvidence"] : []),
@@ -7125,10 +7138,12 @@ async function runManagerStartupScenario(
       repoKey,
     )[0]!;
     if (capture) capture.assignment = assignment;
+    assert.equal(assignment.definition, "managed-lead");
     assert.deepEqual(Object.keys(assignment).sort(), [
       "branch",
       "checkoutPath",
       ...(assignment.currentEvidenceIds ? ["currentEvidenceIds"] : []),
+      "definition",
       "id",
       ...(["success", "unmaterialized-path"].includes(mode)
         ? ["piSessionFile"]
@@ -9264,7 +9279,13 @@ test("visible capabilities omit unlaunchable parents and non-capability metadata
   const definition = (
     name: string,
     frontmatter: AgentDefinition["frontmatter"],
-  ): AgentDefinition => ({ name, path: `/${name}.md`, frontmatter, body: "" });
+  ): AgentDefinition => ({
+    category: "agent",
+    name,
+    path: `/${name}.md`,
+    frontmatter,
+    body: "",
+  });
   assert.deepEqual(
     visibleAgentCapabilities(
       [
@@ -9331,7 +9352,13 @@ test("visible capabilities advertise children only when delegation is enabled", 
   const definition = (
     name: string,
     frontmatter: AgentDefinition["frontmatter"],
-  ): AgentDefinition => ({ name, path: `/${name}.md`, frontmatter, body: "" });
+  ): AgentDefinition => ({
+    category: "agent",
+    name,
+    path: `/${name}.md`,
+    frontmatter,
+    body: "",
+  });
   const definitions = [
     definition("child", {}),
     definition("allowed", { agents: ["child"] }),

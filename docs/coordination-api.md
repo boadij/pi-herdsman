@@ -78,7 +78,8 @@ project work, can use `stop_lead` to stop a Lead while preserving its project
 assignment, and can request
 independent human confirmation to remove an assigned project's worktree.
 `resume_work` requires a fresh instruction for the existing assignment; it
-queues that instruction separately without replacing the saved task. Already
+queues that instruction separately without replacing the saved task or switching
+its assigned Lead profile. Already
 running Leads are not relaunched. Use `message_staff` for ordinary
 communication with known running Leads; queue acceptance is not proof of
 message delivery.

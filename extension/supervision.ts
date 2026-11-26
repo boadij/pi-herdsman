@@ -55,6 +55,11 @@ import type {
   ExtensionActions,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import {
+  isAssignedLeadDefinitionName,
+  isDefinitionName,
+  MANAGED_LEAD_DEFINITION_NAME,
+} from "./definition-identity.ts";
 
 // Authority edges are deliberately asymmetric: Chief -> Manager -> Lead -> Agent.
 // Staff and supervisor cross one edge; only Lead/Manager sessions may be peers.
@@ -105,6 +110,64 @@ export function readSessionKind(
     identity = data;
   }
   return identity;
+}
+
+export const COORDINATOR_DEFINITION_ENTRY =
+  "pi-herdsman-coordinator-definition";
+export const EXPECTED_ASSIGNED_LEAD_DEFINITION_ENV =
+  "PI_HERDSMAN_EXPECTED_ASSIGNED_LEAD_DEFINITION";
+
+export type CoordinatorDefinitionBinding = Readonly<{
+  version: 1;
+  sessionId: string;
+  category: CoordinatorRole;
+  name: string;
+}>;
+
+// Launch intent is immutable and session-wide, not part of role restoration.
+export function readCoordinatorDefinitionBinding(
+  entries: readonly unknown[],
+  sessionId: string,
+): CoordinatorDefinitionBinding | undefined {
+  let binding: CoordinatorDefinitionBinding | undefined;
+  for (const candidate of entries as readonly any[]) {
+    if (
+      candidate?.type !== "custom" ||
+      candidate.customType !== COORDINATOR_DEFINITION_ENTRY
+    )
+      continue;
+    const data = candidate.data;
+    if (validSession(data?.sessionId) && data.sessionId !== sessionId) continue;
+    if (
+      !validSession(sessionId) ||
+      data?.sessionId !== sessionId ||
+      Array.isArray(data) ||
+      data.version !== 1 ||
+      (data.category !== "lead" && data.category !== "manager") ||
+      !isDefinitionName(data.name) ||
+      Object.keys(data).length !== 4
+    )
+      throw new Error("invalid pi-herdsman-coordinator-definition entry");
+    if (binding && !isDeepStrictEqual(binding, data))
+      throw new Error("conflicting pi-herdsman-coordinator-definition entries");
+    binding = data;
+  }
+  return binding;
+}
+
+export function verifyAssignedLeadDefinition(
+  binding: CoordinatorDefinitionBinding | undefined,
+  name: string,
+  established: boolean,
+): void {
+  if (binding && (binding.category !== "lead" || binding.name !== name))
+    throw new Error(
+      `Saved Lead session definition conflicts with assignment definition ${name}`,
+    );
+  if (!binding && established && name !== MANAGED_LEAD_DEFINITION_NAME)
+    throw new Error(
+      `Saved Lead session has no binding for assignment definition ${name}`,
+    );
 }
 
 export type LeadRoleState = Readonly<{
@@ -3086,6 +3149,7 @@ export type ProjectAssignment = Readonly<{
   repoKey: string;
   branch: string;
   text: string;
+  definition?: string;
   checkoutPath?: string;
   piSessionFile?: string;
   resultBindings?: ResultBinding[];
@@ -3121,6 +3185,7 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
   const r = value as Record<string, unknown>;
   const required = ["version", "id", "repoKey", "branch", "text"];
   const optional = [
+    "definition",
     "checkoutPath",
     "piSessionFile",
     "resultBindings",
@@ -3140,6 +3205,9 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
     validNativeIdentity(r.branch) &&
     typeof r.text === "string" &&
     r.text.length > 0 &&
+    (r.definition === undefined ||
+      (typeof r.definition === "string" &&
+        isAssignedLeadDefinitionName(r.definition))) &&
     (r.gitBaselineSha === undefined ||
       (typeof r.gitBaselineSha === "string" &&
         /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(r.gitBaselineSha))) &&

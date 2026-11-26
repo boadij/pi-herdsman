@@ -328,7 +328,7 @@ descendants retains an ownership breadcrumb such as `lead → implementer` and
 renders execution as contextual metadata, never as an added breadcrumb segment.
 The complete label is omitted when it cannot fit rather than being partially
 truncated. A manually continued exact assigned session remains marked managed;
-the `managed-lead` launch definition is not used to derive the marker.
+the selected launch definition is not used to derive the marker.
 
 Example:
 

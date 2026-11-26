@@ -10,6 +10,7 @@ import {
   HERDSMAN_BUILD,
   WORKSPACE,
   fakeContext,
+  nativeSessions,
   realFs,
 } from "../support.ts";
 import { rememberCoordinatorTarget } from "../coordinator-target.ts";
@@ -26,13 +27,22 @@ const {
   parseGitWorktreeInventory,
   captureSenderEnvironment,
 } = await import("./project.ts");
-const { readProjectAssignment, writeProjectAssignment } =
-  await import("../supervision.ts");
+const {
+  COORDINATOR_DEFINITION_ENTRY,
+  EXPECTED_ASSIGNED_LEAD_DEFINITION_ENV,
+  readProjectAssignment,
+  writeProjectAssignment,
+} = await import("../supervision.ts");
 const { claimManagerLease, supervisionRuntime } =
   await import("../supervision.ts");
-const { getAgentDir } = await import("@earendil-works/pi-coding-agent");
-const { herdrAgentAlias, herdrSessionId, sessionIdentity } =
-  await import("../herdr.ts");
+const { getAgentDir, ProjectTrustStore, SessionManager } =
+  await import("@earendil-works/pi-coding-agent");
+const {
+  herdrAgentAlias,
+  herdrSessionId,
+  sameObservedSessionPath,
+  sessionIdentity,
+} = await import("../herdr.ts");
 
 const lifecycleStop = "stop after assignment publication";
 
@@ -799,11 +809,15 @@ function projectLifecycle(options: {
   baseLookupFailure?: "killed" | "truncated";
   pinnedBaseRefs?: string[];
   pinnedBaseLookupFailure?: "killed" | "truncated" | "nonzero";
+  definition?: string;
+  trustTarget?: boolean;
 }) {
   const repoKey = realFs.realpathSync(process.cwd());
   const managerCheckout = repoKey;
   const worktreePath = join(tmpdir(), `project worktree-${randomUUID()}`);
   mkdirSync(worktreePath);
+  if (options.trustTarget)
+    new ProjectTrustStore(getAgentDir()).set(worktreePath, true);
   const workspaceId = `workspace-${randomUUID()}`;
   const assignments = join(tmpdir(), `assignments-${randomUUID()}`);
   const assignmentRoot = join(assignments, "root");
@@ -989,6 +1003,12 @@ function projectLifecycle(options: {
           `lead-${id.slice(0, 8)}`,
           "--env",
           `PI_CODING_AGENT_DIR=${resolve(getAgentDir())}`,
+          "--env",
+          `${EXPECTED_ASSIGNED_LEAD_DEFINITION_ENV}=${JSON.stringify({
+            sessionId: id,
+            name: options.definition ?? "managed-lead",
+            projectTrusted: options.trustTarget === true,
+          })}`,
           ...(options.inheritedModel
             ? [
                 "--env",
@@ -1150,6 +1170,7 @@ function projectLifecycle(options: {
             task: "work",
             branch,
             ...(options.base ? { base: options.base } : {}),
+            definition: options.definition,
             ...(options.retained ? { files: [options.retained.ref!] } : {}),
           },
           ctx,
@@ -1162,6 +1183,38 @@ function projectLifecycle(options: {
   };
 }
 
+test("fresh delegation launches the named profile in the trusted target worktree", async (t) => {
+  const definition = "delivery-launch";
+  const lifecycle = projectLifecycle({
+    definition,
+    trustTarget: true,
+    launch: (options) => {
+      assert.equal(lifecycle.published?.definition, definition);
+      assert.ok(options.agentArgs.includes("--approve"));
+      assert.equal(
+        options.agentArgs[options.agentArgs.indexOf("--thinking") + 1],
+        "high",
+      );
+      throw new Error("named launch observed");
+    },
+  });
+  const profileDir = join(
+    lifecycle.worktreePath,
+    ".pi",
+    "coordinators",
+    "leads",
+  );
+  realFs.mkdirSync(profileDir, { recursive: true });
+  realFs.writeFileSync(
+    join(profileDir, `${definition}.md`),
+    `---\nname: ${definition}\nthinking: high\n---\n`,
+  );
+  t.after(() =>
+    new ProjectTrustStore(getAgentDir()).set(lifecycle.worktreePath, null),
+  );
+  await assert.rejects(lifecycle.activate(), /named launch observed/);
+});
+
 test("fresh delegation launches in the profile-aware worktree tab", async () => {
   const model = { provider: "extension/provider", id: "model" };
   const lifecycle = projectLifecycle({
@@ -1173,6 +1226,7 @@ test("fresh delegation launches in the profile-aware worktree tab", async () => 
       assert.equal(options.tabId, "lead-tab");
       assert.equal(options.paneId, "lead-pane");
       assert.equal(options.agentArgs.includes("--no-extensions"), true);
+      assert.ok(options.agentArgs.includes("--no-approve"));
       assert.equal(
         options.agentArgs[options.agentArgs.indexOf("--provider") + 1],
         model.provider,
@@ -1804,8 +1858,9 @@ test("new project worktree creation gets an extended Herdr timeout", async () =>
 
 test("resume revalidates checkout placement after async preparation", async () => {
   const repoKey = realFs.realpathSync(process.cwd());
-  const checkout = join(tmpdir(), `resume-${randomUUID()}`);
-  mkdirSync(checkout);
+  const checkout = realFs.realpathSync.native(
+    realFs.mkdtempSync(join(tmpdir(), "resume-")),
+  );
   const movedCheckout = join(tmpdir(), `resume-moved-${randomUUID()}`);
   mkdirSync(movedCheckout);
   const assignmentRoot = join(tmpdir(), `resume-assignments-${randomUUID()}`);
@@ -1849,6 +1904,7 @@ test("resume revalidates checkout placement after async preparation", async () =
   let failPreparation = false;
   let failPostPrepareManagerRevalidation = false;
   let liveLead = false;
+  let reconciliations = 0;
   const ctx = fakeContext() as any;
   ctx.cwd = repoKey;
   const runtime = createLeadProjectRuntime({
@@ -1874,6 +1930,7 @@ test("resume revalidates checkout placement after async preparation", async () =
       }),
     } as any,
     leadRuntime: { managerLease: { descriptor: manager } },
+    SessionManager,
     activeRole: () => "manager",
     currentManager: async () => {
       if (failPostPrepareManagerRevalidation) {
@@ -1919,7 +1976,9 @@ test("resume revalidates checkout placement after async preparation", async () =
     readProjectAssignment: () =>
       readProjectAssignment(supervision as any, repoKey, assignment.branch),
     listProjectAssignments: () => [assignment],
-    reconcileProjectAssignments: async () => {},
+    reconcileProjectAssignments: async () => {
+      reconciliations++;
+    },
     withProjectWorkLock: (_key: string, op: () => unknown) => op(),
     withProjectAssignmentLock: async (
       _repo: string,
@@ -1974,6 +2033,61 @@ test("resume revalidates checkout placement after async preparation", async () =
     },
     appendDurableError: () => {},
   } as any);
+  await assert.rejects(
+    runtime.activateProjectLead(
+      {
+        action: "resume",
+        branch: assignment.branch,
+        definition: "different-profile",
+        message: "do not reconcile",
+        retain: true,
+      },
+      ctx,
+    ),
+    /Assigned Lead uses definition managed-lead/,
+  );
+  assert.equal(reconciliations, 0);
+  const nativePath = join(checkout, "native-only.jsonl");
+  nativeSessions.set(id, {
+    id,
+    cwd: checkout,
+    path: nativePath,
+    entries: [
+      {
+        type: "custom",
+        customType: COORDINATOR_DEFINITION_ENTRY,
+        data: {
+          version: 1,
+          sessionId: id,
+          category: "lead",
+          name: "different-profile",
+        },
+      },
+    ],
+  });
+  try {
+    await assert.rejects(
+      runtime.activateProjectLead(
+        {
+          action: "resume",
+          branch: assignment.branch,
+          message: "do not retain or enqueue",
+          retain: true,
+        },
+        ctx,
+      ),
+      /conflicts with assignment definition managed-lead/,
+    );
+    assert.deepEqual(preparedFiles, []);
+    assert.equal(writes, 0);
+    assert.equal(launches, 0);
+    assert.deepEqual(
+      readProjectAssignment(supervision as any, repoKey, assignment.branch),
+      assignment,
+    );
+  } finally {
+    nativeSessions.delete(id);
+  }
   const result = (await runtime.activateProjectLead(
     {
       action: "resume",
@@ -2063,8 +2177,17 @@ test("resume revalidates checkout placement after async preparation", async () =
 
 test("resume preserves queued manager message when controlled recovery fails", async (t) => {
   const repoKey = realFs.realpathSync(process.cwd());
-  const checkout = join(tmpdir(), `resume-${randomUUID()}`);
-  mkdirSync(checkout);
+  const checkout = realFs.realpathSync.native(
+    realFs.mkdtempSync(join(tmpdir(), "resume-")),
+  );
+  const previousSessionDirectory = process.env.PI_CODING_AGENT_SESSION_DIR;
+  process.env.PI_CODING_AGENT_SESSION_DIR = "custom-sessions";
+  t.after(() => {
+    if (previousSessionDirectory === undefined)
+      delete process.env.PI_CODING_AGENT_SESSION_DIR;
+    else process.env.PI_CODING_AGENT_SESSION_DIR = previousSessionDirectory;
+  });
+  const customSessionDirectory = join(checkout, "custom-sessions");
   const assignmentRoot = join(tmpdir(), `resume-assignments-${randomUUID()}`);
   mkdirSync(assignmentRoot);
   const id = randomUUID();
@@ -2081,12 +2204,42 @@ test("resume preserves queued manager message when controlled recovery fails", a
     branch: "feature/resume",
     text: "original",
     checkoutPath: checkout,
-    piSessionFile: join(tmpdir(), `saved-lead-${id}.jsonl`),
+    piSessionFile: join(customSessionDirectory, `saved-lead-${id}.jsonl`),
+    definition: "exact-recovery-lead",
   };
   writeProjectAssignment(
     { root: assignmentRoot, assignments: assignmentRoot } as any,
     assignment as any,
   );
+  const binding = {
+    type: "custom",
+    customType: COORDINATOR_DEFINITION_ENTRY,
+    data: {
+      version: 1,
+      sessionId: id,
+      category: "lead",
+      name: assignment.definition,
+    },
+  };
+  const conversation = { type: "message", message: { role: "user" } };
+  let savedEntries: unknown[] = [binding, conversation];
+  nativeSessions.set(id, {
+    id,
+    path: assignment.piSessionFile,
+    cwd: checkout,
+    sessionDir: customSessionDirectory,
+  });
+  const profileDir = join(getAgentDir(), "coordinators", "leads");
+  realFs.mkdirSync(profileDir, { recursive: true });
+  const profilePath = join(profileDir, `${assignment.definition}.md`);
+  realFs.writeFileSync(
+    profilePath,
+    `---\nname: ${assignment.definition}\nnoExtensions: true\n---\n`,
+  );
+  t.after(() => {
+    nativeSessions.delete(id);
+    realFs.unlinkSync(profilePath);
+  });
   const events: any[] = [];
   const topologyCalls: string[][] = [];
   const unrelatedRepo = join(tmpdir(), `unrelated-${randomUUID()}`);
@@ -2141,6 +2294,7 @@ test("resume preserves queued manager message when controlled recovery fails", a
         return {
           getSessionId: () => openedSessionId,
           getCwd: () => checkout,
+          getEntries: () => savedEntries,
           getBranch: () => [],
           buildSessionContext: () => ({
             model: { provider: "mistral-native", modelId: "zai-glm-5-3" },
@@ -2148,6 +2302,7 @@ test("resume preserves queued manager message when controlled recovery fails", a
         };
       },
     } as any,
+    sameObservedSessionPath,
     activeRole: () => "manager",
     currentManager: async () =>
       tabFailure === "manager" && tabCreates.length ? undefined : manager,
@@ -2274,7 +2429,7 @@ test("resume preserves queued manager message when controlled recovery fails", a
         ? undefined
         : { role: "lead", piSessionId: id },
     requireCompatibleBuild: () => {},
-    supervisedSessionFile: () => undefined,
+    supervisedSessionFile: () => assignment.piSessionFile,
     scanAgentStates: () => ({ states: [] }),
     resolveMessageFiles: () => [],
     messageLimits: async () => ({
@@ -2339,6 +2494,33 @@ test("resume preserves queued manager message when controlled recovery fails", a
   }
   sessionOpenError = undefined;
   openedSessionId = id;
+  for (const [entries, asserted, diagnostic] of [
+    [[binding], "different-profile", /Assigned Lead uses definition/],
+    [[], undefined, /has no binding/],
+    [
+      [{ ...binding, data: { ...binding.data, name: "different-profile" } }],
+      undefined,
+      /conflicts with assignment definition/,
+    ],
+  ] as const) {
+    savedEntries = [...entries];
+    await assert.rejects(
+      runtime.activateProjectLead(
+        {
+          action: "resume",
+          branch: assignment.branch,
+          message: "continue",
+          definition: asserted,
+          retain: true,
+        },
+        ctx,
+      ),
+      diagnostic,
+    );
+    assert.equal(preparations, 0);
+    assert.deepEqual(events, []);
+  }
+  savedEntries = [binding, conversation];
   const result = (await runtime.activateProjectLead(
     { action: "resume", branch: assignment.branch, message: "continue" },
     ctx,
@@ -2357,6 +2539,12 @@ test("resume preserves queued manager message when controlled recovery fails", a
       `lead-${id.slice(0, 8)}`,
       "--env",
       `PI_CODING_AGENT_DIR=${resolve(getAgentDir())}`,
+      "--env",
+      `${EXPECTED_ASSIGNED_LEAD_DEFINITION_ENV}=${JSON.stringify({
+        sessionId: id,
+        name: assignment.definition,
+        projectTrusted: false,
+      })}`,
       "--no-focus",
     ],
   ]);
@@ -2370,6 +2558,10 @@ test("resume preserves queued manager message when controlled recovery fails", a
   assert.equal(launchedArgs!.includes("--model"), false);
   assert.equal(launchedArgs!.includes("--no-extensions"), true);
   assert.deepEqual(launchedArgs!.slice(-2), ["--session-id", id]);
+  assert.deepEqual(launchedArgs!.slice(-4, -2), [
+    "--session-dir",
+    customSessionDirectory,
+  ]);
   assert.equal(result.details.status, "recovery_unverified");
   assert.equal(result.details.message_queued, true);
   assert.equal(result.details.recovery_verified, false);

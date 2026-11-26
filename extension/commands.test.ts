@@ -18,6 +18,7 @@ import {
   CURRENT_SESSION_VERSION,
   initTheme,
   ProjectTrustStore,
+  SessionManager,
   type ExtensionUIDialogOptions,
   type SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
@@ -786,6 +787,7 @@ test("Lead execution state is strict and profile tools preserve only Lead capabi
   );
   const baseline = ["read", "bash", "grep"];
   const projection = state.projectLeadTools(baseline, {
+    category: "lead",
     name: "orchestrator-lead",
     path: "orchestrator-lead.md",
     frontmatter: {
@@ -798,6 +800,7 @@ test("Lead execution state is strict and profile tools preserve only Lead capabi
   assert.deepEqual(projection, ["delegate_agent"]);
   assert.deepEqual(
     state.projectLeadTools(baseline, {
+      category: "lead",
       name: "orchestrator-lead",
       path: "orchestrator-lead.md",
       frontmatter: { name: "orchestrator-lead", tools: [] },
@@ -807,6 +810,7 @@ test("Lead execution state is strict and profile tools preserve only Lead capabi
   );
   assert.deepEqual(
     state.projectLeadTools(baseline, {
+      category: "lead",
       name: "orchestrator-lead",
       path: "orchestrator-lead.md",
       frontmatter: {
@@ -820,6 +824,7 @@ test("Lead execution state is strict and profile tools preserve only Lead capabi
   );
   assert.deepEqual(
     state.projectLeadTools(baseline, {
+      category: "lead",
       name: "flexible-lead",
       path: "flexible-lead.md",
       frontmatter: { name: "flexible-lead" },
@@ -828,6 +833,7 @@ test("Lead execution state is strict and profile tools preserve only Lead capabi
     [...baseline, "delegate_agent"],
   );
   const flexibleWithCodeMode = {
+    category: "lead" as const,
     name: "flexible-lead",
     path: "flexible-lead.md",
     frontmatter: { name: "flexible-lead", tools: ["+codemode"] },
@@ -1156,7 +1162,12 @@ test("unverifiable exact assignment initialization never persists ordinary ident
   assert.equal(pi.pi.getActiveTools().includes("message_manager"), true);
   assert.equal(pi.pi.getActiveTools().includes("message_chief"), false);
 
-  const override = join(PI_AGENT_ROOT, "coordinators", "managed-lead.md");
+  const override = join(
+    PI_AGENT_ROOT,
+    "coordinators",
+    "leads",
+    "managed-lead.md",
+  );
   mkdirSync(dirname(override), { recursive: true });
   realFs.writeFileSync(
     override,
@@ -1625,11 +1636,11 @@ test("a restricted Flexible definition cannot replace the ordinary tool baseline
   setLeadEnvironment();
   const cwd = mkdtempSync(join(tmpdir(), "herdsman-flexible-profile-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
-  mkdirSync(join(cwd, ".pi", "coordinators"), {
+  mkdirSync(join(cwd, ".pi", "coordinators", "leads"), {
     recursive: true,
   });
   writeFileSync(
-    join(cwd, ".pi", "coordinators", "flexible-lead.md"),
+    join(cwd, ".pi", "coordinators", "leads", "flexible-lead.md"),
     "---\nname: flexible-lead\ntools: [read]\n---\nrestricted flexible\n",
   );
   const baseline = ["read", "bash", "edit", "write"];
@@ -1662,11 +1673,11 @@ test("live Flexible tool changes survive order-preserving projection while exclu
   setLeadEnvironment();
   const cwd = mkdtempSync(join(tmpdir(), "herdsman-inherited-tools-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
-  mkdirSync(join(cwd, ".pi", "coordinators"), {
+  mkdirSync(join(cwd, ".pi", "coordinators", "leads"), {
     recursive: true,
   });
   writeFileSync(
-    join(cwd, ".pi", "coordinators", "flexible-lead.md"),
+    join(cwd, ".pi", "coordinators", "leads", "flexible-lead.md"),
     "---\nname: flexible-lead\nexcludeTools: [bash]\n---\nflexible\n",
   );
   const entries: any[] = [];
@@ -1746,11 +1757,11 @@ test("failed inherited-tool persistence enforces policy and retries", async (t) 
   setLeadEnvironment();
   const cwd = mkdtempSync(join(tmpdir(), "herdsman-inherited-tools-failure-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
-  mkdirSync(join(cwd, ".pi", "coordinators"), {
+  mkdirSync(join(cwd, ".pi", "coordinators", "leads"), {
     recursive: true,
   });
   writeFileSync(
-    join(cwd, ".pi", "coordinators", "flexible-lead.md"),
+    join(cwd, ".pi", "coordinators", "leads", "flexible-lead.md"),
     "---\nname: flexible-lead\nexcludeTools: [bash]\n---\nflexible\n",
   );
   const entries: any[] = [];
@@ -1829,10 +1840,16 @@ test("failed inherited capture still enforces invalid-profile fail-closed tools"
   setLeadEnvironment();
   const cwd = mkdtempSync(join(tmpdir(), "herdsman-invalid-inherited-tools-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
-  mkdirSync(join(cwd, ".pi", "coordinators"), {
+  mkdirSync(join(cwd, ".pi", "coordinators", "leads"), {
     recursive: true,
   });
-  const definition = join(cwd, ".pi", "coordinators", "flexible-lead.md");
+  const definition = join(
+    cwd,
+    ".pi",
+    "coordinators",
+    "leads",
+    "flexible-lead.md",
+  );
   writeFileSync(definition, "---\nname: flexible-lead\n---\nflexible\n");
   const entries: any[] = [];
   const pi = fakeChiefPi({
@@ -2052,9 +2069,11 @@ test("session tree restoration respects checkpoint order and tool policies", asy
       const cwd = mkdtempSync(join(tmpdir(), "herdsman-tree-policy-"));
       t.after(() => rmSync(cwd, { recursive: true, force: true }));
       if (scenario.profile) {
-        mkdirSync(join(cwd, ".pi", "coordinators"), { recursive: true });
+        mkdirSync(join(cwd, ".pi", "coordinators", "leads"), {
+          recursive: true,
+        });
         writeFileSync(
-          join(cwd, ".pi", "coordinators", "flexible-lead.md"),
+          join(cwd, ".pi", "coordinators", "leads", "flexible-lead.md"),
           `---\nname: flexible-lead\n${scenario.profile}\n---\nflexible\n`,
         );
       }
@@ -2107,7 +2126,7 @@ test("session tree restoration respects checkpoint order and tool policies", asy
         }
         if (scenario.profile === "excludeTools: [bash]") {
           writeFileSync(
-            join(cwd, ".pi", "coordinators", "flexible-lead.md"),
+            join(cwd, ".pi", "coordinators", "leads", "flexible-lead.md"),
             "---\nname: flexible-lead\n---\nflexible\n",
           );
           await pi.commandOptions.get("lead-orchestrate").handler("", context);
@@ -2154,7 +2173,12 @@ test("session startup restores execution from the selected branch only", async (
 
 test("Manager transitions and mode changes preserve the ordinary Lead baseline", async () => {
   setLeadEnvironment();
-  const managerOverride = join(PI_AGENT_ROOT, "coordinators", "manager.md");
+  const managerOverride = join(
+    PI_AGENT_ROOT,
+    "coordinators",
+    "managers",
+    "manager.md",
+  );
   mkdirSync(dirname(managerOverride), { recursive: true });
   process.env.HERDR_PANE_ID = "manager-baseline-pane";
   process.env.HERDR_TAB_ID = "manager-baseline-tab";
@@ -2330,7 +2354,12 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
 
 test("registered Manager turn_end adapter reconciles late tools in the live policy", async () => {
   setLeadEnvironment();
-  const managerOverride = join(PI_AGENT_ROOT, "coordinators", "manager.md");
+  const managerOverride = join(
+    PI_AGENT_ROOT,
+    "coordinators",
+    "managers",
+    "manager.md",
+  );
   mkdirSync(dirname(managerOverride), { recursive: true });
   const previousOverride = realFs.existsSync(managerOverride)
     ? readFileSync(managerOverride, "utf8")
@@ -4294,7 +4323,12 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
   const projectCwd = realFs.mkdtempSync(
     join(tmpdir(), "herdsman-root-manager-project-"),
   );
-  const managerOverride = join(PI_AGENT_ROOT, "coordinators", "manager.md");
+  const managerOverride = join(
+    PI_AGENT_ROOT,
+    "coordinators",
+    "managers",
+    "manager.md",
+  );
   mkdirSync(dirname(managerOverride), { recursive: true });
   const outsideDefinition = join(PI_AGENTS_DIR, "generalist.md");
   const previousManagerOverride = realFs.existsSync(managerOverride)
@@ -10544,7 +10578,8 @@ async function managerDelegateAssignmentTest(
   const trustPath = extendedPaths ? toNamespacedPath(childCwd) : childCwd;
   new ProjectTrustStore(PI_AGENT_ROOT).set(trustPath, targetDecision);
   t.after(() => new ProjectTrustStore(PI_AGENT_ROOT).set(trustPath, null));
-  const managedLeadDir = join(childCwd, ".pi", "coordinators");
+  const targetTrusted = targetDecision ?? ancestorDecision ?? false;
+  const managedLeadDir = join(childCwd, ".pi", "coordinators", "leads");
   realFs.mkdirSync(managedLeadDir, { recursive: true });
   realFs.writeFileSync(
     join(managedLeadDir, "managed-lead.md"),
@@ -10881,6 +10916,16 @@ async function managerDelegateAssignmentTest(
       );
       assignmentLease();
       const sessionIdIndex = args.indexOf("--session-id");
+      if (extendedPaths) {
+        const sessionDirIndex = args.indexOf("--session-dir");
+        assert.notEqual(sessionDirIndex, -1);
+        assert.equal(
+          args[sessionDirIndex + 1],
+          SessionManager.create(
+            realFs.realpathSync.native(childCwd),
+          ).getSessionDir(),
+        );
+      }
       assert.notEqual(sessionIdIndex, -1);
       childSession = args[sessionIdIndex + 1]!;
       assert.equal(childSession, assignment.id);
@@ -10913,13 +10958,13 @@ async function managerDelegateAssignmentTest(
       assert.equal(args.includes("--no-extensions"), true);
       const thinkingIndex = args.indexOf("--thinking");
       assert.notEqual(thinkingIndex, -1);
-      assert.equal(args[thinkingIndex + 1] === "low", projectTrusted);
-      assert.equal(args.includes("--approve"), projectTrusted);
-      assert.equal(args.includes("--no-approve"), !projectTrusted);
+      assert.equal(args[thinkingIndex + 1] === "low", targetTrusted);
+      assert.equal(args.includes("--approve"), targetTrusted);
+      assert.equal(args.includes("--no-approve"), !targetTrusted);
       const promptIndex = args.indexOf("--append-system-prompt");
       assert.notEqual(promptIndex, -1);
       const childPrompt = readFileSync(args[promptIndex + 1]!, "utf8");
-      if (projectTrusted) {
+      if (targetTrusted) {
         assert.match(childPrompt, /TARGET_WORKTREE_MANAGED_LEAD/);
       } else {
         assert.doesNotMatch(childPrompt, /TARGET_WORKTREE_MANAGED_LEAD/);
@@ -11269,6 +11314,7 @@ async function managerDelegateAssignmentTest(
     else registerExtension!(lead.pi as never);
     leadCtx = fakeContext(lead.entries) as any;
     leadCtx.cwd = childCwd;
+    leadCtx.isProjectTrusted = () => targetTrusted;
     leadCtx.hasUI = true;
     leadCtx.sessionManager.getSessionId = () => childSession;
     leadCtx.sessionManager.getSessionFile = childSessionPath;
@@ -11476,6 +11522,10 @@ async function managerDelegateAssignmentTest(
     }
     assert.equal(delegationError, undefined);
     assert.equal(outcome.details.ok, true);
+    assert.equal(
+      outcome.details.trust,
+      targetTrusted ? "trusted" : "restricted",
+    );
     if (outcome.details.trust === "restricted") {
       assert.equal(outcome.details.project_definitions, "unavailable");
       assert.equal(outcome.details.private_definitions, "unavailable");
@@ -11939,6 +11989,7 @@ async function managerDelegateAssignmentTest(
       "branch",
       "checkoutPath",
       "currentEvidenceIds",
+      "definition",
       "id",
       "piSessionFile",
       "repoKey",
@@ -12402,13 +12453,13 @@ test(
     ),
 );
 
-test("trusted Manager approves an undecided delegated worktree", (t) =>
+test("trusted Manager does not approve an undecided delegated worktree", (t) =>
   managerDelegateAssignmentTest(t, true, undefined, null));
-test("trusted Manager overrides a saved target denial", (t) =>
+test("trusted Manager respects a saved target denial", (t) =>
   managerDelegateAssignmentTest(t, true, undefined, false, true));
-test("untrusted Manager restricts a saved-approved target", (t) =>
+test("untrusted Manager uses the target's saved approval", (t) =>
   managerDelegateAssignmentTest(t, false, undefined, true));
-test("untrusted Manager does not inherit saved ancestor approval", (t) =>
+test("delegated target inherits its saved ancestor approval independently of Manager trust", (t) =>
   managerDelegateAssignmentTest(t, false, undefined, null, true));
 
 test("Manager session binding holds the assignment lock before Lead publication", (t) =>
@@ -13304,6 +13355,7 @@ test("ordinary Lead uplink reaches its Manager while assigned branch targeting f
   const relativeProfilePath = join(
     PI_AGENT_ROOT,
     "coordinators",
+    "leads",
     "flexible-lead.md",
   );
   realFs.mkdirSync(dirname(relativeProfilePath), { recursive: true });
@@ -17094,7 +17146,12 @@ test("Lead profile switch during Agent startup rejects and rolls back stale assi
       "HERDR_SOCKET_PATH",
     ].map((key) => [key, process.env[key]]),
   );
-  const chiefPath = join(PI_AGENT_ROOT, "coordinators", "orchestrator-lead.md");
+  const chiefPath = join(
+    PI_AGENT_ROOT,
+    "coordinators",
+    "leads",
+    "orchestrator-lead.md",
+  );
   mkdirSync(dirname(chiefPath), { recursive: true });
   const previousChief = realFs.existsSync(chiefPath)
     ? readFileSync(chiefPath, "utf8")
@@ -17235,7 +17292,12 @@ test("Lead retains owned Agent controls after switching to an empty allowlist", 
     tmpdir(),
     `owned-policy-${randomUUID()}.sock`,
   );
-  const rolePath = join(PI_AGENT_ROOT, "coordinators", "orchestrator-lead.md");
+  const rolePath = join(
+    PI_AGENT_ROOT,
+    "coordinators",
+    "leads",
+    "orchestrator-lead.md",
+  );
   mkdirSync(dirname(rolePath), { recursive: true });
   const previousRole = realFs.existsSync(rolePath)
     ? readFileSync(rolePath, "utf8")
@@ -21261,7 +21323,12 @@ test("Definitions edits standalone definitions through the shared override write
 
 test("Definitions exposes managed Lead settings without Agent discovery", async () => {
   setLeadEnvironment();
-  const overridePath = join(PI_AGENT_ROOT, "coordinators", "managed-lead.md");
+  const overridePath = join(
+    PI_AGENT_ROOT,
+    "coordinators",
+    "leads",
+    "managed-lead.md",
+  );
   mkdirSync(dirname(overridePath), { recursive: true });
   const pi = fakePi();
   registerExtension!(pi.pi as never);
@@ -21313,13 +21380,13 @@ test("Definitions exposes managed Lead settings without Agent discovery", async 
     assert.deepEqual(
       definitionMenu?.options
         .slice(0, 5)
-        .map((option) => option.split(/\s/u)[0]),
+        .map((option) => option.split("  ")[0]),
       [
-        "flexible-lead",
-        "orchestrator-lead",
-        "managed-lead",
-        "manager",
-        "chief",
+        "flexible-lead (lead)",
+        "managed-lead (lead)",
+        "orchestrator-lead (lead)",
+        "manager (manager)",
+        "chief (chief)",
       ],
     );
     assert.ok(
@@ -25037,7 +25104,13 @@ test("session-start roster uses current delegation policy and ignores superseded
   const { createLeadSessionStartRuntime } = await import("./lead-runtime.ts");
   const { visibleAgentCapabilities } = await import("./agent-controller.ts");
   const rosterDefinitions: AgentDefinition[] = ["allowed", "other"].map(
-    (name) => ({ name, path: `/${name}.md`, frontmatter: {}, body: "" }),
+    (name) => ({
+      category: "agent",
+      name,
+      path: `/${name}.md`,
+      frontmatter: {},
+      body: "",
+    }),
   );
   let resolveOldDefinitions!: (value: {
     definitions: AgentDefinition[];

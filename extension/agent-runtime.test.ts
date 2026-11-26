@@ -10171,6 +10171,7 @@ test("relative Lead policy denies only terminal removals and protected owned too
   );
   assert.deepEqual(
     toolState.projectLeadTools(["read", "bash", "edit", "write"], {
+      category: "lead",
       name: "flexible-lead",
       path: "/flexible.md",
       body: "",

@@ -137,9 +137,10 @@ Group routine tests by area rather than enumerating every test file.
 - `extension/lead/commands.ts`: Lead command menus, settings UI, and command dispatch.
 - `extension/lead/project.ts`: Managed project work operations and Git worktree inspection.
 - `extension/lead/coordination.ts`: Lead coordination, peer messaging, and session discovery.
-- `extension/agent-definitions.ts`: Agent and Coordinator definition discovery, validation, overrides, and launch arguments.
+- `extension/agent-definitions.ts`: Category-aware definition discovery, layering, validation, edit targets, and launch arguments.
+- `extension/definition-identity.ts`: Pure definition-name and reserved-category validation shared with standalone peer supervision.
 - `extension/agents/`: Bundled delegable Agent definitions.
-- `extension/coordinators/`: Bundled Lead, Manager, and Chief Coordinator profiles.
+- `extension/coordinators/`: Bundled Coordinator profiles in `leads/`, `managers/`, and `chief.md`.
 - `extension/coordinator-target.ts`: Coordinator target identity and session bindings.
 - `extension/herdr.ts`: Herdr topology, verified Git checkout identity, workspace and pane preparation, and process launch and ownership.
 - `extension/manager-git.ts`: Shared Manager Git bootstrap and checks for conflicting legacy Manager authority.
@@ -156,7 +157,7 @@ Group routine tests by area rather than enumerating every test file.
 - `extension/lock.ts`: Process-lock ownership.
 - `extension/presentation.ts`: Model, TUI, and status presentation.
 - `extension/config.ts`: Flat Pi Herdsman configuration.
-- `extension/supervision.ts`: Chief, Manager, and Lead authority, leases, supervision state, and staff tool contracts; repository-scoped Manager lifecycle coordination records.
+- `extension/supervision.ts`: Chief, Manager, and Lead authority, leases, supervision state, and staff tool contracts; exact-session Coordinator definition bindings and repository-scoped Manager lifecycle records.
 - `extension/support.ts`: Shared extension integration-test mocks and fixtures.
 - `extension/*.test.ts`, `extension/lead/*.test.ts`: Extension runtime, command, and integration tests.
 - `bin/*.test.ts`, `scripts/*.test.mjs`: Peer bridge and development tooling tests.

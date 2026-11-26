@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import {
   claimDelegationLock,
@@ -1628,20 +1636,22 @@ test("Invalid and untrusted project settings leave global editing available", as
 });
 
 test("Definitions retains the last selected Agent when returning to its list", async () => {
-  const { RESERVED_ROLE_DEFINITION_NAMES } =
-    await import("../agent-definitions.ts");
-  const second = { name: "second", frontmatter: { name: "second" } } as any;
-  const first = { name: "first", frontmatter: { name: "first" } } as any;
-  const roleDefinitions = RESERVED_ROLE_DEFINITION_NAMES.map((name) => ({
-    name,
-    frontmatter: { name },
-  })) as any[];
+  const second = {
+    category: "agent",
+    name: "second",
+    frontmatter: { name: "second" },
+  } as any;
+  const first = {
+    category: "agent",
+    name: "first",
+    frontmatter: { name: "first" },
+  } as any;
   const selections: { title: string; selected?: string }[] = [];
   const results = ["agents", "second", undefined, undefined, undefined];
   const runtime = createLeadCommandRuntime({
     contextAgentDefinitions: async () => ({
       definitions: [first, second],
-      roleDefinitions,
+      roleDefinitions: [],
       projectTrusted: true,
     }),
     selectMenu: async (
@@ -1756,6 +1766,7 @@ test("ordinary Agent Details order native and appended context by launch mode", 
     let inspectedSections: any[] | undefined;
     const notices: string[] = [];
     const definition = {
+      category: "agent" as const,
       name: "reviewer",
       path: "/reviewer.md",
       extensionSource: "/reviewer.md",
@@ -1767,7 +1778,7 @@ test("ordinary Agent Details order native and appended context by launch mode", 
       getThinkingLevel: () => "high",
       agentDefinitionEnabled: () => true,
       contextAgentDefinitions: async () => ({ definitions: [definition] }),
-      inspectAgentDefinition: () => ({
+      inspectDefinition: () => ({
         definition,
         layers:
           scenario.layers ??
@@ -1810,6 +1821,7 @@ test("ordinary Agent Details order native and appended context by launch mode", 
         { path: "/workspace/AGENTS.md", content: "context sentinel" },
       ],
       leadExecutionPresentation: () => ({ managed: false, mode: "flexible" }),
+      leadExecutionDefinition: () => undefined,
       roleActive: () => false,
       isCurrentChief: () => false,
       agentDefinitionMetadata: () => ({ name: "reviewer" }),
@@ -1884,10 +1896,17 @@ test("ordinary Agent Details order native and appended context by launch mode", 
 });
 
 test("inactive Managed Lead Details include Working directory exactly once", async () => {
-  const choices = ["roles", "managed-lead", "details", undefined, undefined];
+  const choices = [
+    "roles",
+    "lead:managed-lead",
+    "details",
+    undefined,
+    undefined,
+  ];
   let details: any;
   let selectedCwd: string | undefined;
   const definition = {
+    category: "lead" as const,
     name: "managed-lead",
     path: "/managed-lead.md",
     frontmatter: {
@@ -1903,7 +1922,7 @@ test("inactive Managed Lead Details include Working directory exactly once", asy
     getThinkingLevel: () => "high",
     agentDefinitionEnabled: () => true,
     getSystemPromptOptions: () => ({ contextFiles: [] }),
-    inspectRoleDefinition: () => ({
+    inspectDefinition: () => ({
       definition,
       layers: [],
       bodyFragments: [
@@ -1915,6 +1934,7 @@ test("inactive Managed Lead Details include Working directory exactly once", asy
     roleActive: () => false,
     isCurrentChief: () => false,
     leadExecutionPresentation: () => ({ managed: false, mode: "flexible" }),
+    leadExecutionDefinition: () => undefined,
     selectedAgentContextFiles: (_definition: unknown, cwd: string) => {
       selectedCwd = cwd;
       return [{ path: "/workspace/AGENTS.md", content: "project context" }];
@@ -1970,8 +1990,68 @@ test("inactive Managed Lead Details include Working directory exactly once", asy
   );
 });
 
+test("same-named Lead and Manager entries expose only applicable settings", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "herdsman-definition-menu-"));
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = root;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+    rmSync(root, { recursive: true, force: true });
+  });
+  for (const directory of ["leads", "managers"]) {
+    const path = join(root, "coordinators", directory);
+    mkdirSync(path, { recursive: true });
+    writeFileSync(join(path, "shared.md"), "---\nname: shared\n---\nProfile");
+  }
+  const choices = [
+    "roles",
+    "lead:shared",
+    undefined,
+    "manager:shared",
+    undefined,
+    undefined,
+    undefined,
+  ];
+  const profileMenus: string[][] = [];
+  const runtime = createLeadCommandRuntime({
+    selectMenu: async (
+      _ctx: unknown,
+      title: string,
+      items: { value: string; label: string }[],
+    ) => {
+      if (title === "Coordinators") {
+        assert.ok(
+          items.some(
+            ({ value, label }) =>
+              value === "lead:shared" && label === "shared (lead)",
+          ),
+        );
+        assert.ok(
+          items.some(
+            ({ value, label }) =>
+              value === "manager:shared" && label === "shared (manager)",
+          ),
+        );
+      }
+      if (title === "shared")
+        profileMenus.push(items.map(({ value }) => value));
+      return choices.shift();
+    },
+    getThinkingLevel: () => "high",
+  } as any);
+  await runtime.openDefinitionsMenu({
+    isProjectTrusted: () => false,
+    ui: { notify: () => undefined },
+  } as any);
+  assert.deepEqual(profileMenus, [
+    ["model", "thinking", "details"],
+    ["details"],
+  ]);
+});
+
 test("Coordinator Details show current prompt inputs in composition order", async () => {
-  const choices = ["roles", "manager", "details", undefined, undefined];
+  const choices = ["roles", "manager:manager", "details", undefined, undefined];
   const menus: { title: string; value?: string }[] = [];
   let displayed: string[] | undefined;
   const runtime = createLeadCommandRuntime({
@@ -1987,8 +2067,9 @@ test("Coordinator Details show current prompt inputs in composition order", asyn
         { path: "/workspace/AGENTS.md", content: "Current project context" },
       ],
     }),
-    inspectRoleDefinition: () => ({
+    inspectDefinition: () => ({
       definition: {
+        category: "manager" as const,
         name: "manager",
         path: "/profile.md",
         frontmatter: { name: "manager" },
@@ -2032,7 +2113,7 @@ test("Coordinator Details show current prompt inputs in composition order", asyn
   } as any);
   assert.deepEqual(
     menus.slice(0, 3).map(({ value }) => value),
-    ["roles", "manager", "details"],
+    ["roles", "manager:manager", "details"],
   );
   const lines = displayed!.join("\n");
   const base = lines.indexOf("Pi base prompt");
@@ -2050,7 +2131,7 @@ test("Coordinator Details show current prompt inputs in composition order", asyn
 test("Chief Details use the forced prompt producer with global-only context", async () => {
   const { chiefGlobalInstructions, chiefSystemPrompt } =
     await import("../chief-prompt.ts");
-  const choices = ["roles", "chief", "details", undefined, undefined];
+  const choices = ["roles", "chief:chief", "details", undefined, undefined];
   let displayed: string[] | undefined;
   const promptOptions = {
     contextFiles: [
@@ -2069,8 +2150,9 @@ test("Chief Details use the forced prompt producer with global-only context", as
     getThinkingLevel: () => "high",
     agentDefinitionEnabled: () => true,
     getSystemPromptOptions: () => promptOptions,
-    inspectRoleDefinition: () => ({
+    inspectDefinition: () => ({
       definition: {
+        category: "chief" as const,
         name: "chief",
         path: "/profile.md",
         frontmatter: { name: "chief" },
@@ -2144,9 +2226,13 @@ test("Chief Details use the forced prompt producer with global-only context", as
 });
 
 test("Definitions lists and displays misplaced-definition warnings without editing them", async () => {
-  const first = { name: "first", frontmatter: { name: "first" } } as any;
+  const first = {
+    category: "agent",
+    name: "first",
+    frontmatter: { name: "first" },
+  } as any;
   const warning =
-    "/agent/agents/manager.md: definition belongs in /agent/coordinators/manager.md; file excluded from discovery";
+    "/agent/agents/manager.md: definition belongs in /agent/coordinators/managers/manager.md; file excluded from discovery";
   const menus: { title: string; items: any[] }[] = [];
   const notices: [string, string | undefined][] = [];
   const results = ["agents", "__definition_warnings__", undefined, undefined];

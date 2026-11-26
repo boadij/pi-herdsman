@@ -78,7 +78,8 @@ a supervised Lead's herd.
 Lead execution configuration is separate from role and authority. An ordinary
 Lead uses its session's `flexible` or `orchestrate` preference, selecting
 `flexible-lead` or `orchestrator-lead`; a Manager-assigned Lead uses
-`managed-lead`. These definitions configure execution, not ownership or
+its assigned launch profile (by default, `managed-lead`). These definitions
+configure execution, not ownership or
 supervision. Only the exact current `ProjectAssignment` establishes Manager
 authority, and Lead-owned Agent trees remain governed by the existing durable
 ownership model. Session kind is immutable and exact-session-bound, independent
@@ -214,7 +215,7 @@ under the existing authorization and safety checks. Successful Herdr worktree
 removal or verified checkout absence retires the matching assignment and any
 still-pending project messages while preserving the Git branch. A changed
 checked-out branch is not checkout absence. Manually continuing the
-exact assigned Pi session remains managed; `managed-lead` is launch policy,
+exact assigned Pi session remains managed; the selected profile is launch policy,
 not authority.
 A complete Git worktree inventory that verifies the checkout is absent retires
 the exact assignment and pending project messages, even when a Herdr removal

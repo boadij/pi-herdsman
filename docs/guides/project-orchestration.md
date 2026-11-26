@@ -19,8 +19,9 @@ Eligible ordinary Leads in the verified worktree group are also supervised for
 observation and communication, not project operations. Project Leads own
 technical decisions and orchestrate execution through their Agent trees.
 
-Manager-assigned project Leads use only the reserved `managed-lead` definition,
-regardless of an ordinary Lead's saved execution preference. The bundled
+Manager-assigned project Leads use the launch profile selected by
+`delegate_work`, defaulting to `managed-lead`, regardless of any ordinary Lead
+execution preference. Resume keeps that selection. The bundled
 default keeps direct Lead work read-only and delegates executable project work
 to managed Agents while the Lead retains decomposition,
 architecture, scope, technical direction, integration, conflict resolution,
@@ -173,10 +174,10 @@ from its branch. Existing names, including names explicitly cleared in Pi, are
 preserved; use Pi's `/name` command to choose or change a name.
 
 Whenever Herdsman actually launches the project Lead process, it resolves the
-current `managed-lead` definition from the target worktree plus the global
-overlay. A trusted project may therefore configure the Lead that works on its
-branch. A Lead that is already live is not hot-reconfigured; changed launch
-policy takes effect on its next start.
+selected profile using the applicable layers for the verified target checkout.
+A trusted project may therefore configure the Lead that works on its branch.
+A running Lead is not hot-reconfigured; changed launch policy takes effect at
+its next start.
 
 Herdsman-managed Leads inherit the Manager's effective Pi project-trust
 decision when launched into a verified linked worktree. A trusted Manager
