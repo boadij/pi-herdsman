@@ -1616,8 +1616,7 @@ export function decide(model, context) {
         const result = text(existing.result);
         const requestId = result.match(/^Request: ([^\n]+)$/m)?.[1];
         const sessionId = result.match(/^Session: ([^\n]+)$/m)?.[1];
-        const expectedHeader =
-          `Agent result · agent=chief-manager-smoke-agent · definition=smoke-agent · session=${sessionId} · status=completed`;
+        const expectedHeader = `Agent result · agent=chief-manager-smoke-agent · definition=smoke-agent · session=${sessionId} · status=completed`;
         const delivered =
           requestId &&
           sessionId &&
