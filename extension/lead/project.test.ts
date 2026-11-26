@@ -8,6 +8,7 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
   AGENT_ID,
   HERDSMAN_BUILD,
+  PI_AGENT_ROOT,
   WORKSPACE,
   fakeContext,
   nativeSessions,
@@ -47,6 +48,10 @@ const {
 } = await import("../herdr.ts");
 
 const lifecycleStop = "stop after assignment publication";
+
+test.before(() => {
+  process.env.HERDR_SOCKET_PATH = join(PI_AGENT_ROOT, "test-herdr.sock");
+});
 
 function removeHerdrIntegrationForTest(t: TestContext) {
   const integrationPath = join(
