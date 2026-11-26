@@ -14208,6 +14208,17 @@ export function sanitizedFailureEvidence(
             ctx.chiefManagerDelegationProgress?.promptMarker ??
             ctx.chiefManagerDelegationIdentity?.promptMarker ??
             null,
+          providerEntryLogStatus:
+            ctx.chiefManagerProviderEntryLogStatus ?? "not_read",
+          providerEntries: ctx.chiefManagerProviderEntries ?? [],
+          managerSessionProviderEntries: (
+            ctx.chiefManagerProviderEntries ?? []
+          ).filter(
+            (entry) =>
+              entry.sessionId ===
+              (ctx.chiefManagerDelegationProgress?.managerSessionId ??
+                ctx.chiefManagerDelegationIdentity?.managerSessionId),
+          ),
           promptDispatchAttempted:
             ctx.chiefManagerDelegationProgress?.promptDispatchAttempted ?? null,
           workingObserved:
@@ -15182,6 +15193,54 @@ async function main() {
             });
         } catch {
           ctx.chiefManagerInvocationObserved = false;
+        }
+        try {
+          const providerLog = await readFile(
+            join(
+              paths.piAgent,
+              "pi-herdsman",
+              "runtime",
+              "smoke-chief-manager-provider-entries.jsonl",
+            ),
+            "utf8",
+          );
+          ctx.chiefManagerProviderEntries = providerLog
+            .trim()
+            .split(/\r?\n/)
+            .filter(Boolean)
+            .slice(-128)
+            .flatMap((line) => {
+              try {
+                const entry = JSON.parse(line);
+                if (
+                  entry.modelId !== "chief-manager" ||
+                  typeof entry.sessionId !== "string" ||
+                  typeof entry.managerContext !== "boolean" ||
+                  typeof entry.exactMarkerMatch !== "boolean" ||
+                  !Number.isSafeInteger(entry.lastUserLength) ||
+                  !Number.isSafeInteger(entry.invocationSequence)
+                )
+                  return [];
+                return [
+                  {
+                    sessionId: entry.sessionId.slice(0, 128),
+                    modelId: entry.modelId,
+                    managerContext: entry.managerContext,
+                    exactMarkerMatch: entry.exactMarkerMatch,
+                    lastUserLength: entry.lastUserLength,
+                    invocationSequence: entry.invocationSequence,
+                  },
+                ];
+              } catch {
+                return [];
+              }
+            })
+            .slice(-32);
+          ctx.chiefManagerProviderEntryLogStatus = "read";
+        } catch (error) {
+          ctx.chiefManagerProviderEntries = [];
+          ctx.chiefManagerProviderEntryLogStatus =
+            error.code === "ENOENT" ? "missing" : "unavailable";
         }
       }
       try {
