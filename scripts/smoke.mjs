@@ -30,6 +30,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs, promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import { matchesProjectMessageContent } from "./smoke-faux.mjs";
+import { matchesChiefManagerHandoff } from "./chief-manager-smoke.mjs";
 
 export { matchesProjectMessageContent };
 import {
@@ -11794,15 +11795,12 @@ async function runChiefManagerSmoke(ctx) {
     if (!requestId || !childSessionId) return { done: false };
     progress.requestId = requestId;
     progress.childSessionId = childSessionId;
-    const handoff = entries.find(
-      (entry) =>
-        entry.message?.customType === "pi-herdsman-agent-result" &&
-        entry.message.details?.requestId === requestId &&
-        entry.message.details?.piSessionId === childSessionId &&
-        entry.message.details?.status === "completed" &&
-        messageText(entry.message.content).includes(
-          "CHIEF_MANAGER_AGENT_COMPLETED",
-        ),
+    const handoff = entries.find((entry) =>
+      matchesChiefManagerHandoff(
+        { ...entry, content: messageText(entry.content) },
+        requestId,
+        childSessionId,
+      ),
     );
     progress.handoffObserved = Boolean(handoff);
     return handoff
