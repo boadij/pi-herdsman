@@ -30,7 +30,10 @@ import { fileURLToPath } from "node:url";
 import { parseArgs, promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import { matchesProjectMessageContent } from "./smoke-faux.mjs";
-import { matchesChiefManagerHandoff } from "./chief-manager-smoke.mjs";
+import {
+  chiefManagerSuccessEvidence,
+  matchesChiefManagerHandoff,
+} from "./chief-manager-smoke.mjs";
 
 export { matchesProjectMessageContent };
 import {
@@ -11738,6 +11741,8 @@ async function runChiefManagerSmoke(ctx) {
     requestId: null,
     childSessionId: null,
     handoffObserved: false,
+    handoffStatus: null,
+    completionMarkerObserved: false,
   };
   ctx.chiefManagerDelegationProgress.promptDispatchAttempted = true;
   await nestedCommand(ctx, [
@@ -11803,6 +11808,10 @@ async function runChiefManagerSmoke(ctx) {
       ),
     );
     progress.handoffObserved = Boolean(handoff);
+    progress.handoffStatus = handoff?.details?.status ?? null;
+    progress.completionMarkerObserved =
+      typeof handoff === "object" &&
+      messageText(handoff.content).includes("CHIEF_MANAGER_AGENT_COMPLETED");
     return handoff
       ? { done: true, value: { requestId, childSessionId } }
       : { done: false };
@@ -12023,11 +12032,18 @@ async function runChiefManagerSmoke(ctx) {
   ctx.chiefManager = {
     assignmentPreserved: true,
     mismatchedRecoveryBlocked: true,
-    workspaceId: first.pane.workspace_id,
-    sessionId: first.session.id,
-    firstPid: first.pid,
-    resumedPid: resumed.pid,
+    managerAgentDelegation: chiefManagerSuccessEvidence(
+      ctx.chiefManagerDelegationProgress,
+    ),
   };
+  requireSmokeEvidence(
+    ctx.chiefManager.managerAgentDelegation.delegationToolCallObserved &&
+      ctx.chiefManager.managerAgentDelegation
+        .successfulCorrelatedDelegationResultObserved &&
+      ctx.chiefManager.managerAgentDelegation
+        .completedAgentResultReceiptCorrelated,
+    "named Manager Agent completion evidence is incomplete",
+  );
 }
 
 async function runChiefTreeSmoke(ctx) {
@@ -14578,6 +14594,21 @@ export async function preserveFailureEvidence(evidence, path) {
   return evidencePath;
 }
 
+export async function preserveSuccessEvidence(evidence) {
+  const directory = await mkdtemp(join(tmpdir(), "pi-herdsman-smoke-success-"));
+  evidence.runReference = basename(directory);
+  const evidencePath = join(directory, "chief-manager.json");
+  await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, {
+    flag: "wx",
+    mode: 0o600,
+  });
+  return evidencePath;
+}
+
+export function successEvidenceReference(artifact) {
+  return `${basename(dirname(artifact))}/chief-manager.json`;
+}
+
 export function failureEvidenceReference(artifact) {
   return `${basename(dirname(artifact))}/result.json`;
 }
@@ -14673,6 +14704,15 @@ export function reportFailureEvidenceWriteError(error, action = "save") {
   console.error(
     `failure evidence: could not ${operation} (filesystem error ${code})`,
   );
+}
+
+export function reportSuccessEvidenceWriteError(error) {
+  const code = ["ENOSPC", "EACCES", "EPERM", "EROFS", "EIO", "ENOENT"].includes(
+    error?.code,
+  )
+    ? error.code
+    : "unknown";
+  console.error(`success evidence: could not save (filesystem error ${code})`);
 }
 
 export async function updateFailureEvidenceAfterCleanup(
@@ -15343,6 +15383,25 @@ async function main() {
         evidence.cleanupErrorCode = null;
         evidence.cleanup = "PASS";
         await updateFailureEvidenceAfterCleanup(ctx, evidence);
+      }
+    }
+    if (!failure && !cleanupError && scenario === "chief-manager") {
+      try {
+        const artifact = await preserveSuccessEvidence({
+          schemaVersion: 1,
+          scenario,
+          mode: ctx.simulated ? "simulated" : "live",
+          outcome: "PASS",
+          cleanup: "PASS",
+          managerAgentDelegation:
+            ctx.chiefManager?.managerAgentDelegation ?? null,
+        });
+        console.log(
+          `chief-manager success evidence reference: ${successEvidenceReference(artifact)} (under system temp directory)`,
+        );
+      } catch (error) {
+        ctx.evidenceSaveFailed = true;
+        reportSuccessEvidenceWriteError(error);
       }
     }
     if (failure && ctx.failureArtifact)
