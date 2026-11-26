@@ -32,7 +32,9 @@ const {
 const {
   COORDINATOR_DEFINITION_ENTRY,
   EXPECTED_ASSIGNED_LEAD_DEFINITION_ENV,
+  consumeCoordinatorStartIntent,
   getCoordinatorStartIntent,
+  listCoordinatorStartIntents,
   readProjectAssignment,
   writeProjectAssignment,
 } = await import("../supervision.ts");
@@ -41,10 +43,12 @@ const { claimManagerLease, supervisionRuntime } =
 const { getAgentDir, ProjectTrustStore, SessionManager } =
   await import("@earendil-works/pi-coding-agent");
 const {
+  HerdrStartFailure,
   herdrAgentAlias,
   herdrSessionId,
   sameObservedSessionPath,
   sessionIdentity,
+  startHerdrCoordinatorInPane,
 } = await import("../herdr.ts");
 
 const lifecycleStop = "stop after assignment publication";
@@ -2232,7 +2236,7 @@ test("resume revalidates checkout placement after async preparation", async () =
   managerLease.release();
 });
 
-test("resume preserves queued manager message when controlled recovery fails", async (t) => {
+test("exact assigned Lead resume settles definite refusal and retains uncertain dispatch", async (t) => {
   const repoKey = realFs.realpathSync(process.cwd());
   const checkout = realFs.realpathSync.native(
     realFs.mkdtempSync(join(tmpdir(), "resume-")),
@@ -2247,6 +2251,10 @@ test("resume preserves queued manager message when controlled recovery fails", a
   const customSessionDirectory = join(checkout, "custom-sessions");
   const assignmentRoot = join(tmpdir(), `resume-assignments-${randomUUID()}`);
   mkdirSync(assignmentRoot);
+  const intentRuntime = {
+    root: assignmentRoot,
+    assignments: assignmentRoot,
+  } as any;
   const id = randomUUID();
   const manager = {
     repoKey,
@@ -2302,6 +2310,24 @@ test("resume preserves queued manager message when controlled recovery fails", a
   const topologyCalls: string[][] = [];
   const unrelatedRepo = join(tmpdir(), `unrelated-${randomUUID()}`);
   let launches = 0;
+  let launchOutcome: "refused" | "ready" | "uncertain" = "refused";
+  let dispatched = 0;
+  let startedState: ReturnType<typeof verifiedStartupState> | undefined;
+  function verifiedStartupState() {
+    const instanceId = randomUUID();
+    return {
+      role: "lead" as const,
+      piSessionId: id,
+      instanceId,
+      updatedAt: Date.now(),
+      startupAttestation: {
+        kind: "model_restore" as const,
+        assignmentId: id,
+        generation: instanceId,
+        result: "verified" as const,
+      },
+    };
+  }
   const tabCreates: string[][] = [];
   let tabFailure:
     | "create"
@@ -2446,6 +2472,7 @@ test("resume preserves queued manager message when controlled recovery fails", a
       snapshotCalls++;
       return {
         agents:
+          startedState ||
           startingUnverifiedPi ||
           (tabFailure === "competing-start" && tabCreates.length)
             ? [
@@ -2472,7 +2499,7 @@ test("resume preserves queued manager message when controlled recovery fails", a
     liveAgent: async () =>
       alreadyRunning ? [{ workspace_id: "resume-workspace" }] : [],
     liveLead: async () =>
-      startingUnverifiedPi
+      startedState || startingUnverifiedPi
         ? [
             {
               workspace_id: "resume-workspace",
@@ -2483,9 +2510,10 @@ test("resume preserves queued manager message when controlled recovery fails", a
           ]
         : [],
     readLeadCoordinationState: () =>
-      startingUnverifiedPi && snapshotCalls <= 3
+      startedState ??
+      (startingUnverifiedPi && snapshotCalls <= 3
         ? undefined
-        : { role: "lead", piSessionId: id },
+        : { role: "lead", piSessionId: id }),
     requireCompatibleBuild: () => {},
     supervisedSessionFile: () => assignment.piSessionFile,
     scanAgentStates: () => ({ states: [] }),
@@ -2547,7 +2575,49 @@ test("resume preserves queued manager message when controlled recovery fails", a
         options.cwd,
       ];
       events.push("launch");
-      throw new Error("controlled launch failed");
+      assert.equal(options.session.id, id);
+      const intent = getCoordinatorStartIntent(intentRuntime, id);
+      assert.ok(intent, "launch must publish its exact intent first");
+      if (launchOutcome === "refused")
+        return startHerdrCoordinatorInPane(
+          {
+            exec: async (_command: string, args: string[]) => {
+              assert.deepEqual(args.slice(0, 2), ["api", "snapshot"]);
+              return {
+                code: 0,
+                stderr: "",
+                stdout: JSON.stringify({
+                  id: 1,
+                  result: {
+                    snapshot: {
+                      agents: [],
+                      panes: [],
+                      workspaces: [
+                        {
+                          workspace_id: options.workspaceId,
+                          worktree: { checkout_path: repoKey },
+                        },
+                      ],
+                    },
+                  },
+                }),
+              };
+            },
+          } as any,
+          ctx,
+          options,
+        );
+      dispatched++;
+      if (launchOutcome === "uncertain")
+        throw new HerdrStartFailure("controlled launch failed", "agent_start", {
+          ...options,
+          herdrAgent: "lead",
+          createdTab: true,
+          launchMayHaveStarted: true,
+        });
+      // Simulate the verified child consuming its own attempt and publishing readiness.
+      consumeCoordinatorStartIntent(intentRuntime, intent);
+      startedState = verifiedStartupState();
     },
     appendDurableError: () => {},
   } as any);
@@ -2656,6 +2726,12 @@ test("resume preserves queued manager message when controlled recovery fails", a
   assert.equal(result.details.status, "recovery_unverified");
   assert.equal(result.details.message_queued, true);
   assert.equal(result.details.recovery_verified, false);
+  assert.match(
+    result.content[0].text,
+    /workspace checkout changed before launch/,
+  );
+  assert.equal(dispatched, 0);
+  assert.equal(getCoordinatorStartIntent(intentRuntime, id), undefined);
   assert.equal(
     readProjectAssignment(
       { root: assignmentRoot, assignments: assignmentRoot } as any,
@@ -2694,28 +2770,26 @@ test("resume preserves queued manager message when controlled recovery fails", a
   tabFailure = undefined;
   tabCreates.length = 0;
   events.length = 0;
-  const missingIntegration = removeHerdrIntegrationForTest(t);
-  const priorPreparations = preparations;
-  const readAssignment = () =>
-    readProjectAssignment(
-      { root: assignmentRoot, assignments: assignmentRoot } as any,
-      repoKey,
-      assignment.branch,
+  await t.test("missing integration leaves the saved assignment untouched", async (t) => {
+    const missingIntegration = removeHerdrIntegrationForTest(t);
+    const priorPreparations = preparations;
+    const readAssignment = () =>
+      readProjectAssignment(intentRuntime, repoKey, assignment.branch);
+    const priorAssignment = readAssignment();
+    await assert.rejects(
+      runtime.activateProjectLead(
+        { action: "resume", branch: assignment.branch, message: "continue" },
+        ctx,
+        new AbortController().signal,
+      ),
+      missingIntegration,
     );
-  const priorAssignment = readAssignment();
-  await assert.rejects(
-    runtime.activateProjectLead(
-      { action: "resume", branch: assignment.branch, message: "continue" },
-      ctx,
-      new AbortController().signal,
-    ),
-    missingIntegration,
-  );
-  assert.deepEqual(readAssignment(), priorAssignment);
-  assert.equal(preparations, priorPreparations);
-  assert.equal(events.length, 0);
-  assert.deepEqual(tabCreates, []);
-  assert.equal(launches, 1);
+    assert.deepEqual(readAssignment(), priorAssignment);
+    assert.equal(preparations, priorPreparations);
+    assert.equal(events.length, 0);
+    assert.deepEqual(tabCreates, []);
+    assert.equal(launches, 1);
+  });
 
   alreadyRunning = true;
   const runningResult = (await runtime.activateProjectLead(
@@ -2760,6 +2834,38 @@ test("resume preserves queued manager message when controlled recovery fails", a
     ["manager_message"],
   );
   assert.equal(events[0].id, recovered.details.message_id);
+
+  startingUnverifiedPi = false;
+  launchOutcome = "ready";
+  const resume = () =>
+    runtime.activateProjectLead(
+      {
+        action: "resume",
+        branch: assignment.branch,
+        message: "continue exact session",
+      },
+      ctx,
+    );
+  const exact = await resume();
+  assert.equal(exact.details.ok, true, JSON.stringify(exact));
+  assert.equal(exact.details.session, id);
+  assert.equal(dispatched, 1);
+  assert.equal(getCoordinatorStartIntent(intentRuntime, id), undefined);
+
+  startedState = undefined;
+  launchOutcome = "uncertain";
+  const uncertain = await resume();
+  assert.ok("status" in uncertain.details);
+  assert.equal(uncertain.details.status, "recovery_unverified");
+  const unsettled = getCoordinatorStartIntent(intentRuntime, id);
+  assert.ok(unsettled);
+  assert.deepEqual(listCoordinatorStartIntents(intentRuntime).intents, [
+    unsettled,
+  ]);
+  const blocked = await resume();
+  assert.match(blocked.content[0].text, /startup intent already exists/);
+  assert.equal(dispatched, 2, "the unsettled attempt blocks another dispatch");
+  assert.deepEqual(getCoordinatorStartIntent(intentRuntime, id), unsettled);
 });
 
 test("Git worktree porcelain inventory rejects incomplete or ambiguous records", () => {

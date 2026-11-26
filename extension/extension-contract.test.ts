@@ -24,7 +24,7 @@ import {
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
-import { acquireProcessLock } from "./lock.ts";
+import { acquireCoordinatorAdmission, acquireProcessLock } from "./lock.ts";
 import { resultPath, resultRef } from "./storage.ts";
 import {
   COORDINATOR_TARGET_PATTERN,
@@ -67,6 +67,7 @@ import support, {
   WORKSPACE,
   agentFromState,
   controlMarker,
+  delegationLockPathForTest,
   fakeContext,
   fakePi,
   fakeAgentContext,
@@ -166,6 +167,103 @@ test("hierarchy traversal stops every child first and preserves owner on failure
     "lead-b",
     "manager",
   ]);
+});
+
+test("Chief rejects Agent admission after tree quiescence and through native shutdown pending", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "chief-pane";
+  process.env.HERDR_TAB_ID = "chief-tab";
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-role",
+      data: {
+        sessionId: LEAD_SESSION_ID,
+        role: "chief",
+        leadTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
+      },
+    },
+  ];
+  const context = fakeContext(entries);
+  const lockPath = delegationLockPathForTest(WORKSPACE, LEAD_SESSION_ID);
+  let requested = false;
+  let sawQuiescence = false;
+  let duringFinalObservation: Promise<any> | undefined;
+  const pi = fakePi({
+    entries,
+    activeTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
+    allTools: REGISTERED_ROLE_TOOLS,
+    exec: (_command, args) => {
+      if (isApiSnapshot(args)) {
+        if (realFs.existsSync(lockPath)) sawQuiescence = true;
+        else if (sawQuiescence && !requested && !duringFinalObservation)
+          duringFinalObservation = attemptAssignment("delegate_agent");
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { snapshot: { agents: [], panes: [], workspaces: [] } },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "{}", stderr: "", code: 0 };
+    },
+  });
+  const tool = (name: string) => pi.tools.find((tool) => tool.name === name)!;
+  const attemptAssignment = (name: "delegate_agent" | "resume_agent") =>
+    tool(name).execute(
+      name,
+      name === "delegate_agent"
+        ? { definition: "agent", task: "must not start" }
+        : { session: DEFAULT_PI_SESSION_ID, task: "must not resume" },
+      undefined,
+      undefined,
+      context,
+    );
+  context.shutdown = () => {
+    requested = true;
+  };
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const shutdown = await tool("stop_hierarchy").execute(
+      "stop-all",
+      { scope: "all" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(
+      shutdown.details.status,
+      "shutdown_requested",
+      JSON.stringify(shutdown.details),
+    );
+    assert.equal(requested, true);
+    assert.ok(duringFinalObservation);
+    const attempts = [
+      await duringFinalObservation,
+      await attemptAssignment("delegate_agent"),
+      await attemptAssignment("resume_agent"),
+    ];
+    for (const attempt of attempts) {
+      assert.equal(attempt.details.error?.category, "agent_busy");
+      assert.equal(
+        attempt.details.error?.message,
+        "Chief hierarchy shutdown is in progress",
+      );
+    }
+    assert.throws(
+      () => acquireCoordinatorAdmission().release(),
+      /Coordinator admission is busy/,
+    );
+  } finally {
+    for (const handler of pi.events.get("session_shutdown") ?? [])
+      await handler(undefined, context);
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+  }
+  acquireCoordinatorAdmission().release();
 });
 
 const peerTopology = () => ({

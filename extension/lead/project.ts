@@ -30,6 +30,8 @@ import {
   normalizeHerdrLifecycleState,
   EXPECTED_ASSIGNED_LEAD_DEFINITION_ENV,
   readCoordinatorDefinitionBinding,
+  removeCoordinatorStartIntent,
+  type CoordinatorStartIntent,
   verifyAssignedLeadDefinition,
   writeCoordinatorStartIntent,
 } from "../supervision.ts";
@@ -46,6 +48,7 @@ import {
   requireHerdrPiIntegration,
   prepareHerdrCoordinatorPane,
   startHerdrCoordinatorInPane,
+  HerdrStartFailure,
 } from "../herdr.ts";
 import { readResult, unacknowledgedRequestExists } from "../mailbox.ts";
 import {
@@ -4905,7 +4908,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             throw new Error(
               "Assigned Lead launch is missing its Coordinator admission identity",
             );
-          writeCoordinatorStartIntent(runtime, {
+          const intent: CoordinatorStartIntent = {
             version: 1,
             sessionId: assignment.id,
             role: "assigned-lead",
@@ -4918,7 +4921,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             paneId,
             createdAt: Date.now(),
             admission: admissionClaim,
-          });
+          };
+          writeCoordinatorStartIntent(runtime, intent);
           await (
             host.startHerdrCoordinatorInPane ?? startHerdrCoordinatorInPane
           )(pi, ctx, {
@@ -4958,6 +4962,21 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               assignment.id,
             ],
             signal,
+          }).catch((error: unknown) => {
+            if (
+              error instanceof HerdrStartFailure &&
+              !error.attempt.launchMayHaveStarted
+            ) {
+              try {
+                removeCoordinatorStartIntent(runtime, intent);
+              } catch (cleanupError) {
+                throw new Error(
+                  `${error.message}; unused Lead startup intent could not be removed: ${String(cleanupError)}`,
+                  { cause: error },
+                );
+              }
+            }
+            throw error;
           });
           startedLead = true;
         }

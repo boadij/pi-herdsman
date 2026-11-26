@@ -29,14 +29,18 @@ worktrees; or control execution outside the selected verified scope. Project
 work, branches, worktrees, Pi history, assignments, and Manager recovery
 references remain intact.
 
-Participating Coordinator starts, role activation/restoration, project work
-delegation/recovery, and Agent delegation/continuation share a process-lock
-admission boundary scoped to the current Pi profile and Herdr socket. The lock
-serializes admission with shutdown; it does not replace narrower Manager,
+Participating Coordinator starts, role activation/restoration, and project work
+delegation/recovery share a process-lock admission boundary scoped to the
+current Pi profile and Herdr socket. It serializes Coordinator admission
+with shutdown and does not replace narrower Manager,
 assignment, session, Agent ownership, or Herdr lifecycle locks. An admitted
 Coordinator child may complete startup only through its exact startup intent
 while its admission claim and launch identity remain current. Uncertain or
-incomplete observations block a complete result.
+incomplete observations block a complete result. Agent delegation and
+continuation use per-owner locks instead: a child can accept its assignment
+and delegate before its parent observes acceptance. Shutdown quiesces each
+selected Agent tree under those same locks. Chief's own admission stays
+blocked through staff settlement and any pending graceful exit.
 
 `staff` shutdown leaves Chief running. `all` requests graceful exit through
 Pi's native shutdown contract only after descendants are verified settled; a
@@ -52,8 +56,8 @@ cross-profile authority boundaries remain in force.
   names, repository paths, and arbitrary session IDs do not.
 - The selected descendants stop before their owning Coordinators. A blocked
   child preserves its ancestor.
-- Shutdown may temporarily block unrelated admissions in the same Pi
-  profile/socket, but does not stop or mutate unrelated running work.
+- Shutdown may temporarily block unrelated Coordinator admissions in the same
+  Pi profile/socket, but does not stop or mutate unrelated running work.
 - Unknown, incompatible, unsettled, or changed identity produces a blocked or
   partial result rather than proof of absence.
 - Native Chief shutdown may be deferred by Pi until queued work and the active

@@ -682,6 +682,7 @@ function registerExtensionImpl(
   pi: ExtensionAPI,
   lockHooks?: TestProjectAssignmentLockHooks,
 ): void {
+  let chiefStaffShutdownActive = false;
   let pendingShutdownAdmission:
     ReturnType<typeof acquireCoordinatorAdmission> | undefined;
   const registerNoArgs = (
@@ -2442,6 +2443,10 @@ function registerExtensionImpl(
               remaining: [],
             });
           }
+          // Freeze new Chief-owned assignments before tree cleanup and through
+          // final observation. Any already admitted assignment holds the owner
+          // lock and must settle before that tree can be quiesced.
+          chiefStaffShutdownActive = scope !== "manager";
           const stopped: Array<{ role: string; session: string }> = [];
           const remaining: Array<{
             role: string;
@@ -2822,7 +2827,12 @@ function registerExtensionImpl(
               });
             if (scope === "all") {
               pendingShutdownAdmission = admission;
-              ctx.shutdown();
+              try {
+                ctx.shutdown();
+              } catch (error) {
+                pendingShutdownAdmission = undefined;
+                throw error;
+              }
               return result({
                 status: "shutdown_requested",
                 scope,
@@ -2847,6 +2857,7 @@ function registerExtensionImpl(
               remaining,
             });
           } finally {
+            chiefStaffShutdownActive = false;
             if (pendingShutdownAdmission !== admission) admission.release();
           }
         },
@@ -3236,7 +3247,11 @@ function registerExtensionImpl(
           leadRuntime = runtime;
           leadToolState = tools;
         },
-        controllerServices,
+        controllerServices: {
+          ...controllerServices,
+          rootAgentAdmissionBlocked: () =>
+            chiefStaffShutdownActive || pendingShutdownAdmission !== undefined,
+        },
         identityHost: {
           listAgents: (ctx: ExtensionContext) =>
             listAllHerdrAgents(pi, ctx, ctx.signal),
