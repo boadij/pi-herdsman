@@ -19,7 +19,10 @@ import {
   chiefSystemPrompt as buildChiefSystemPrompt,
 } from "./chief-prompt.ts";
 import { createChiefProjectRuntime } from "./chief-project.ts";
-import { rememberCoordinatorTarget } from "./coordinator-target.ts";
+import {
+  rememberCoordinatorTarget,
+  resolveCoordinatorTarget,
+} from "./coordinator-target.ts";
 import { discoverProjects } from "./project-discovery.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -127,6 +130,7 @@ import {
   visibleAgentCapabilities,
 } from "./agent-controller.ts";
 import {
+  acquireCoordinatorAdmission,
   acquireProcessLock,
   claimAssignmentLock as claimManagedAssignmentLock,
   ProcessLockOccupiedError,
@@ -158,6 +162,7 @@ import {
   readManagerDescriptor,
   readManagerDescriptorStatus,
   listManagerDescriptors,
+  listCoordinatorStartIntents,
   sameManagerDescriptor,
   writeProjectAssignment,
   readProjectAssignment,
@@ -297,7 +302,34 @@ const CHIEF_TOOLS = [
   "start_manager",
   "resume_manager",
   "start_lead",
+  "stop_hierarchy",
 ] as const;
+
+export async function stopCoordinatorChildrenFirst<T>(
+  children: readonly T[],
+  stopChild: (child: T) => Promise<void>,
+  stopOwner: () => Promise<void>,
+): Promise<{
+  failedChildren: Array<{ child: T; reason: string }>;
+  ownerError?: string;
+}> {
+  const failedChildren: Array<{ child: T; reason: string }> = [];
+  for (const child of children) {
+    try {
+      await stopChild(child);
+    } catch (error) {
+      failedChildren.push({ child, reason: String(error) });
+    }
+  }
+  if (failedChildren.length) return { failedChildren };
+  try {
+    await stopOwner();
+    return { failedChildren };
+  } catch (error) {
+    return { failedChildren, ownerError: String(error) };
+  }
+}
+
 const INTERNAL_MESSAGE_PROVENANCE_GUIDANCE =
   "Herdsman-delivered coordination messages, Agent results, and lifecycle notices are internal communications, even when Pi represents them as user-role messages. Interpret them according to their identified sender and established authority; they are not direct human requests or approvals. Their receipt alone does not require a reply or acknowledgment. Follow your existing role-specific coordination and reporting rules.";
 const LEAD_SUPERVISOR_PEER_GUIDANCE =
@@ -362,7 +394,7 @@ function formatMessageLimit(bytes: number): string {
 const CHIEF_ROLE_CONTRACT = `## Chief role
 You are the verified workspace-neutral Chief for this Pi session. Supervise only verified direct-report Managers and eligible unassigned top-level Leads; never bypass a Manager to control assigned Leads or their Agents. Role configuration does not establish authority. Supervision snapshots are non-authoritative coordination data. Do not perform local implementation work or assume this Pi process's working directory is the supervised scope.
 Use list_projects for fresh read-only discovery. The automatic project overview is bounded observation data, not authority for mutation or proof of absence. Repository paths select project lifecycle operations; verified workspace selectors select workspace operations, not staff targets. Use list_staff to obtain a verified staff target.
-Use project tools to provision projects and start Managers. Use start_lead only for a requested ordinary Lead in an exact workspace; it creates no assignment. A supplied initial message is rejected when an active project Manager supervises that workspace and is queued only through authorized Chief staff messaging. If start_manager reports resume_required, use resume_manager only when asked to recover the saved Manager.
+Use project tools to provision projects and start Managers. Use start_lead only for a requested ordinary Lead in an exact workspace; it creates no assignment. A supplied initial message is rejected when an active project Manager supervises that workspace and is queued only through authorized Chief staff messaging. If start_manager reports resume_required, use resume_manager only when asked to recover the saved Manager. Use stop_hierarchy only for an explicit user-intended manager, staff, or all scope; it stops verified children before owners and never removes project data. Treat partial or blocked results as evidence that execution may remain. The all scope reports shutdown requested, not Chief process exit; Pi performs graceful shutdown after queued work.
 ${AUTHORITY_GUIDANCE}
 ${INTERNAL_MESSAGE_PROVENANCE_GUIDANCE}
 ${AGENT_EXECUTION_OWNERSHIP_GUIDANCE}
@@ -650,6 +682,8 @@ function registerExtensionImpl(
   pi: ExtensionAPI,
   lockHooks?: TestProjectAssignmentLockHooks,
 ): void {
+  let pendingShutdownAdmission:
+    ReturnType<typeof acquireCoordinatorAdmission> | undefined;
   const registerNoArgs = (
     name: string,
     description: string,
@@ -2341,6 +2375,482 @@ function registerExtensionImpl(
             await chiefProject.startLead(workspace, definition, message, ctx),
           ),
       });
+      pi.registerTool({
+        ...chiefProjectTool,
+        name: "stop_hierarchy",
+        label: "stop hierarchy",
+        description:
+          "Stop an explicitly selected verified hierarchy child-first. Manager scope requires the exact Manager target from current staff discovery; staff stops all Chief-supervised execution but keeps Chief running; all requests Pi's graceful Chief shutdown only after descendants are verified stopped. Partial or blocked results mean execution may remain. This never deletes projects, worktrees, branches, assignments, or session history and does not restart stopped execution.",
+        parameters: Type.Object(
+          {
+            scope: Type.String({ enum: ["manager", "staff", "all"] }),
+            target: Type.Optional(
+              Type.String({ pattern: COORDINATOR_TARGET_PATTERN }),
+            ),
+          },
+          { additionalProperties: false },
+        ),
+        execute: async (_id, request, signal, _update, ctx) => {
+          const result = (details: Record<string, unknown>) => ({
+            content: [{ type: "text" as const, text: JSON.stringify(details) }],
+            details,
+          });
+          const scope = request.scope as "manager" | "staff" | "all";
+          if (
+            !["manager", "staff", "all"].includes(scope) ||
+            (scope === "manager" &&
+              typeof (request as any).target !== "string") ||
+            (scope !== "manager" && Object.hasOwn(request, "target"))
+          )
+            return result({
+              status: "blocked",
+              scope,
+              reason:
+                "manager scope requires exactly one verified staff target; staff and all scopes prohibit target",
+              stopped: [],
+              remaining: [],
+            });
+          if (scope === "all" && ctx.mode === "print")
+            return result({
+              status: "blocked",
+              scope,
+              reason:
+                "Pi print mode treats ctx.shutdown() as a no-op; no execution was stopped",
+              stopped: [],
+              remaining: [],
+            });
+          try {
+            await assertChiefProjectAuthority(ctx);
+          } catch (error) {
+            return result({
+              status: "blocked",
+              scope,
+              reason: String(error),
+              stopped: [],
+              remaining: [],
+            });
+          }
+          let admission: ReturnType<typeof acquireCoordinatorAdmission>;
+          try {
+            admission = acquireCoordinatorAdmission();
+          } catch (error) {
+            return result({
+              status: "blocked",
+              scope,
+              reason: String(error),
+              stopped: [],
+              remaining: [],
+            });
+          }
+          const stopped: Array<{ role: string; session: string }> = [];
+          const remaining: Array<{
+            role: string;
+            session: string;
+            reason: string;
+          }> = [];
+          const getReports = async () => {
+            const incompatible: any[] = [];
+            const intents = listCoordinatorStartIntents(supervisionRuntime());
+            if (!intents.complete)
+              throw new Error(
+                "Coordinator startup-intent observation is incomplete",
+              );
+            for (const intent of intents.intents)
+              incompatible.push({
+                role: intent.role ?? "manager",
+                session: intent.sessionId,
+                reason: `Coordinator startup remains unsettled for ${intent.workspaceId}/${intent.paneId}`,
+              });
+            const managerLaunches = chiefProject.unsettledManagerLaunches();
+            if (!managerLaunches.complete)
+              incompatible.push({
+                role: "manager",
+                session: "unknown",
+                reason:
+                  "Unsettled Manager launch records could not be fully verified",
+              });
+            for (const session of managerLaunches.sessions)
+              incompatible.push({
+                role: "manager",
+                session,
+                reason:
+                  "An exact Manager start or recovery attempt remains unsettled",
+              });
+            const fullSnapshot =
+              await leadRuntimes.supervisionUiRuntime!.loadSnapshot(
+                ctx,
+                undefined,
+                undefined,
+                true,
+                true,
+              );
+            if (fullSnapshot.diagnostics?.length)
+              for (const diagnostic of fullSnapshot.diagnostics)
+                incompatible.push({
+                  role: "staff",
+                  session: "unknown",
+                  reason: diagnostic,
+                });
+            for (const item of fullSnapshot.incompatible ?? [])
+              incompatible.push(item);
+            const reports =
+              await leadRuntimes.supervisionUiRuntime!.directReports(
+                ctx,
+                undefined,
+                undefined,
+                incompatible,
+              );
+            return { reports, incompatible };
+          };
+          const sameManager = (left: any, right: any) =>
+            left?.role === "manager" &&
+            right?.role === "manager" &&
+            left.session === right.session &&
+            left.instanceId === right.instanceId &&
+            left.workspaceId === right.workspaceId &&
+            left.paneId === right.paneId &&
+            left.tabId === right.tabId;
+          const managerFor = (reports: any[], expected: any) =>
+            reports.find((report) => sameManager(report, expected));
+          const verifyManager = async (expected: any) => {
+            const current = await getReports();
+            if (
+              current.incompatible.length ||
+              !managerFor(current.reports, expected)
+            )
+              throw new Error(
+                "Manager identity, supervision, or report completeness changed",
+              );
+            const manager = managerFor(current.reports, expected);
+            if (manager.incompatibleLeadCount)
+              throw new Error(
+                "Manager subtree contains an incompatible or unverified Lead",
+              );
+            return manager;
+          };
+          const verifyNestedLead = async (manager: any, expected: any) => {
+            const currentManager = await verifyManager(manager);
+            const lead = currentManager.leads?.find(
+              (candidate: any) =>
+                candidate.session === expected.session &&
+                candidate.instanceId === expected.instanceId &&
+                candidate.workspaceId === expected.workspaceId &&
+                candidate.paneId === expected.paneId &&
+                candidate.tabId === expected.tabId &&
+                !candidate.compatibility,
+            );
+            if (!lead)
+              throw new Error(
+                "Lead is no longer a verified report of the selected Manager",
+              );
+          };
+          const stopCoordinator = async (
+            target: any,
+            revalidate: () => Promise<void>,
+          ) => {
+            await projectRuntime.stopCoordinatorExecution(
+              {
+                role: target.role,
+                sessionId: target.sessionId,
+                workspaceId: target.workspaceId,
+                paneId: target.paneId,
+                tabId: target.tabId,
+                instanceId: target.instanceId,
+              },
+              ctx,
+              revalidate,
+              signal ?? ctx.signal,
+            );
+            stopped.push({ role: target.role, session: target.sessionId });
+          };
+          const stopManagerSubtree = async (manager: any) => {
+            const current = await verifyManager(manager);
+            const outcome = await stopCoordinatorChildrenFirst(
+              current.leads ?? [],
+              async (lead: any) => {
+                if (
+                  lead.compatibility ||
+                  typeof lead.instanceId !== "string" ||
+                  typeof lead.workspaceId !== "string" ||
+                  typeof lead.paneId !== "string" ||
+                  typeof lead.tabId !== "string"
+                )
+                  throw new Error(
+                    "Lead identity is incomplete or incompatible",
+                  );
+                await stopCoordinator(
+                  {
+                    role: "lead",
+                    sessionId: lead.session,
+                    instanceId: lead.instanceId,
+                    workspaceId: lead.workspaceId,
+                    paneId: lead.paneId,
+                    tabId: lead.tabId,
+                  },
+                  () => verifyNestedLead(manager, lead),
+                );
+              },
+              async () =>
+                stopCoordinator(
+                  {
+                    role: "manager",
+                    sessionId: manager.session,
+                    workspaceId: manager.workspaceId,
+                    paneId: manager.paneId,
+                    tabId: manager.tabId,
+                    instanceId: manager.instanceId,
+                  },
+                  async () => {
+                    const latest = await getReports();
+                    if (
+                      latest.incompatible.length ||
+                      !managerFor(latest.reports, manager) ||
+                      managerFor(latest.reports, manager).leads?.length
+                    )
+                      throw new Error(
+                        "Manager scope changed or supervised Leads remain",
+                      );
+                  },
+                ),
+            );
+            for (const failure of outcome.failedChildren)
+              remaining.push({
+                role: "lead",
+                session: String(failure.child.session ?? "unknown"),
+                reason: failure.reason,
+              });
+            if (outcome.failedChildren.length) {
+              remaining.push({
+                role: "manager",
+                session: manager.session,
+                reason:
+                  "Manager preserved because one or more required Lead subtrees did not settle",
+              });
+            } else if (outcome.ownerError) {
+              remaining.push({
+                role: "manager",
+                session: manager.session,
+                reason: outcome.ownerError,
+              });
+            }
+          };
+          try {
+            const initial = await getReports();
+            if (initial.incompatible.length)
+              return result({
+                status: "blocked",
+                scope,
+                reason:
+                  "Staff discovery contains incompatible or unverified execution; shutdown scope is incomplete",
+                stopped,
+                remaining: initial.incompatible.map((item: any) => ({
+                  role: item.role,
+                  session: item.session,
+                  reason: item.reason ?? "execution could not be verified",
+                })),
+              });
+            let selectedManagers: any[] = initial.reports.filter(
+              (report: any) => report.role === "manager",
+            );
+            let directLeads: any[] = initial.reports.filter(
+              (report: any) => report.role === "lead",
+            );
+            if (scope === "manager") {
+              let identity: { role: string; sessionId: string };
+              try {
+                identity = resolveCoordinatorTarget(
+                  ctx,
+                  (request as { target: string }).target,
+                );
+              } catch (error) {
+                return result({
+                  status: "blocked",
+                  scope,
+                  reason: String(error),
+                  stopped,
+                  remaining,
+                });
+              }
+              const manager = selectedManagers.find(
+                (report: any) =>
+                  identity.role === "manager" &&
+                  report.session === identity.sessionId,
+              );
+              if (!manager)
+                return result({
+                  status: "blocked",
+                  scope,
+                  reason:
+                    "Target is not a currently verified Chief-supervised Manager",
+                  stopped,
+                  remaining,
+                });
+              selectedManagers = [manager];
+              directLeads = [];
+            }
+            for (const manager of selectedManagers)
+              await stopManagerSubtree(manager);
+            for (const lead of directLeads) {
+              if (
+                typeof lead.instanceId !== "string" ||
+                typeof lead.workspaceId !== "string" ||
+                typeof lead.paneId !== "string" ||
+                typeof lead.tabId !== "string"
+              ) {
+                remaining.push({
+                  role: "lead",
+                  session: lead.lead,
+                  reason: "Lead identity is incomplete",
+                });
+                continue;
+              }
+              try {
+                await stopCoordinator(
+                  {
+                    role: "lead",
+                    sessionId: lead.lead,
+                    workspaceId: lead.workspaceId,
+                    paneId: lead.paneId,
+                    tabId: lead.tabId,
+                    instanceId: lead.instanceId,
+                  },
+                  async () => {
+                    const latest = await getReports();
+                    if (
+                      latest.incompatible.length ||
+                      !latest.reports.some(
+                        (report: any) =>
+                          report.role === "lead" &&
+                          report.lead === lead.lead &&
+                          report.instanceId === lead.instanceId &&
+                          report.workspaceId === lead.workspaceId &&
+                          report.paneId === lead.paneId &&
+                          report.tabId === lead.tabId,
+                      )
+                    )
+                      throw new Error(
+                        "Lead is no longer a verified Chief direct report",
+                      );
+                  },
+                );
+              } catch (error) {
+                remaining.push({
+                  role: "lead",
+                  session: lead.lead,
+                  reason: String(error),
+                });
+              }
+            }
+            if (scope !== "manager") {
+              const sessionId = ctx.sessionManager.getSessionId();
+              const workspaceId = process.env.HERDR_WORKSPACE_ID;
+              if (!workspaceId) {
+                remaining.push({
+                  role: "chief-agent",
+                  session: sessionId,
+                  reason: "Chief workspace identity is unavailable",
+                });
+              } else {
+                try {
+                  const root = leadRuntimes.controller!;
+                  const result = await root.withQuiescedTree(
+                    ctx,
+                    sessionId,
+                    workspaceId,
+                    (held) =>
+                      root.stopOwnedAgentsForSession(
+                        ctx,
+                        sessionId,
+                        workspaceId,
+                        signal ?? ctx.signal,
+                        held,
+                      ),
+                    signal ?? ctx.signal,
+                  );
+                  if (!result.complete) throw new Error(result.summary);
+                } catch (error) {
+                  remaining.push({
+                    role: "chief-agent",
+                    session: sessionId,
+                    reason: String(error),
+                  });
+                }
+              }
+            }
+            let finalReports:
+              Awaited<ReturnType<typeof getReports>> | undefined;
+            try {
+              finalReports = await getReports();
+            } catch (error) {
+              remaining.push({
+                role: "staff",
+                session: "unknown",
+                reason: `Final supervision observation failed: ${String(error)}`,
+              });
+            }
+            if (finalReports?.incompatible.length)
+              remaining.push(
+                ...finalReports.incompatible.map((item: any) => ({
+                  role: item.role,
+                  session: item.session,
+                  reason: item.reason ?? "execution could not be verified",
+                })),
+              );
+            if (finalReports) {
+              const remainingReports =
+                scope === "manager"
+                  ? finalReports.reports.filter(
+                      (report: any) =>
+                        report.role === "manager" &&
+                        report.session === selectedManagers[0]?.session,
+                    )
+                  : finalReports.reports;
+              for (const report of remainingReports)
+                remaining.push({
+                  role: report.role,
+                  session:
+                    report.role === "manager" ? report.session : report.lead,
+                  reason: "Execution remains in the selected scope",
+                });
+            }
+            if (remaining.length)
+              return result({
+                status: stopped.length ? "partial" : "blocked",
+                scope,
+                stopped,
+                remaining,
+              });
+            if (scope === "all") {
+              pendingShutdownAdmission = admission;
+              ctx.shutdown();
+              return result({
+                status: "shutdown_requested",
+                scope,
+                chief:
+                  "graceful exit requested; external process exit not observed",
+                stopped,
+                remaining: [],
+              });
+            }
+            return result({
+              status: "complete",
+              scope,
+              stopped,
+              remaining: [],
+            });
+          } catch (error) {
+            return result({
+              status: stopped.length ? "partial" : "blocked",
+              scope,
+              reason: String(error),
+              stopped,
+              remaining,
+            });
+          } finally {
+            if (pendingShutdownAdmission !== admission) admission.release();
+          }
+        },
+      });
       const staffTool = {
         name: "message_staff",
         label: "message staff",
@@ -2832,6 +3342,15 @@ function registerExtensionImpl(
         hasPane: () => !!process.env.HERDR_PANE_ID,
         sessionName: () => pi.getSessionName(),
         queueLeadPresentation,
+      });
+      pi.on("session_shutdown", () => {
+        const pending = pendingShutdownAdmission;
+        pendingShutdownAdmission = undefined;
+        try {
+          pending?.release();
+        } catch {
+          // The process is exiting; its exact lock claim is recovered on next use.
+        }
       });
       roleTransitions = leadRuntimes.roleTransitions;
       leadCommandRuntime = leadRuntimes.commandRuntime;

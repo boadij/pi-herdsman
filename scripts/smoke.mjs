@@ -11254,12 +11254,20 @@ async function runChiefManagerSmoke(ctx) {
     nestedCommand(ctx, ["agent", "prompt", pane, text]);
   let turn = 0;
   async function lifecycle(tool, expected, stage, args = { repository }) {
+    const exitsChief = tool === "stop_hierarchy" && args.scope === "all";
+    const chiefSessionId = exitsChief
+      ? sessionEntries((await rootSessionSnapshot(ctx)).contents).find(
+          (entry) => entry.type === "session",
+        ).id
+      : undefined;
     const request = `CHIEF_MANAGER_SMOKE ${++turn} ${tool} ${JSON.stringify(args)}`;
     await prompt(ctx.rootPaneId, request);
     const result = await wait(
       stage,
       async () => {
-        const session = await rootSessionSnapshot(ctx);
+        const session = chiefSessionId
+          ? await exactIsolatedSession(ctx, chiefSessionId)
+          : await rootSessionSnapshot(ctx);
         const turns = sessionEntries(session?.contents ?? "");
         const index = turns.findIndex(
           (entry) =>
@@ -11276,10 +11284,7 @@ async function runChiefManagerSmoke(ctx) {
             ? message.content.filter((part) => part.type === "toolCall")
             : [],
         );
-        assert.ok(
-          calls.length <= 1,
-          "Chief turn must not repeat a project call",
-        );
+        assert.ok(calls.length <= 1, "Chief turn must not repeat a tool call");
         if (calls.length === 1) {
           assert.equal(calls[0].name, tool);
           assert.deepEqual(calls[0].arguments, args);
@@ -11391,15 +11396,29 @@ async function runChiefManagerSmoke(ctx) {
     if (expected) {
       assert.equal(result.isError, false, `${stage} returned a tool error`);
       const failure =
-        result.details?.status === "partial_failure"
-          ? ` (${result.details.stage}: ${sanitizeManagerBootstrapText(result.details.reason, ctx).slice(0, 350)})`
+        result.details?.status === "partial_failure" ||
+        tool === "stop_hierarchy"
+          ? ` (${sanitizeManagerBootstrapText(
+              [
+                result.details?.stage,
+                result.details?.reason,
+                ...(result.details?.remaining ?? []).map((item) => item.reason),
+              ]
+                .filter(Boolean)
+                .join("; "),
+              ctx,
+            ).slice(0, 350)})`
           : "";
       assert.equal(
         result.details?.status,
         expected,
-        `${stage} project status${failure}`,
+        `${stage} tool status${failure}`,
       );
-    } else if (tool === "list_projects") {
+      if (tool === "stop_hierarchy") {
+        assert.equal(result.details.scope, args.scope);
+        assert.deepEqual(result.details.remaining, []);
+      }
+    } else if (tool === "list_projects" || tool === "list_staff") {
       assert.equal(
         result.isError,
         false,
@@ -11419,6 +11438,7 @@ async function runChiefManagerSmoke(ctx) {
         "mismatched saved session must block lifecycle action at recovery",
       );
     }
+    if (exitsChief) return result.details;
     await wait(
       `${stage}-settlement`,
       async () => {
@@ -11686,6 +11706,11 @@ async function runChiefManagerSmoke(ctx) {
   const ordinaryLeadId = await agentSessionId(ctx, ordinaryLeadAgents[0]);
   assert.ok(ordinaryLeadId, "ordinary Lead has no exact Pi session ID");
   const ordinaryLeadSession = await exactIsolatedSession(ctx, ordinaryLeadId);
+  const ordinaryLeadPane = ordinaryLeadAgents[0].pane_id;
+  const [ordinaryLeadProcess, ...extraLeadProcesses] =
+    await processIn(ordinaryLeadPane);
+  assert.ok(ordinaryLeadProcess?.pid > 0);
+  assert.deepEqual(extraLeadProcesses, []);
   assert.ok(
     ordinaryLeadSession,
     "ordinary Lead exact saved session is missing",
@@ -11945,36 +11970,54 @@ async function runChiefManagerSmoke(ctx) {
       (await run("git", ["rev-parse", "HEAD"], { cwd: checkout })).stdout,
       expectedHead,
     );
-    const live = await assignedLead();
-    assert.equal(live?.paneId, lead.paneId);
-    assert.equal(
-      live.pid,
-      lead.pid,
-      "Manager turnover must not restart the Lead",
-    );
-    assert.equal(live.session.path, lead.session.path);
-    assert.ok(live.session.contents.startsWith(lead.session.contents));
+    const savedLead = await exactIsolatedSession(ctx, assignment.session);
+    assert.equal(savedLead?.path, lead.session.path);
+    assert.ok(savedLead.contents.startsWith(lead.session.contents));
+    assert.deepEqual(await processIn(lead.paneId), []);
   };
   const beforeStop = await verifyManager(first, "before-stop");
 
-  // Quit Pi, not the Manager role or its Herdr workspace.
-  await submitPaneCommand(ctx, first.pane.pane_id, "/quit");
-  await wait("stopped", async () => {
-    const observed = await projectPanes();
-    if (observed.some((pane) => pane.pane_id === first.pane.pane_id)) {
-      const live = (await processIn(first.pane.pane_id)).some(
-        (process) => process.pid === first.pid,
-      );
-      if (live) return { done: false };
-    }
+  const staff = await lifecycle("list_staff", null, "staff-target", {});
+  const managers = staff.reports.filter((report) => report.role === "manager");
+  assert.equal(managers.length, 1);
+  assert.match(managers[0].target, /^manager:/u);
+  const targeted = await lifecycle(
+    "stop_hierarchy",
+    "complete",
+    "targeted-stop",
+    {
+      scope: "manager",
+      target: managers[0].target,
+    },
+  );
+  assert.deepEqual(targeted.stopped, [
+    { role: "lead", session: assignment.session },
+    { role: "manager", session: first.session.id },
+  ]);
+  const pidExited = (pid) => {
     try {
-      process.kill(first.pid, 0);
-      return { done: false };
+      process.kill(pid, 0);
+      return false;
     } catch (error) {
       if (error.code !== "ESRCH") throw error;
     }
-    return { done: true };
-  });
+    return true;
+  };
+  await wait("targeted-process-exit", async () => ({
+    done: pidExited(lead.pid) && pidExited(first.pid),
+  }));
+  const assertOrdinaryLeadSurvives = async () => {
+    assert.deepEqual(
+      (await processIn(ordinaryLeadPane)).map(({ pid }) => pid),
+      [ordinaryLeadProcess.pid],
+    );
+    const live = (await agents()).find(
+      (agent) => agent.pane_id === ordinaryLeadPane,
+    );
+    assert.ok(live);
+    assert.equal(await agentSessionId(ctx, live), ordinaryLeadId);
+  };
+  await assertOrdinaryLeadSurvives();
   const workspace = await nestedCommand(ctx, [
     "workspace",
     "get",
@@ -12037,7 +12080,75 @@ async function runChiefManagerSmoke(ctx) {
     "resume replaced the saved history",
   );
   await assertAssignmentPreserved();
+  await assertOrdinaryLeadSurvives();
+  const [chiefProcess, ...extraChiefProcesses] = await processIn(
+    ctx.rootPaneId,
+  );
+  assert.ok(chiefProcess?.pid > 0);
+  assert.deepEqual(extraChiefProcesses, []);
+  const staffStop = await lifecycle(
+    "stop_hierarchy",
+    "complete",
+    "staff-stop",
+    {
+      scope: "staff",
+    },
+  );
+  assert.equal(staffStop.stopped.length, 2);
+  assert.ok(
+    staffStop.stopped.some(
+      (record) =>
+        record.role === "manager" && record.session === resumed.session.id,
+    ),
+  );
+  assert.ok(
+    staffStop.stopped.some(
+      (record) => record.role === "lead" && record.session === ordinaryLeadId,
+    ),
+  );
+  await wait("staff-process-exit", async () => ({
+    done: pidExited(resumed.pid) && pidExited(ordinaryLeadProcess.pid),
+  }));
+  const savedOrdinaryLead = await exactIsolatedSession(ctx, ordinaryLeadId);
+  assert.equal(savedOrdinaryLead?.path, ordinaryLeadSession.path);
+  assert.ok(
+    savedOrdinaryLead.contents.startsWith(ordinaryLeadSession.contents),
+  );
+  assert.deepEqual(
+    (await processIn(ctx.rootPaneId)).map(({ pid }) => pid),
+    [chiefProcess.pid],
+  );
+  await assertAssignmentPreserved();
+
+  // Restaff so the complete scope proves descendant settlement as well as exit.
+  await lifecycle("resume_manager", "resumed", "restaff");
+  const restaffed = await observeManager("restaffed-manager");
+  assert.equal(restaffed.session.id, first.session.id);
+  assert.equal(restaffed.session.path, first.session.path);
+  const complete = await lifecycle(
+    "stop_hierarchy",
+    "shutdown_requested",
+    "complete-stop",
+    {
+      scope: "all",
+    },
+  );
+  assert.deepEqual(complete.stopped, [
+    { role: "manager", session: restaffed.session.id },
+  ]);
+  await wait("complete-process-exit", async () => ({
+    done: pidExited(restaffed.pid) && pidExited(chiefProcess.pid),
+  }));
+  const finalManager = await exactIsolatedSession(ctx, first.session.id);
+  assert.equal(finalManager?.path, first.session.path);
+  assert.ok(finalManager.contents.startsWith(resumedHistory.contents));
+  await assertAssignmentPreserved();
   ctx.chiefManager = {
+    targetedShutdown: targeted.status,
+    staffShutdown: staffStop.status,
+    chiefSurvivedStaffShutdown: true,
+    completeShutdown: complete.status,
+    chiefExitObserved: true,
     assignmentPreserved: true,
     mismatchedRecoveryBlocked: true,
     managerAgentDelegation: chiefManagerSuccessEvidence(

@@ -3736,7 +3736,10 @@ export async function stopHerdrAgentPreservingPane(
   },
   signal?: AbortSignal,
 ): Promise<void> {
-  const release = await lockLifecycle(ctx, signal);
+  const release = await lockLifecycleForWorkspace(
+    expected?.workspaceId ?? workspace(ctx),
+    signal,
+  );
   try {
     const initial = await proveExactRunningAgent(
       pi,

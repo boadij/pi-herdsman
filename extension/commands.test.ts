@@ -27,6 +27,7 @@ import { Value } from "typebox/value";
 import { formatRuntimeBuild, sameRuntimeBuild } from "./compatibility.ts";
 import type { ManagedAgentState } from "./mailbox.ts";
 import {
+  acquireCoordinatorAdmission,
   acquireProcessLock,
   claimProcessLock,
   ProcessLockOccupiedError,
@@ -50,6 +51,7 @@ import {
   readManagerRecoveryReference,
   getManagerStartIntent,
   writeManagerStartIntent,
+  writeManagerRecoveryReference,
   peerLeadLockPath,
   peerRuntime,
   readPeerLeadRecord,
@@ -726,6 +728,7 @@ const chiefTools = [
   "start_manager",
   "resume_manager",
   "start_lead",
+  "stop_hierarchy",
   "load_skill",
 ];
 
@@ -5656,13 +5659,19 @@ test("Manager leave suspends authority when lease release fails", async (t) => {
 
 for (const scenario of [
   "restored Manager registers supervision tools and restores Manager tools",
+  "Manager recovery intent restores under held admission",
+  "Manager recovery intent rejects wrong placement under held admission",
+  "Manager recovery intent rejects a replaced admission claim",
   "fresh Manager startup consumes the exact intent and publishes recovery",
   "foreign Manager startup intent blocks optional activation",
   "Manager startup rejects Herdr reporting a different session path",
   "Manager startup with failed recovery persistence releases authority",
 ] as const)
   test(scenario, async (t) => {
-    const restored = scenario.startsWith("restored");
+    const recovery = scenario.startsWith("Manager recovery intent");
+    const rejectedRecovery = recovery && scenario.includes("rejects");
+    const manualRestore = scenario.startsWith("restored");
+    const restored = manualRestore || recovery;
     const foreign = scenario.startsWith("foreign");
     const failed = scenario.includes("failed recovery");
     const wrongSession = scenario.includes("different session path");
@@ -5768,22 +5777,49 @@ for (const scenario of [
         if (type === "pi-herdsman-role") flushRole();
       };
       const runtime = supervisionRuntime();
+      const admission = manualRestore
+        ? undefined
+        : acquireCoordinatorAdmission();
+      t.after(() => admission?.release());
       const intent = {
         version: 1 as const,
         sessionId,
         canonicalRepoKey: repo,
         checkoutPath: context.cwd,
         workspaceId: WORKSPACE,
-        paneId: restored || foreign ? "other-pane" : "manager-pane",
+        paneId:
+          foreign || scenario.includes("wrong placement")
+            ? "other-pane"
+            : "manager-pane",
         createdAt: Date.now(),
+        admission: admission?.claim,
+        ...(recovery
+          ? {
+              role: "manager" as const,
+              tabId: "manager-tab",
+              recoverySessionFile: sessionFile,
+            }
+          : {}),
       };
+      if (scenario.includes("replaced admission")) {
+        admission!.release();
+        const replacement = acquireCoordinatorAdmission();
+        t.after(() => replacement.release());
+      }
+      if (recovery)
+        writeManagerRecoveryReference(runtime, {
+          version: 1,
+          canonicalRepoKey: repo,
+          piSessionId: sessionId,
+          piSessionFile: sessionFile,
+        });
       if (failed) {
         const key = createHash("sha256").update(repo).digest("hex");
         const directory = runtime.managerRecovery;
         mkdirSync(directory, { recursive: true });
         writeFileSync(join(directory, key + ".json"), "{}");
       }
-      writeManagerStartIntent(runtime, intent);
+      if (!manualRestore) writeManagerStartIntent(runtime, intent);
       await pi.events.get("session_start")![0]({ reason: "startup" }, context);
       assert.equal(readManagerDescriptor(runtime, repo), undefined);
       assert.equal(pi.pi.getActiveTools().includes("delegate_work"), false);
@@ -5791,7 +5827,10 @@ for (const scenario of [
         readLeadRoleState(pi.entries, sessionId)?.role,
         restored ? "manager" : undefined,
       );
-      assert.deepEqual(getManagerStartIntent(runtime, sessionId), intent);
+      assert.deepEqual(
+        getManagerStartIntent(runtime, sessionId),
+        manualRestore ? undefined : intent,
+      );
       // With explicit CLI extension ordering, Herdr reports the Pi path in a later session_start handler.
       reportedSessionPath = wrongSession
         ? join(checkout, "other.jsonl")
@@ -5806,8 +5845,18 @@ for (const scenario of [
       await invokeEventHandlers(pi, "resources_discover")({}, context);
       assert.deepEqual(
         getManagerStartIntent(runtime, sessionId),
-        restored || foreign || wrongSession ? intent : undefined,
+        rejectedRecovery || foreign || wrongSession ? intent : undefined,
       );
+      if (rejectedRecovery) {
+        assert.equal(pi.pi.getActiveTools().includes("delegate_work"), false);
+        assert.equal(readManagerDescriptor(runtime, repo), undefined);
+        assert.equal(readLeadRoleState(pi.entries, sessionId)?.role, "manager");
+        assert.equal(
+          readManagerRecoveryReference(runtime, repo)?.piSessionFile,
+          sessionFile,
+        );
+        return;
+      }
       if (foreign || failed || wrongSession) {
         assert.equal(
           pi.pi
@@ -11332,6 +11381,20 @@ async function managerDelegateAssignmentTest(
       authorityContention === "binding" &&
       command === "herdr" &&
       args[0] === "agent" &&
+      args[1] === "start" &&
+      !leadStarted
+    ) {
+      await initializeLeadRuntime();
+      await lead.events.get("session_start")![0](undefined, leadCtx);
+      leadStarted = true;
+      process.env.HERDR_WORKSPACE_ID = WORKSPACE;
+      process.env.HERDR_PANE_ID = "root-pane";
+      process.env.HERDR_TAB_ID = "root-tab";
+    }
+    if (
+      authorityContention === "binding" &&
+      command === "herdr" &&
+      args[0] === "agent" &&
       args[1] === "start"
     ) {
       const { projectAssignmentAuthorityLockPath } =
@@ -11378,6 +11441,21 @@ async function managerDelegateAssignmentTest(
       args[1] === "start"
     ) {
       lockPhase = "manager-bind";
+    }
+    if (
+      !lockOrder &&
+      authorityContention !== "binding" &&
+      command === "herdr" &&
+      args[0] === "agent" &&
+      args[1] === "start" &&
+      !leadStarted
+    ) {
+      await initializeLeadRuntime();
+      await lead.events.get("session_start")![0](undefined, leadCtx);
+      leadStarted = true;
+      process.env.HERDR_WORKSPACE_ID = WORKSPACE;
+      process.env.HERDR_PANE_ID = "root-pane";
+      process.env.HERDR_TAB_ID = "root-tab";
     }
     if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
       const state = readLeadCoordinationState(
@@ -12292,6 +12370,17 @@ async function managerDelegateAssignmentTest(
                     args[0] === "worktree" && args[1] === "list" && !succeeded,
                 )
                 .map(({ args }: { args: string[] }) => args),
+              leadTools: lead.pi.getActiveTools(),
+              leadRole: readLeadCoordinationState(
+                supervisionRuntime(),
+                childSession,
+              ),
+              leadEntries: lead.entries
+                .filter((entry: any) => entry.type === "custom")
+                .map((entry: any) => ({
+                  customType: entry.customType,
+                  data: entry.data,
+                })),
               lifecycleSubscriptions,
             },
           )}`,
@@ -17122,7 +17211,7 @@ test("Chief profile drives the turn-start tools, prompt, and tool-call guard", a
   }
 });
 
-test("root assignment rejects a role generation changed during preflight", async () => {
+test("root assignment preflight excludes concurrent Coordinator role activation", async () => {
   setLeadEnvironment();
   const previousEnvironment = new Map(
     [
@@ -17201,18 +17290,14 @@ test("root assignment rejects a role generation changed during preflight", async
       );
     await preflightEntered;
     await pi.commandOptions.get("chief").handler("", context);
+    assert.equal(pi.pi.getActiveTools().includes("list_projects"), false);
     assert.equal(context.sessionManager.getSessionId(), sessionId);
     releasePreflight();
     const result = await pending;
     assert.equal(
-      result.details.error.category,
-      "invalid_request",
-      JSON.stringify(result.details),
-    );
-    assert.match(result.details.error.message, /role or authority changed/i);
-    assert.equal(
       pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
       false,
+      JSON.stringify(result.details),
     );
   } finally {
     releasePreflight();
@@ -17225,7 +17310,7 @@ test("root assignment rejects a role generation changed during preflight", async
   }
 });
 
-test("root assignment rechecks changed authority after Agent startup and rolls back", async () => {
+test("root assignment keeps role activation out while an Agent start is admitted", async () => {
   setLeadEnvironment();
   const previousEnvironment = new Map(
     [
@@ -17327,26 +17412,14 @@ test("root assignment rechecks changed authority after Agent startup and rolls b
     await startEntered;
     assert.equal(paused, true);
     await pi.commandOptions.get("chief").handler("", context);
+    assert.equal(pi.pi.getActiveTools().includes("list_projects"), false);
     releaseStart();
 
     const result = await pending;
-    assert.equal(
-      result.details.error.category,
-      "invalid_request",
-      JSON.stringify(result.details.error),
-    );
-    assert.match(result.details.error.message, /role or authority changed/i);
-    assert.equal(taskAccepted, false);
-    assert.equal(
-      stopped,
-      true,
-      "the unauthorized started Agent must be stopped",
-    );
-    assert.equal(
-      readAgentState(agentMailboxPath(WORKSPACE, label)),
-      undefined,
-      "rollback must leave no unresolved live Agent generation",
-    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    assert.equal(taskAccepted, true);
+    assert.equal(stopped, false);
+    assert.ok(readAgentState(agentMailboxPath(WORKSPACE, label)));
     assert.equal(
       realFs.existsSync(startup.mailbox) &&
         realFs
@@ -25406,6 +25479,7 @@ test("session-start roster uses current delegation policy and ignores superseded
       }),
       reconcileRoleTools() {},
       activeManager: () => managerActive,
+      coordinatorStartIntent: () => undefined,
       canRestoreChiefState: () => false,
       resolveControllerRole: async () => undefined,
       finalizeOptionalManagerStartup() {},
@@ -25574,6 +25648,7 @@ test("managed model-restore attestation survives Lead identity restoration and l
         persistCoordinatorState();
       },
       activeManager: () => false,
+      coordinatorStartIntent: () => undefined,
       shouldRestoreChief: () => false,
       chiefModeActive: () => false,
       chiefModeInactive: () => true,
@@ -25903,6 +25978,14 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
   let resolveInitial: ((value: ExecResult) => void) | undefined;
   let resolveReconciliation: ((value: ExecResult) => void) | undefined;
   let resolveAfterReconciliation: ((value: ExecResult) => void) | undefined;
+  const emptySnapshot = {
+    stdout: JSON.stringify({
+      id: 1,
+      result: { snapshot: { agents: [], panes: [], workspaces: [] } },
+    }),
+    stderr: "",
+    code: 0,
+  };
   const pi = fakePi({
     exec: (command, args) => {
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
@@ -25921,7 +26004,8 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
           return new Promise<ExecResult>((resolve) => {
             resolveAfterReconciliation = resolve;
           });
-        return { stdout: envelope(), stderr: "", code: 0 };
+        // Health scans may run after recovery; the Agent stays absent.
+        return emptySnapshot;
       }
       if (args[0] === "agent" && args[1] === "get")
         return {
@@ -25967,25 +26051,11 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
 
   await t.waitFor(() => assert.ok(resolveReconciliation));
   const countBeforeReconciliation = listCount;
-  resolveReconciliation!({
-    stdout: JSON.stringify({
-      id: 1,
-      result: { snapshot: { agents: [], panes: [], workspaces: [] } },
-    }),
-    stderr: "",
-    code: 0,
-  });
+  resolveReconciliation!(emptySnapshot);
   await starting;
   await t.waitFor(() => assert.ok(resolveAfterReconciliation));
   assert.match(widget.render(160).join("\n"), /○ lead\s+\? 1/);
-  resolveAfterReconciliation!({
-    stdout: JSON.stringify({
-      id: 1,
-      result: { snapshot: { agents: [], panes: [], workspaces: [] } },
-    }),
-    stderr: "",
-    code: 0,
-  });
+  resolveAfterReconciliation!(emptySnapshot);
   await t.waitFor(() => {
     assert.ok(listCount > countBeforeReconciliation, JSON.stringify(pi.calls));
     assert.ok(widget);

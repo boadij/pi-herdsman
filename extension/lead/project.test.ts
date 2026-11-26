@@ -14,6 +14,7 @@ import {
   realFs,
 } from "../support.ts";
 import { rememberCoordinatorTarget } from "../coordinator-target.ts";
+import { coordinatorAdmissionClaimIsCurrent } from "../lock.ts";
 import { OperationError } from "../errors.ts";
 import {
   herdsmanDataRoot,
@@ -30,6 +31,7 @@ const {
 const {
   COORDINATOR_DEFINITION_ENTRY,
   EXPECTED_ASSIGNED_LEAD_DEFINITION_ENV,
+  getCoordinatorStartIntent,
   readProjectAssignment,
   writeProjectAssignment,
 } = await import("../supervision.ts");
@@ -1164,6 +1166,7 @@ function projectLifecycle(options: {
   return {
     branch,
     manager,
+    supervision,
     managerCheckout,
     worktreePath,
     workspaceId,
@@ -1210,6 +1213,21 @@ test("fresh delegation launches the named profile in the trusted target worktree
     trustTarget: true,
     launch: (options) => {
       assert.equal(lifecycle.published?.definition, definition);
+      const intent = getCoordinatorStartIntent(
+        lifecycle.supervision,
+        lifecycle.published!.id,
+      );
+      assert.equal(intent?.role, "assigned-lead");
+      assert.equal(intent?.assignmentRepoKey, lifecycle.manager.repoKey);
+      assert.equal(intent?.branch, lifecycle.branch);
+      assert.deepEqual(intent?.admission, {
+        pid: process.pid,
+        id: intent?.admission?.id,
+      });
+      assert.equal(
+        coordinatorAdmissionClaimIsCurrent(intent!.admission!),
+        true,
+      );
       assert.ok(options.agentArgs.includes("--approve"));
       assert.equal(
         options.agentArgs[options.agentArgs.indexOf("--thinking") + 1],
@@ -1764,6 +1782,7 @@ test("new project worktree creation gets an extended Herdr timeout", async () =>
   const repoKey = realFs.realpathSync(process.cwd());
   const manager = {
     repoKey,
+    canonicalRepoKey: repoKey,
     workspaceId: WORKSPACE,
     socket: process.env.HERDR_SOCKET_PATH ?? "/test-socket",
     group: null,
@@ -2226,6 +2245,7 @@ test("resume preserves queued manager message when controlled recovery fails", a
   const id = randomUUID();
   const manager = {
     repoKey,
+    canonicalRepoKey: repoKey,
     workspaceId: WORKSPACE,
     leaseId: randomUUID(),
     piSessionId: randomUUID(),

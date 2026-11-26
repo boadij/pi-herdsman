@@ -6923,7 +6923,9 @@ async function runManagerStartupScenario(
         results.filter(
           (result) =>
             result.status === "rejected" &&
-            /Work already exists/.test(String(result.reason)),
+            /Work already exists|Coordinator admission is busy/.test(
+              String(result.reason),
+            ),
         ).length,
         1,
       );

@@ -1,7 +1,12 @@
 import * as fs from "node:fs";
+import { realpathSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { basename, dirname, join } from "node:path";
-import { herdsmanTempRoot, isIncidentalMetadata } from "./storage.ts";
+import { basename, dirname, join, resolve } from "node:path";
+import {
+  herdsmanTempRoot,
+  isIncidentalMetadata,
+  nodeOnlyAgentDir,
+} from "./storage.ts";
 
 export class ProcessLockOccupiedError extends Error {
   readonly code = "PROCESS_LOCK_OCCUPIED";
@@ -24,6 +29,67 @@ export function sessionActivationLockPath(
     herdsmanTempRoot(),
     "locks",
     `session-${createHash("sha256").update(canonicalSessionPath).digest("hex")}`,
+  );
+}
+
+/**
+ * Coordinator admission is shared by sessions in one Pi profile and Herdr
+ * socket. It is deliberately coarser than repository startup locks.
+ * ponytail: serialize Coordinator admission per profile/socket; split by
+ * verified repository only if launch contention becomes material.
+ */
+export function coordinatorAdmissionLockPath(
+  agentDir = nodeOnlyAgentDir(),
+  socket = process.env.HERDR_SOCKET_PATH,
+): string {
+  if (typeof socket !== "string" || !socket.trim() || socket.includes("\0"))
+    throw new Error("HERDR_SOCKET_PATH is required for Coordinator admission");
+  const scope = JSON.stringify([
+    canonicalAdmissionProfile(resolve(agentDir)),
+    resolve(socket),
+  ]);
+  return join(
+    herdsmanTempRoot(),
+    "locks",
+    `coordinator-admission-${createHash("sha256").update(scope).digest("hex")}`,
+  );
+}
+
+function canonicalAdmissionProfile(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch (error) {
+    const parent = dirname(path);
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" || parent === path)
+      throw error;
+    return join(canonicalAdmissionProfile(parent), basename(path));
+  }
+}
+
+export function acquireCoordinatorAdmission(
+  agentDir?: string,
+  socket?: string,
+): ProcessLockLease {
+  return acquireProcessLock(coordinatorAdmissionLockPath(agentDir, socket), {
+    name: "Coordinator admission",
+    occupiedMessage:
+      "Coordinator admission is busy; no new execution was admitted",
+  });
+}
+
+export function coordinatorAdmissionClaimIsCurrent(
+  claim: ProcessLockClaim,
+  agentDir?: string,
+  socket?: string,
+): boolean {
+  const current = readProcessLockStatus(
+    coordinatorAdmissionLockPath(agentDir, socket),
+    "Coordinator admission",
+  );
+  return (
+    current.live &&
+    current.claim.pid === claim.pid &&
+    current.claim.id === claim.id
   );
 }
 

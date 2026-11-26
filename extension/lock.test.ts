@@ -16,8 +16,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import {
+  acquireCoordinatorAdmission,
   acquireProcessLock,
   claimProcessLock,
+  coordinatorAdmissionClaimIsCurrent,
+  coordinatorAdmissionLockPath,
   ProcessLockOccupiedError,
   readLiveProcessLock,
   readProcessLockStatus,
@@ -107,6 +110,61 @@ test("acquireProcessLock returns an exact claim", () => {
     lease.release();
   } finally {
     rmSync(path, { recursive: true, force: true });
+  }
+});
+
+test("Coordinator admission is profile/socket scoped, bounded, and verifies its generation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-admission-"));
+  const profile = join(root, "profile");
+  const otherProfile = join(root, "other-profile");
+  const socket = join(root, "herdr.sock");
+  mkdirSync(profile);
+  symlinkSync(profile, join(root, "profile-alias"), "dir");
+  const lease = acquireCoordinatorAdmission(profile, socket);
+  try {
+    equal(
+      coordinatorAdmissionClaimIsCurrent(lease.claim, profile, socket),
+      true,
+    );
+    equal(
+      coordinatorAdmissionLockPath(profile, socket),
+      coordinatorAdmissionLockPath(profile, socket),
+    );
+    equal(
+      coordinatorAdmissionLockPath(profile, socket) ===
+        coordinatorAdmissionLockPath(otherProfile, socket),
+      false,
+    );
+    equal(
+      coordinatorAdmissionLockPath(profile, socket),
+      coordinatorAdmissionLockPath(join(root, "profile-alias"), socket),
+    );
+    equal(
+      coordinatorAdmissionLockPath(profile, socket) ===
+        coordinatorAdmissionLockPath(profile, `${socket}.other`),
+      false,
+    );
+    throws(
+      () => acquireCoordinatorAdmission(profile, socket),
+      (error: unknown) => error instanceof ProcessLockOccupiedError,
+    );
+    const concurrentAttempt = Promise.resolve().then(() => {
+      try {
+        acquireCoordinatorAdmission(profile, socket);
+        return "admitted";
+      } catch (error) {
+        if (!(error instanceof ProcessLockOccupiedError)) throw error;
+        return "busy";
+      }
+    });
+    equal(await concurrentAttempt, "busy");
+    equal(
+      coordinatorAdmissionClaimIsCurrent(lease.claim, profile, socket),
+      true,
+    );
+  } finally {
+    lease.release();
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
