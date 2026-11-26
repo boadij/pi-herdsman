@@ -35,12 +35,14 @@ roster. Do not create a parallel definition engine.
    deduplicate verified assignments across batches. Do not fall back to an
    unfiltered cross-project query if the installed inspector lacks this
    parameter; report that an updated inspector is needed.
-3. Search exact recorded tool names `delegate_agent` and `continue_agent`
-   separately. Start without argument excerpts:
+3. Search exact recorded tool names `delegate_agent` and `resume_agent`
+   separately. Include historical names `continue_agent` and `agent_continue`
+   for older recovery receipts, and `agent_delegate` for older delegation
+   receipts. Start without argument excerpts:
 
    ```text
    session_inspect(action="tools", history="all-projects", cwdPrefixes=[...absoluteRoots], tool="delegate_agent", sessionLimit=25, limit=20)
-   session_inspect(action="tools", history="all-projects", cwdPrefixes=[...absoluteRoots], tool="continue_agent", sessionLimit=25, limit=20)
+   session_inspect(action="tools", history="all-projects", cwdPrefixes=[...absoluteRoots], tool="resume_agent", sessionLimit=25, limit=20)
    ```
 
    For an explicit audit of _all_ accessible projects, omit `cwdPrefixes`.

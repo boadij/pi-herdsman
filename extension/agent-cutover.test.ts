@@ -25,12 +25,14 @@ import {
   writeAgentState,
 } from "./support.ts";
 
-test("historical Agent assignment tool results still reconstruct ownership", () => {
+test("historical and current Agent assignment tool results reconstruct ownership", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-history-"));
   try {
     const entries = [
       ["agent_delegate", "11111111-1111-4111-8111-111111111111"],
       ["agent_continue", "22222222-2222-4222-8222-222222222222"],
+      ["continue_agent", "55555555-5555-4555-8555-555555555555"],
+      ["resume_agent", "66666666-6666-4666-8666-666666666666"],
     ].map(([toolName, sessionId], index) => {
       const sessionPath = join(root, `${index}.jsonl`);
       writeFileSync(sessionPath, "{}\n");
@@ -60,6 +62,8 @@ test("historical Agent assignment tool results still reconstruct ownership", () 
       [
         { label: "child-0", id: "11111111-1111-4111-8111-111111111111" },
         { label: "child-1", id: "22222222-2222-4222-8222-222222222222" },
+        { label: "child-2", id: "55555555-5555-4555-8555-555555555555" },
+        { label: "child-3", id: "66666666-6666-4666-8666-666666666666" },
       ],
     );
   } finally {
@@ -174,7 +178,7 @@ test("managed Agent surfaces distinguish delegation capability from leaf access"
     [
       "await_owner",
       "stop_agent",
-      "continue_agent",
+      "resume_agent",
       "delegate_agent",
       "inspect_agent",
       "interrupt_agent",
@@ -354,7 +358,7 @@ test("fresh root delegation refreshes cwd at safe turn boundaries", async () => 
     );
 
     const continuation = first.tools.find(
-      (tool) => tool.name === "continue_agent",
+      (tool) => tool.name === "resume_agent",
     )!;
     assert.equal(
       Value.Check(continuation.parameters, {
@@ -409,7 +413,7 @@ test("each Agent operation has its own schema without projection", () => {
       ["definition", "task"],
     ],
     [
-      "continue_agent",
+      "resume_agent",
       { session: "/tmp/session.jsonl", task: "work" },
       { session: "/tmp/session.jsonl", task: "work", agent: "x" },
       ["session", "task"],

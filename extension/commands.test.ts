@@ -681,7 +681,7 @@ type CommandTestExecOptions = NonNullable<Parameters<ExecHandler>[2]> & {
 const leadTools = [
   "list_agents",
   "delegate_agent",
-  "continue_agent",
+  "resume_agent",
   "steer_agent",
   "interrupt_agent",
   "reply_agent",
@@ -932,7 +932,7 @@ test("managed identity survives tree and assignment loss while native new-sessio
   for (const tool of [
     "read",
     "delegate_agent",
-    "continue_agent",
+    "resume_agent",
     "delegate_work",
     "list_staff",
   ])
@@ -1264,7 +1264,7 @@ test("known managed identity remains unavailable and recovery-only when startup 
           "message_manager",
           "message_chief",
           "delegate_agent",
-          "continue_agent",
+          "resume_agent",
         ].includes(tool),
       ),
     false,
@@ -1340,7 +1340,7 @@ test("managed pending execution projects only exact-owner recovery tools", async
   const starting = pi.events.get("session_start")![0](undefined, context);
   await snapshotStarted;
   const recoveryTools = AGENT_COORDINATION_TOOLS.filter(
-    (name) => name !== "delegate_agent" && name !== "continue_agent",
+    (name) => name !== "delegate_agent" && name !== "resume_agent",
   );
   assert.deepEqual(pi.pi.getActiveTools(), recoveryTools);
   releaseSnapshot({ stdout: "", stderr: "Herdr disconnected", code: 1 });
@@ -1351,7 +1351,7 @@ test("managed pending execution projects only exact-owner recovery tools", async
       .some((name) =>
         [
           "delegate_agent",
-          "continue_agent",
+          "resume_agent",
           "message_manager",
           "list_peers",
           "message_peer",
@@ -3484,7 +3484,7 @@ const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
         {
           list: "list_agents",
           delegate: "delegate_agent",
-          continue: "continue_agent",
+          continue: "resume_agent",
           steer: "steer_agent",
           interrupt: "interrupt_agent",
           reply: "reply_agent",
@@ -4268,7 +4268,7 @@ function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
           "foreign_tool",
           "list_agents",
           "delegate_agent",
-          "continue_agent",
+          "resume_agent",
           "steer_agent",
           "interrupt_agent",
           "reply_agent",
@@ -5535,7 +5535,7 @@ test("Manager leave suspends authority when lease release fails", async (t) => {
     for (const name of ["list_agents", "reply_agent", "stop_agent"])
       assert.ok(pi.pi.getActiveTools().includes(name), name);
     assert.ok(!pi.pi.getActiveTools().includes("delegate_agent"));
-    assert.ok(!pi.pi.getActiveTools().includes("continue_agent"));
+    assert.ok(!pi.pi.getActiveTools().includes("resume_agent"));
     const blocked = await agentTool(pi, "delegate").execute(
       "suspended-manager",
       { definition: "agent", task: "must not start" },
@@ -12327,7 +12327,7 @@ async function managerDelegateAssignmentTest(
       assert.deepEqual(lifecyclePresentation, ["managed · retired"]);
       assert.equal(tabLabels.get("child-tab"), "Managed Lead");
       assert.equal(lead.pi.getActiveTools().includes("delegate_agent"), false);
-      assert.equal(lead.pi.getActiveTools().includes("continue_agent"), false);
+      assert.equal(lead.pi.getActiveTools().includes("resume_agent"), false);
       const retiredLeadNotices: string[] = [];
       leadCtx.ui.notify = (message: string) => retiredLeadNotices.push(message);
       await lead.commandOptions.get("lead-orchestrate").handler("", leadCtx);
@@ -16436,7 +16436,7 @@ test("lead session-start retries an exact baseline after restoration fails", asy
     ...ordinaryBaseline,
     "list_agents",
     "delegate_agent",
-    "continue_agent",
+    "resume_agent",
     "steer_agent",
     "interrupt_agent",
     "reply_agent",
@@ -16519,7 +16519,7 @@ test("lead session-start continues when chief lease release fails", async () => 
         "bash",
         "list_agents",
         "delegate_agent",
-        "continue_agent",
+        "resume_agent",
         "steer_agent",
         "interrupt_agent",
         "reply_agent",
@@ -16543,7 +16543,7 @@ test("lead session-start continues when chief lease release fails", async () => 
     "bash",
     "list_agents",
     "delegate_agent",
-    "continue_agent",
+    "resume_agent",
     "steer_agent",
     "interrupt_agent",
     "reply_agent",
@@ -17258,7 +17258,7 @@ test("Lead retains owned Agent controls after switching to an empty allowlist", 
     });
     await pi.commandOptions.get("lead-orchestrate").handler("", context);
     const active = pi.pi.getActiveTools();
-    for (const name of ["delegate_agent", "continue_agent"])
+    for (const name of ["delegate_agent", "resume_agent"])
       assert.ok(!active.includes(name), name);
     for (const name of [
       "list_agents",
@@ -19409,7 +19409,7 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
     "bash",
     "list_agents",
     "delegate_agent",
-    "continue_agent",
+    "resume_agent",
     "steer_agent",
     "interrupt_agent",
     "reply_agent",
@@ -19487,7 +19487,7 @@ test("ordinary branch tool state wins over an older lead checkpoint", async () =
           "bash",
           "list_agents",
           "delegate_agent",
-          "continue_agent",
+          "resume_agent",
           "steer_agent",
           "interrupt_agent",
           "reply_agent",
@@ -19506,7 +19506,7 @@ test("ordinary branch tool state wins over an older lead checkpoint", async () =
     "grep",
     "list_agents",
     "delegate_agent",
-    "continue_agent",
+    "resume_agent",
     "steer_agent",
     "interrupt_agent",
     "reply_agent",
@@ -19946,7 +19946,7 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
           "foreign_tool",
           "list_agents",
           "delegate_agent",
-          "continue_agent",
+          "resume_agent",
           "steer_agent",
           "interrupt_agent",
           "reply_agent",
@@ -19990,7 +19990,7 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
     "foreign_tool",
     "list_agents",
     "delegate_agent",
-    "continue_agent",
+    "resume_agent",
     "steer_agent",
     "interrupt_agent",
     "reply_agent",
@@ -20039,7 +20039,7 @@ test("persisted chief collision is suspended and has no lead authority", async (
         leadTools: [
           "list_agents",
           "delegate_agent",
-          "continue_agent",
+          "resume_agent",
           "steer_agent",
           "interrupt_agent",
           "reply_agent",
@@ -20071,7 +20071,7 @@ test("persisted chief collision is suspended and has no lead authority", async (
         "bash",
         "list_agents",
         "delegate_agent",
-        "continue_agent",
+        "resume_agent",
         "steer_agent",
         "interrupt_agent",
         "reply_agent",
@@ -20101,7 +20101,7 @@ test("persisted chief collision is suspended and has no lead authority", async (
       "suspended Chief must retain the intentionally restored baseline tool",
     );
     assert.ok(!pi.pi.getActiveTools().includes("delegate_agent"));
-    assert.ok(!pi.pi.getActiveTools().includes("continue_agent"));
+    assert.ok(!pi.pi.getActiveTools().includes("resume_agent"));
     const denied = await agentTool(pi, "delegate").execute(
       "suspended-chief",
       { definition: "agent", task: "must not start" },

@@ -874,7 +874,7 @@ const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
         {
           list: "list_agents",
           delegate: "delegate_agent",
-          continue: "continue_agent",
+          continue: "resume_agent",
           steer: "steer_agent",
           interrupt: "interrupt_agent",
           attach: "attach_handoff",
@@ -5564,7 +5564,7 @@ test("a stray agent variable does not suppress the active Lead tool surface", as
   assert.deepEqual(lead.pi.getActiveTools(), [
     "list_agents",
     "delegate_agent",
-    "continue_agent",
+    "resume_agent",
     "steer_agent",
     "interrupt_agent",
     "reply_agent",
@@ -8254,7 +8254,7 @@ test("retired Agents cannot start fresh assignments but may coordinate children"
   agent.pi.appendEntry("pi-herdsman-agent-context-retired", {
     sessionId: context.sessionManager.getSessionId(),
   });
-  for (const toolName of ["delegate_agent", "continue_agent"]) {
+  for (const toolName of ["delegate_agent", "resume_agent"]) {
     assert.deepEqual(toolCall({ toolName }, context), {
       block: true,
       reason:
@@ -8268,7 +8268,7 @@ test("retired Agents cannot start fresh assignments but may coordinate children"
   assert.equal(toolCall({ toolName: "delegate_agent" }, context), undefined);
   enabled = true;
   active = false;
-  assert.equal(toolCall({ toolName: "continue_agent" }, context), undefined);
+  assert.equal(toolCall({ toolName: "resume_agent" }, context), undefined);
 });
 
 test("agent persists one identity entry before mailbox initialization", async () => {
@@ -9849,7 +9849,7 @@ test("native Code Mode preserves accepted Agent lifecycle through reopen and con
   };
   const acceptedSessionAt = (
     index: number,
-    action: "delegate_agent" | "continue_agent",
+    action: "delegate_agent" | "resume_agent",
   ): { sessionId: string; sessionPath: string } => {
     const controllerResult = controllerResults[index];
     assert.ok(controllerResult);
@@ -9878,11 +9878,11 @@ test("native Code Mode preserves accepted Agent lifecycle through reopen and con
     settingsManager,
     resourceLoader,
     sessionManager: SessionManager.inMemory(WORKSPACE),
-    tools: ["codemode", "delegate_agent", "continue_agent", "stop_agent"],
+    tools: ["codemode", "delegate_agent", "resume_agent", "stop_agent"],
   });
   try {
     assert.ok(session.getActiveToolNames().includes("codemode"));
-    for (const name of ["delegate_agent", "continue_agent", "stop_agent"])
+    for (const name of ["delegate_agent", "resume_agent", "stop_agent"])
       assert.ok(session.getCallableToolNames().includes(name));
     const promptCode = async (code: string, before?: () => void) => {
       faux.setResponses([
@@ -9903,15 +9903,15 @@ test("native Code Mode preserves accepted Agent lifecycle through reopen and con
       `await tools.stop_agent({ agent: ${JSON.stringify(label)} });`,
     );
     await promptCode(
-      `await tools.continue_agent({ session: ${JSON.stringify(childPath)}, task: "continued assignment" });`,
+      `await tools.resume_agent({ session: ${JSON.stringify(childPath)}, task: "continued assignment" });`,
       reopenOwnerHistory,
     );
     assert.equal(accepted.length, 2);
     assert.deepEqual(
-      acceptedSessionAt(2, "continue_agent"),
+      acceptedSessionAt(2, "resume_agent"),
       acceptedSessionAt(0, "delegate_agent"),
     );
-    assert.deepEqual(acceptedSessionAt(2, "continue_agent"), {
+    assert.deepEqual(acceptedSessionAt(2, "resume_agent"), {
       sessionId: DEFAULT_PI_SESSION_ID,
       sessionPath: childPath,
     });
@@ -9938,7 +9938,7 @@ test("native Code Mode preserves accepted Agent lifecycle through reopen and con
       "duplicate mailbox notifications deliver the continued result exactly once",
     );
     await promptCode(
-      `await tools.continue_agent({ session: ${JSON.stringify(foreignPath)}, task: "foreign session must be denied" });`,
+      `await tools.resume_agent({ session: ${JSON.stringify(foreignPath)}, task: "foreign session must be denied" });`,
     );
     assert.equal(accepted.length, 2, JSON.stringify(controllerResults));
     assert.equal(

@@ -139,7 +139,7 @@ async function assertLiveDelegateSchema(
   realFs.mkdirSync(dirname(configPath), { recursive: true });
   const latest = (name: string) =>
     pi.tools.filter((tool) => tool.name === name).at(-1)!;
-  const continuation = latest("continue_agent");
+  const continuation = latest("resume_agent");
   const originalTools = pi.pi.getActiveTools();
   const available = {
     provider: "vendor",
@@ -231,7 +231,7 @@ async function assertLiveDelegateSchema(
         delegateActive,
         `scope=${scope}, model=${model}, hideTool=${hideTool}`,
       );
-      assert.equal(latest("continue_agent"), continuation);
+      assert.equal(latest("resume_agent"), continuation);
       assert.ok(!("model" in continuation.parameters.properties));
       assert.ok(!("thinking" in continuation.parameters.properties));
       const projected = sections.agent_models;
@@ -393,7 +393,7 @@ const CHIEF_PROJECT_TOOLS = [
 const REGISTERED_ROLE_TOOLS = [
   "list_agents",
   "delegate_agent",
-  "continue_agent",
+  "resume_agent",
   "steer_agent",
   "interrupt_agent",
   "reply_agent",
@@ -425,7 +425,7 @@ const SEMANTIC_TOOL_CASES = [
     ["definition", "task"],
   ],
   [
-    "continue_agent",
+    "resume_agent",
     { session: "/tmp/session.jsonl", task: "work" },
     { session: "/tmp/session.jsonl", task: "work", agent: "x" },
     ["session", "task"],
@@ -652,7 +652,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
   const semanticNames = SEMANTIC_TOOL_CASES.map(([name]) => name);
   const portableStrings = [
     ["delegate_agent", ["definition", "task"]],
-    ["continue_agent", ["session", "task"]],
+    ["resume_agent", ["session", "task"]],
     ["steer_agent", ["message"]],
     ["interrupt_agent", ["message"]],
     ["reply_agent", ["message"]],
@@ -676,7 +676,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
   const labels: Record<string, string> = {
     list_agents: "list agents",
     delegate_agent: "delegate agent",
-    continue_agent: "continue agent",
+    resume_agent: "resume agent",
     steer_agent: "steer agent",
     interrupt_agent: "interrupt agent",
     reply_agent: "reply agent",
@@ -706,6 +706,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     "agent_list",
     "agent_delegate",
     "agent_continue",
+    "continue_agent",
     "agent_steer",
     "agent_interrupt",
     "agent_reply",
@@ -736,7 +737,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     "direct",
   );
   assert.equal(agentDelegate.exposure, "direct");
-  assert.equal(tools.get("continue_agent")?.exposure, "direct");
+  assert.equal(tools.get("resume_agent")?.exposure, "direct");
   assert.equal(rootDelegate.parameters.properties.retain, undefined);
   for (const retain of [true, false])
     assert.equal(
@@ -753,7 +754,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     assert.equal(tool.label, labels[name], name);
     assertPortableToolSchema(
       tool,
-      name === "delegate_agent" || name === "continue_agent"
+      name === "delegate_agent" || name === "resume_agent"
         ? "direct"
         : "direct",
     );
@@ -1161,7 +1162,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     lead.pi.getActiveTools().sort(),
     [
       "stop_agent",
-      "continue_agent",
+      "resume_agent",
       "delegate_agent",
       "inspect_agent",
       "interrupt_agent",
@@ -4648,7 +4649,7 @@ test("Lead empty allowlist hides fresh delegation and the Agent roster", async (
   try {
     await pi.events.get("session_start")![0](undefined, context);
     assert.ok(!pi.pi.getActiveTools().includes("delegate_agent"));
-    assert.ok(!pi.pi.getActiveTools().includes("continue_agent"));
+    assert.ok(!pi.pi.getActiveTools().includes("resume_agent"));
     const event: any = {
       systemPrompt: "base",
       systemPromptOptions: { sections: {}, contextFiles: [] },
@@ -5008,7 +5009,7 @@ test("replaced Lead strategy keeps its protected charter and coordination tools"
       charter,
       /a supervisor message does not transfer it to the child/,
     );
-    for (const name of ["delegate_agent", "continue_agent"]) {
+    for (const name of ["delegate_agent", "resume_agent"]) {
       assert.ok(pi.pi.getActiveTools().includes(name), name);
       const tool = pi.tools.find((candidate) => candidate.name === name)!;
       assert.match(
@@ -6360,7 +6361,7 @@ test("delegating agents receive their allowed roster and initialize their model 
   const sharedGuidance = agentListTool.promptGuidelines?.join(" ") ?? "";
   assert.match(
     sharedGuidance,
-    /prefer continue_agent if a known exact historical managed-Agent Pi session carries substantial context relevant to that task and remains eligible; otherwise use delegate_agent/,
+    /prefer resume_agent if a known exact historical managed-Agent Pi session carries substantial context relevant to that task and remains eligible; otherwise use delegate_agent/,
   );
   assert.match(
     sharedGuidance,
@@ -6381,7 +6382,7 @@ test("delegating agents receive their allowed roster and initialize their model 
   for (const toolName of [
     "list_agents",
     "delegate_agent",
-    "continue_agent",
+    "resume_agent",
     "steer_agent",
     "interrupt_agent",
     "reply_agent",

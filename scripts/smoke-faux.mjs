@@ -251,7 +251,7 @@ function supervisorAgentResult(messages) {
 
 function completedResultBody(message) {
   const match = text(message).match(
-    /status=completed\n\n(?:Result ref: [^\n]+\n\n)?(?:To continue this session, use continue_agent with session="[^"]+"\.\n\n)?([\s\S]+?)\n\nDelegation status:/,
+    /status=completed\n\n(?:Result ref: [^\n]+\n\n)?(?:To continue this session, use resume_agent with session="[^"]+"\.\n\n)?([\s\S]+?)\n\nDelegation status:/,
   );
   if (!match)
     throw new Error("Completed Agent result omitted its response body");
@@ -559,19 +559,19 @@ function continuationDecision(messages) {
     );
     if (!completedFirst?.includes("CONTINUATION_FIRST_DONE"))
       throw new Error("First continuation Agent result was not delivered");
-    const continued = correlatedCall(messages, "continue_agent");
+    const continued = correlatedCall(messages, "resume_agent");
     if (!continued)
-      return call("continue_agent", {
+      return call("resume_agent", {
         session: followup[1],
         task: "SMOKE_CONTINUATION_SECOND: use the exact package name from your previous successful package.json read; do not reread package.json; return the name followed by PI_HERDSMAN_CONTINUATION_SECOND.",
       });
     if (continued.call.arguments?.session !== followup[1])
       throw new Error(
-        "continue_agent did not target the exact saved session path",
+        "resume_agent did not target the exact saved session path",
       );
     const result = deliveredResult(
       messages,
-      "continue_agent",
+      "resume_agent",
       (content) =>
         content.startsWith(
           "Agent result · agent=smoke-continuation-implementer ·",
@@ -796,15 +796,15 @@ function agentCrashRecoveryDecision(model, context) {
         : closed.result?.details?.closed_assignment?.session_path;
       if (!session)
         throw new Error("Crash recovery omitted exact target session path");
-      const continued = correlatedCall(messages, "continue_agent");
+      const continued = correlatedCall(messages, "resume_agent");
       if (!continued)
-        return call("continue_agent", {
+        return call("resume_agent", {
           session,
           task: "SMOKE_CRASH_CONTINUE: return exactly PI_HERDSMAN_CRASH_RECOVERY_CONTINUED without replaying prior work.",
         });
       const handoff = deliveredResult(
         messages,
-        "continue_agent",
+        "resume_agent",
         (content) =>
           content.startsWith(
             "Agent result · agent=smoke-crash-target · definition=",

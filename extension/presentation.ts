@@ -3552,7 +3552,7 @@ function coordinationHeader(
         ? "list agents"
         : verb === "transcript"
           ? "read agent transcript"
-          : `${verb} agent`
+          : `${verb === "continue" ? "resume" : verb} agent`
       : tool === "staff"
         ? verb === "transcript"
           ? "read staff transcript"

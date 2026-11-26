@@ -3033,13 +3033,13 @@ test("continuation task parser correlates tool call, successful session result a
           {
             type: "toolCall",
             id: "other-call",
-            name: "continue_agent",
+            name: "resume_agent",
             arguments: { task: "wrong task" },
           },
           {
             type: "toolCall",
             id: "continue-call",
-            name: "continue_agent",
+            name: "resume_agent",
             arguments: { session: "/saved/child.jsonl", task },
           },
         ],
@@ -3051,7 +3051,7 @@ test("continuation task parser correlates tool call, successful session result a
       parentId: "call",
       message: {
         role: "toolResult",
-        toolName: "continue_agent",
+        toolName: "resume_agent",
         toolCallId: "continue-call",
         details: { ok: true, action: "continue", session_id: "child" },
       },
@@ -5030,7 +5030,7 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     resultRef = "result:fixture#1",
   ) => ({
     role: "user",
-    content: `Agent result · agent=${label} · definition=implementer · status=completed\n\nResult ref: ${resultRef}\n\nTo continue this session, use continue_agent with session="${resultRef}".\n\n${body}\n\nDelegation status: 0 active direct agents; 0 pending direct results; all direct assignments are resolved.`,
+    content: `Agent result · agent=${label} · definition=implementer · status=completed\n\nResult ref: ${resultRef}\n\nTo continue this session, use resume_agent with session="${resultRef}".\n\n${body}\n\nDelegation status: 0 active direct agents; 0 pending direct results; all direct assignments are resolved.`,
   });
   const rootPrompt =
     "Do not read package.json yourself. Delegate and return PI_HERDSMAN_SMOKE_OK pi-herdsman@0.25.1.";
@@ -5265,12 +5265,12 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     { role: "user", content: followup },
   ];
   const continueCall = decide("continuation", { messages: beforeContinue });
-  assert.equal(firstToolCall(continueCall).name, "continue_agent");
+  assert.equal(firstToolCall(continueCall).name, "resume_agent");
   assert.equal(firstToolCall(continueCall).arguments.session, savedPath);
   const continued = [
     ...beforeContinue,
-    call("continue_agent", firstToolCall(continueCall).arguments, "continue-1"),
-    result("continue_agent", "continue-1", { session_id: "saved-id" }),
+    call("resume_agent", firstToolCall(continueCall).arguments, "continue-1"),
+    result("resume_agent", "continue-1", { session_id: "saved-id" }),
     delivered(
       "smoke-continuation-implementer",
       "saved-id",
@@ -5574,7 +5574,7 @@ test("crash recovery faux performs only authorized stop or settled continuation"
       content: `PI_HERDSMAN_CRASH_RECOVERY_SETTLED_CONTINUE ${session}`,
     },
   ]);
-  assert.equal(firstToolCall(settled).name, "continue_agent");
+  assert.equal(firstToolCall(settled).name, "resume_agent");
   assert.equal(firstToolCall(settled).arguments.session, session);
   assert.equal(
     settled.content.some(
@@ -5614,12 +5614,12 @@ test("crash recovery faux performs only authorized stop or settled continuation"
     content: "PI_HERDSMAN_CRASH_RECOVERY_CONTINUE",
   };
   const resumed = decide([...closed, prompt]);
-  assert.equal(firstToolCall(resumed).name, "continue_agent");
+  assert.equal(firstToolCall(resumed).name, "resume_agent");
   assert.equal(firstToolCall(resumed).arguments.session, session);
   const call = firstToolCall(resumed);
   const continuationResult = {
     role: "toolResult",
-    toolName: "continue_agent",
+    toolName: "resume_agent",
     toolCallId: call.id,
     isError: false,
     details: { ok: true },
@@ -5636,7 +5636,7 @@ test("crash recovery faux performs only authorized stop or settled continuation"
   );
   assert.equal(
     pending.content.some(
-      (part) => part.type === "toolCall" && part.name === "continue_agent",
+      (part) => part.type === "toolCall" && part.name === "resume_agent",
     ),
     false,
   );
@@ -6314,7 +6314,7 @@ test("continuation first-generation stalls if completed child retires before obs
   };
   const delivered = {
     role: "user",
-    content: `Agent result · agent=smoke-continuation-implementer · definition=implementer · status=completed\n\nResult ref: result:fixture#1\n\nTo continue this session, use continue_agent with session="result:fixture#1".\n\n${completedChild.content}\n\nDelegation status: 0 active direct agents; 0 pending direct results; all direct assignments are resolved.`,
+    content: `Agent result · agent=smoke-continuation-implementer · definition=implementer · status=completed\n\nResult ref: result:fixture#1\n\nTo continue this session, use resume_agent with session="result:fixture#1".\n\n${completedChild.content}\n\nDelegation status: 0 active direct agents; 0 pending direct results; all direct assignments are resolved.`,
   };
   const answer = decide("continuation", {
     messages: [{ role: "user", content: prompt }, call, result, delivered],
@@ -7175,7 +7175,7 @@ test("active-stop accepts fast completion only with exact durable identity", () 
           {
             type: "toolCall",
             id: "tool",
-            name: "continue_agent",
+            name: "resume_agent",
             arguments: { session: identity.sessionPath, task },
           },
         ],
@@ -7187,7 +7187,7 @@ test("active-stop accepts fast completion only with exact durable identity", () 
       parentId: "call",
       message: {
         role: "toolResult",
-        toolName: "continue_agent",
+        toolName: "resume_agent",
         toolCallId: "tool",
         details: {
           ok: true,

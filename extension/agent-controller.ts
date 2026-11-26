@@ -1146,7 +1146,7 @@ function agentToolName(action: string): string {
     case "delegate":
       return "delegate_agent";
     case "continue":
-      return "continue_agent";
+      return "resume_agent";
     case "steer":
       return "steer_agent";
     case "interrupt":
@@ -1181,7 +1181,7 @@ export const AGENT_DELEGATION_GUIDANCE =
   "Keep work local when it is trivial, inseparable from work you must own, " +
   "otherwise unsuitable for an Agent, or delegation would add more coordination than value.";
 export const AGENT_HANDOFF_GUIDANCE =
-  "When delegating a bounded task, prefer continue_agent if a known exact historical " +
+  "When delegating a bounded task, prefer resume_agent if a known exact historical " +
   "managed-Agent Pi session carries substantial context relevant to that task " +
   "and remains eligible; otherwise use delegate_agent to start fresh from a definition. " +
   "When a result ref is shown, prefer it to the exact session UUID or path. " +
@@ -1754,9 +1754,11 @@ function acceptedAssignmentEvidence(
         message.details?.ok !== true
       )
         return [];
+      // These are recorded tool names, not callable aliases.
       const actions: Record<string, "delegate" | "continue"> = {
         delegate_agent: "delegate",
         agent_delegate: "delegate",
+        resume_agent: "continue",
         continue_agent: "continue",
         agent_continue: "continue",
       };
@@ -8216,11 +8218,11 @@ export function createAgentController(
           ...(semanticResult ? [`Result ref: ${semanticResult.ref}`] : []),
           ...(usableSemanticResult
             ? [
-                `To continue this session, use continue_agent with session="${usableSemanticResult.ref}".`,
+                `To continue this session, use resume_agent with session="${usableSemanticResult.ref}".`,
               ]
             : exactSelector
               ? [
-                  `To continue this session, use continue_agent with session="${exactSelector}".`,
+                  `To continue this session, use resume_agent with session="${exactSelector}".`,
                 ]
               : []),
           ...(forwardedResultBindings.length
@@ -11128,8 +11130,8 @@ export function createAgentController(
     };
     pi.registerTool({
       ...agentTool,
-      name: "continue_agent",
-      label: "continue agent",
+      name: "resume_agent",
+      label: "resume agent",
       exposure: "direct",
       description:
         "Start one bounded assignment from an eligible historical managed-Agent Pi session selected by a directly owned result ref, exact path, or UUID. Retired sessions cannot be continued while context retirement is enabled.",
@@ -11463,7 +11465,7 @@ export function createAgentController(
           return ["list"];
         case "delegate_agent":
           return ["delegate"];
-        case "continue_agent":
+        case "resume_agent":
           return ["continue"];
         case "steer_agent":
           return ["steer"];

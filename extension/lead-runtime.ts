@@ -2248,7 +2248,7 @@ export function registerLeadRuntime(
   const ownedAgentManagementTools = (ctx: ExtensionContext): string[] =>
     hasOwnedRootAgents(ctx)
       ? AGENT_COORDINATION_TOOLS.filter(
-          (name) => name !== "delegate_agent" && name !== "continue_agent",
+          (name) => name !== "delegate_agent" && name !== "resume_agent",
         )
       : [];
   const restrictLeadAgentTools = (
@@ -2261,7 +2261,7 @@ export function registerLeadRuntime(
     return tools.filter((name) => {
       if (!(AGENT_COORDINATION_TOOLS as readonly string[]).includes(name))
         return true;
-      if (name === "delegate_agent" || name === "continue_agent")
+      if (name === "delegate_agent" || name === "resume_agent")
         return mayDelegate;
       return mayDelegate || hasOwned;
     });
@@ -2271,7 +2271,7 @@ export function registerLeadRuntime(
     definition: AgentDefinition,
   ): string[] => {
     const discovery = definition.frontmatter.agents?.length
-      ? ["list_agents", "delegate_agent", "continue_agent"]
+      ? ["list_agents", "delegate_agent", "resume_agent"]
       : [];
     const management = ownedAgentManagementTools(ctx);
     return [...new Set([...discovery, ...management])];
@@ -2284,7 +2284,7 @@ export function registerLeadRuntime(
     if (!profile) return undefined;
     const permitted = new Set(
       supervisoryAgentTools(ctx, profile.definition).filter((name) => {
-        if (name !== "delegate_agent" && name !== "continue_agent") return true;
+        if (name !== "delegate_agent" && name !== "resume_agent") return true;
         const policy = rootDelegationPolicy();
         return policy === "all" || policy.size > 0;
       }),
