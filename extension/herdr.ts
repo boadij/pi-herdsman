@@ -827,7 +827,7 @@ export function herdrAgentAlias(
   return alias(workspaceId, label, runId);
 }
 
-function canonicalCwd(value: string): string {
+export function canonicalCwd(value: string): string {
   const resolved = resolve(value);
   try {
     return realpathSync.native(resolved);

@@ -74,7 +74,13 @@ test.afterEach(() => {
 const definition = (
   name: string,
   frontmatter: AgentDefinition["frontmatter"] = {},
-): AgentDefinition => ({ name, path: `/${name}.md`, frontmatter, body: "" });
+): AgentDefinition => ({
+  category: "agent",
+  name,
+  path: `/${name}.md`,
+  frontmatter,
+  body: "",
+});
 
 const managedScope = (depth: number) =>
   ({

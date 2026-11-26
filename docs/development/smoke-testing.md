@@ -492,7 +492,7 @@ current choice remains marked when moving the cursor. For disposable settings,
 verify `Use default` removes an override even if it already equals the default. `Lead mode` shows the current ordinary mode and opens the
 `flexible` / `orchestrate` selector. `/lead` opens that selector directly, while
 `/lead-flexible` and `/lead-orchestrate` select directly through that control.
-For a Managed Lead, `/lead` shows managed with `managed-lead` help and no ordinary
+For a Managed Lead, `/lead` shows managed orchestration with no ordinary
 mode choices. Verify Managed Leads cannot select ordinary modes or activate
 Manager/Chief.
 
@@ -536,9 +536,8 @@ inheritance; verify cancellation leaves policy unchanged.
 
 Verify the native `Agents & Coordinators` menu shows:
 
-- separate `Agent definitions` and `Coordinator profiles` lists, with reserved
-  `flexible-lead`, `orchestrator-lead`, `managed-lead`, `manager`, and `chief`
-  in that canonical role order;
+- separate `Agent definitions` and `Coordinator profiles` lists, with
+  Coordinator profiles distinguished by category;
 - contributing source words `bundled`, `global`, `project`, and `private repo`, including
   combinations where multiple sources contribute;
 - unpadded definition-name labels, with model, thinking, and provenance as
@@ -547,9 +546,9 @@ Verify the native `Agents & Coordinators` menu shows:
 - `Remove local override` for model and thinking;
 - selected-row contextual help and width-safe layout in narrow panes.
 
-All five reserved Coordinator profiles remain non-Agent. The Lead, Manager, and
-Chief runtime profiles have Details only; `managed-lead` has Model, Thinking,
-and Details, but no Enabled action. Runtime-profile definitions reject
+Coordinator profiles are not Agents. Runtime profiles have Details only;
+assigned Lead launch profiles have Model, Thinking, and Details, but no
+Enabled action. Runtime-profile definitions reject
 launch-only fields such as model, thinking, extensions, skills, and context
 inheritance. `/manager-refresh` or `/chief-refresh` refreshes the active profile
 after the current turn becomes idle.

@@ -10,8 +10,12 @@ import {
   type LeadCommandBaseHost,
 } from "./lead/commands.ts";
 import {
+  COORDINATOR_DEFINITION_ENTRY,
+  EXPECTED_ASSIGNED_LEAD_DEFINITION_ENV,
+  readCoordinatorDefinitionBinding,
   readSessionKind,
   sessionLeadRoleState,
+  verifyAssignedLeadDefinition,
   type SessionKindEntry,
 } from "./supervision.ts";
 import type {
@@ -1345,6 +1349,7 @@ export function createLeadSessionStartRuntime(host: {
   initializeSessionKind?(
     ctx: ExtensionContext,
     signal: AbortSignal,
+    freshSession: boolean,
   ): Promise<void>;
   afterManagedSessionIdentityInitialized?(): void;
   verifyManagedLeadModelRestoration?(
@@ -1447,7 +1452,7 @@ export function createLeadSessionStartRuntime(host: {
       if (isRoot()) {
         const sessionId = ctx.sessionManager.getSessionId();
         try {
-          await host.initializeSessionKind?.(ctx, sessionSignal);
+          await host.initializeSessionKind?.(ctx, sessionSignal, freshSession);
         } catch (error) {
           malformedRole = true;
           await host.failClosedRole(ctx, error);
@@ -1995,6 +2000,7 @@ export function registerLeadRuntime(
     | { mode: LeadExecutionMode; valid: false; managed: boolean }
     | undefined;
   let sessionKind: SessionKindEntry | undefined;
+  let assignedLeadDefinitionName = MANAGED_LEAD_DEFINITION_NAME;
   let verifiedManagedAssignment:
     { sessionId: string; assignment: ProjectAssignment } | undefined;
   let managedLifecycle: "assigned" | "unavailable" | "retired" = "unavailable";
@@ -2020,7 +2026,7 @@ export function registerLeadRuntime(
   ): SupervisoryProfile => {
     const name =
       role === "manager" ? MANAGER_DEFINITION_NAME : CHIEF_DEFINITION_NAME;
-    const definition = options.commandHost.discoverRoleDefinition(name, {
+    const definition = options.commandHost.resolveDefinition(role, name, {
       ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
       onWarning: (message) => notifyDefinitionWarning(ctx, message),
     });
@@ -2047,6 +2053,7 @@ export function registerLeadRuntime(
   ): SupervisoryProfile => ({
     role,
     definition: {
+      category: role,
       name:
         role === "manager" ? MANAGER_DEFINITION_NAME : CHIEF_DEFINITION_NAME,
       path: "",
@@ -4070,15 +4077,19 @@ export function registerLeadRuntime(
   const initializeSessionKind = async (
     ctx: ExtensionContext,
     signal: AbortSignal,
+    freshSession: boolean,
   ): Promise<void> => {
     const sessionId = ctx.sessionManager.getSessionId();
     assignmentVerificationGeneration++;
-    const identity = readSessionKind(
-      ctx.sessionManager.getEntries(),
-      sessionId,
-    );
     // Keep the runtime unavailable until assignment evidence agrees with identity.
     sessionKind = undefined;
+    assignedLeadDefinitionName = MANAGED_LEAD_DEFINITION_NAME;
+    const entries = ctx.sessionManager.getEntries();
+    const identity = readSessionKind(entries, sessionId);
+    const binding = readCoordinatorDefinitionBinding(entries, sessionId);
+    const expected = process.env[EXPECTED_ASSIGNED_LEAD_DEFINITION_ENV];
+    if (identity?.kind === "managed" && binding?.category === "lead")
+      assignedLeadDefinitionName = binding.name;
     const exactAssignments = globalProjectAssignmentSnapshot();
     const socket = process.env.HERDR_SOCKET_PATH;
     const matches = exactAssignments.get(sessionId) ?? [];
@@ -4100,7 +4111,7 @@ export function registerLeadRuntime(
         scope = await roleTransitions.currentWorktreeScope(ctx);
         if (signal.aborted) return;
       } catch (error) {
-        if (identity?.kind !== "managed") throw error;
+        if (identity?.kind !== "managed" || expected) throw error;
         // Keep a validated permanent identity visible, but without scope evidence
         // it grants no project, profile, role, or fresh-delegation authority.
         sessionKind = identity;
@@ -4135,7 +4146,47 @@ export function registerLeadRuntime(
             branch: assignment.branch,
           }
         : { version: 1, sessionId, kind: "ordinary" });
+    if (expected) {
+      const launch = JSON.parse(expected);
+      if (
+        !assignment ||
+        launch?.sessionId !== sessionId ||
+        launch.name !==
+          (assignment.definition ?? MANAGED_LEAD_DEFINITION_NAME) ||
+        launch.projectTrusted !== ctx.isProjectTrusted()
+      )
+        throw new Error(
+          "Assigned Lead startup definition or project trust did not match the verified launch",
+        );
+    }
+    if (assignment) {
+      const name = assignment.definition ?? MANAGED_LEAD_DEFINITION_NAME;
+      const path = ctx.sessionManager.getSessionFile();
+      const established =
+        !freshSession ||
+        !!identity ||
+        (!!path && !!lstatSync(path, { throwIfNoEntry: false }));
+      verifyAssignedLeadDefinition(binding, name, established);
+      if (!binding && !established && assignment.definition !== undefined) {
+        pi.appendEntry(COORDINATOR_DEFINITION_ENTRY, {
+          version: 1,
+          sessionId,
+          category: "lead",
+          name,
+        });
+        verifyAssignedLeadDefinition(
+          readCoordinatorDefinitionBinding(
+            ctx.sessionManager.getEntries(),
+            sessionId,
+          ),
+          name,
+          true,
+        );
+      }
+      assignedLeadDefinitionName = name;
+    }
     if (!identity) pi.appendEntry("pi-herdsman-session-kind", resolved);
+    if (expected) delete process.env[EXPECTED_ASSIGNED_LEAD_DEFINITION_ENV];
     sessionKind = resolved;
     if (
       !identity &&
@@ -4203,7 +4254,9 @@ export function registerLeadRuntime(
       if (validScope && assignment) {
         if (
           assignment.repoKey !== identity.repoKey ||
-          assignment.branch !== identity.branch
+          assignment.branch !== identity.branch ||
+          (assignment.definition ?? MANAGED_LEAD_DEFINITION_NAME) !==
+            assignedLeadDefinitionName
         )
           throw new Error(
             "Project assignment conflicts with permanent session identity",
@@ -4350,8 +4403,11 @@ export function registerLeadRuntime(
         ? FLEXIBLE_LEAD_DEFINITION_NAME
         : ORCHESTRATOR_LEAD_DEFINITION_NAME;
     const definition = definitions
-      ? definitions.find((candidate) => candidate.name === name)
-      : options.commandHost.discoverRoleDefinition(name, {
+      ? definitions.find(
+          (candidate) =>
+            candidate.category === "lead" && candidate.name === name,
+        )
+      : options.commandHost.resolveDefinition("lead", name, {
           ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
           onWarning: (message) => notifyDefinitionWarning(ctx, message),
         });
@@ -4374,7 +4430,8 @@ export function registerLeadRuntime(
     };
   };
   const managedLeadDefinition = (ctx: ExtensionContext): AgentDefinition =>
-    options.commandHost.discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME, {
+    options.commandHost.resolveDefinition("lead", assignedLeadDefinitionName, {
+      usage: "assigned-lead",
       ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
       onWarning: (message) => notifyDefinitionWarning(ctx, message),
     });

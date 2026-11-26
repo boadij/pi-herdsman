@@ -37,6 +37,7 @@ export const nativeSessions = new Map<
     entries?: unknown[];
     contextEntries?: unknown[];
     cwd?: string;
+    sessionDir?: string;
     sessionName?: string;
   }
 >();
@@ -99,7 +100,7 @@ const fakeThemeColors = {
   bashMode: "",
 };
 const fakeTheme = new PiTheme(fakeThemeColors, fakeThemeColors, "truecolor");
-const { SessionManager: nativeSessionManager } =
+const { SessionManager: nativeSessionManager, SettingsManager } =
   await import("@earendil-works/pi-coding-agent");
 export let sessionOpenError: unknown;
 export let failNextMailboxWrite = false;
@@ -422,6 +423,7 @@ mock.module("@earendil-works/pi-coding-agent", {
     CURRENT_SESSION_VERSION: nativeCurrentSessionVersion,
     getAgentDir: () => PI_AGENT_ROOT,
     ProjectTrustStore: NativeProjectTrustStore,
+    SettingsManager,
     parseFrontmatter: nativeParseFrontmatter,
     parseSessionEntries: nativeParseSessionEntries,
     loadProjectContextFiles: ({ cwd }: { cwd: string }) => {
@@ -429,11 +431,17 @@ mock.module("@earendil-works/pi-coding-agent", {
       return [];
     },
     SessionManager: {
+      create: (...args: Parameters<typeof nativeSessionManager.create>) =>
+        nativeSessionManager.create(...args),
       inMemory: (...args: any[]) =>
         (nativeSessionManager as any).inMemory(...args),
-      findById: (cwd: string, id: string) =>
+      findById: (cwd: string, id: string, sessionDir?: string) =>
         [...nativeSessions.values()].find(
-          (session) => session.id === id && session.cwd === cwd,
+          (session) =>
+            session.id === id &&
+            session.cwd === cwd &&
+            (session.sessionDir === undefined ||
+              session.sessionDir === sessionDir),
         )?.path,
       listAll: async () =>
         [...nativeSessions.values()].map((session) => ({

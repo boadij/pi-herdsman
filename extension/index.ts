@@ -58,9 +58,8 @@ import {
   agentDefinitionEnabled,
   agentDefinitionMetadata,
   contextAgentDefinitions,
-  discoverRoleDefinition,
-  inspectAgentDefinition,
-  inspectRoleDefinition,
+  resolveDefinition,
+  inspectDefinition,
   expandAgentBodyFiles,
   expandDefinitionBodyFragments,
   expandDefinitionBodyFragmentsWithSources,
@@ -69,6 +68,7 @@ import {
   VALID_THINKING_LEVELS,
   type AgentDefinition,
 } from "./agent-definitions.ts";
+import { DEFINITION_NAME_PATTERN } from "./definition-identity.ts";
 import { sessionAgentModelCatalog } from "./agent-model-overrides.ts";
 import {
   captureStartupDiagnostic,
@@ -623,7 +623,7 @@ type TestProjectAssignmentLockHooks = {
     request: import("./mailbox.ts").RequestRecord,
   ) => undefined;
   afterManagedSessionIdentityInitialized?: () => void;
-  managedLeadDefinition?: () => AgentDefinition;
+  managedLeadDefinition?: (name: string) => AgentDefinition;
   removeProjectMessage?: typeof removeProjectMessage;
 };
 
@@ -1169,6 +1169,13 @@ function registerExtensionImpl(
           description: "Base ref used when Herdsman creates a new worktree.",
         }),
       ),
+      definition: Type.Optional(
+        Type.String({
+          pattern: DEFINITION_NAME_PATTERN.source,
+          description:
+            "Assigned Lead launch definition. Defaults to managed-lead.",
+        }),
+      ),
       files: FILES_SCHEMA,
     },
     { additionalProperties: false },
@@ -1185,6 +1192,13 @@ function registerExtensionImpl(
   const staffResumeParameters = Type.Object(
     {
       ...staffBranchParameters.properties,
+      definition: Type.Optional(
+        Type.String({
+          pattern: DEFINITION_NAME_PATTERN.source,
+          description:
+            "Assert the saved assigned Lead definition. Omit to use the saved selection.",
+        }),
+      ),
       message: Type.String({
         minLength: 1,
         description:
@@ -1856,13 +1870,14 @@ function registerExtensionImpl(
       readProjectOverrides,
       updateProjectOverride,
       contextAgentDefinitions,
-      discoverRoleDefinition: (
-        name: Parameters<typeof discoverRoleDefinition>[0],
-        options?: Parameters<typeof discoverRoleDefinition>[1],
+      resolveDefinition: (
+        ...[category, name, options]: Parameters<typeof resolveDefinition>
       ) =>
-        name === "managed-lead" && lockHooks?.managedLeadDefinition
-          ? lockHooks.managedLeadDefinition()
-          : discoverRoleDefinition(name, options),
+        category === "lead" &&
+        options?.usage === "assigned-lead" &&
+        lockHooks?.managedLeadDefinition
+          ? lockHooks.managedLeadDefinition(name)
+          : resolveDefinition(category, name, options),
       getSystemPromptOptions: (ctx: ExtensionCommandContext) =>
         ctx.getSystemPromptOptions(),
       chiefSystemPrompt,
@@ -1875,8 +1890,7 @@ function registerExtensionImpl(
       ) => leadRuntimes.supervisoryProfileBody(ctx, role),
       executionPrompt: () => leadRuntimes.executionPrompt(),
       leadExecutionDefinition: () => leadRuntimes.leadExecutionDefinition(),
-      inspectAgentDefinition,
-      inspectRoleDefinition,
+      inspectDefinition,
       expandDefinitionBodyFragments,
       expandDefinitionBodyFragmentsWithSources,
       expandAgentBodyFiles,
@@ -2394,6 +2408,7 @@ function registerExtensionImpl(
               {
                 action: "resume",
                 branch: p.branch,
+                definition: p.definition,
                 message: p.message,
                 files: p.files,
                 retain: p.retain,

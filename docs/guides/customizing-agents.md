@@ -9,30 +9,10 @@ are user-wide defaults; a trusted project can specialize even explicit global
 values, including Agent enablement and capability allowlists. Herdsman-owned
 authority and required coordination tools remain protected.
 
-Coordinator profiles live under `<project>/.pi/coordinators/`,
-`<agentDir>/coordinators/`, and the optional
-`<git-common-dir>/pi-herdsman/coordinators/`, not the Agent directories. Find the
-common directory with `git rev-parse --path-format=absolute --git-common-dir`;
-linked worktrees share it. The private layer is local to one clone, and
-referenced skills or scripts need their own accessible paths. Project
-profiles require project trust; the global agent directory is normally
-`~/.pi/agent`.
-
-If profiles remain in legacy directories, Coordinator discovery reports a
-migration error rather than loading either location as a fallback. Move the
-files with their contents intact and move referenced relative prompt assets
-while preserving their relative paths. Update symlink-managed definitions to
-use the canonical paths:
-
-```text
-<agentDir>/pi-herdsman/roles/       -> <agentDir>/coordinators/
-<project>/.pi/pi-herdsman/roles/    -> <project>/.pi/coordinators/
-<git-common-dir>/pi-herdsman/roles/ -> <git-common-dir>/pi-herdsman/coordinators/
-```
-
-No user files are automatically moved or deleted. The legacy-path check applies
-only to Coordinator discovery at global, trusted-project, and resolved private
-repository scopes; Agent discovery is independent.
+Coordinator profiles use `coordinators/leads/` and `coordinators/managers/`
+beneath the applicable definition roots. Chief uses `coordinators/chief.md`
+and accepts only a global override. See the
+[canonical paths and scope rules](../reference/agent-definition-schema.md#sources-and-precedence).
 
 This allows local customization while continuing to inherit future bundled
 changes for omitted fields.
@@ -53,7 +33,7 @@ inheritance, or permission policy are not supported.
 The bundled `flexible-lead` preserves Pi's ordinary tool baseline and supports
 both direct and delegated work. The bundled `orchestrator-lead` uses an
 explicit tool allowlist and delegates inspection and execution to Agents by
-default. See the [Coordinator tool defaults](../reference/agent-definition-schema.md#reserved-coordinator-definitions)
+default. See the [Coordinator tool defaults](../reference/agent-definition-schema.md#coordinator-definitions)
 for the bundled selections.
 For example, an overlay can opt into direct tools:
 
@@ -98,7 +78,7 @@ Ordinary Leads persist their execution mode separately from role/authority
 state and retain their ordinary tool baseline while a restrictive profile is
 active. The user-wide `defaultLeadExecution` setting seeds future ordinary
 sessions only; it does not replace a saved session choice. Assigned project
-Leads use `managed-lead` instead.
+Leads use their assigned launch profile instead.
 
 ## Manager and Chief profiles
 
@@ -140,8 +120,8 @@ authority nor access to Agents owned by supervised Leads. Removing the
 allowlist prevents new delegation but does not abandon Agents already owned by
 that exact session; their applicable ownership and recovery controls remain.
 
-Manager accepts trusted project overlays at `<project>/.pi/coordinators/manager.md`
-and global overlays at `<agentDir>/coordinators/manager.md`.
+Manager accepts trusted project overlays at `<project>/.pi/coordinators/managers/manager.md`
+and global overlays at `<agentDir>/coordinators/managers/manager.md`.
 Chief accepts only global overlays because it
 is workspace-neutral; a project-local `chief.md` is an error. Both resolve
 when the role activates or is restored. `/manager-refresh` or `/chief-refresh`
@@ -164,13 +144,17 @@ Use the read tool when a supervised decision requires checking a local artifact.
 
 ## Managed project Lead
 
-`managed-lead` is the reserved definition for Manager-created/assigned project
-Leads. Every assigned Lead uses it, independently of the ordinary execution
-mode. It follows the Coordinator precedence described above, but it is launch
-configuration rather than an Agent: it is excluded from the Agent roster
-and cannot be delegated to. It appears under `Coordinators`, with
-Model, Thinking, and Details settings but no `Enabled` action. These settings
-do not add it to Agent discovery or delegation.
+Manager-created project Leads use `managed-lead` by default. To select a
+different launch policy, define a named Lead profile in `coordinators/leads/`
+at an applicable scope and pass its frontmatter name as `definition` to
+[`delegate_work`](../reference/staff.md#delegate_work). For example, a profile
+with `name: implementation-lead` can live in
+`<agentDir>/coordinators/leads/implementation-lead.md`. A new name does not
+inherit the bundled `managed-lead` settings. Ordinary Lead execution
+preferences do not affect this selection.
+
+Assigned Lead profiles appear under Coordinators with Model, Thinking, and
+Details, but no Enabled action. They are not Agents.
 
 The bundled default selects Code Mode alongside mandatory Herdsman
 coordination tools. Inspection and execution are delegated to managed Agents
@@ -198,9 +182,9 @@ bodyMode: append
 Also require an independent reviewer before accepting implementation output.
 ```
 
-A project override lives at `<project>/.pi/coordinators/managed-lead.md` and is
+A project override lives at `<project>/.pi/coordinators/leads/managed-lead.md` and is
 resolved from the delegated worktree when the project is trusted. The global
-override lives at `<agentDir>/coordinators/managed-lead.md`.
+override lives at `<agentDir>/coordinators/leads/managed-lead.md`.
 
 `managed-lead` is an independent full launch definition, not an extension of
 either ordinary runtime profile. For example, a minimal body customization is:
@@ -214,7 +198,7 @@ bodyMode: append
 Include the team's branch-validation checklist in the final handoff.
 ```
 
-`managed-lead` does not support `enabled` or `permission`. For example, add
+Assigned Lead profiles do not support `enabled` or `permission`. For example, add
 `agents: [scout, reviewer]` to its overlay to restrict direct delegation;
 omitting it permits all available Agents, while `agents: []` denies fresh
 delegation. The managed runtime enforces this policy independently of Pi's
@@ -351,14 +335,14 @@ prompt.
 
 Bundled Herdsman definitions use `append` so their specialization does not
 replace Pi's normal prompt or runtime/tool guidance. Ordinary custom definitions
-may explicitly choose `replace`; the reserved `managed-lead` role is
-append-only and rejects `replace`. A custom replacement prompt does not
+may explicitly choose `replace`; assigned Lead launch profiles are
+append-only. A custom replacement prompt does not
 automatically preserve Pi's normal system-prompt rules or tool guidelines.
 
 Managed agents additionally receive shared herdr agent guidance at launch,
 including the `notify_owner` and `await_owner` contracts. This shared guidance is infrastructure and
 is not copied into every bundled role body. Managed project Leads instead use
-the effective `managed-lead` body plus the ordinary Lead runtime charter and
+the effective assigned Lead profile body plus the ordinary Lead runtime charter and
 dynamic project coordination context.
 
 ## Add local body files
@@ -478,14 +462,13 @@ Lead Pi sessions with UI can use:
 ```
 
 The native `Agents & Coordinators` menu opens an `Agents` or `Coordinators`
-list. Coordinators appear in canonical order: `flexible-lead`,
-`orchestrator-lead`, `managed-lead`, `manager`, and `chief`. Each definition
+list. Coordinator profiles are distinguished by category. Each definition
 identifies its contributing sources as `bundled`, `global`, `project`, and/or
 `private repo`. Select a definition to open:
 
 ```text
 flexible-lead / orchestrator-lead / manager / chief: Details…
-managed-lead: Model / Thinking / Details…
+assigned Lead launch profile: Model / Thinking / Details…
 ordinary Agent: Model / Thinking / Enabled / Details…
 ```
 

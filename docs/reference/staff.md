@@ -232,7 +232,7 @@ currently executing; `message_staff` does not perform lifecycle recovery.
 ## `delegate_work`
 
 Manager only. Start new project work with a required `task` and optional
-`branch`, `base`, and `files`:
+`branch`, `base`, `files`, and `definition`:
 
 ```json
 { "task": "Improve Agent selection guidance", "branch": "feat/agent-selection" }
@@ -241,6 +241,12 @@ Manager only. Start new project work with a required `task` and optional
 For new work, prefer a concise, task-specific branch following repository
 conventions without exposing sensitive details. `branch` remains optional;
 Herdsman generates one when omitted.
+
+`definition` selects an assigned Lead launch profile by name. Omit it to use
+`managed-lead`. Named Lead profiles use the
+[Coordinator definition paths](agent-definition-schema.md#sources-and-precedence).
+The ordinary Lead defaults, `flexible-lead` and `orchestrator-lead`, cannot be
+used for assigned work.
 
 An existing assignment on that branch is rejected; use `resume_work` to
 continue it. An unoccupied existing Herdr worktree may still be reused for new
@@ -301,6 +307,12 @@ immediate handoff. If retention succeeds but message preparation, enqueue, or
 recovery later fails, the result reports confirmed retention separately from
 whether the message was queued or the Lead recovered. `message_queued` means
 durable enqueue acceptance, not delivery or acknowledgment.
+
+Resume restores the saved profile selection. An optional `definition` is an
+assertion, not a switch: it must match the saved name. A mismatch is rejected
+before adding evidence or queueing the instruction. Recovery of an established
+named session fails if its exact Pi session binding is missing or conflicts
+with the assignment.
 
 The assignment must already exist; resume does not create or replace it. The
 message adds direction within the assignment without changing its saved task.

@@ -188,8 +188,8 @@ Ordinary usage retains its owned-session warning.
 ## `/herdsman-definitions`
 
 Opens the native `Agents & Coordinators` category menu with `Agent definitions` and
-`Coordinator profiles`. Each category lists effective definitions; reserved profiles
-appear in their canonical order. Project definitions are included when Pi
+`Coordinator profiles`. Coordinator definitions are distinguished by category.
+Project definitions are included when Pi
 considers the project trusted. Each definition shows contributing `bundled`,
 `global`, `project`, and/or `private repo` sources. Settings default to the
 most specific existing editable source (private repository, project, then
@@ -198,12 +198,12 @@ sources exist, `Edit scope` lets you choose among them. Project edits affect
 the current worktree and may be included in a Git commit; private edits are
 shared by trusted linked worktrees in the same clone.
 
-All five reserved Coordinator profiles are not Agents and remain excluded as
+Coordinator profiles are not Agents and remain excluded as
 delegation targets. Manager/Chief profiles may nevertheless list ordinary
 Agent definitions in `agents` to authorize their own direct delegation.
 Runtime profiles support `Details` only;
-`managed-lead` supports `Model`, `Thinking`, and `Details`, but has no `Enabled`
-action. Use `/manager-refresh` or `/chief-refresh` to validate and apply the
+assigned Lead launch profiles support `Model`, `Thinking`, and `Details`, but
+have no `Enabled` action. Use `/manager-refresh` or `/chief-refresh` to validate and apply the
 active role's definition. Definition files are not watched while a profile is
 active.
 
@@ -393,7 +393,7 @@ Manager definition after the current turn becomes idle; a failed refresh keeps
 the previous profile. Refresh requires active Manager mode.
 Manager definitions accept trusted project and global overlays; omitted fields
 inherit from lower-precedence definitions. See the
-[Agent-definition schema](agent-definition-schema.md#reserved-coordinator-definitions)
+[Agent-definition schema](agent-definition-schema.md#coordinator-definitions)
 for the current ordinary-tool defaults and override behavior.
 
 Leaving Manager restores the session's ordinary Lead tool baseline and selected
@@ -420,8 +420,8 @@ reported separately from checkout removal. Manager staff reports include
 eligible live Leads in its verified worktree group; exact current assignments
 grant project execution and lifecycle authority, not direct supervision.
 Project assignments survive Manager replacement and manual
-continuation of the exact assigned Pi session. `managed-lead` is launch policy,
-not authority. Successful Herdr worktree removal or verified checkout absence
+continuation of the exact assigned Pi session. Profile selection is launch
+policy, not authority. Successful Herdr worktree removal or verified checkout absence
 retires an assignment; failed or ambiguous inventory preserves it. A retired
 assignment cannot be resumed, though new work may use the remaining Git branch.
 

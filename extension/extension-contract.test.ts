@@ -4639,7 +4639,7 @@ test("malformed definitions do not abort ordinary lead startup", async () => {
 
 test("Lead empty allowlist hides fresh delegation and the Agent roster", async () => {
   setLeadEnvironment();
-  const roleDirectory = join(PI_AGENT_ROOT, "coordinators");
+  const roleDirectory = join(PI_AGENT_ROOT, "coordinators", "leads");
   realFs.mkdirSync(roleDirectory, { recursive: true });
   const role = join(roleDirectory, "flexible-lead.md");
   writeFileSync(role, "---\nname: flexible-lead\nagents: []\n---\n");
@@ -4703,7 +4703,7 @@ test("ordinary Lead exposes only allowlisted Agents and initializes its model ca
     tmpdir(),
     `catalog-${randomUUID()}.sock`,
   );
-  const roleDirectory = join(PI_AGENT_ROOT, "coordinators");
+  const roleDirectory = join(PI_AGENT_ROOT, "coordinators", "leads");
   realFs.mkdirSync(roleDirectory, { recursive: true });
   const role = join(roleDirectory, "flexible-lead.md");
   writeFileSync(role, "---\nname: flexible-lead\nagents: [agent]\n---\n");
@@ -4742,7 +4742,7 @@ test("ordinary Lead exposes only allowlisted Agents and initializes its model ca
 
 test("role discovery failure denies the Lead Agent roster", async () => {
   setLeadEnvironment();
-  const roleDirectory = join(PI_AGENT_ROOT, "coordinators");
+  const roleDirectory = join(PI_AGENT_ROOT, "coordinators", "leads");
   realFs.mkdirSync(roleDirectory, { recursive: true });
   const malformedRole = join(roleDirectory, "malformed-session-role.md");
   writeFileSync(
@@ -4913,10 +4913,15 @@ test("persisted Chief projects intrinsic skill loading only for a valid profile"
 
 test("replaced Lead strategy keeps its protected charter and coordination tools", async () => {
   setLeadEnvironment();
-  realFs.mkdirSync(join(PI_AGENT_ROOT, "coordinators"), {
+  realFs.mkdirSync(join(PI_AGENT_ROOT, "coordinators", "leads"), {
     recursive: true,
   });
-  const overlay = join(PI_AGENT_ROOT, "coordinators", "orchestrator-lead.md");
+  const overlay = join(
+    PI_AGENT_ROOT,
+    "coordinators",
+    "leads",
+    "orchestrator-lead.md",
+  );
   process.env.HERDR_SOCKET_PATH = join(
     tmpdir(),
     `lead-contract-${randomUUID()}.sock`,
@@ -5209,7 +5214,7 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
 
 test("managed Lead prompt keeps protected authority under a replacement overlay", async () => {
   setLeadEnvironment();
-  const roleDirectory = join(PI_AGENT_ROOT, "coordinators");
+  const roleDirectory = join(PI_AGENT_ROOT, "coordinators", "leads");
   realFs.mkdirSync(roleDirectory, { recursive: true });
   const role = join(roleDirectory, "managed-lead.md");
   const previousRole = realFs.existsSync(role)
@@ -5602,7 +5607,7 @@ test("native managed-Agent restore quarantines malformed and conflicting exact-s
 
 test("managed Lead prompt keeps the managed charter with an assigned session", async () => {
   setLeadEnvironment();
-  const roleDirectory = join(PI_AGENT_ROOT, "coordinators");
+  const roleDirectory = join(PI_AGENT_ROOT, "coordinators", "leads");
   realFs.mkdirSync(roleDirectory, { recursive: true });
   const role = join(roleDirectory, "managed-lead.md");
   writeFileSync(
@@ -6469,7 +6474,7 @@ test("delegating agents receive their allowed roster and initialize their model 
 
 test("Manager disabled allowlist targets do not block other Agent delegation", async () => {
   setLeadEnvironment();
-  const roleDirectory = join(PI_AGENT_ROOT, "coordinators");
+  const roleDirectory = join(PI_AGENT_ROOT, "coordinators", "managers");
   realFs.mkdirSync(roleDirectory, { recursive: true });
   const managerProfile = join(roleDirectory, "manager.md");
   const priorManagerProfile = realFs.existsSync(managerProfile)
@@ -7919,6 +7924,7 @@ test("Managed Lead definition-resolution failure with an exact assignment denies
   setLeadEnvironment();
   const cwd = realFs.mkdtempSync(join(tmpdir(), "managed-invalid-profile-"));
   const sessionId = randomUUID();
+  const definition = "named-invalid-profile";
   const repoKey = `managed-invalid-${randomUUID()}`;
   const branch = `managed-invalid-${randomUUID()}`;
   process.env.HERDR_PANE_ID = "managed-invalid-profile-pane";
@@ -7932,6 +7938,7 @@ test("Managed Lead definition-resolution failure with an exact assignment denies
     id: sessionId,
     repoKey,
     branch,
+    definition,
     checkoutPath: cwd,
     text: "managed invalid profile regression",
   });
@@ -7964,7 +7971,8 @@ test("Managed Lead definition-resolution failure with an exact assignment denies
   });
   let managedDefinitionResolutionCalls = 0;
   registerExtensionForTest!(pi.pi as never, {
-    managedLeadDefinition: () => {
+    managedLeadDefinition: (name) => {
+      assert.equal(name, definition);
       managedDefinitionResolutionCalls++;
       throw new Error("invalid trusted Managed Lead execution profile");
     },
@@ -7976,7 +7984,18 @@ test("Managed Lead definition-resolution failure with an exact assignment denies
     getSessionId: () => sessionId,
   };
   try {
-    await pi.events.get("session_start")![0](undefined, context);
+    await pi.events.get("session_start")![0]({ reason: "new" }, context);
+    assert.deepEqual(
+      pi.entries.find(
+        (entry): entry is { customType: string; data: unknown } =>
+          typeof entry === "object" &&
+          entry !== null &&
+          "customType" in entry &&
+          entry.customType === "pi-herdsman-coordinator-definition" &&
+          "data" in entry,
+      )?.data,
+      { version: 1, sessionId, category: "lead", name: definition },
+    );
     assert.ok(
       pi.entries.some(
         (entry: any) =>
@@ -7995,6 +8014,7 @@ test("Managed Lead definition-resolution failure with an exact assignment denies
         id: sessionId,
         repoKey,
         branch,
+        definition,
         checkoutPath: cwd,
         text: "managed invalid profile regression",
       },

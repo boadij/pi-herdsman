@@ -32,12 +32,11 @@ import {
   type DefinitionInspection,
   definitionEditTargets,
   readDefinitionEditSnapshot,
-  isReservedRoleDefinition,
-  isRuntimeRoleDefinition,
-  MANAGED_LEAD_DEFINITION_NAME,
+  supportsDefinitionLaunchSettings,
+  type DefinitionCategory,
+  type DiscoverAgentDefinitionsOptions,
   type AgentDefinition,
   type DefinitionEditScope,
-  type RoleDefinitionName,
 } from "../agent-definitions.ts";
 import {
   isLeadExecutionMode,
@@ -123,20 +122,15 @@ type LeadCommandHost = {
   ): string;
   executionPrompt(): string | undefined;
   leadExecutionDefinition(): AgentDefinition | undefined;
-  discoverRoleDefinition(
-    name: RoleDefinitionName,
-    options?: {
-      projectRoot?: string;
-      onWarning?: (message: string) => void;
-    },
-  ): AgentDefinition;
-  inspectAgentDefinition(
+  resolveDefinition(
+    category: DefinitionCategory,
     name: string,
-    options?: { projectRoot?: string; onWarning?: (message: string) => void },
-  ): DefinitionInspection;
-  inspectRoleDefinition(
-    name: RoleDefinitionName,
-    options?: { projectRoot?: string; onWarning?: (message: string) => void },
+    options?: DiscoverAgentDefinitionsOptions,
+  ): AgentDefinition;
+  inspectDefinition(
+    category: DefinitionCategory,
+    name: string,
+    options?: DiscoverAgentDefinitionsOptions,
   ): DefinitionInspection;
   expandDefinitionBodyFragments: typeof expandDefinitionBodyFragments;
   expandDefinitionBodyFragmentsWithSources?: typeof expandDefinitionBodyFragmentsWithSources;
@@ -466,11 +460,19 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 onWarning?.(message);
               },
             });
-      const resolveDefinition = async (name: string) => {
+      const definitionKey = ({ category, name }: AgentDefinition) =>
+        category === "agent" ? name : `${category}:${name}`;
+      const reloadDefinition = async (
+        category: DefinitionCategory,
+        name: string,
+      ) => {
         const loaded = await loadDefinitions(
-          isReservedRoleDefinition(name) ? "roles" : "agents",
+          category === "agent" ? "agents" : "roles",
         );
-        return loaded.find((candidate) => candidate.name === name);
+        return loaded.find(
+          (candidate) =>
+            candidate.category === category && candidate.name === name,
+        );
       };
       while (true) {
         const section =
@@ -520,20 +522,22 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             ]
               .filter(Boolean)
               .join(" + ");
-            const reservedLead = isReservedRoleDefinition(definition.name);
-            const runtimeProfile = isRuntimeRoleDefinition(definition.name);
+            const coordinator = definition.category !== "agent";
+            const launchSettings = supportsDefinitionLaunchSettings(definition);
             const description = [
-              ...(!runtimeProfile ? [model, thinking] : []),
+              ...(launchSettings ? [model, thinking] : []),
               sources,
-              ...(!reservedLead && !host.agentDefinitionEnabled(definition)
+              ...(!coordinator && !host.agentDefinitionEnabled(definition)
                 ? ["disabled"]
                 : []),
             ]
               .filter(Boolean)
               .join(" · ");
             return {
-              value: definition.name,
-              label: definition.name,
+              value: definitionKey(definition),
+              label: coordinator
+                ? `${definition.name} (${definition.category})`
+                : definition.name,
               description,
               ...(typeof definition.frontmatter.description === "string"
                 ? { help: definition.frontmatter.description }
@@ -541,7 +545,11 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             };
           });
           let warningValue = "__definition_warnings__";
-          while (availableDefinitions.some(({ name }) => name === warningValue))
+          while (
+            availableDefinitions.some(
+              (definition) => definitionKey(definition) === warningValue,
+            )
+          )
             warningValue += "_";
           if (warnings.length)
             options.unshift({
@@ -563,12 +571,12 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             continue;
           }
           const selectedEntry = availableDefinitions.find(
-            (definition) => definition.name === selected,
+            (definition) => definitionKey(definition) === selected,
           );
           if (!selectedEntry) continue;
-          selectedDefinitions[section] = selectedEntry.name;
+          selectedDefinitions[section] = definitionKey(selectedEntry);
           let definition = selectedEntry;
-          const selectedName = definition.name;
+          const { category, name: selectedName } = definition;
           let selectedScope =
             definitionEditTargets(definition)[0]?.scope ?? "global";
           let selectedAction = "model";
@@ -601,11 +609,14 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 : undefined;
             const snapshotError =
               "error" in snapshotResult ? snapshotResult.error : undefined;
-            const globalDefinition = isReservedRoleDefinition(definition.name)
-              ? (await loadDefinitions("roles", false)).find(
-                  (candidate) => candidate.name === definition.name,
-                )
-              : discoverGlobalAgentDefinition(definition.name);
+            const globalDefinition =
+              category !== "agent"
+                ? (await loadDefinitions("roles", false)).find(
+                    (candidate) =>
+                      candidate.category === category &&
+                      candidate.name === definition.name,
+                  )
+                : discoverGlobalAgentDefinition(definition.name);
             const projectSnapshot =
               selectedScope === "project" ? snapshot : undefined;
             const valueAtScope = (field: "model" | "thinking" | "enabled") =>
@@ -640,8 +651,9 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   ? String(localValue(field))
                   : "inherit";
             const managedDefinition =
-              definition.name === MANAGED_LEAD_DEFINITION_NAME;
-            const runtimeProfile = isRuntimeRoleDefinition(definition.name);
+              category === "lead" &&
+              supportsDefinitionLaunchSettings(definition);
+            const launchSettings = supportsDefinitionLaunchSettings(definition);
             const action = await host.selectMenu(
               ctx,
               definition.name,
@@ -655,7 +667,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       },
                     ]
                   : []),
-                ...(!runtimeProfile
+                ...(launchSettings
                   ? [
                       {
                         value: "model",
@@ -667,7 +679,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       },
                     ]
                   : []),
-                ...(!runtimeProfile
+                ...(launchSettings
                   ? [
                       {
                         value: "thinking",
@@ -679,7 +691,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       },
                     ]
                   : []),
-                ...(!isReservedRoleDefinition(definition.name)
+                ...(category === "agent"
                   ? [
                       {
                         value: "enabled",
@@ -731,7 +743,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             if (action === "details") {
               let current;
               try {
-                current = await resolveDefinition(selectedName);
+                current = await reloadDefinition(category, selectedName);
               } catch (error) {
                 ctx.ui.notify(String(error), "error");
                 break;
@@ -747,18 +759,15 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               const metadata = host.agentDefinitionMetadata(current);
               if (ctx.mode === "tui") {
                 try {
-                  const promptOptions = isReservedRoleDefinition(current.name)
-                    ? host.getSystemPromptOptions(ctx)
-                    : undefined;
-                  const inspection = isReservedRoleDefinition(current.name)
-                    ? host.inspectRoleDefinition(
-                        current.name as RoleDefinitionName,
-                        ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
-                      )
-                    : host.inspectAgentDefinition(
-                        current.name,
-                        ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
-                      );
+                  const promptOptions =
+                    category !== "agent"
+                      ? host.getSystemPromptOptions(ctx)
+                      : undefined;
+                  const inspection = host.inspectDefinition(
+                    category,
+                    current.name,
+                    ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
+                  );
                   const expandedFragments: ExpandedDefinitionBodyPart[][] =
                     host.expandDefinitionBodyFragmentsWithSources?.(
                       inspection.bodyFragments,
@@ -776,27 +785,25 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                     parts.map(({ text }) => text).join(""),
                   );
                   const sources = inspection.layers.map(({ scope }) => scope);
-                  const roleProfile = isReservedRoleDefinition(current.name);
-                  const execution = host.leadExecutionPresentation();
-                  const managedLeadProfile = current.name === "managed-lead";
+                  const roleProfile = category !== "agent";
+                  const selectedLead =
+                    category === "lead"
+                      ? host.leadExecutionDefinition()
+                      : undefined;
+                  const managedLeadProfile = managedDefinition;
                   let activeRole =
-                    (current.name === "manager" &&
+                    (category === "manager" &&
+                      current.name === "manager" &&
                       host.roleActive("manager")) ||
-                    (current.name === "chief" && host.isCurrentChief(ctx)) ||
-                    (managedLeadProfile && execution.managed) ||
-                    (current.name === "flexible-lead" &&
-                      !execution.managed &&
-                      execution.mode === "flexible" &&
-                      !host.roleActive("manager") &&
-                      !host.roleActive("chief")) ||
-                    (current.name === "orchestrator-lead" &&
-                      !execution.managed &&
-                      execution.mode === "orchestrate" &&
+                    (category === "chief" && host.isCurrentChief(ctx)) ||
+                    (category === "lead" &&
+                      selectedLead?.category === category &&
+                      selectedLead.name === current.name &&
                       !host.roleActive("manager") &&
                       !host.roleActive("chief"));
-                  const activeChief = current.name === "chief" && activeRole;
+                  const activeChief = category === "chief" && activeRole;
                   const currentRoleCharter =
-                    activeRole && current.name !== "chief"
+                    activeRole && category !== "chief"
                       ? host.roleCharter(ctx)
                       : undefined;
                   if (
@@ -813,14 +820,14 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       ? contextInheritance(current)
                       : undefined;
                   const roleContextFiles =
-                    activeRole && current.name !== "chief"
+                    activeRole && category !== "chief"
                       ? (promptOptions?.contextFiles ?? []).map((file) => ({
                           path: file.path,
                           text: file.content,
                         }))
                       : [];
                   const chiefContextFiles =
-                    current.name === "chief"
+                    category === "chief"
                       ? host
                           .chiefGlobalInstructions(promptOptions)
                           .map((file) => ({
@@ -838,7 +845,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                           }))
                       : [];
                   const contextFiles =
-                    current.name === "chief"
+                    category === "chief"
                       ? chiefContextFiles
                       : roleProfile
                         ? activeRole
@@ -847,13 +854,13 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                         : futureContextFiles;
                   const contextCount = inheritance
                     ? String(contextFiles.length)
-                    : current.name === "chief"
+                    : category === "chief"
                       ? String(chiefContextFiles.length)
                       : activeRole
                         ? String(roleContextFiles.length)
                         : "session-dependent";
                   const contextMode =
-                    current.name === "chief"
+                    category === "chief"
                       ? "Chief forced prompt includes only global user instructions; project context excluded"
                       : activeRole
                         ? "Current Pi context from getSystemPromptOptions()"
@@ -931,7 +938,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                     ? host.supervisoryProfileBody(ctx, "chief")
                     : fragments.join("\n\n");
                   const chiefPrompt =
-                    current.name === "chief"
+                    category === "chief"
                       ? host.chiefSystemPrompt(promptOptions, chiefBody)
                       : undefined;
                   if (!roleProfile) {
@@ -967,7 +974,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                     );
                     add("Working directory", ctx.cwd);
                     add("Runtime contributions", "Session-dependent.");
-                  } else if (current.name === "chief") {
+                  } else if (category === "chief") {
                     add(
                       activeChief
                         ? "Active Chief forced prompt"
@@ -985,7 +992,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                     );
                   } else if (managedLeadProfile) {
                     if (activeRole) {
-                      if (activeExecutionDefinition?.name === "managed-lead")
+                      if (activeExecutionDefinition?.name === current.name)
                         add(
                           "Managed Lead body",
                           host.expandAgentBodyFiles(
@@ -1041,7 +1048,10 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       appendDefinition(
                         "Effective Lead profile on disk · active prompt is a session snapshot",
                       );
-                    } else if (current.name === "manager")
+                    } else if (
+                      category === "manager" &&
+                      current.name === "manager"
+                    )
                       appendDefinition(
                         "Effective Manager profile on disk · active prompt is a session snapshot",
                       );
@@ -1057,7 +1067,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                     roleProfile &&
                     !activeRole &&
                     !managedLeadProfile &&
-                    current.name !== "chief"
+                    category !== "chief"
                   )
                     add("Working directory", ctx.cwd);
                   host.appendDefinitionsEntry({
@@ -1196,7 +1206,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               field = "enabled";
               value = enabledAtScope === false;
             } else continue;
-            const latest = await resolveDefinition(selectedName);
+            const latest = await reloadDefinition(category, selectedName);
             if (
               !latest ||
               !definitionEditTargets(latest).some(
@@ -1215,7 +1225,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               scope: selectedScope,
               expectedContent: snapshotResult.snapshot.content,
             });
-            const verified = await resolveDefinition(definition.name);
+            const verified = await reloadDefinition(category, definition.name);
             if (!verified)
               throw new Error(
                 `definition ${definition.name} is no longer available`,
