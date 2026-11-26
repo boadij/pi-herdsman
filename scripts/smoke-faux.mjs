@@ -852,6 +852,34 @@ function agentCrashRecoveryDecision(model, context) {
 export function decide(model, context) {
   const messages = context.messages;
   const prompt = text(lastUser(messages));
+  if (
+    model === "chief-manager" &&
+    typeof context.sessionId === "string" &&
+    context.sessionId &&
+    Number.isSafeInteger(context.invocationSequence) &&
+    context.invocationSequence <= 128 &&
+    process.env.PI_CODING_AGENT_DIR
+  ) {
+    const managerContext = getCurrentSystemPrompt(messages).includes(
+      "You are the verified Manager for this Pi session.",
+    );
+    appendFileSync(
+      join(
+        process.env.PI_CODING_AGENT_DIR,
+        "pi-herdsman",
+        "runtime",
+        "smoke-chief-manager-provider-entries.jsonl",
+      ),
+      `${JSON.stringify({
+        sessionId: context.sessionId,
+        modelId: model,
+        managerContext,
+        exactMarkerMatch: prompt === "CHIEF_MANAGER_SMOKE delegate",
+        lastUserLength: prompt.length,
+        invocationSequence: context.invocationSequence,
+      })}\n`,
+    );
+  }
 
   if (model === "terminal-error")
     return fauxAssistantMessage("CONTROLLED_PARTIAL_RESPONSE", {
@@ -1820,6 +1848,7 @@ export default function install(pi) {
     api: "smoke-faux-api",
     models: modelIds.map((id) => ({ id, reasoning: false, input: ["text"] })),
   });
+  const invocationSequences = new Map();
   function response(context, _options, _state, model) {
     faux.appendResponses([response]);
     logPeerCoreLifecycle({
@@ -1830,6 +1859,9 @@ export default function install(pi) {
     const currentSessionId = sessionId;
     if (typeof currentSessionId !== "string" || !currentSessionId)
       throw new Error("Faux provider request has no Pi session identity");
+    const invocationSequence =
+      (invocationSequences.get(currentSessionId) ?? 0) + 1;
+    invocationSequences.set(currentSessionId, invocationSequence);
     if (model.id === "manager-merge" || model.id === "manager-merge-lead") {
       const tools = getCurrentTools(context.messages).map((tool) => tool.name);
       const latestUser = lastUser(context.messages);
@@ -2035,6 +2067,8 @@ export default function install(pi) {
       answer = decide(model.id, {
         ...context,
         peerImportedBindingVisible,
+        sessionId: currentSessionId,
+        invocationSequence,
       });
     } catch (error) {
       if (
