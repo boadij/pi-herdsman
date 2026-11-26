@@ -234,6 +234,7 @@ mock.module("node:fs", {
     mkdirSync: realFs.mkdirSync,
     lstatSync: realFs.lstatSync,
     openSync: realFs.openSync,
+    opendirSync: realFs.opendirSync,
     readFileSync: new Proxy(realFs.readFileSync, {
       apply(target, _thisArg, args) {
         fileReadHook?.(args[0]);

@@ -2,7 +2,6 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
   getAgentDir,
-  parseSessionEntries,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
@@ -14,7 +13,6 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
-  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -23,6 +21,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { requireCompatibleBuild, type RuntimeBuild } from "./compatibility.ts";
 import { readConfig } from "./config.ts";
 import {
+  ensurePrimaryWorkspace,
   HerdrManagerPreparationFailure,
   HerdrStartFailure,
   localRepositoryScope,
@@ -38,6 +37,7 @@ import {
   ensureManagerGitRepository,
   requireNoLiveLegacyManager,
 } from "./manager-git.ts";
+import { readSavedManagerSession } from "./manager-recovery.ts";
 import {
   cloneRepository,
   createLocalRepositoryDirectory,
@@ -54,7 +54,6 @@ import {
   readManagerRecoveryReference,
   removeManagerStartIntent,
   sameManagerDescriptor,
-  sessionLeadRoleState,
   verifyManagerCoordinationAuthority,
   writeManagerStartIntent,
   type ChiefDescriptor,
@@ -159,9 +158,9 @@ function clearLaunchGuard(path: string): void {
 }
 
 type ProjectResult =
+  | { status: "cloned"; repository: string; workspaceId: string }
   | {
       status:
-        | "cloned"
         | "started"
         | "resumed"
         | "already_running"
@@ -174,6 +173,7 @@ type ProjectResult =
       repository: string;
       stage: string;
       reason: string;
+      placement?: HerdrManagerPreparationFailure["placement"];
     };
 
 type Host = {
@@ -200,6 +200,9 @@ function partial(
     repository,
     stage,
     reason: error instanceof Error ? error.message : String(error),
+    ...(error instanceof HerdrManagerPreparationFailure && {
+      placement: error.placement,
+    }),
   };
 }
 
@@ -213,22 +216,7 @@ function reserveManagerSession(checkout: string): Session {
 }
 
 function readSavedRole(session: Session, checkout: string) {
-  if (!statSync(session.path).isFile())
-    throw new Error("Saved Manager session is not a regular file");
-  const entries = parseSessionEntries(readFileSync(session.path, "utf8"));
-  const header = entries[0];
-  if (
-    header?.type !== "session" ||
-    header.id !== session.id ||
-    typeof header.cwd !== "string" ||
-    !sameDirectory(header.cwd, checkout)
-  )
-    throw new Error(
-      "Saved Manager session identity does not match the repository",
-    );
-  // Opening an existing file with Pi can migrate it. Validate the active branch in memory.
-  const saved = SessionManager.inMemory(checkout, undefined, entries);
-  return sessionLeadRoleState(saved.getBranch(), session.id)?.role;
+  return readSavedManagerSession(session, { checkout }).role;
 }
 
 function matchesSession(reference: ManagerRecoveryReference, session: Session) {
@@ -245,18 +233,47 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
     ctx: ExtensionContext,
   ): Promise<ProjectResult> => {
     await host.assertChief(ctx);
+    let repository: Awaited<ReturnType<typeof cloneRepository>>;
     try {
-      const repository = await cloneRepository(
+      repository = await cloneRepository(
         pi,
         url,
         readConfig().projectsDirectory,
         { destination, signal: ctx.signal },
       );
-      return { status: "cloned", repository: repository.checkoutPath };
     } catch (error) {
       if (error instanceof RepositoryCloneError)
         return partial(error.destination, error.stage, error);
       throw error;
+    }
+    try {
+      const lock = claimManagerStartupLock(
+        host.runtime(),
+        repository.canonicalRepoKey,
+      );
+      try {
+        const { workspaceId } = await ensurePrimaryWorkspace(pi, ctx, {
+          repository,
+          signal: ctx.signal,
+          assertCurrentAuthority: () => host.assertChief(ctx),
+          timeoutMs: STARTUP_TIMEOUT_MS,
+        });
+        return {
+          status: "cloned",
+          repository: repository.checkoutPath,
+          workspaceId,
+        };
+      } finally {
+        lock.release();
+      }
+    } catch (error) {
+      return partial(
+        repository.checkoutPath,
+        error instanceof HerdrManagerPreparationFailure
+          ? error.stage
+          : "workspace",
+        error,
+      );
     }
   };
 
@@ -783,6 +800,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
 
   return {
     clone,
+    verifyActive,
     start: (
       repository: string,
       destination: string | undefined,

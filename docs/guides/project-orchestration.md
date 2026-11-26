@@ -456,12 +456,22 @@ See [Coordination](../concepts/coordination.md) and
 
 ## Open or recover a project from Chief
 
-In an active `/chief` session, ask Chief to start a Manager for an explicit
-local primary checkout or a remote Git repository. To provision a local clone
-without starting a Manager, ask Chief to clone it only. Review any Git
-initialization prompt for the exact directory, and handle Pi's native project
-trust in the target workspace. An untrusted target does not inherit Chief's
-trust.
+In an active `/chief` session, use the automatic project overview for a quick
+view of known projects. Ask Chief to list projects for a fresh discovery that
+also scans the configured projects directory. Treat Manager status as an
+observation, not as proof that no Manager exists. You can change the scan and
+default clone root in **Settings → Manager & repositories → Projects directory**
+for the active Pi profile. Changing it does not move or create repositories.
+
+To add a project without starting Pi, ask Chief to clone it only. Chief clones
+the repository and prepares its primary Herdr workspace. If workspace
+preparation fails after cloning, the local checkout remains; inspect the
+reported path and workspace state before retrying.
+
+To run a Manager, ask Chief to start one for an explicit local primary checkout
+or a remote Git repository. Review any Git initialization prompt for the exact
+directory, and handle Pi's native project trust in the target workspace. An
+untrusted target does not inherit Chief's trust.
 
 If the Manager is already running in Chief's Pi profile and Herdr socket,
 Chief uses the verified instance instead of starting another. Manager

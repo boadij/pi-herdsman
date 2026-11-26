@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -385,6 +386,7 @@ function emptyPromptSections(): Record<string, string> {
 }
 
 const CHIEF_PROJECT_TOOLS = [
+  "list_projects",
   "clone_repository",
   "start_manager",
   "resume_manager",
@@ -696,6 +698,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     integrate_branch: "integrate branch",
     stop_lead: "stop lead",
     remove_worktree: "remove worktree",
+    list_projects: "list projects",
     clone_repository: "clone repository",
     start_manager: "start Manager",
     resume_manager: "resume Manager",
@@ -921,7 +924,8 @@ test("extension loading does not call runtime action methods", () => {
   }
 });
 
-test("Chief activation exposes only semantic staff and project tools", async () => {
+test("Chief activation exposes only semantic staff and project tools", async (t) => {
+  const { updateConfig } = await import("./config.ts");
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "semantic-chief-pane";
   process.env.HERDR_TAB_ID = "semantic-chief-tab";
@@ -940,8 +944,47 @@ test("Chief activation exposes only semantic staff and project tools", async () 
       },
     },
   ];
+  const projectsDirectory = realFs.mkdtempSync(
+    join(tmpdir(), "chief-projects-"),
+  );
+  const checkout = join(
+    projectsDirectory,
+    "namespace",
+    "directory-only-project",
+  );
+  realFs.mkdirSync(checkout, { recursive: true });
+  t.after(() => {
+    updateConfig("projectsDirectory", undefined);
+    realFs.rmSync(projectsDirectory, { recursive: true, force: true });
+  });
+  execFileSync("git", ["init", "--quiet"], { cwd: checkout });
+  updateConfig("projectsDirectory", projectsDirectory);
+  let gitObservations = 0;
   const chief = fakePi({
     entries,
+    exec: (command, args) => {
+      if (command === "git" && args[0] === "rev-parse") {
+        gitObservations++;
+        return {
+          stdout: execFileSync(command, args, {
+            cwd: checkout,
+            encoding: "utf8",
+          }),
+          stderr: "",
+          code: 0,
+        };
+      }
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: isApiSnapshot(args)
+            ? { snapshot: { agents: [], panes: [], workspaces: [] } }
+            : { agents: [] },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    },
     activeTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
     allTools: [
       ...REGISTERED_ROLE_TOOLS,
@@ -957,7 +1000,9 @@ test("Chief activation exposes only semantic staff and project tools", async () 
       const args =
         name === "clone_repository"
           ? { url: "https://example.com/project" }
-          : { repository: "/project" };
+          : name === "list_projects"
+            ? {}
+            : { repository: "/project" };
       assertPortableToolSchema(tool);
       assert.equal(tool.defaultActive, false);
       assert.equal(tool.executionMode, "sequential");
@@ -980,6 +1025,25 @@ test("Chief activation exposes only semantic staff and project tools", async () 
       "message_staff",
       ...CHIEF_PROJECT_TOOLS,
     ]);
+    const prompt = await invokeBeforeAgentStart(
+      chief,
+      { systemPromptOptions: {} },
+      context,
+    );
+    assert.match(prompt?.systemPrompt ?? "", /## Project overview/u);
+    assert.doesNotMatch(prompt?.systemPrompt ?? "", /directory-only-project/u);
+    assert.equal(gitObservations, 0);
+    const listed = await tools
+      .get("list_projects")!
+      .execute("list", {}, undefined, undefined, context);
+    assert.equal(listed.details.complete, true);
+    assert.ok(
+      listed.details.projects.some(
+        (project: { primaryCheckoutPath?: string }) =>
+          project.primaryCheckoutPath === realFs.realpathSync.native(checkout),
+      ),
+    );
+    assert.ok(gitObservations > 0);
     for (const [name, valid, invalid, required] of STAFF_TOOL_CASES) {
       const tool = tools.get(name);
       assert.ok(tool, `missing ${name}`);

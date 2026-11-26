@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -16,6 +17,7 @@ import {
 import {
   DEFAULT_CONFIG,
   readConfig,
+  updateConfig,
   validByteLimit,
   validMaxAgentDepth,
   validStatusWidgetMaxRows,
@@ -1073,6 +1075,7 @@ test("Settings categories expose canonical rows, values and contextual help", as
           "Required",
         ],
         ["manager-merge", "Merge accepted branches", "Repository unavailable"],
+        ["projects-directory", "Projects directory", "~/Projects"],
         [
           "removal-confirmation",
           "Confirm worktree removal",
@@ -1194,7 +1197,7 @@ test("Settings identifies trusted project and verified repository sources", asyn
       selectMenu: async (_ctx: unknown, _title: string, items: any[]) => {
         assert.deepEqual(
           items.map(({ description }) => description),
-          [project, "Required", merge, "Skipped · Repository"],
+          [project, "Required", merge, "~/Projects", "Skipped · Repository"],
         );
       },
     } as any);
@@ -1203,6 +1206,67 @@ test("Settings identifies trusted project and verified repository sources", asyn
       "manager",
     );
   }
+});
+
+test("Projects directory edits use the active profile's global configuration", async (t) => {
+  const profile = mkdtempSync(join(tmpdir(), "herdsman-projects-setting-"));
+  const previousProfile = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = profile;
+  t.after(() => {
+    if (previousProfile === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousProfile;
+    rmSync(profile, { recursive: true, force: true });
+  });
+  const customPath = join(profile, "Work Repositories");
+  const defaultPath = DEFAULT_CONFIG.projectsDirectory;
+  for (const [input, before, after, writes, invalid] of [
+    [customPath, defaultPath, customPath, 1, false],
+    ["relative/path", customPath, customPath, 1, true],
+    [undefined, customPath, customPath, 0, false],
+    [defaultPath, customPath, defaultPath, 1, false],
+  ] as const) {
+    const notices: [string, string][] = [];
+    let visits = 0;
+    let writeCount = 0;
+    const runtime = createLeadCommandRuntime({
+      readConfig,
+      updateConfig: (key: "projectsDirectory", value: string | undefined) => {
+        writeCount++;
+        assert.equal(key, "projectsDirectory");
+        assert.equal(value, input === defaultPath ? undefined : input);
+        updateConfig(key, value);
+      },
+      input: async (_ctx: unknown, label: string) => {
+        assert.equal(label, `Projects directory (default: ${defaultPath})`);
+        return input;
+      },
+      selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
+        assert.equal(title, "Manager & repositories");
+        const row = items.find(({ value }) => value === "projects-directory");
+        assert.equal(row?.description, visits === 0 ? before : after);
+        if (visits++ === 0) return row.value;
+      },
+    } as any);
+    await runtime.openSettingsCategory(
+      {
+        isProjectTrusted: () => false,
+        ui: {
+          notify: (message: string, level: string) =>
+            notices.push([message, level]),
+        },
+      } as any,
+      "manager",
+    );
+    assert.equal(visits, 2);
+    assert.equal(writeCount, writes);
+    assert.equal(readConfig().projectsDirectory, after);
+    if (invalid) {
+      assert.equal(notices.length, 1);
+      assert.match(notices[0]![0], /projectsDirectory.*absolute/);
+      assert.equal(notices[0]![1], "error");
+    } else assert.deepEqual(notices, []);
+  }
+  assert.equal(existsSync(customPath), false);
 });
 
 test("Delegate Agents to other directories (cwd) shows the current choice and persists globally", async () => {

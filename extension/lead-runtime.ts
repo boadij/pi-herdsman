@@ -1713,6 +1713,29 @@ export function createLeadSessionStartRuntime(host: {
   };
 }
 
+function renderChiefProjectOverview({
+  projects,
+  complete,
+}: import("./project-discovery.ts").ProjectDiscoveryResult): string {
+  const displayed = projects.slice(0, 20);
+  const lines = [
+    "## Project overview",
+    "",
+    `${projects.length} projects observed; ${projects.length - displayed.length} omitted.`,
+  ];
+  if (!complete) lines.push("Incomplete project observation.");
+  for (const project of displayed) {
+    const checkout =
+      project.primaryCheckoutPath ??
+      project.workspaces[0]?.checkoutPath ??
+      project.canonicalRepoKey;
+    lines.push(
+      `- ${JSON.stringify(checkout)} — Manager: ${project.managerStatus}; ${project.workspaces.length} open workspaces`,
+    );
+  }
+  return lines.join("\n");
+}
+
 export function createLeadAgentEventRuntime(host: {
   drainRetirementNotices(
     ctx: ExtensionContext,
@@ -1728,9 +1751,15 @@ export function createLeadAgentEventRuntime(host: {
   >;
   prepareSupervisionMessage(
     ctx: ExtensionContext,
+    inventory?: HerdrSessionSnapshot,
   ): Promise<
     { customType: string; content: string; display: boolean } | undefined
   >;
+  observeChiefTopology?(ctx: ExtensionContext): Promise<HerdrSessionSnapshot>;
+  discoverChiefOverview?(
+    ctx: ExtensionContext,
+    inventory: HerdrSessionSnapshot | null,
+  ): Promise<import("./project-discovery.ts").ProjectDiscoveryResult>;
   sendMessage(message: {
     customType: string;
     content: string;
@@ -1800,13 +1829,29 @@ export function createLeadAgentEventRuntime(host: {
           ? host.modelCatalog?.(ctx)
           : undefined;
         host.leadInboxRuntime.holdStartPreflight(ctx);
-        const message = await host.prepareSupervisionMessage(ctx);
+        const sessionId = ctx.sessionManager.getSessionId();
+        const inventory = await host
+          .observeChiefTopology?.(ctx)
+          .catch(() => undefined);
+        const message = await host.prepareSupervisionMessage(ctx, inventory);
         if (message) host.sendMessage(message);
+        const discovery = await host
+          .discoverChiefOverview?.(ctx, inventory ?? null)
+          .catch(() => undefined);
+        const overview = discovery
+          ? renderChiefProjectOverview(discovery)
+          : "## Project overview\n\nIncomplete: project observation unavailable.";
+        if (
+          !host.isCurrentChief(ctx) ||
+          host.isRoleSuspended() ||
+          ctx.sessionManager.getSessionId() !== sessionId
+        )
+          return;
         return {
           systemPrompt:
             host.chiefSystemPrompt(
               event.systemPromptOptions,
-              host.supervisoryProfileBody(ctx, "chief"),
+              `${host.supervisoryProfileBody(ctx, "chief")}\n\n${overview}`,
             ) + (catalog ? `\n\n## agent_models\n\n${catalog}` : ""),
         };
       }
@@ -6033,7 +6078,8 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     | undefined;
   let uiContext: ExtensionContext | undefined;
   let inFlight: Promise<void> | undefined;
-  let pending: ExtensionContext | undefined;
+  let pending:
+    { ctx: ExtensionContext; inventory?: HerdrSessionSnapshot } | undefined;
   let overviewGeneration = 0;
   let renderOverview: (() => void) | undefined;
   let renderWidget: (() => void) | undefined;
@@ -6262,7 +6308,10 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     });
     gitSampling = sampling;
   };
-  const refreshOnce = async (ctx: ExtensionContext): Promise<void> => {
+  const refreshOnce = async ({
+    ctx,
+    inventory: suppliedInventory,
+  }: NonNullable<typeof pending>): Promise<void> => {
     if (
       host.state.chiefMode !== "active" &&
       !(host.activeRole() === "manager" && !host.state.roleSuspended)
@@ -6279,11 +6328,9 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     const currentGeneration = generation(ctx);
     const current = (): boolean => generation(ctx) === currentGeneration;
     try {
-      const inventory = await host.herdrSessionSnapshot(
-        host.pi,
-        ctx,
-        ctx.signal,
-      );
+      const inventory =
+        suppliedInventory ??
+        (await host.herdrSessionSnapshot(host.pi, ctx, ctx.signal));
       const agents = await host.managedAgentSnapshots(
         host.pi,
         ctx,
@@ -6317,8 +6364,11 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       }
     }
   };
-  const refresh = (ctx: ExtensionContext): Promise<void> => {
-    pending = ctx;
+  const refresh = (
+    ctx: ExtensionContext,
+    inventory?: HerdrSessionSnapshot,
+  ): Promise<void> => {
+    pending = { ctx, inventory };
     if (inFlight) return inFlight;
     inFlight = (async () => {
       while (pending) {
@@ -7171,6 +7221,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     },
     prepareMessage: async (
       ctx: ExtensionContext,
+      inventory?: HerdrSessionSnapshot,
     ): Promise<
       { customType: string; content: string; display: boolean } | undefined
     > => {
@@ -7180,7 +7231,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         (host.isCurrentChief(ctx) || host.activeRole() === "manager") &&
         generation(ctx) === currentGeneration;
       try {
-        await refresh(ctx);
+        await refresh(ctx, inventory);
         if (!isCurrent()) return;
         const contextStatus = status(ctx);
         const targets = new Map<string, string>();
