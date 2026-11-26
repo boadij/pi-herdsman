@@ -1501,7 +1501,7 @@ export function decide(model, context) {
       return fauxAssistantMessage("CHIEF_MANAGER_SMOKE_STARTUP");
     }
     const request = prompt.match(
-      /^CHIEF_MANAGER_SMOKE \d+ (clone_repository|list_projects|start_manager|resume_manager) (\{.*\})$/u,
+      /^CHIEF_MANAGER_SMOKE \d+ (clone_repository|list_projects|start_lead|start_manager|resume_manager) (\{.*\})$/u,
     );
     if (request) {
       if (

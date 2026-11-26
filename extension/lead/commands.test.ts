@@ -2110,7 +2110,7 @@ test("same-named Lead and Manager entries expose only applicable settings", asyn
   } as any);
   assert.deepEqual(profileMenus, [
     ["model", "thinking", "details"],
-    ["details"],
+    ["model", "thinking", "details"],
   ]);
 });
 

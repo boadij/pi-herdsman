@@ -12,7 +12,10 @@ import {
 } from "node:fs";
 import { isAbsolute } from "node:path";
 import { sameDirectory } from "./herdr.ts";
-import { sessionLeadRoleState } from "./supervision.ts";
+import {
+  readCoordinatorDefinitionBinding,
+  sessionLeadRoleState,
+} from "./supervision.ts";
 
 export function readSavedManagerSession(
   session: { id: string; path: string },
@@ -71,5 +74,6 @@ export function readSavedManagerSession(
   return {
     checkoutPath: header.cwd,
     role: sessionLeadRoleState(saved.getBranch(), session.id)?.role,
+    definition: readCoordinatorDefinitionBinding(entries, session.id),
   };
 }

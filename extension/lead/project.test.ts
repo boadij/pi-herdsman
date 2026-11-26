@@ -1036,9 +1036,29 @@ function projectLifecycle(options: {
     scanAgentStates: () => ({ states: [] }),
     readLeadCoordinationState: (_runtime: unknown, id: string) =>
       leadState?.piSessionId === id ? leadState : undefined,
-    startHerdrAgentInPane: async (_pi: unknown, _ctx: unknown, launch: any) => {
+    prepareHerdrCoordinatorPane: async (
+      _pi: unknown,
+      _ctx: unknown,
+      preparation: any,
+    ) => {
+      if (options.switchBranchOnTabCreate) checkoutBranch = "feature/other";
+      return {
+        workspaceId: preparation.workspaceId,
+        tabId: "lead-tab",
+        paneId: "lead-pane",
+        terminalId: "lead-terminal",
+        cwd: preparation.cwd,
+        createdWorkspace: false,
+        createdTab: true,
+      };
+    },
+    startHerdrCoordinatorInPane: async (
+      _pi: unknown,
+      _ctx: unknown,
+      launch: any,
+    ) => {
       options.launch?.(launch);
-      const id = launch.agentArgs.at(-1);
+      const id = launch.session.id;
       const instanceId = randomUUID();
       lead = {
         workspace_id: launch.workspaceId,
@@ -2028,7 +2048,20 @@ test("resume revalidates checkout placement after async preparation", async () =
     writeChiefMessage: () => {
       if (++writes === 1) throw new Error("disk write failed");
     },
-    startHerdrAgentInPane: async () => {
+    prepareHerdrCoordinatorPane: async (
+      _pi: unknown,
+      _ctx: unknown,
+      options: any,
+    ) => ({
+      workspaceId: options.workspaceId,
+      tabId: "lead-tab",
+      paneId: "lead-pane",
+      terminalId: "lead-terminal",
+      cwd: options.cwd,
+      createdWorkspace: false,
+      createdTab: true,
+    }),
+    startHerdrCoordinatorInPane: async () => {
       launches++;
     },
     appendDurableError: () => {},
@@ -2441,7 +2474,40 @@ test("resume preserves queued manager message when controlled recovery fails", a
       return { text: message, resultBindings: [] };
     },
     writeChiefMessage: (message: any) => events.push(message),
-    startHerdrAgentInPane: async (
+    prepareHerdrCoordinatorPane: async (
+      _pi: unknown,
+      _ctx: unknown,
+      options: any,
+    ) => {
+      tabCreates.push([
+        "tab",
+        "create",
+        "--workspace",
+        options.workspaceId,
+        "--cwd",
+        options.cwd,
+        "--label",
+        options.label,
+        "--env",
+        `PI_CODING_AGENT_DIR=${options.agentDir}`,
+        ...options.env.flatMap((env: string) => ["--env", env]),
+        "--no-focus",
+      ]);
+      if (tabFailure === "create") throw new Error("controlled tab failure");
+      if (tabFailure === "topology")
+        throw new Error("Herdr did not return exact Lead tab identities");
+      await options.assertCurrentAuthority();
+      return {
+        workspaceId: options.workspaceId,
+        tabId: "lead-tab",
+        paneId: "lead-pane",
+        terminalId: "lead-terminal",
+        cwd: options.cwd,
+        createdWorkspace: false,
+        createdTab: true,
+      };
+    },
+    startHerdrCoordinatorInPane: async (
       _pi: unknown,
       _ctx: unknown,
       options: any,

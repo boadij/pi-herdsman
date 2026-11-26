@@ -1428,10 +1428,15 @@ test("Manager and Chief overlays use reserved runtime-profile scope", () => {
         ),
         `---\nname: ${name}\n${field}: ${field === "skills" || field === "agents" ? '["scout"]' : field === "systemPromptMode" ? '"append"' : '"low"'}\n---\n`,
       );
-      assert.throws(
-        () => withPiAgentDir(global, () => discoverRoleDefinition(name)),
-        new RegExp(`${name} field ${field}: is not supported`),
-      );
+      if (name === "manager")
+        assert.doesNotThrow(() =>
+          withPiAgentDir(global, () => discoverRoleDefinition(name)),
+        );
+      else
+        assert.throws(
+          () => withPiAgentDir(global, () => discoverRoleDefinition(name)),
+          new RegExp(`${name} field ${field}: is not supported`),
+        );
     }
 });
 
@@ -3288,6 +3293,33 @@ test("passes native capability combinations through to Pi", () => {
       "--extension",
       "explicit-extension",
     ],
+  );
+});
+
+test("Coordinator launch policy preserves native Pi context and skills", () => {
+  const definition: AgentDefinition = {
+    category: "manager",
+    name: "custom-manager",
+    path: "/manager.md",
+    frontmatter: {},
+    body: "runtime-owned body",
+  };
+  assert.deepEqual(
+    agentLaunchArgs(definition, {
+      nativeCoordinatorDefaults: true,
+      omitBodyPrompt: true,
+    }),
+    [],
+  );
+  assert.deepEqual(
+    agentLaunchArgs(
+      {
+        ...definition,
+        frontmatter: { noSkills: true, inheritProjectContext: false },
+      },
+      { nativeCoordinatorDefaults: true, omitBodyPrompt: true },
+    ),
+    ["--no-context-files", "--no-skills"],
   );
 });
 

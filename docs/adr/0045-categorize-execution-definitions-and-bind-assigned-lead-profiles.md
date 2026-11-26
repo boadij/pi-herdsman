@@ -30,6 +30,13 @@ The binding records identity, not a snapshot of effective configuration or
 proof of authority. The exact current project assignment still authorizes
 assigned work; immutable session kind and Agent ownership remain separate.
 
+Chief-launched Manager sessions also bind their selected `manager` category
+definition to the exact Pi session. Omitted selection binds the reserved
+`manager` definition. Recovery restores that identity and does not switch
+profiles; a missing or invalid named definition blocks recovery. Manager
+authority continues to come from the verified repository-scoped lease, not
+from the definition binding.
+
 ## Supersession
 
 This replaces the fixed managed-Lead profile selection in ADRs 0015 and 0018,
