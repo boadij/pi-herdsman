@@ -8,3 +8,20 @@ export function matchesChiefManagerHandoff(entry, requestId, childSessionId) {
     entry.content.includes("CHIEF_MANAGER_AGENT_COMPLETED")
   );
 }
+
+export function chiefManagerSuccessEvidence(progress = {}) {
+  return {
+    managerDefinition: "smoke-manager",
+    agentDefinition: "smoke-agent",
+    delegationToolCallObserved: progress.toolCallObserved === true,
+    successfulCorrelatedDelegationResultObserved:
+      progress.toolResultObserved === true &&
+      progress.toolResultError === false &&
+      typeof progress.requestId === "string" &&
+      typeof progress.childSessionId === "string",
+    completedAgentResultReceiptCorrelated:
+      progress.handoffObserved === true &&
+      progress.handoffStatus === "completed" &&
+      progress.completionMarkerObserved === true,
+  };
+}
