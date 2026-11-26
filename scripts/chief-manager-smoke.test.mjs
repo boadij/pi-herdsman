@@ -13,5 +13,8 @@ test("Manager smoke accepts only the completed correlated persisted handoff", ()
     content: "Agent result CHIEF_MANAGER_AGENT_COMPLETED",
   };
   assert.equal(matchesChiefManagerHandoff(entry, "request-1", "child-1"), true);
-  assert.equal(matchesChiefManagerHandoff(entry, "wrong-request", "child-1"), false);
+  assert.equal(
+    matchesChiefManagerHandoff(entry, "wrong-request", "child-1"),
+    false,
+  );
 });
