@@ -1506,7 +1506,7 @@ export function decide(model, context) {
       return fauxAssistantMessage("CHIEF_MANAGER_SMOKE_STARTUP");
     }
     const request = prompt.match(
-      /^CHIEF_MANAGER_SMOKE \d+ (start_manager|resume_manager) (.+)$/u,
+      /^CHIEF_MANAGER_SMOKE \d+ (clone_repository|list_projects|start_manager|resume_manager) (\{.*\})$/u,
     );
     if (request) {
       if (
@@ -1514,15 +1514,15 @@ export function decide(model, context) {
           "You are the verified workspace-neutral Chief",
         )
       )
-        throw new Error("Lifecycle tool prompt lacked verified Chief context");
-      const [, tool, repository] = request;
+        throw new Error("Project tool prompt lacked verified Chief context");
+      const [, tool, args] = request;
       const turn = currentTurn(messages);
       const result = turn.find(
         (message) => message.role === "toolResult" && message.toolName === tool,
       );
       return result
         ? fauxAssistantMessage("CHIEF_MANAGER_SMOKE_SETTLED")
-        : call(tool, { repository });
+        : call(tool, JSON.parse(args));
     }
     const assignment = prompt.match(/^CHIEF_MANAGER_SMOKE assign (\S+)$/u);
     if (assignment) {

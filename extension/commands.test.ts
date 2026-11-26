@@ -717,6 +717,7 @@ const chiefCoordinationTools = [
 ];
 const chiefTools = [
   ...chiefCoordinationTools,
+  "list_projects",
   "clone_repository",
   "start_manager",
   "resume_manager",

@@ -33,9 +33,23 @@ These sequential tools require current, verified Chief authority when called.
 
 | Tool               | Parameters                                        | Behavior                                                                                                                                                |
 | ------------------ | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `clone_repository` | `url`, optional `destination`                     | Clone and verify an HTTPS or SSH Git remote without launching Pi.                                                                                       |
+| `list_projects`    | None                                              | Discover verified projects, workspace placement, and observed Manager status without changing them.                                                     |
+| `clone_repository` | `url`, optional `destination`                     | Clone and verify an HTTPS or SSH Git remote and prepare its primary Herdr workspace without launching Pi.                                               |
 | `start_manager`    | `repository`, optional `destination` for a remote | Prepare a local project or clone a remote. Reuse the verified primary Herdr workspace or create one if absent, then start a Manager in a dedicated tab. |
 | `resume_manager`   | `repository` (local primary checkout)             | Verify and reopen the exact saved Manager Pi session in a dedicated tab. Does not initialize Git.                                                       |
+
+`list_projects` combines verified repositories from current Herdr workspaces,
+Manager recovery records in the active Pi profile, and a bounded scan of the
+configured projects directory. It groups linked worktrees and multiple
+workspace placements by the physical repository's canonical Git common
+directory. Separate clones of the same remote remain separate projects.
+
+Chief's automatic project overview is bounded and does not scan the projects
+directory. Use `list_projects` for a fresh observation, and check whether
+discovery was incomplete. Manager status reflects the available evidence, not
+proof of global absence or authority to act. Repository paths select project
+lifecycle operations; verified workspace selectors identify workspace
+placements. Use `list_staff` for actionable staff targets.
 
 Local paths must be absolute or start with `~/`. Remote sources support
 `https://`, `ssh://`, and SSH `user@host:path` forms. Clone destinations
@@ -60,7 +74,10 @@ Workspace placement and supervision are scoped to the current profile and
 Herdr socket. A detected conflict blocks a competing launch; Chief does not
 adopt another profile's session history or supervise its Manager.
 
-`cloned` returns the verified local checkout path. `started` and `resumed`
+`cloned` returns the verified local checkout path and its primary Herdr
+workspace ID. The operation reuses an eligible primary workspace or creates one
+without changing focus. It does not prepare a dedicated execution tab or
+launch Pi. `started` and `resumed`
 require verified Manager readiness. `already_running`
 does not launch another Pi process. `resume_required` means a verified saved
 session exists in this Pi profile: use `resume_manager` with the returned local
@@ -70,9 +87,11 @@ blocks recovery rather than creating a replacement conversation. Use
 `list_staff` to discover a current Manager target; the returned repository path
 is not a staff selector.
 
-A `partial_failure` identifies the affected path, stage, and reason. Inspect
-what remains before retrying; a partial clone can leave its destination, and
-a failed launch can leave Herdr resources. At `unsettled_launch`, inspect the
+A `partial_failure` identifies the affected path, stage, and reason. If Git
+clone succeeded but workspace preparation failed, Chief preserves the verified
+checkout and any workspace that may have been created. Inspect what remains
+before retrying; a partial clone can leave its destination, and a failed
+launch can leave Herdr resources. At `unsettled_launch`, inspect the
 exact Pi session and pane in the initiating Herdr runtime as reported. Later
 calls can recognize the exact live, ready Manager, but do not launch a
 duplicate or automatically expire the reservation, even if the earlier call was

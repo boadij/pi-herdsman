@@ -88,6 +88,7 @@ Agent discovery or definition resolution to render.
 | `Manager & repositories` | `Start Manager automatically`                |
 | `Manager & repositories` | `Confirm Git initialization`                 |
 | `Manager & repositories` | `Merge accepted branches`                    |
+| `Manager & repositories` | `Projects directory`                         |
 | `Manager & repositories` | `Confirm worktree removal`                   |
 | `Interface`              | `Agent terminal layout`                      |
 | `Interface`              | `Status widget lines`                        |
