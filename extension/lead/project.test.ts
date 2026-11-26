@@ -31,7 +31,8 @@ const { readProjectAssignment, writeProjectAssignment } =
 const { claimManagerLease, supervisionRuntime } =
   await import("../supervision.ts");
 const { getAgentDir } = await import("@earendil-works/pi-coding-agent");
-const { herdrAgentAlias } = await import("../herdr.ts");
+const { herdrAgentAlias, herdrSessionId, sessionIdentity } =
+  await import("../herdr.ts");
 
 const lifecycleStop = "stop after assignment publication";
 
@@ -788,8 +789,14 @@ function projectLifecycle(options: {
   rejectEvidence?: boolean;
   rejectAtPublication?: boolean;
   launch?: (options: any) => never;
+  completeLaunch?: boolean;
   switchBranchOnTabCreate?: boolean;
   inheritedModel?: { provider: string; id: string };
+  base?: string;
+  existingBranch?: boolean;
+  existingComparison?: string;
+  failComparisonWrite?: boolean;
+  baseLookupFailure?: "killed" | "truncated";
 }) {
   const repoKey = realFs.realpathSync(process.cwd());
   const managerCheckout = repoKey;
@@ -802,6 +809,11 @@ function projectLifecycle(options: {
   const branch = "feature/baseline";
   let checkoutBranch = branch;
   let worktreeCreates = 0;
+  const gitCommands: string[][] = [];
+  let comparisonValues = options.existingComparison;
+  let lead: Record<string, unknown> | undefined;
+  let leadState: Record<string, unknown> | undefined;
+  const simulateLaunch = options.launch || options.completeLaunch;
   const supervision = {
     ...supervisionRuntime(WORKSPACE),
     root: assignmentRoot,
@@ -846,6 +858,39 @@ function projectLifecycle(options: {
             stderr: "",
             code: 0,
           };
+        }
+        gitCommands.push(args);
+        if (args[0] === "for-each-ref")
+          return {
+            stdout: options.existingBranch ? `refs/heads/${branch}\n` : "",
+            stderr: "",
+            code: 0,
+          };
+        if (args[0] === "rev-parse" && args.includes("--symbolic-full-name")) {
+          const input = args.at(-1);
+          const ref = input?.startsWith("refs/")
+            ? input
+            : input === "HEAD" || /^[0-9a-f]{7,64}$/iu.test(input ?? "")
+              ? ""
+              : `refs/heads/${input}`;
+          return {
+            stdout: ref ? `${ref}\n` : "",
+            stderr: "",
+            code: ref ? 0 : 1,
+            ...(options.baseLookupFailure
+              ? { [options.baseLookupFailure]: true }
+              : {}),
+          };
+        }
+        if (args[0] === "config" && args.includes("--get-all"))
+          return comparisonValues
+            ? { stdout: `${comparisonValues}\0`, stderr: "", code: 0 }
+            : { stdout: "", stderr: "", code: 1 };
+        if (args[0] === "config" && args.includes("--add")) {
+          if (options.failComparisonWrite)
+            return { stdout: "", stderr: "write denied", code: 1 };
+          comparisonValues = args.at(-1);
+          return { stdout: "", stderr: "", code: 0 };
         }
         let stdout = "";
         if (args[0] === "rev-parse" && args.includes("--show-toplevel"))
@@ -893,9 +938,9 @@ function projectLifecycle(options: {
           tab: { tab_id: "tab" },
           worktree: { path: worktreePath, branch },
         };
-      if (options.launch && args[0] === "pane" && args[1] === "process-info")
+      if (simulateLaunch && args[0] === "pane" && args[1] === "process-info")
         return { process_info: { foreground_processes: [] } };
-      if (options.launch && args[0] === "tab" && args[1] === "create") {
+      if (simulateLaunch && args[0] === "tab" && args[1] === "create") {
         if (options.switchBranchOnTabCreate) checkoutBranch = "feature/other";
         const id = readProjectAssignment(
           supervision as any,
@@ -935,13 +980,48 @@ function projectLifecycle(options: {
       throw new Error(`Unexpected Herdr request: ${args.join(" ")}`);
     },
     herdrSessionSnapshot: async () => {
-      if (options.launch) return { agents: [] };
+      if (simulateLaunch) return { agents: lead ? [lead] : [] };
       throw new Error(lifecycleStop);
     },
     scanAgentStates: () => ({ states: [] }),
-    readLeadCoordinationState: () => undefined,
-    startHerdrAgentInPane: async (_pi: unknown, _ctx: unknown, launch: any) =>
-      options.launch?.(launch),
+    readLeadCoordinationState: (_runtime: unknown, id: string) =>
+      leadState?.piSessionId === id ? leadState : undefined,
+    startHerdrAgentInPane: async (_pi: unknown, _ctx: unknown, launch: any) => {
+      options.launch?.(launch);
+      const id = launch.agentArgs.at(-1);
+      const instanceId = randomUUID();
+      lead = {
+        workspace_id: launch.workspaceId,
+        tab_id: launch.tabId,
+        pane_id: launch.paneId,
+        agent_session: {
+          source: "herdr:pi",
+          agent: "pi",
+          kind: "id",
+          value: id,
+        },
+      };
+      leadState = {
+        role: "lead",
+        piSessionId: id,
+        build: HERDSMAN_BUILD,
+        instanceId,
+        updatedAt: Date.now(),
+        startupAttestation: {
+          kind: "model_restore",
+          assignmentId: id,
+          generation: instanceId,
+          result: "verified",
+        },
+      };
+    },
+    isPiAgent: (candidate: any) => Boolean(candidate.agent_session),
+    sessionIdentity,
+    herdrSessionId,
+    liveLead: async () => (lead ? [lead] : []),
+    requireCompatibleBuild: () => {},
+    supervisedSessionFile: () => undefined,
+    writeChiefMessage: () => {},
     liveAgent: async () => [],
     messageLimits: async () => ({
       inline: { bytes: 1000 },
@@ -1020,6 +1100,10 @@ function projectLifecycle(options: {
     get worktreeCreates() {
       return worktreeCreates;
     },
+    gitCommands,
+    get comparisonValues() {
+      return comparisonValues;
+    },
     get published() {
       return readProjectAssignment(supervision as any, repoKey, branch);
     },
@@ -1032,6 +1116,7 @@ function projectLifecycle(options: {
             action: "delegate",
             task: "work",
             branch,
+            ...(options.base ? { base: options.base } : {}),
             ...(options.retained ? { files: [options.retained.ref!] } : {}),
           },
           ctx,
@@ -1072,6 +1157,77 @@ test("fresh delegation launches in the profile-aware worktree tab", async () => 
   });
   await assert.rejects(lifecycle.activate(), /launch observed/);
   assert.ok(lifecycle.published);
+});
+
+test("fresh delegation initializes comparison metadata only for a new branch with a named base", async () => {
+  const launch = () => {
+    throw new Error("launch observed");
+  };
+  const created = projectLifecycle({ base: "feature/parent", launch });
+  await assert.rejects(created.activate(), /launch observed/);
+  assert.equal(created.comparisonValues, "refs/heads/feature/parent");
+  const writeIndex = created.gitCommands.findIndex(
+    (args) => args[0] === "config" && args.includes("--add"),
+  );
+  const checkoutCheckIndex = created.gitCommands.findIndex(
+    (args) => args[0] === "symbolic-ref",
+  );
+  assert.ok(
+    writeIndex > checkoutCheckIndex,
+    "write follows checkout verification",
+  );
+
+  const existingBranch = projectLifecycle({
+    base: "feature/parent",
+    existingBranch: true,
+    launch,
+  });
+  await assert.rejects(existingBranch.activate(), /launch observed/);
+  assert.equal(existingBranch.comparisonValues, undefined);
+  assert.equal(
+    existingBranch.gitCommands.some((args) => args.includes("--add")),
+    false,
+  );
+
+  const existingValue = projectLifecycle({
+    base: "feature/parent",
+    existingComparison: "refs/heads/other-parent",
+    launch,
+  });
+  await assert.rejects(existingValue.activate(), /launch observed/);
+  assert.equal(existingValue.comparisonValues, "refs/heads/other-parent");
+
+  const implicitBase = projectLifecycle({ launch });
+  await assert.rejects(implicitBase.activate(), /launch observed/);
+  assert.equal(implicitBase.comparisonValues, undefined);
+
+  for (const scenario of [
+    { base: "a1b2c3d" },
+    { base: "feature/parent", failComparisonWrite: true },
+    { base: "feature/parent", baseLookupFailure: "killed" },
+    { base: "feature/parent", baseLookupFailure: "truncated" },
+  ] as const) {
+    const lifecycle = projectLifecycle({ ...scenario, completeLaunch: true });
+    const result = await lifecycle.activate();
+    assert.equal(lifecycle.comparisonValues, undefined);
+    assert.equal(
+      lifecycle.gitCommands.some((args) => args.includes("--add")),
+      "failComparisonWrite" in scenario,
+    );
+    const warning =
+      scenario.base === "feature/parent"
+        ? "Could not initialize the branch comparison target."
+        : undefined;
+    const rendered = JSON.parse(result.content[0].text);
+    for (const response of [result.details, rendered]) {
+      assert.equal(response.ok, true);
+      assert.equal(
+        response.comparison_warning,
+        warning,
+        JSON.stringify(scenario),
+      );
+    }
+  }
 });
 
 test("fresh delegation rejects missing Herdr integration before creating worktree or evidence", async (t) => {

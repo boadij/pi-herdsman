@@ -116,6 +116,39 @@ pending project messages; failed or ambiguous inventory preserves it. A retired
 assignment cannot be resumed, but a new delegation may start managed work from
 the remaining Git branch. Retirement does not delete branches or Pi sessions.
 
+For stacked work, delegate a new child from its named parent branch. Herdsman
+records that parent as the child's local comparison target, so widget
+statistics show changes relative to the parent rather than cumulative stack
+changes:
+
+```js
+delegate_work({
+  branch: "feat/child",
+  base: "feat/parent",
+  task: "Implement the dependent changes.",
+});
+```
+
+The target is advisory repository-local Git configuration. To initialize or
+retarget an existing branch manually, inspect its value, or restore implicit
+primary-checkout comparison, use:
+
+```sh
+git config --local --replace-all \
+  branch.feat/child.herdsman-base \
+  refs/heads/feat/parent
+
+git config --local --get-all \
+  branch.feat/child.herdsman-base
+
+git config --local --unset-all \
+  branch.feat/child.herdsman-base
+```
+
+Hosted pull-request retargeting does not update this local setting. The
+responsible shipping workflow must keep it current when reorganizing a stack;
+an unavailable configured parent suppresses numeric totals until corrected.
+
 Resume also accepts optional `files` for explicit evidence handoff and
 `retain: true` to add the instruction and supplied files to the assignment's
 continuing required evidence. By default, attachments are handoff-only and

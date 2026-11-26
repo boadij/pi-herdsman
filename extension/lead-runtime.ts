@@ -997,12 +997,17 @@ type LeadStatusRuntime = ReturnType<typeof createAgentStatusRuntime>;
 type LeadHerdRunRuntime = ReturnType<typeof createLeadHerdRunRuntime>;
 type LeadProjectRuntime = ReturnType<typeof createLeadProjectRuntime>;
 
-type GitRunner = (cwd: string, args: string[]) => Promise<string>;
+type GitRunner = (
+  cwd: string,
+  args: string[],
+  allowMissingConfig?: boolean,
+) => Promise<string>;
 
 type GitWorktreeState = {
   checkedOutBranch: string;
   dirty: boolean;
   head?: string;
+  branchRef?: string;
 };
 
 async function readGitWorktreeState(
@@ -1042,7 +1047,37 @@ async function readGitWorktreeState(
     checkedOutBranch,
     dirty: status.slice(headerEnd).some((entry) => entry.length > 0),
     ...(oid === "(initial)" ? {} : { head: oid }),
+    ...(branchHead === "(detached)"
+      ? {}
+      : { branchRef: `refs/heads/${branchHead}` }),
   };
+}
+
+async function resolveGitComparisonHead(
+  git: GitRunner,
+  cwd: string,
+  state: GitWorktreeState,
+  defaultHead: () => Promise<string>,
+): Promise<string> {
+  if (!state.branchRef) return defaultHead();
+  const key = `branch.${state.checkedOutBranch}.herdsman-base`;
+  const output = await git(
+    cwd,
+    ["config", "--local", "--no-includes", "--null", "--get-all", key],
+    true,
+  );
+  if (output === "") return defaultHead();
+  const values = output.split("\0");
+  const target = values[0];
+  if (
+    values.length !== 2 ||
+    values[1] !== "" ||
+    !target ||
+    !/^refs\/(?:heads|remotes)\/.+$/u.test(target) ||
+    target === state.branchRef
+  )
+    throw new Error("Invalid Git comparison target");
+  return git(cwd, ["show-ref", "--verify", "--hash", "--", target]);
 }
 
 async function observeGitChangeSummary(
@@ -1068,7 +1103,9 @@ async function observeGitChangeSummary(
   let comparisonSha: string | undefined;
   if (state.head) {
     try {
-      const head = (await comparisonHead()).trim();
+      const head = (
+        await resolveGitComparisonHead(git, checkoutPath, state, comparisonHead)
+      ).trim();
       if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(head)) {
         const bases = (
           await git(checkoutPath, ["merge-base", "--all", head, state.head])
@@ -3731,16 +3768,26 @@ export function registerLeadRuntime(
       );
     };
     const current = (): boolean => !abort.signal.aborted && stillCurrent();
-    const git: GitRunner = async (cwd, args) => {
+    const git: GitRunner = async (cwd, args, allowMissingConfig) => {
       if (!current()) throw new Error("Git sampling cancelled");
       const result = await pi.exec("git", args, {
         cwd,
         signal: abort.signal,
         timeout: 3_000,
       });
-      if (!current() || result.code !== 0 || result.killed)
+      if (!current() || result.killed || result.truncated)
         throw new Error("Git observation unavailable");
-      return String(result.stdout ?? "");
+      const stdout = String(result.stdout ?? "");
+      if (
+        allowMissingConfig &&
+        result.code === 1 &&
+        stdout === "" &&
+        !result.stderr?.trim()
+      )
+        return "";
+      if (result.code !== 0 || (allowMissingConfig && stdout === ""))
+        throw new Error("Git observation unavailable");
+      return stdout;
     };
     const sampling = (async () => {
       let summary: GitChangeSummary | undefined;
@@ -6034,16 +6081,30 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         generation(ctx) === expectedGeneration &&
         host.activeRole() === "manager" &&
         !host.state.roleSuspended;
-      const git = async (cwd: string, args: string[]): Promise<string> => {
+      const git = async (
+        cwd: string,
+        args: string[],
+        allowMissingConfig?: boolean,
+      ): Promise<string> => {
         if (!current()) throw new Error("Git sampling cancelled");
         const result = await host.pi.exec("git", args, {
           cwd,
           signal: abort.signal,
           timeout: 3_000,
         });
-        if (!current() || result.code !== 0 || result.killed)
+        if (!current() || result.killed || result.truncated)
           throw new Error("Git observation unavailable");
-        return String(result.stdout ?? "");
+        const stdout = String(result.stdout ?? "");
+        if (
+          allowMissingConfig &&
+          result.code === 1 &&
+          stdout === "" &&
+          !result.stderr?.trim()
+        )
+          return "";
+        if (result.code !== 0 || (allowMissingConfig && stdout === ""))
+          throw new Error("Git observation unavailable");
+        return stdout;
       };
       const identity = async (cwd: string, expectedCommon: string) => {
         const root = (await git(cwd, ["rev-parse", "--show-toplevel"])).trim();

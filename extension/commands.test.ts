@@ -18433,6 +18433,51 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
     "ignored-only worktree is clean",
   );
 
+  runGit(["branch", "feat/compare", assignedHead], assignedCheckout);
+  runGit(
+    [
+      "config",
+      "--local",
+      "branch.feat/assigned.herdsman-base",
+      "refs/heads/feat/compare",
+    ],
+    assignedCheckout,
+  );
+  testNow += 30_001;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.match(widget.render(120).join("\n"), /±0/);
+
+  runGit(
+    [
+      "config",
+      "--local",
+      "branch.feat/assigned.herdsman-base",
+      "refs/heads/missing-parent",
+    ],
+    assignedCheckout,
+  );
+  testNow += 30_001;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const unavailableTargetRow = widget
+    .render(120)
+    .find((line: string) => line.includes("feat/assigned"))!;
+  assert.match(unavailableTargetRow, /feat\/assigned/u);
+  assert.doesNotMatch(unavailableTargetRow, /(?:\+\d+ -\d+|\d+f|±0)/);
+
+  runGit(
+    ["config", "--local", "--unset-all", "branch.feat/assigned.herdsman-base"],
+    assignedCheckout,
+  );
+  testNow += 30_001;
+  sampleRefresh = true;
+  await runtime.refresh(ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.match(widget.render(120).join("\n"), /\+1 -0(?!\*)/);
+
   currentSnapshot.work[0].gitBaselineSha = undefined;
   testNow += 30_001;
   sampleRefresh = true;
@@ -19052,6 +19097,119 @@ test("supervision clicks verify standalone Manager Leads with fresh evidence des
   );
   runGit(["clean", "-fd"], assignedCheckout);
   runGit(["switch", "feat/assigned"], assignedCheckout);
+
+  const stackedParentCheckout = join(gitTestRoot, "stacked-parent");
+  runGit(
+    [
+      "worktree",
+      "add",
+      "-b",
+      "feat/parent",
+      stackedParentCheckout,
+      baselineSha,
+    ],
+    managerCheckout,
+  );
+  writeFileSync(
+    join(stackedParentCheckout, "parent-only.txt"),
+    "parent change\n".repeat(120),
+  );
+  runGit(["add", "parent-only.txt"], stackedParentCheckout);
+  runGit(["commit", "-m", "parent-only changes"], stackedParentCheckout);
+  runGit(["switch", "-c", "feat/stack-child", "feat/parent"], assignedCheckout);
+  writeFileSync(
+    join(assignedCheckout, "child-only.txt"),
+    "child change\n".repeat(20),
+  );
+  runGit(["add", "child-only.txt"], assignedCheckout);
+  runGit(["commit", "-m", "child changes"], assignedCheckout);
+  assignedHead = runGit(["rev-parse", "HEAD"], assignedCheckout);
+  const refreshStackSample = async () => {
+    testNow += 30_001;
+    sampleRefresh = true;
+    await runtime.refresh(ctx);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    return widget
+      .render(120)
+      .find((line: string) => line.includes("feat/assigned"))!;
+  };
+  let stackedRow = await refreshStackSample();
+  assert.match(
+    stackedRow,
+    /\+140 -0/,
+    "the primary-checkout comparison includes the committed parent and child changes",
+  );
+
+  runGit(
+    [
+      "config",
+      "--local",
+      "branch.feat/stack-child.herdsman-base",
+      "refs/heads/feat/parent",
+    ],
+    assignedCheckout,
+  );
+  stackedRow = await refreshStackSample();
+  assert.match(
+    stackedRow,
+    /\+20 -0/,
+    "the configured parent excludes inherited parent-only changes",
+  );
+
+  writeFileSync(
+    join(assignedCheckout, "child-only.txt"),
+    `${"child change\n".repeat(20)}${"unstaged child line\n".repeat(5)}`,
+  );
+  stackedRow = await refreshStackSample();
+  assert.match(stackedRow, /\+25 -0\*/);
+
+  runGit(
+    [
+      "config",
+      "--local",
+      "--replace-all",
+      "branch.feat/stack-child.herdsman-base",
+      "refs/heads/feat/assigned",
+    ],
+    assignedCheckout,
+  );
+  stackedRow = await refreshStackSample();
+  assert.match(stackedRow, /\+145 -0\*/);
+
+  runGit(
+    [
+      "config",
+      "--local",
+      "--replace-all",
+      "branch.feat/stack-child.herdsman-base",
+      "refs/heads/missing-parent",
+    ],
+    assignedCheckout,
+  );
+  stackedRow = await refreshStackSample();
+  assert.match(stackedRow, /↪ feat\/stack-child.*\*/);
+  assert.doesNotMatch(stackedRow, /(?:\+\d+ -\d+|\d+f|±0)/);
+
+  runGit(
+    [
+      "config",
+      "--local",
+      "--unset-all",
+      "branch.feat/stack-child.herdsman-base",
+    ],
+    assignedCheckout,
+  );
+  stackedRow = await refreshStackSample();
+  assert.match(stackedRow, /\+145 -0\*/);
+
+  runGit(["reset", "--hard", "HEAD"], assignedCheckout);
+  runGit(["switch", "feat/assigned"], assignedCheckout);
+  assignedHead = runGit(["rev-parse", "HEAD"], assignedCheckout);
+  runGit(
+    ["worktree", "remove", "--force", stackedParentCheckout],
+    managerCheckout,
+  );
+  runGit(["branch", "-D", "feat/parent", "feat/stack-child"], managerCheckout);
 
   currentRole = "chief";
   currentState.chiefMode = "active";
@@ -23899,11 +24057,31 @@ test("managed Lead sampler requires a verified assignment, caches its sample, an
   writeFileSync(join(primaryCheckout, "tracked.txt"), "base\n");
   runGit(["add", "tracked.txt"], primaryCheckout);
   runGit(["commit", "-m", "base"], primaryCheckout);
+  writeFileSync(
+    join(primaryCheckout, "tracked.txt"),
+    `base\n${"inherited parent line\n".repeat(10)}`,
+  );
+  runGit(["add", "tracked.txt"], primaryCheckout);
+  runGit(["commit", "-m", "parent changes"], primaryCheckout);
+  runGit(["branch", "feature-parent"], primaryCheckout);
+  runGit(["reset", "--hard", "HEAD^"], primaryCheckout);
   runGit(
-    ["worktree", "add", "-b", "feature", assignedCheckout],
+    ["worktree", "add", "-b", "feature", assignedCheckout, "feature-parent"],
     primaryCheckout,
   );
-  writeFileSync(join(assignedCheckout, "tracked.txt"), "base\nchange\n");
+  writeFileSync(
+    join(assignedCheckout, "tracked.txt"),
+    `base\n${"inherited parent line\n".repeat(10)}change\n`,
+  );
+  runGit(
+    [
+      "config",
+      "--local",
+      "branch.feature.herdsman-base",
+      "refs/heads/feature-parent",
+    ],
+    assignedCheckout,
+  );
   const repoKey = resolve(
     primaryCheckout,
     runGit(["rev-parse", "--git-common-dir"], primaryCheckout),
@@ -24087,6 +24265,13 @@ test("managed Lead sampler requires a verified assignment, caches its sample, an
   assert.ok(widget);
   await t.waitFor(() => assert.match(widget!.render(120)[0]!, /\+1 -0\*/u));
   assert.match(widget!.render(120)[0]!, /⎇ feature/u);
+  assert.ok(
+    gitCalls.some(
+      (args) =>
+        args[0] === "config" && args.includes("branch.feature.herdsman-base"),
+    ),
+    "managed Lead resolves its branch-specific comparison target",
+  );
   assert.equal(gitCalls.filter((args) => args[1] === "status").length, 1);
   const probesAfterSample = gitCalls.length;
   for (let i = 0; i < 3; i++) widget!.render(120);

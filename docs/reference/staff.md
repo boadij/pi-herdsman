@@ -247,6 +247,14 @@ continue it. An unoccupied existing Herdr worktree may still be reused for new
 work. A different live Lead occupying that worktree prevents another managed
 writer.
 
+When Herdsman creates a genuinely new branch from an explicit named local or
+remote-tracking branch base, it initializes the branch's repository-local Git
+comparison target to that base. Existing branches, reused worktrees, omitted
+bases, and bases that do not unambiguously name a branch do not initialize or
+overwrite this advisory setting. Initialization failure does not prevent
+otherwise successful delegation; the result includes a `comparison_warning`.
+`resume_work` never changes comparison metadata.
+
 For new work, `files` uses the same configured attachment sizing policy as
 Agent delegation: `inlineAttachmentLimitBytes` controls per-file embedding and
 `mailboxPayloadLimitBytes` bounds the durable project assignment. Explicitly

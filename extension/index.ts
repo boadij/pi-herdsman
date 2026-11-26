@@ -1167,7 +1167,9 @@ function registerExtensionImpl(
         Type.String({
           minLength: 1,
           description:
-            "Base ref used only when Herdsman creates a new worktree.",
+            "Base ref used when Herdsman creates a new worktree. " +
+            "For a new branch, an explicit named branch base also " +
+            "initializes its local Git comparison target.",
         }),
       ),
       files: FILES_SCHEMA,
