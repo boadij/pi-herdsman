@@ -721,6 +721,7 @@ const chiefTools = [
   "clone_repository",
   "start_manager",
   "resume_manager",
+  "start_lead",
   "load_skill",
 ];
 
@@ -10625,6 +10626,7 @@ async function managerDelegateAssignmentTest(
   const childSessionPath = () => join(tmpdir(), `${childSession}.jsonl`);
   let created = false;
   let createdBranch = "";
+  let coordinatorTabCreated = false;
   let reportCheckoutAbsent = false;
   let gitStatusOutput = "";
   let started = false;
@@ -10671,11 +10673,18 @@ async function managerDelegateAssignmentTest(
   ) => {
     if (command === "herdr" && args[0] === "tab" && args[1] === "list") {
       tabCommands.push(args);
-      const tabId = args[3] === childWorkspace ? "child-tab" : "root-tab";
+      const tabId =
+        args[3] === childWorkspace
+          ? coordinatorTabCreated
+            ? "child-tab"
+            : "worktree-tab"
+          : "root-tab";
       return respond({
         tabs: [
           {
             tab_id: tabId,
+            workspace_id:
+              args[3] === childWorkspace ? childWorkspace : WORKSPACE,
             number: tabId === "child-tab" ? 41 : 27,
             label: tabLabels.get(tabId),
           },
@@ -10848,6 +10857,7 @@ async function managerDelegateAssignmentTest(
         `PI_CODING_AGENT_DIR=${PI_AGENT_ROOT}`,
       );
       assert.ok(args.includes("--no-focus"));
+      coordinatorTabCreated = true;
       return respond({
         tab: { tab_id: "child-tab", workspace_id: childWorkspace },
         root_pane: {
@@ -10861,13 +10871,20 @@ async function managerDelegateAssignmentTest(
     if (command === "herdr" && args[0] === "pane" && args[1] === "list")
       return respond({
         panes: [
-          {
-            pane_id: "child-pane",
-            workspace_id: childWorkspace,
-            tab_id: "child-tab",
-            terminal_id: "child-terminal",
-            cwd: childCwd,
-          },
+          coordinatorTabCreated
+            ? {
+                pane_id: "child-pane",
+                workspace_id: childWorkspace,
+                tab_id: "child-tab",
+                terminal_id: "child-terminal",
+                cwd: childCwd,
+              }
+            : {
+                pane_id: "worktree-pane",
+                workspace_id: childWorkspace,
+                tab_id: "worktree-tab",
+                cwd: childCwd,
+              },
         ],
       });
     if (command === "herdr" && args[0] === "pane" && args[1] === "get") {
@@ -10992,8 +11009,35 @@ async function managerDelegateAssignmentTest(
     if (command === "herdr" && isApiSnapshot(args))
       return respond({
         snapshot: {
-          workspaces: [],
-          panes: [],
+          workspaces:
+            created || started
+              ? [
+                  {
+                    workspace_id: childWorkspace,
+                    worktree: { checkout_path: childCwd, repo_key: repoKey },
+                  },
+                ]
+              : [],
+          panes: coordinatorTabCreated
+            ? [
+                {
+                  pane_id: "child-pane",
+                  workspace_id: childWorkspace,
+                  tab_id: "child-tab",
+                  cwd: childCwd,
+                  ...(started
+                    ? {
+                        agent_session: {
+                          source: "herdr:pi",
+                          agent: "pi",
+                          kind: "path",
+                          value: childSessionPath(),
+                        },
+                      }
+                    : {}),
+                },
+              ]
+            : [],
           agents: started
             ? [
                 {

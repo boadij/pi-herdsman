@@ -43,6 +43,8 @@ import {
   sameObservedSessionPath,
   resolveAssignmentCheckout,
   requireHerdrPiIntegration,
+  prepareHerdrCoordinatorPane,
+  startHerdrCoordinatorInPane,
 } from "../herdr.ts";
 import { readResult, unacknowledgedRequestExists } from "../mailbox.ts";
 import { claimSessionActivationLock } from "../lock.ts";
@@ -242,6 +244,8 @@ export type LeadProjectHost = {
     sessionPath?: string,
   ): Promise<HerdrRecord[]>;
   runHerdr: typeof import("../herdr.ts").runHerdr;
+  startHerdrCoordinatorInPane?: typeof import("../herdr.ts").startHerdrCoordinatorInPane;
+  prepareHerdrCoordinatorPane?: typeof import("../herdr.ts").prepareHerdrCoordinatorPane;
   listProjectAssignments: typeof import("../supervision.ts").listProjectAssignments;
   messageLimits(
     ctx: ExtensionContext,
@@ -249,7 +253,6 @@ export type LeadProjectHost = {
   prepareMessageInput: typeof import("../core.ts").prepareMessageInput;
   projectAssignmentBytes: typeof import("../supervision.ts").projectAssignmentBytes;
   delay: typeof import("node:timers/promises").setTimeout;
-  startHerdrAgentInPane: typeof import("../herdr.ts").startHerdrAgentInPane;
   sessionIdentity: typeof import("../herdr.ts").sessionIdentity;
   captureStartupDiagnostic: typeof import("../herdr.ts").captureStartupDiagnostic;
   truncateModelText: typeof import("../presentation.ts").truncateModelText;
@@ -2158,7 +2161,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     resolveMessageFiles,
     projectAssignmentBytes,
     delay,
-    startHerdrAgentInPane,
     sessionIdentity,
     captureStartupDiagnostic,
     appendDurableError,
@@ -4748,48 +4750,25 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           });
           // Keep the initial tab: Herdr cannot conditionally close it while
           // proving atomically that no user process has taken ownership.
-          const created = await runHerdr(
-            pi,
-            ctx,
-            [
-              "tab",
-              "create",
-              "--workspace",
-              workspaceId!,
-              "--cwd",
-              cwd!,
-              "--label",
-              label,
-              "--env",
-              `PI_CODING_AGENT_DIR=${agentDir}`,
-              "--env",
+          const pane = await (
+            host.prepareHerdrCoordinatorPane ?? prepareHerdrCoordinatorPane
+          )(pi, ctx, {
+            workspaceId: workspaceId!,
+            cwd: cwd!,
+            agentDir,
+            label,
+            signal,
+            workspaceVerified: true,
+            env: [
               `${EXPECTED_ASSIGNED_LEAD_DEFINITION_ENV}=${JSON.stringify({ sessionId: assignment.id, name, projectTrusted })}`,
               ...(expectedStartupModel
                 ? [
-                    "--env",
                     `${EXPECTED_STARTUP_MODEL_ENV}=${JSON.stringify(expectedStartupModel)}`,
                   ]
                 : []),
-              "--no-focus",
             ],
-            { signal },
-          );
-          const tab = created?.tab;
-          const pane = created?.root_pane;
-          if (
-            typeof tab?.tab_id !== "string" ||
-            !tab.tab_id ||
-            tab.workspace_id !== workspaceId ||
-            tab.tab_id === initialTabId ||
-            typeof pane?.pane_id !== "string" ||
-            !pane.pane_id ||
-            pane.pane_id === initialPaneId ||
-            typeof pane.terminal_id !== "string" ||
-            !pane.terminal_id ||
-            pane.workspace_id !== workspaceId ||
-            pane.tab_id !== tab.tab_id
-          )
-            throw new Error("Herdr did not return exact Lead tab identities");
+            assertCurrentAuthority: assertManagerCurrent,
+          });
           if (operation.action === "delegate")
             await assertAssignedGitCheckout(cwd);
           else await assertResumePlacement();
@@ -4814,23 +4793,44 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             throw new Error(
               "Project assignment changed during Lead tab creation",
             );
-          tabId = tab.tab_id;
-          paneId = pane.pane_id;
+          tabId = pane.tabId;
+          paneId = pane.paneId;
           previousLeadInstanceId = readLeadCoordinationState(
             supervisionRuntime(),
             assignment.id,
           )?.instanceId;
           leadStartupStartedAt = Date.now();
-          await startHerdrAgentInPane(pi, ctx, {
+          await (
+            host.startHerdrCoordinatorInPane ?? startHerdrCoordinatorInPane
+          )(pi, ctx, {
             agentDir,
-            primaryWorkspaceId,
             workspaceId,
             tabId,
             paneId,
+            terminalId: pane.terminalId,
             cwd,
             label,
             runId: id,
             extensionPath: HERDSMAN_EXTENSION_PATH,
+            session: { id: assignment.id },
+            assertCurrentAuthority: async () => {
+              await assertManagerCurrent();
+              const current = readProjectAssignment(
+                runtime,
+                manager.repoKey,
+                branch,
+              );
+              if (
+                current?.id !== assignment.id ||
+                current.definition !== assignment.definition
+              )
+                throw new Error(
+                  "Project assignment changed before Lead launch",
+                );
+              if (operation.action === "delegate")
+                await assertAssignedGitCheckout(cwd);
+              else await assertResumePlacement();
+            },
             agentArgs: [
               ...launchArgs,
               "--session-dir",

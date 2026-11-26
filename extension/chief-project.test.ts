@@ -23,6 +23,7 @@ import {
 import { createChiefProjectRuntime } from "./chief-project.ts";
 import { fakeContext, PI_AGENT_ROOT } from "./support.ts";
 import {
+  COORDINATOR_DEFINITION_ENTRY,
   claimManagerLease,
   claimManagerStartupLock,
   getManagerStartIntent,
@@ -161,6 +162,7 @@ test("Chief clone provisions only a verified primary workspace", async (t) => {
         },
       );
       const result = await chief.clone(url, repository, fakeContext());
+      assert.ok("repository" in result);
       assert.equal(result.repository, repository);
       assert.ok(
         statSync(
@@ -296,6 +298,7 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
     "old generation",
     "malformed",
     "foreign",
+    "named",
   ] as const) {
     await t.test(scenario, async (t) => {
       const root = realpathSync.native(
@@ -310,6 +313,14 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         writeFileSync(
           join(agentDir, hook),
           readFileSync(join(PI_AGENT_ROOT, hook)),
+        );
+      }
+      if (scenario === "named") {
+        const definitions = join(agentDir, "coordinators", "managers");
+        mkdirSync(definitions, { recursive: true });
+        writeFileSync(
+          join(definitions, "custom-manager.md"),
+          "---\nname: custom-manager\nmodel: test-provider/test-model\nthinking: high\n---\nCustom manager profile body",
         );
       }
       const gitDirectory = join(root, "project", ".git");
@@ -481,6 +492,22 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
             case "agent start": {
               launches++;
               assert.ok(args.includes(join(agentDir, hook)));
+              if (scenario === "named") {
+                assert.ok(args.includes("--model"), JSON.stringify(args));
+                assert.ok(args.includes("test-provider/test-model"));
+                assert.ok(args.includes("--thinking"));
+                assert.ok(args.includes("high"));
+              }
+              assert.ok(!args.includes("--no-skills"));
+              assert.ok(!args.includes("--no-context-files"));
+              if (scenario !== "named") {
+                const tools =
+                  args[args.indexOf("--tools") + 1]?.split(",") ?? [];
+                assert.ok(
+                  tools.includes("delegate_work"),
+                  JSON.stringify(args),
+                );
+              }
               assert.equal(args.at(-2), "--session");
               assert.ok(!args.some((arg) => arg.includes("--trust")));
               const path = args.at(-1)!;
@@ -509,6 +536,10 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
                   getManagerStartIntent(runtime, id)?.paneId,
                   pane.pane_id,
                 );
+                assert.equal(
+                  getManagerStartIntent(runtime, id)?.definition,
+                  scenario === "named" ? "custom-manager" : "manager",
+                );
                 if (scenario === "safe refusal" && launches === 1) {
                   file = undefined;
                   id = undefined;
@@ -529,6 +560,13 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
                     sessionId: id,
                     role: "manager",
                     leadTools: [],
+                  });
+                if (scenario === "named")
+                  saved.appendCustomEntry(COORDINATOR_DEFINITION_ENTRY, {
+                    version: 1,
+                    sessionId: id,
+                    category: "manager",
+                    name: "custom-manager",
                   });
               } else {
                 assert.equal(path, file);
@@ -585,9 +623,13 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         runtime: () => currentRuntime,
         build,
         extensionPath: "/extension.ts",
+        managerTools: ["delegate_work"],
       });
       const ctx = fakeContext();
-      const start = () => chief.start(repository, undefined, ctx);
+      const start = () =>
+        scenario === "named"
+          ? chief.startNamed(repository, undefined, "custom-manager", ctx)
+          : chief.start(repository, undefined, ctx);
       if (scenario === "missing integration") {
         await assert.rejects(
           start(),
@@ -647,7 +689,11 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         assert.deepEqual(remainingIntents(), []);
         denyChief = false;
         tabCreated = false;
-        assert.deepEqual(await start(), { status: "started", repository });
+        assert.deepEqual(await start(), {
+          status: "started",
+          repository,
+          definition: "manager",
+        });
         assert.equal(launches, 2);
         assert.equal(existsSync(guardPath), false);
         return;
@@ -733,7 +779,11 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         );
         return;
       }
-      assert.deepEqual(first, { status: "started", repository });
+      assert.deepEqual(first, {
+        status: "started",
+        repository,
+        definition: scenario === "named" ? "custom-manager" : "manager",
+      });
       assert.equal(existsSync(guardPath), false);
       if (scenario === "pending" || scenario === "old generation") {
         assert.equal(managerPublished, true);
@@ -780,11 +830,13 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
       assert.deepEqual(await start(), {
         status: "resume_required",
         repository,
+        ...(scenario === "named" ? { definition: "custom-manager" } : {}),
       });
       assert.equal(readFileSync(file, "utf8"), expectedHistoryAtLaunch);
       assert.deepEqual(await chief.resume(repository, ctx), {
         status: "resumed",
         repository,
+        definition: scenario === "named" ? "custom-manager" : "manager",
       });
       assert.equal(launches, 2);
       assert.equal(existsSync(guardPath), false);

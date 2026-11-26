@@ -41,6 +41,7 @@ import type {
   ManagerLease,
   ManagerRecoveryReference,
   ManagerStartIntent,
+  CoordinatorStartIntent,
   ProjectAssignment,
   UnverifiedLead,
   ProjectMessage,
@@ -79,7 +80,9 @@ import {
   COORDINATION_INBOX_SCAN_LIMIT,
   peerRuntime,
   consumeManagerStartIntent,
+  consumeCoordinatorStartIntent,
   getManagerStartIntent,
+  getCoordinatorStartIntent,
   removeManagerRecoveryReference,
   writeManagerRecoveryReference,
 } from "./supervision.ts";
@@ -364,6 +367,10 @@ type LeadRoleTransitionHost = LeadTransitionHost & {
     ctx: ExtensionContext,
     role: "manager" | "chief",
   ): SupervisoryProfile;
+  initializeOrdinaryLeadExecution?(
+    ctx: ExtensionContext,
+    mode: LeadExecutionMode,
+  ): void;
   commitSupervisoryProfile(profile: SupervisoryProfile | undefined): void;
   currentSupervisoryProfile(
     ctx: ExtensionContext,
@@ -1495,10 +1502,11 @@ export function createLeadSessionStartRuntime(host: {
         let optionalManager = false;
         let leadStateRestored = false;
         let leadStateValid = true;
-        let startupIntent: ManagerStartIntent | undefined;
+        let startupIntent: CoordinatorStartIntent | undefined;
         if (freshSession && !hasPersistedRole && !malformedRole) {
           try {
-            startupIntent = host.roleTransitions.managerStartIntent(sessionId);
+            startupIntent =
+              host.roleTransitions.coordinatorStartIntent(sessionId);
           } catch (error) {
             malformedRole = true;
             await host.failClosedRole(ctx, error);
@@ -1512,7 +1520,9 @@ export function createLeadSessionStartRuntime(host: {
           }
         }
         if (
-          (startupIntent || optionalManager || persistedRole === "manager") &&
+          ((startupIntent && (startupIntent.role ?? "manager") === "manager") ||
+            optionalManager ||
+            persistedRole === "manager") &&
           !malformedRole &&
           host.roleTransitions.canRestoreChiefState()
         ) {
@@ -1522,10 +1532,21 @@ export function createLeadSessionStartRuntime(host: {
         }
         try {
           if (!malformedRole && !sessionSignal.aborted) {
-            if (startupIntent)
-              await host.roleTransitions.activateManagerFromIntent(
+            if (startupIntent && (startupIntent.role ?? "manager") === "lead") {
+              await host.roleTransitions.activateLeadFromIntent(
                 ctx,
                 startupIntent,
+              );
+              await host.roleTransitions.resolveControllerRole(
+                ctx,
+                "lead",
+                false,
+                reason === "reload",
+              );
+            } else if (startupIntent)
+              await host.roleTransitions.activateManagerFromIntent(
+                ctx,
+                startupIntent as ManagerStartIntent,
               );
             else
               await host.roleTransitions.resolveControllerRole(
@@ -2069,8 +2090,22 @@ export function registerLeadRuntime(
     ctx: ExtensionContext,
     role: "manager" | "chief",
   ): SupervisoryProfile => {
+    const sessionId = ctx.sessionManager.getSessionId();
+    const binding =
+      role === "manager"
+        ? readCoordinatorDefinitionBinding(
+            ctx.sessionManager.getEntries(),
+            sessionId,
+          )
+        : undefined;
+    if (binding && binding.category !== "manager")
+      throw new Error(
+        "Saved Coordinator definition is not a Manager definition",
+      );
     const name =
-      role === "manager" ? MANAGER_DEFINITION_NAME : CHIEF_DEFINITION_NAME;
+      role === "manager"
+        ? (binding?.name ?? MANAGER_DEFINITION_NAME)
+        : CHIEF_DEFINITION_NAME;
     const definition = options.commandHost.resolveDefinition(role, name, {
       ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
       onWarning: (message) => notifyDefinitionWarning(ctx, message),
@@ -2088,7 +2123,7 @@ export function registerLeadRuntime(
       role,
       definition: prepared,
       baseline,
-      sessionId: ctx.sessionManager.getSessionId(),
+      sessionId,
       valid: true,
     };
   };
@@ -3084,6 +3119,12 @@ export function registerLeadRuntime(
     advanceChiefInboxGeneration: () => inboxRuntime.advanceGeneration(),
     clearChiefInboxTimer: () => inboxRuntime.clearTimer(),
     startChiefInbox: (ctx: ExtensionContext) => inboxRuntime.start(ctx),
+    initializeOrdinaryLeadExecution: (_ctx, mode) => {
+      const baseline =
+        leadToolState.getLeadTools() ??
+        leadToolState.normalizeBaseTools(pi.getActiveTools());
+      persistLeadExecution(mode, baseline);
+    },
   });
   const inboxServices = {
     ...options.inboxHost,
@@ -4443,6 +4484,39 @@ export function registerLeadRuntime(
     mode: LeadExecutionMode,
     definitions?: readonly AgentDefinition[],
   ): AgentDefinition => {
+    const binding =
+      sessionKind?.kind === "ordinary"
+        ? readCoordinatorDefinitionBinding(
+            ctx.sessionManager.getEntries(),
+            ctx.sessionManager.getSessionId(),
+          )
+        : undefined;
+    if (
+      binding?.category === "lead" &&
+      ![
+        FLEXIBLE_LEAD_DEFINITION_NAME,
+        ORCHESTRATOR_LEAD_DEFINITION_NAME,
+        MANAGED_LEAD_DEFINITION_NAME,
+      ].includes(binding.name)
+    ) {
+      const custom =
+        definitions?.find(
+          (candidate) =>
+            candidate.category === "lead" && candidate.name === binding.name,
+        ) ??
+        options.commandHost.resolveDefinition("lead", binding.name, {
+          ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
+          onWarning: (message) => notifyDefinitionWarning(ctx, message),
+        });
+      return {
+        ...custom,
+        body: expandAgentBodyFiles(
+          custom.body,
+          [],
+          `${custom.name} execution profile`,
+        ),
+      };
+    }
     const name =
       mode === "flexible"
         ? FLEXIBLE_LEAD_DEFINITION_NAME
@@ -11363,9 +11437,12 @@ export function createLeadRoleTransitions(
     const sessionId = ctx.sessionManager.getSessionId();
     if (
       intent &&
-      (intent.sessionId !== sessionId ||
+      ((intent.role !== undefined && intent.role !== "manager") ||
+        !intent.canonicalRepoKey ||
+        intent.sessionId !== sessionId ||
         intent.workspaceId !== workspaceId ||
         intent.paneId !== paneId ||
+        (intent.tabId !== undefined && intent.tabId !== tabId) ||
         !sameDirectory(intent.checkoutPath, ctx.cwd) ||
         host.sessionLeadRoleState(ctx.sessionManager.getBranch(), sessionId))
     )
@@ -11491,6 +11568,26 @@ export function createLeadRoleTransitions(
           "Manager startup requires a session with no persisted role",
         );
       ctx.signal?.throwIfAborted();
+      const existingBinding = readCoordinatorDefinitionBinding(
+        ctx.sessionManager.getEntries(),
+        sessionId,
+      );
+      const selectedDefinition = intent.definition ?? MANAGER_DEFINITION_NAME;
+      if (
+        existingBinding &&
+        (existingBinding.category !== "manager" ||
+          existingBinding.name !== selectedDefinition)
+      )
+        throw new Error(
+          "Manager startup definition conflicts with immutable session binding",
+        );
+      if (!existingBinding)
+        host.pi.appendEntry(COORDINATOR_DEFINITION_ENTRY, {
+          version: 1,
+          sessionId,
+          category: "manager",
+          name: selectedDefinition,
+        });
       consumeManagerStartIntent(host.supervisionRuntime(), intent);
     }
     const profile = host.prepareSupervisoryProfile(ctx, "manager");
@@ -12126,6 +12223,64 @@ export function createLeadRoleTransitions(
     state.managerLease = undefined;
     reconcileRoleTools();
   };
+  const activateLeadFromIntent = async (
+    ctx: ExtensionContext,
+    intent: CoordinatorStartIntent,
+  ): Promise<void> => {
+    const sessionId = ctx.sessionManager.getSessionId();
+    if (
+      intent.role !== "lead" ||
+      intent.sessionId !== sessionId ||
+      !intent.tabId ||
+      intent.workspaceId !== host.identity.workspaceId ||
+      intent.paneId !== host.identity.paneId ||
+      intent.tabId !== host.identity.tabId ||
+      !sameDirectory(intent.checkoutPath, ctx.cwd) ||
+      host.isManagedSession?.() ||
+      host.sessionLeadRoleState(ctx.sessionManager.getBranch(), sessionId)
+    )
+      throw new Error(
+        "Ordinary Lead startup intent does not match the fresh session and placement",
+      );
+    const current = getCoordinatorStartIntent(
+      host.supervisionRuntime(),
+      sessionId,
+    );
+    if (
+      !current ||
+      current.role !== "lead" ||
+      current.tabId !== intent.tabId ||
+      current.workspaceId !== intent.workspaceId ||
+      current.paneId !== intent.paneId ||
+      current.checkoutPath !== intent.checkoutPath ||
+      current.definition !== intent.definition
+    )
+      throw new Error("Ordinary Lead startup intent changed before activation");
+    const binding = readCoordinatorDefinitionBinding(
+      ctx.sessionManager.getEntries(),
+      sessionId,
+    );
+    if (intent.definition) {
+      if (
+        binding &&
+        (binding.category !== "lead" || binding.name !== intent.definition)
+      )
+        throw new Error(
+          "Ordinary Lead definition conflicts with immutable session binding",
+        );
+      if (!binding)
+        host.pi.appendEntry(COORDINATOR_DEFINITION_ENTRY, {
+          version: 1,
+          sessionId,
+          category: "lead",
+          name: intent.definition,
+        });
+    }
+    if (intent.leadMode)
+      host.initializeOrdinaryLeadExecution?.(ctx, intent.leadMode);
+    consumeCoordinatorStartIntent(host.supervisionRuntime(), intent);
+    host.persistRole("lead");
+  };
   return {
     beginShutdownRole,
     shutdownRole,
@@ -12136,10 +12291,21 @@ export function createLeadRoleTransitions(
     beginSessionRole,
     activateChief,
     activateManager,
-    managerStartIntent: (sessionId: string) =>
+    managerStartIntent: (sessionId: string) => {
+      if (!process.env.HERDR_SOCKET_PATH) return undefined;
+      const intent = getManagerStartIntent(
+        host.supervisionRuntime(),
+        sessionId,
+      );
+      return intent && (intent.role ?? "manager") === "manager"
+        ? intent
+        : undefined;
+    },
+    coordinatorStartIntent: (sessionId: string) =>
       process.env.HERDR_SOCKET_PATH
-        ? getManagerStartIntent(host.supervisionRuntime(), sessionId)
+        ? getCoordinatorStartIntent(host.supervisionRuntime(), sessionId)
         : undefined,
+    activateLeadFromIntent,
     activateManagerFromIntent: (
       ctx: ExtensionContext,
       intent: ManagerStartIntent,

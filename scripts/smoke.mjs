@@ -11653,6 +11653,38 @@ async function runChiefManagerSmoke(ctx) {
     },
   ]);
   assert.equal(matches[0].managerStatus, "none");
+  const ordinaryLeadStart = await lifecycle(
+    "start_lead",
+    "lead_started",
+    "ordinary-lead",
+    { workspace: clone.workspaceId },
+  );
+  const ordinaryLeadPanes = (await panes()).filter(
+    (pane) => pane.workspace_id === clone.workspaceId,
+  );
+  assert.equal(ordinaryLeadPanes.length, 2);
+  const ordinaryLeadAgents = (await agents()).filter((agent) =>
+    ordinaryLeadPanes.some((pane) => pane.pane_id === agent.pane_id),
+  );
+  assert.equal(ordinaryLeadAgents.length, 1);
+  const ordinaryLeadId = await agentSessionId(ctx, ordinaryLeadAgents[0]);
+  assert.ok(ordinaryLeadId, "ordinary Lead has no exact Pi session ID");
+  const ordinaryLeadSession = await exactIsolatedSession(ctx, ordinaryLeadId);
+  assert.ok(
+    ordinaryLeadSession,
+    "ordinary Lead exact saved session is missing",
+  );
+  assert.ok(
+    sessionEntries(ordinaryLeadSession.contents).some(
+      (entry) =>
+        entry.customType === "pi-herdsman-role" &&
+        entry.data?.sessionId === ordinaryLeadId &&
+        entry.data?.role === "lead",
+    ),
+    "Chief start_lead did not establish ordinary Lead role identity",
+  );
+  assert.equal(matches[0].managerStatus, "none");
+  assert.ok(ordinaryLeadStart, "Chief start_lead result was not persisted");
   await lifecycle("start_manager", "started", "start");
   const first = await observeManager("first-manager");
   assert.notEqual(first.pane.workspace_id, ctx.rootWorkspaceId);
