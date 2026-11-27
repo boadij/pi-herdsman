@@ -2770,26 +2770,29 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
   tabFailure = undefined;
   tabCreates.length = 0;
   events.length = 0;
-  await t.test("missing integration leaves the saved assignment untouched", async (t) => {
-    const missingIntegration = removeHerdrIntegrationForTest(t);
-    const priorPreparations = preparations;
-    const readAssignment = () =>
-      readProjectAssignment(intentRuntime, repoKey, assignment.branch);
-    const priorAssignment = readAssignment();
-    await assert.rejects(
-      runtime.activateProjectLead(
-        { action: "resume", branch: assignment.branch, message: "continue" },
-        ctx,
-        new AbortController().signal,
-      ),
-      missingIntegration,
-    );
-    assert.deepEqual(readAssignment(), priorAssignment);
-    assert.equal(preparations, priorPreparations);
-    assert.equal(events.length, 0);
-    assert.deepEqual(tabCreates, []);
-    assert.equal(launches, 1);
-  });
+  await t.test(
+    "missing integration leaves the saved assignment untouched",
+    async (t) => {
+      const missingIntegration = removeHerdrIntegrationForTest(t);
+      const priorPreparations = preparations;
+      const readAssignment = () =>
+        readProjectAssignment(intentRuntime, repoKey, assignment.branch);
+      const priorAssignment = readAssignment();
+      await assert.rejects(
+        runtime.activateProjectLead(
+          { action: "resume", branch: assignment.branch, message: "continue" },
+          ctx,
+          new AbortController().signal,
+        ),
+        missingIntegration,
+      );
+      assert.deepEqual(readAssignment(), priorAssignment);
+      assert.equal(preparations, priorPreparations);
+      assert.equal(events.length, 0);
+      assert.deepEqual(tabCreates, []);
+      assert.equal(launches, 1);
+    },
+  );
 
   alreadyRunning = true;
   const runningResult = (await runtime.activateProjectLead(

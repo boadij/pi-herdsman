@@ -1547,6 +1547,41 @@ export function decide(model, context) {
         ? fauxAssistantMessage("CHIEF_MANAGER_SMOKE_SETTLED")
         : call(tool, JSON.parse(args));
     }
+    const delegation = prompt.match(
+      /^CHIEF_MANAGER_SMOKE delegate (chief|first|second)$/u,
+    );
+    if (delegation) {
+      const [, owner] = delegation;
+      const nested = owner === "first";
+      const label = `smoke-${owner}-agent`;
+      if (correlatedCall(messages, "delegate_agent", label))
+        return waitForResult("Waiting on the owned Agent.");
+      return call("delegate_agent", {
+        definition: nested ? "implementer" : "scout",
+        label,
+        task: nested
+          ? "CHIEF_MANAGER_SMOKE_AGENT_PARENT: delegate one child and remain pending."
+          : "CHIEF_MANAGER_SMOKE_AGENT_WAIT: ask your owner and remain waiting.",
+      });
+    }
+    if (prompt.includes("CHIEF_MANAGER_SMOKE_AGENT_PENDING"))
+      return waitForResult("Waiting on the owned Agent.");
+    const task = prompt.replace(/^Task:\n/u, "");
+    if (task.startsWith("CHIEF_MANAGER_SMOKE_AGENT_PARENT:")) {
+      return correlatedCall(messages, "delegate_agent", "smoke-nested-agent")
+        ? waitForResult("Waiting on the nested Agent.")
+        : call("delegate_agent", {
+            definition: "scout",
+            label: "smoke-nested-agent",
+            task: "CHIEF_MANAGER_SMOKE_AGENT_WAIT: ask your owner and remain waiting.",
+          });
+    }
+    if (task.startsWith("CHIEF_MANAGER_SMOKE_AGENT_WAIT:"))
+      return correlatedCall(messages, "await_owner")
+        ? waitForResult("Waiting on the owner.")
+        : call("await_owner", {
+            question: "CHIEF_MANAGER_SMOKE_AGENT_PENDING",
+          });
     const assignment = prompt.match(/^CHIEF_MANAGER_SMOKE assign (\S+)$/u);
     if (assignment) {
       const result = successfulCallCount(

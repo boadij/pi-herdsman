@@ -126,6 +126,7 @@ import { contentText } from "@earendil-works/pi-ai";
 import { isLeadExecutionMode, type LeadExecutionMode } from "./core.ts";
 import {
   createAgentController,
+  claimDelegationLock,
   openOwnedAssignmentSession,
   ownedAssignmentChildren,
   resolveAssignmentSession,
@@ -10385,6 +10386,21 @@ export function createLeadRoleTransitions(
   state: LeadRuntimeState,
   host: LeadRoleTransitionHost,
 ) {
+  const withRootDelegationExclusion = async <T>(
+    ctx: ExtensionContext,
+    operation: () => Promise<T>,
+  ): Promise<T> => {
+    if (host.controllerScope.kind !== "root") return operation();
+    const release = claimDelegationLock(
+      host.identity.workspaceId ?? "",
+      ctx.sessionManager.getSessionId(),
+    );
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  };
   let pendingManagerRecovery: ManagerLease | undefined;
   const publishManagerRecovery = (
     ctx: ExtensionContext,
@@ -11329,10 +11345,8 @@ export function createLeadRoleTransitions(
       throw error;
     }
     try {
-      return await activateChiefUnderAdmission(
-        args[0],
-        args[1],
-        refreshSnapshot,
+      return await withRootDelegationExclusion(args[0], () =>
+        activateChiefUnderAdmission(args[0], args[1], refreshSnapshot),
       );
     } finally {
       admission.release();
@@ -11571,7 +11585,7 @@ export function createLeadRoleTransitions(
       }
       return "Manager profile refreshed.";
     }
-    return establishManager(ctx);
+    return withRootDelegationExclusion(ctx, () => establishManager(ctx));
   };
   const establishManager = async (
     ctx: ExtensionCommandContext,
