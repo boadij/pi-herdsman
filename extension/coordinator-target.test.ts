@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
+import {
+  SessionManager,
+  type CustomEntry,
+  type ExtensionAPI,
+  type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
   COORDINATOR_TARGET_PATTERN,
@@ -92,8 +94,67 @@ test("caller bindings persist once and resolve after session restoration", () =>
     resolveCoordinatorTarget(restored.ctx, uppercaseSuffixTarget),
     { role: "lead", sessionId: RECIPIENT_SESSION_ID },
   );
-  assert.throws(() =>
-    resolveCoordinatorTarget(fixture("other-caller", entries).ctx, target),
+  assert.throws(
+    () =>
+      resolveCoordinatorTarget(
+        fixture("0190abc1-2345-7def-8123-456789abcdf0", entries).ctx,
+        target,
+      ),
+    /Unknown coordinator target; rediscover it/,
+  );
+});
+
+test("forked sessions rediscover coordinator targets without inheriting bindings", () => {
+  const sessionManager = SessionManager.inMemory(undefined, {
+    id: OWNER_SESSION_ID,
+  });
+  const ctx = { sessionManager } as unknown as ExtensionContext;
+  const pi = {
+    appendEntry(type: string, data: unknown) {
+      sessionManager.appendCustomEntry(type, data);
+    },
+  } as unknown as ExtensionAPI;
+
+  const target = rememberCoordinatorTarget(
+    pi,
+    ctx,
+    "lead",
+    RECIPIENT_SESSION_ID,
+  );
+  const leaf = sessionManager.getBranch().at(-1)!;
+
+  sessionManager.createBranchedSession(leaf.id);
+
+  const forkId = sessionManager.getSessionId();
+  assert.notEqual(forkId, OWNER_SESSION_ID);
+  assert.throws(
+    () => resolveCoordinatorTarget(ctx, target),
+    /Unknown coordinator target; rediscover it/,
+  );
+
+  assert.equal(
+    rememberCoordinatorTarget(pi, ctx, "lead", RECIPIENT_SESSION_ID),
+    target,
+  );
+  assert.equal(
+    rememberCoordinatorTarget(pi, ctx, "lead", RECIPIENT_SESSION_ID),
+    target,
+  );
+  assert.deepEqual(resolveCoordinatorTarget(ctx, target), {
+    role: "lead",
+    sessionId: RECIPIENT_SESSION_ID,
+  });
+
+  const bindings = sessionManager
+    .getBranch()
+    .filter((entry) => entry.type === "custom" && entry.customType === ENTRY);
+  assert.equal(bindings.length, 2);
+  assert.deepEqual(
+    bindings.map(
+      (entry) =>
+        (entry as CustomEntry<{ ownerSessionId: string }>).data?.ownerSessionId,
+    ),
+    [OWNER_SESSION_ID, forkId],
   );
 });
 
@@ -147,7 +208,7 @@ test("absent, malformed, tampered, and conflicting bindings fail closed", () => 
     },
     {
       version: 1,
-      ownerSessionId: "other-owner",
+      ownerSessionId: "session-id.",
       target,
       role: "lead",
       sessionId: RECIPIENT_SESSION_ID,
