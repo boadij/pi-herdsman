@@ -144,19 +144,25 @@ function inspectDirectory(path: string) {
   return { path: anchor, exists: true, anchor };
 }
 
-/** Inspect only; the caller owns approval for creation and Git bootstrap. */
-export function resolveLocalRepositoryPath(value: string) {
-  const selected = inspectDirectory(absolutePath(value, homedir()));
+function inspectLocalRepositoryPath(path: string) {
+  const selected = inspectDirectory(path);
   const identity = directoryEntry(selected.anchor);
   if (!identity?.isDirectory() || identity.dev === 0n || identity.ino === 0n)
     throw new Error("Cannot verify local repository directory identity");
   return { ...selected, dev: identity.dev, ino: identity.ino };
 }
 
+/** Inspect only; the caller owns approval for creation and Git bootstrap. */
+export function resolveLocalRepositoryPath(value: string) {
+  return inspectLocalRepositoryPath(absolutePath(value, homedir()));
+}
+
 type LocalSelection = ReturnType<typeof resolveLocalRepositoryPath>;
 
-export function verifyLocalRepositoryPath(selected: LocalSelection): void {
-  const current = resolveLocalRepositoryPath(selected.path);
+function verifyLocalSelection(
+  selected: LocalSelection,
+  current: LocalSelection,
+): void {
   if (
     current.exists !== selected.exists ||
     current.anchor !== selected.anchor ||
@@ -164,6 +170,10 @@ export function verifyLocalRepositoryPath(selected: LocalSelection): void {
     current.ino !== selected.ino
   )
     throw new Error("Approved local repository path changed");
+}
+
+export function verifyLocalRepositoryPath(selected: LocalSelection): void {
+  verifyLocalSelection(selected, resolveLocalRepositoryPath(selected.path));
 }
 
 /** Create a missing, previously approved local path; never adopt a new leaf. */
@@ -253,11 +263,6 @@ export async function resolveCheckoutCloneSource(
 ): Promise<RemoteSource> {
   signal?.throwIfAborted();
   assertNoGitRedirection();
-  const select = (path: string) => {
-    const selected = resolveLocalRepositoryPath(path);
-    if (!selected.exists) throw new Error("Checkout directory is missing");
-    return selected;
-  };
   const bounded: Pick<ExtensionAPI, "exec"> = {
     async exec(command, args, options) {
       signal?.throwIfAborted();
@@ -279,11 +284,15 @@ export async function resolveCheckoutCloneSource(
     },
   };
   try {
-    const selected = select(path);
+    const selected = resolveLocalRepositoryPath(path);
+    if (!selected.exists) throw new Error("Checkout directory is missing");
     const before = await gitRepositoryScope(bounded, selected.path, signal);
     if (!sameDirectory(before.checkoutPath, selected.path))
       throw new Error("Selected directory is not the checkout root");
-    const metadata = select(before.canonicalRepoKey);
+    // Git returned a canonical metadata path, not a user checkout selector.
+    // The Windows selector policy intentionally rejects .git components.
+    const metadata = inspectLocalRepositoryPath(before.canonicalRepoKey);
+    if (!metadata.exists) throw new Error("Git metadata directory is missing");
     verifyLocalRepositoryPath(selected);
     const { stdout } = await bounded.exec(
       "git",
@@ -296,7 +305,7 @@ export async function resolveCheckoutCloneSource(
     if (source.kind !== "remote") throw new Error("Origin is not a remote");
     const after = await gitRepositoryScope(bounded, selected.path, signal);
     verifyLocalRepositoryPath(selected);
-    verifyLocalRepositoryPath(metadata);
+    verifyLocalSelection(metadata, inspectLocalRepositoryPath(metadata.path));
     if (
       !sameDirectory(before.checkoutPath, after.checkoutPath) ||
       !sameDirectory(before.canonicalRepoKey, after.canonicalRepoKey) ||
