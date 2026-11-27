@@ -2471,12 +2471,18 @@ export type ManagerRecoveryReference = Readonly<{
 export type ManagerStartIntent = Readonly<{
   version: 1;
   sessionId: string;
-  canonicalRepoKey: string;
+  canonicalRepoKey?: string;
   checkoutPath: string;
   workspaceId: string;
   paneId: string;
+  tabId?: string;
   createdAt: number;
+  role?: "manager" | "lead";
+  leadMode?: "flexible" | "orchestrate";
+  definition?: string;
 }>;
+
+export type CoordinatorStartIntent = ManagerStartIntent;
 
 const MANAGER_START_INTENT_TTL_MS = 10 * 60 * 1000;
 const MANAGER_LIFECYCLE_MAX_BYTES = 8192;
@@ -2713,16 +2719,43 @@ function validManagerStartIntent(value: unknown): value is ManagerStartIntent {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   return (
-    Object.keys(record).length === 7 &&
+    Object.keys(record).length >= 7 &&
+    Object.keys(record).length <= 11 &&
+    Object.keys(record).every((key) =>
+      [
+        "version",
+        "sessionId",
+        "canonicalRepoKey",
+        "checkoutPath",
+        "workspaceId",
+        "paneId",
+        "tabId",
+        "createdAt",
+        "role",
+        "leadMode",
+        "definition",
+      ].includes(key),
+    ) &&
     record.version === 1 &&
     validSession(record.sessionId) &&
-    validCanonicalRepoKey(record.canonicalRepoKey) &&
+    ((record.role === "lead" && record.canonicalRepoKey === undefined) ||
+      ((record.role === undefined || record.role === "manager") &&
+        validCanonicalRepoKey(record.canonicalRepoKey))) &&
     validCanonicalRepoKey(record.checkoutPath) &&
     validNativeIdentity(record.workspaceId) &&
     validNativeIdentity(record.paneId) &&
+    (record.tabId === undefined || validNativeIdentity(record.tabId)) &&
+    (record.role !== "lead" || validNativeIdentity(record.tabId)) &&
+    (record.role === undefined ||
+      record.role === "manager" ||
+      record.role === "lead") &&
+    (record.leadMode === undefined ||
+      record.leadMode === "flexible" ||
+      record.leadMode === "orchestrate") &&
     typeof record.createdAt === "number" &&
     Number.isSafeInteger(record.createdAt) &&
-    record.createdAt >= 0
+    record.createdAt >= 0 &&
+    (record.definition === undefined || isDefinitionName(record.definition))
   );
 }
 
@@ -2771,6 +2804,49 @@ export function getManagerStartIntent(
   );
   if (intent) assertManagerStartIntentFresh(intent);
   return intent;
+}
+
+export const writeCoordinatorStartIntent = writeManagerStartIntent;
+export const getCoordinatorStartIntent = getManagerStartIntent;
+export const consumeCoordinatorStartIntent = consumeManagerStartIntent;
+export const removeCoordinatorStartIntent = removeManagerStartIntent;
+
+/** Bounded read-only inventory used to prevent retrying unsettled ordinary starts. */
+export function listCoordinatorStartIntents(runtime: SupervisionRuntime): {
+  intents: CoordinatorStartIntent[];
+  complete: boolean;
+} {
+  const intents: CoordinatorStartIntent[] = [];
+  const directory = join(runtime.root, "manager-start-intents");
+  const info = lstatSync(directory, { throwIfNoEntry: false });
+  if (!info) return { intents, complete: true };
+  if (!info.isDirectory()) return { intents, complete: false };
+  let complete = true;
+  let names: string[];
+  try {
+    names = readdirSync(directory);
+  } catch {
+    return { intents, complete: false };
+  }
+  if (names.length > 2_000) return { intents, complete: false };
+  for (const name of names) {
+    if (!/^[0-9a-f]{64}\.json$/u.test(name)) continue;
+    try {
+      const record = readManagerLifecycleRecord(join(directory, name));
+      if (
+        !validManagerStartIntent(record) ||
+        managerStartIntentPath(runtime, record.sessionId) !==
+          join(directory, name)
+      ) {
+        complete = false;
+        continue;
+      }
+      intents.push(record);
+    } catch {
+      complete = false;
+    }
+  }
+  return { intents, complete };
 }
 
 export function consumeManagerStartIntent(
@@ -4381,6 +4457,7 @@ export type LeadStartupAttestation = {
   assignmentId: string;
   generation: string;
   result: "verified" | "definition_override" | "no_saved_model";
+  launchConfiguration?: string;
 };
 
 export type CoordinatorState = {
@@ -4806,13 +4883,28 @@ function validLeadState(value: unknown): value is CoordinatorState {
     (!!attestation &&
       typeof attestation === "object" &&
       !Array.isArray(attestation) &&
-      Object.keys(attestation).length === 4 &&
+      Object.keys(attestation).every((key) =>
+        [
+          "kind",
+          "assignmentId",
+          "generation",
+          "result",
+          "launchConfiguration",
+        ].includes(key),
+      ) &&
       (attestation as any).kind === "model_restore" &&
       (attestation as any).assignmentId === r.piSessionId &&
       (attestation as any).generation === r.instanceId &&
       ["verified", "definition_override", "no_saved_model"].includes(
         (attestation as any).result,
-      ));
+      ) &&
+      ((attestation as LeadStartupAttestation).launchConfiguration ===
+        undefined ||
+        (typeof (attestation as LeadStartupAttestation).launchConfiguration ===
+          "string" &&
+          /^[0-9a-f]{64}$/u.test(
+            (attestation as LeadStartupAttestation).launchConfiguration!,
+          ))));
   return (
     r.version === 1 &&
     (r.build === undefined || isRuntimeBuild(r.build)) &&

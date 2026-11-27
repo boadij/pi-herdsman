@@ -34,6 +34,7 @@ import {
 } from "./lock.ts";
 import {
   claimChiefLease as claimChiefLeaseRaw,
+  COORDINATOR_DEFINITION_ENTRY,
   globalProjectAssignmentSnapshot,
   listPendingRetirements,
   listProjectAssignments,
@@ -72,6 +73,9 @@ import {
 } from "./coordinator-target.ts";
 import {
   AGENT_COORDINATION_TOOLS,
+  coordinatorLaunchConfiguration,
+  EXPECTED_COORDINATOR_LAUNCH_ENV,
+  resolveDefinition,
   type AgentDefinition,
 } from "./agent-definitions.ts";
 import { herdsmanTempRoot, readRequiredEvidenceSnapshot } from "./storage.ts";
@@ -721,6 +725,7 @@ const chiefTools = [
   "clone_repository",
   "start_manager",
   "resume_manager",
+  "start_lead",
   "load_skill",
 ];
 
@@ -5169,6 +5174,52 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       createTabsBeforeDenied,
       "a definition outside agents: [agent] is denied before Herdr launch",
     );
+    const ownedLabel = `manager-policy-${randomUUID().slice(0, 8)}`;
+    const ownedMailbox = agentMailboxPath(WORKSPACE, ownedLabel);
+    resetAgentMailbox(ownedMailbox);
+    t.after(() => resetAgentMailbox(ownedMailbox));
+    writeAgentState(ownedMailbox, {
+      ...managedState(ownedLabel),
+      ownerSessionId: persistedManagerSessionId,
+    });
+    for (const agents of ["", "agents: []\n"]) {
+      writeFileSync(
+        managerOverride,
+        `---\nname: manager\ntools: []\n${agents}---\n`,
+      );
+      await persistedManager.commandOptions
+        .get("manager-refresh")
+        .handler("", persistedManagerContext);
+      const active = persistedManager.pi.getActiveTools();
+      for (const name of ["list_agents", "inspect_agent", "stop_agent"])
+        assert.ok(active.includes(name), name);
+      for (const name of ["delegate_agent", "resume_agent", "read"])
+        assert.ok(!active.includes(name), name);
+      const denied: any = await agentTool(persistedManager, "delegate").execute(
+        "restored-manager-opted-out",
+        { definition: "agent", task: "not permitted after opt-out" },
+        undefined,
+        undefined,
+        persistedManagerContext,
+      );
+      assert.equal(denied.details.error.category, "invalid_request");
+      const listed: any = await agentTool(persistedManager, "list").execute(
+        "restored-manager-owned",
+        {},
+        undefined,
+        undefined,
+        persistedManagerContext,
+      );
+      assert.equal(listed.details.ok, true, JSON.stringify(listed.details));
+      assert.ok(
+        listed.details.agents.some(
+          (agent: { agent?: string; available_tools?: string[] }) =>
+            agent.agent === ownedLabel &&
+            agent.available_tools?.includes("stop_agent"),
+        ),
+        JSON.stringify(listed.details),
+      );
+    }
     await persistedManager.events.get("session_shutdown")?.[0]();
     assert.equal(
       readManagerDescriptor(
@@ -6840,6 +6891,143 @@ test("Manager activation of an existing Git primary does not initialize Git", as
     readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
     "manager",
     harness.notices.join("\n"),
+  );
+});
+
+test("a named ordinary Lead can enter, restore and leave default Manager mode", async (t) => {
+  const cwd = realFs.mkdtempSync(join(tmpdir(), "manager-lead-binding-"));
+  const harness = managerBootstrapHarness(cwd);
+  updateConfig("autoActivateManager", false);
+  t.after(async () => {
+    delete process.env[EXPECTED_COORDINATOR_LAUNCH_ENV];
+    updateConfig("autoActivateManager", undefined);
+    await harness.cleanup();
+  });
+  assert.equal(harness.git(["init"]).status, 0);
+  assert.equal(
+    harness.git(["commit", "--allow-empty", "-m", "initial"]).status,
+    0,
+  );
+  const leads = join(cwd, ".pi", "coordinators", "leads");
+  mkdirSync(leads, { recursive: true });
+  writeFileSync(
+    join(leads, "custom-lead.md"),
+    "---\nname: custom-lead\n---\nCustom Lead profile",
+  );
+  harness.pi.pi.appendEntry(COORDINATOR_DEFINITION_ENTRY, {
+    version: 1,
+    sessionId: LEAD_SESSION_ID,
+    category: "lead",
+    name: "custom-lead",
+  });
+  const start = async () =>
+    harness.pi.events.get("session_start")![0](undefined, harness.context);
+  const assertLeadProfile = async () => {
+    const event = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await invokeEventHandlers(harness.pi, "before_agent_start")(
+      event,
+      harness.context,
+    );
+    assert.match(
+      (event.systemPromptOptions.sections as Record<string, string>)
+        .pi_herdsman_lead_execution!,
+      /Custom Lead profile/,
+    );
+  };
+  await start();
+  await assertLeadProfile();
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+    "manager",
+    harness.notices.join("\n"),
+  );
+
+  const choices = ["Project management  Active", "Leave Manager mode"];
+  harness.context.ui.select = async (_title: string, options: string[]) => {
+    const choice = choices.shift();
+    return options.find((option) => option === choice);
+  };
+  await harness.pi.commandOptions.get("herdsman")!.handler("", harness.context);
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+    "lead",
+    harness.notices.join("\n"),
+  );
+  await assertLeadProfile();
+  await harness.pi.commandOptions.get("manager")!.handler("", harness.context);
+
+  const expected = coordinatorLaunchConfiguration(
+    resolveDefinition("manager", "manager"),
+    cwd,
+  );
+  const sessionFile = join(cwd, "manager.jsonl");
+  writeFileSync(
+    sessionFile,
+    [
+      {
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: LEAD_SESSION_ID,
+        cwd,
+      },
+      {
+        type: "custom",
+        customType: "pi-herdsman-role",
+        id: "1234abcd",
+        parentId: null,
+        data: {
+          sessionId: LEAD_SESSION_ID,
+          role: "manager",
+          leadTools: ["read"],
+        },
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n") + "\n",
+  );
+  harness.context.sessionManager.getSessionFile = () => sessionFile;
+  harness.pi.entries.push({
+    type: "model_change",
+    provider: "test-provider",
+    modelId: "saved",
+  });
+  process.env[EXPECTED_COORDINATOR_LAUNCH_ENV] = expected;
+  harness.context.model = { provider: "test-provider", id: "fallback" };
+  await assert.rejects(
+    start(),
+    /saved model test-provider\/saved was not restored/,
+  );
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)
+      ?.startupAttestation,
+    undefined,
+  );
+
+  process.env[EXPECTED_COORDINATOR_LAUNCH_ENV] = expected;
+  harness.context.model = { provider: "test-provider", id: "saved" };
+  await start();
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)
+      ?.startupAttestation?.launchConfiguration,
+    expected,
+  );
+
+  const managers = join(cwd, ".pi", "coordinators", "managers");
+  mkdirSync(managers, { recursive: true });
+  writeFileSync(
+    join(managers, "manager.md"),
+    "---\nname: manager\nmodel: different/model\n---\nProject Manager",
+  );
+  process.env[EXPECTED_COORDINATOR_LAUNCH_ENV] = expected;
+  await assert.rejects(start(), /differs from the effective definition/);
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)
+      ?.startupAttestation,
+    undefined,
   );
 });
 
@@ -10625,6 +10813,7 @@ async function managerDelegateAssignmentTest(
   const childSessionPath = () => join(tmpdir(), `${childSession}.jsonl`);
   let created = false;
   let createdBranch = "";
+  let coordinatorTabCreated = false;
   let reportCheckoutAbsent = false;
   let gitStatusOutput = "";
   let started = false;
@@ -10671,11 +10860,18 @@ async function managerDelegateAssignmentTest(
   ) => {
     if (command === "herdr" && args[0] === "tab" && args[1] === "list") {
       tabCommands.push(args);
-      const tabId = args[3] === childWorkspace ? "child-tab" : "root-tab";
+      const tabId =
+        args[3] === childWorkspace
+          ? coordinatorTabCreated
+            ? "child-tab"
+            : "worktree-tab"
+          : "root-tab";
       return respond({
         tabs: [
           {
             tab_id: tabId,
+            workspace_id:
+              args[3] === childWorkspace ? childWorkspace : WORKSPACE,
             number: tabId === "child-tab" ? 41 : 27,
             label: tabLabels.get(tabId),
           },
@@ -10848,6 +11044,7 @@ async function managerDelegateAssignmentTest(
         `PI_CODING_AGENT_DIR=${PI_AGENT_ROOT}`,
       );
       assert.ok(args.includes("--no-focus"));
+      coordinatorTabCreated = true;
       return respond({
         tab: { tab_id: "child-tab", workspace_id: childWorkspace },
         root_pane: {
@@ -10861,13 +11058,20 @@ async function managerDelegateAssignmentTest(
     if (command === "herdr" && args[0] === "pane" && args[1] === "list")
       return respond({
         panes: [
-          {
-            pane_id: "child-pane",
-            workspace_id: childWorkspace,
-            tab_id: "child-tab",
-            terminal_id: "child-terminal",
-            cwd: childCwd,
-          },
+          coordinatorTabCreated
+            ? {
+                pane_id: "child-pane",
+                workspace_id: childWorkspace,
+                tab_id: "child-tab",
+                terminal_id: "child-terminal",
+                cwd: childCwd,
+              }
+            : {
+                pane_id: "worktree-pane",
+                workspace_id: childWorkspace,
+                tab_id: "worktree-tab",
+                cwd: childCwd,
+              },
         ],
       });
     if (command === "herdr" && args[0] === "pane" && args[1] === "get") {
@@ -10992,8 +11196,35 @@ async function managerDelegateAssignmentTest(
     if (command === "herdr" && isApiSnapshot(args))
       return respond({
         snapshot: {
-          workspaces: [],
-          panes: [],
+          workspaces:
+            created || started
+              ? [
+                  {
+                    workspace_id: childWorkspace,
+                    worktree: { checkout_path: childCwd, repo_key: repoKey },
+                  },
+                ]
+              : [],
+          panes: coordinatorTabCreated
+            ? [
+                {
+                  pane_id: "child-pane",
+                  workspace_id: childWorkspace,
+                  tab_id: "child-tab",
+                  cwd: childCwd,
+                  ...(started
+                    ? {
+                        agent_session: {
+                          source: "herdr:pi",
+                          agent: "pi",
+                          kind: "path",
+                          value: childSessionPath(),
+                        },
+                      }
+                    : {}),
+                },
+              ]
+            : [],
           agents: started
             ? [
                 {
@@ -25767,6 +25998,16 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
 });
 
 test("fresh assignment refreshes the widget after validation", async (t) => {
+  const waitForPhase = async (phase: string, condition: () => unknown) => {
+    try {
+      await t.waitFor(condition);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`waitFor phase "${phase}" failed: ${detail}`, {
+        cause: error,
+      });
+    }
+  };
   const previousPlacement = readConfig().spawnPlacement;
   const label = "fresh-start-widget-agent";
   let sessionPath = "";
@@ -26176,14 +26417,14 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
       undefined,
       context,
     );
-    await t.waitFor(() =>
+    await waitForPhase("initial-status-request", () =>
       assert.ok(
         resolveInitialStatus,
         "assignment did not request initial status",
       ),
     );
     resolveInitialStatus!({ stdout: snapshot(true), stderr: "", code: 0 });
-    await t.waitFor(() =>
+    await waitForPhase("integration-validation", () =>
       assert.ok(
         resolveIntegration,
         "assignment did not reach integration validation",
@@ -26195,7 +26436,7 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
       stderr: "",
       code: 0,
     });
-    await t.waitFor(() =>
+    await waitForPhase("initial-request-handoff", () =>
       assert.ok(
         releaseInitialHandoff,
         "assignment did not reach initial request handoff",
@@ -26233,7 +26474,7 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
       firstStatusAfterValidation >= 0,
       "fresh runtime refresh must occur after validation and before submit validation",
     );
-    await t.waitFor(() =>
+    await waitForPhase("post-validation-widget-refresh", () =>
       assert.match(widget!.render(160).join("\n"), /flexible.*● 1/),
     );
     const rendered = widget!.render(160).join("\n");
@@ -26255,7 +26496,9 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
     );
     assert.equal(failed.details.ok, true, JSON.stringify(failed.details));
     assert.equal(pi.sentMessageCalls.length, 1);
-    await t.waitFor(() => assert.match(widget!.render(160).join("\n"), /lead/));
+    await waitForPhase("widget-reset-after-failed-assignment", () =>
+      assert.match(widget!.render(160).join("\n"), /lead/),
+    );
     assert.match(widget!.render(160).join("\n"), /lead/);
 
     failValidation = true;
@@ -26273,7 +26516,9 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
       context,
     );
     assert.equal(invalid.details.ok, false);
-    await t.waitFor(() => assert.match(widget!.render(160).join("\n"), /lead/));
+    await waitForPhase("widget-reset-after-invalid-assignment", () =>
+      assert.match(widget!.render(160).join("\n"), /lead/),
+    );
     assert.match(widget!.render(160).join("\n"), /lead/);
   } finally {
     updateConfig("spawnPlacement", previousPlacement);

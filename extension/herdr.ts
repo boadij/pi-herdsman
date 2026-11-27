@@ -1951,7 +1951,10 @@ type PrimaryWorkspaceOptions = {
   timeoutMs?: number;
 };
 
-type ManagerPaneOptions = PrimaryWorkspaceOptions & { agentDir: string };
+type ManagerPaneOptions = PrimaryWorkspaceOptions & {
+  agentDir: string;
+  env?: string[];
+};
 
 export type HerdrManagerPaneSelection = Readonly<{
   workspaceId: string;
@@ -1967,6 +1970,7 @@ export type StartHerdrManagerInPaneOptions = ManagerPaneOptions & {
   pane: HerdrManagerPaneSelection;
   session: Readonly<{ id: string; path?: string }>;
   extensionPath?: string;
+  agentArgs?: string[];
 };
 
 export class HerdrManagerPreparationFailure extends Error {
@@ -2137,7 +2141,134 @@ async function verifyManagerPane(
     !Array.isArray(agents) ||
     agents.some((agent) => agent?.pane_id === target.paneId)
   )
-    error("start", "prepared Manager pane is occupied or its identity changed");
+    error(
+      "start",
+      "prepared Coordinator pane is occupied or its identity changed",
+    );
+}
+
+type CoordinatorPanePreparation = {
+  workspaceId: string;
+  cwd: string;
+  agentDir: string;
+  label: string;
+  assertCurrentAuthority: () => void | Promise<void>;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  workspaceVerified?: boolean;
+  env?: readonly string[];
+};
+
+/** Prepare one verified, unoccupied dedicated Coordinator tab in an exact workspace. */
+export async function prepareHerdrCoordinatorPane(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  options: CoordinatorPanePreparation,
+): Promise<HerdrManagerPaneSelection> {
+  const deadline =
+    Date.now() + startupTimeoutBudget(options.timeoutMs).totalTimeout;
+  const { workspaceId, signal } = options;
+  const cwd = canonicalCwd(options.cwd);
+  if (!options.workspaceVerified) {
+    const snapshot = await herdrSessionSnapshot(pi, ctx, signal);
+    const workspaces = snapshot.workspaces.filter(
+      (item) => item?.workspace_id === workspaceId,
+    );
+    const workspacePaths = new Set<string>();
+    for (const item of workspaces) {
+      const path = item?.worktree?.checkout_path;
+      if (typeof path === "string" && isAbsolute(path))
+        workspacePaths.add(canonicalCwd(path));
+    }
+    if (workspacePaths.size === 0) {
+      for (const pane of snapshot.panes) {
+        if (
+          pane?.workspace_id === workspaceId &&
+          typeof pane.cwd === "string" &&
+          isAbsolute(pane.cwd)
+        )
+          workspacePaths.add(canonicalCwd(pane.cwd));
+      }
+    }
+    if (
+      workspaces.length !== 1 ||
+      workspacePaths.size !== 1 ||
+      !sameCwd([...workspacePaths][0]!, cwd)
+    )
+      error(
+        "start",
+        "selected Herdr workspace does not have one verified checkout",
+      );
+  }
+  let tabId: string | undefined;
+  let paneId: string | undefined;
+  let stage: HerdrManagerPreparationFailure["stage"] = "workspace_verify";
+  try {
+    const before = await managerTabInventory(
+      pi,
+      ctx,
+      workspaceId,
+      signal,
+      deadline,
+    );
+    await options.assertCurrentAuthority();
+    signal?.throwIfAborted();
+    stage = "tab_create";
+    const env = validateEnvironment(options.env ?? []);
+    const created = await runHerdr(
+      pi,
+      ctx,
+      [
+        "tab",
+        "create",
+        "--workspace",
+        workspaceId,
+        "--cwd",
+        cwd,
+        "--label",
+        options.label,
+        "--env",
+        `PI_CODING_AGENT_DIR=${options.agentDir}`,
+        ...env.flatMap((assignment) => ["--env", assignment]),
+        "--no-focus",
+      ],
+      { signal, timeout: startupCallTimeout(deadline) },
+    );
+    const tab = created?.tab?.tab_id;
+    const pane = created?.root_pane?.pane_id;
+    const terminalId = created?.root_pane?.terminal_id;
+    if (
+      typeof tab !== "string" ||
+      !tab ||
+      typeof pane !== "string" ||
+      !pane ||
+      typeof terminalId !== "string" ||
+      !terminalId ||
+      before.tabs.some((item) => item?.tab_id === tab) ||
+      before.panes.some((item) => item?.pane_id === pane)
+    )
+      error("start", "Herdr did not create a dedicated Coordinator tab");
+    tabId = tab;
+    paneId = pane;
+    stage = "pane_verify";
+    const selection = Object.freeze({
+      workspaceId,
+      tabId,
+      paneId,
+      terminalId,
+      cwd,
+      createdWorkspace: false,
+      createdTab: true as const,
+    });
+    await verifyManagerPane(pi, ctx, selection, signal, deadline);
+    return selection;
+  } catch (cause) {
+    throw new HerdrManagerPreparationFailure(cause, stage, {
+      workspaceId,
+      tabId,
+      paneId,
+    });
+  }
 }
 
 /**
@@ -2200,74 +2331,22 @@ export async function prepareHerdrManagerPane(
     checkoutPath: cwd,
     created: createdWorkspace,
   } = await ensurePrimaryWorkspace(pi, ctx, options, deadline);
-  let tabId: string | undefined;
-  let paneId: string | undefined;
-  let stage: HerdrManagerPreparationFailure["stage"] = "workspace_verify";
-  try {
-    const before = await managerTabInventory(
-      pi,
-      ctx,
-      workspaceId,
-      signal,
-      deadline,
-    );
-    await options.assertCurrentAuthority();
-    signal?.throwIfAborted();
-    stage = "tab_create";
-    const created = await runHerdr(
-      pi,
-      ctx,
-      [
-        "tab",
-        "create",
-        "--workspace",
-        workspaceId,
-        "--cwd",
-        cwd,
-        "--label",
-        "Manager",
-        "--env",
-        `PI_CODING_AGENT_DIR=${options.agentDir}`,
-        "--no-focus",
-      ],
-      { signal, timeout: startupCallTimeout(deadline) },
-    );
-    const tab = created?.tab?.tab_id;
-    const pane = created?.root_pane?.pane_id;
-    const terminalId = created?.root_pane?.terminal_id;
-    if (
-      typeof tab !== "string" ||
-      !tab ||
-      typeof pane !== "string" ||
-      !pane ||
-      typeof terminalId !== "string" ||
-      !terminalId ||
-      before.tabs.some((item) => item?.tab_id === tab) ||
-      before.panes.some((item) => item?.pane_id === pane)
-    )
-      error("start", "Herdr did not create a dedicated Manager tab");
-    tabId = tab;
-    paneId = pane;
-    stage = "pane_verify";
-    const selection = Object.freeze({
-      workspaceId,
-      tabId,
-      paneId,
-      terminalId,
-      cwd,
-      createdWorkspace,
-      createdTab: true as const,
-    });
-    await verifyManagerPane(pi, ctx, selection, signal, deadline);
-    return selection;
-  } catch (cause) {
-    // Do not clean up from an incomplete observation of creation or occupancy.
-    throw new HerdrManagerPreparationFailure(cause, stage, {
-      workspaceId,
-      tabId,
-      paneId,
-    });
-  }
+  const selection = await prepareHerdrCoordinatorPane(pi, ctx, {
+    workspaceId,
+    cwd,
+    label: "Manager",
+    agentDir: options.agentDir,
+    env: options.env,
+    signal,
+    timeoutMs: options.timeoutMs,
+    assertCurrentAuthority: options.assertCurrentAuthority,
+    workspaceVerified: true,
+  });
+  return Object.freeze({
+    ...selection,
+    createdWorkspace,
+    createdTab: true as const,
+  });
 }
 
 export async function startHerdrManagerInPane(
@@ -2330,8 +2409,10 @@ export async function startHerdrManagerInPane(
       extensionPath: options.extensionPath,
       signal,
       // Let Pi determine project trust in its own checkout.
-      agentArgs:
-        file === undefined ? ["--session-id", id] : ["--session", file],
+      agentArgs: [
+        ...(options.agentArgs ?? []),
+        ...(file === undefined ? ["--session-id", id] : ["--session", file]),
+      ],
     },
     pane.workspaceId,
     verifyTarget,
@@ -2372,6 +2453,98 @@ export async function startHerdrAgentInPane(
           "start",
           `workspace ${options.workspaceId} is not in primary workspace ${options.primaryWorkspaceId}'s worktree group`,
         );
+    },
+  );
+}
+
+export type StartHerdrCoordinatorInPaneOptions = Omit<
+  StartHerdrInPaneOptions,
+  "primaryWorkspaceId"
+> & {
+  session: ExpectedSession;
+  terminalId: string;
+  assertCurrentAuthority: () => void | Promise<void>;
+};
+
+/** Launch an exact new or recovered Coordinator session in a prepared pane. */
+export async function startHerdrCoordinatorInPane(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  options: StartHerdrCoordinatorInPaneOptions,
+): Promise<StartedHerdrAgent> {
+  if (
+    typeof options.session.id !== "string" ||
+    !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(options.session.id)
+  )
+    error("start", "an exact Pi session ID is required");
+  if (
+    options.session.path !== undefined &&
+    (!isAbsolute(options.session.path) ||
+      !statSync(options.session.path).isFile())
+  )
+    error("start", "an exact existing Pi session file is required");
+  const pane: HerdrManagerPaneSelection = {
+    workspaceId: options.workspaceId,
+    tabId: options.tabId,
+    paneId: options.paneId,
+    terminalId: options.terminalId,
+    cwd: options.cwd,
+    createdWorkspace: false,
+    createdTab: true,
+  };
+  const file = options.session.path;
+  const verifyTarget = async (deadline: number) => {
+    const snapshot = await herdrSessionSnapshot(pi, ctx, options.signal);
+    const matches = snapshot.workspaces.filter(
+      (workspace) => workspace?.workspace_id === options.workspaceId,
+    );
+    if (matches.length !== 1)
+      error("start", "Coordinator workspace identity is ambiguous");
+    const worktreePath = matches[0]?.worktree?.checkout_path;
+    const observedPaths = worktreePath
+      ? [worktreePath]
+      : snapshot.panes
+          .filter(
+            (candidate) => candidate?.workspace_id === options.workspaceId,
+          )
+          .map((candidate) => candidate.cwd)
+          .filter((path) => typeof path === "string" && isAbsolute(path));
+    if (
+      !observedPaths.length ||
+      observedPaths.some((path) => !sameDirectory(path, options.cwd))
+    )
+      error("start", "Coordinator workspace checkout changed before launch");
+    if (file) {
+      const header = statSync(file).isFile()
+        ? readPiSessionHeaderIdentity(realpathSync(file))
+        : undefined;
+      if (
+        !header ||
+        header.id !== options.session.id ||
+        !header.cwd ||
+        !sameDirectory(header.cwd, options.cwd)
+      )
+        error("start", "exact Pi session does not match Coordinator checkout");
+    }
+    const currentPane = (
+      await runHerdr(pi, ctx, ["pane", "get", options.paneId], {
+        signal: options.signal,
+        timeout: startupCallTimeout(deadline),
+      })
+    ).pane;
+    if (!matchesAttemptPane(currentPane, pane))
+      error("start", "prepared Coordinator placement changed before launch");
+  };
+  return launchPiInVerifiedPane(
+    pi,
+    ctx,
+    options,
+    options.workspaceId,
+    verifyTarget,
+    {
+      pane,
+      session: options.session,
+      assertCurrentAuthority: options.assertCurrentAuthority,
     },
   );
 }

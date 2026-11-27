@@ -31,12 +31,30 @@ labels are not targets.
 
 These sequential tools require current, verified Chief authority when called.
 
-| Tool               | Parameters                                        | Behavior                                                                                                                                                |
-| ------------------ | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list_projects`    | None                                              | Discover verified projects, workspace placement, and observed Manager status without changing them.                                                     |
-| `clone_repository` | `url`, optional `destination`                     | Clone and verify an HTTPS or SSH Git remote and prepare its primary Herdr workspace without launching Pi.                                               |
-| `start_manager`    | `repository`, optional `destination` for a remote | Prepare a local project or clone a remote. Reuse the verified primary Herdr workspace or create one if absent, then start a Manager in a dedicated tab. |
-| `resume_manager`   | `repository` (local primary checkout)             | Verify and reopen the exact saved Manager Pi session in a dedicated tab. Does not initialize Git.                                                       |
+| Tool               | Parameters                                                                       | Behavior                                                                                                                                                |
+| ------------------ | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_projects`    | None                                                                             | Discover verified projects, workspace placement, and observed Manager status without changing them.                                                     |
+| `clone_repository` | `url`, optional `destination`                                                    | Clone and verify an HTTPS or SSH Git remote and prepare its primary Herdr workspace without launching Pi.                                               |
+| `start_manager`    | `repository`, optional `destination` for a remote, optional Manager `definition` | Prepare a local project or clone a remote. Reuse the verified primary Herdr workspace or create one if absent, then start a Manager in a dedicated tab. |
+| `resume_manager`   | `repository` (local primary checkout)                                            | Verify and reopen the exact saved Manager Pi session in a dedicated tab. Does not initialize Git.                                                       |
+| `start_lead`       | exact `workspace`, optional `definition` and `message`                           | Start an ordinary Lead in a verified current Herdr workspace without creating a project assignment or starting a Manager.                               |
+
+`start_manager` defaults to the `manager` definition. Named Manager
+definitions use the `coordinators/managers/` category. The selected definition
+is bound to the exact new Pi session and restored with that session; a saved
+Manager session cannot be replaced with another definition. Definition launch
+settings apply at process startup, while its body is composed by the Manager
+runtime profile rather than injected a second time as a startup prompt.
+
+`start_lead` selects an exact current Herdr workspace ID, not a display label.
+An omitted definition uses the configured ordinary Lead mode; `flexible-lead`
+and `orchestrator-lead` select their respective initial modes, while a custom
+Lead definition remains the saved session profile. Non-Git workspaces are
+accepted only when Herdr/Pi observations establish one checkout unambiguously;
+the tool never initializes Git for an ordinary Lead. Leads supervised by an
+active project Manager are not Chief direct reports, so a combined initial
+message is rejected before launch. If supervision changes after startup, the
+Lead is preserved and the result reports whether the message was queued.
 
 `list_projects` combines verified repositories from current Herdr workspaces,
 Manager recovery records in the active Pi profile, and a bounded scan of the

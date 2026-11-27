@@ -161,8 +161,8 @@ discarded. Agent discovery does not validate every Coordinator profile.
 Coordinator profiles cannot be delegated to or disabled. An `agents`
 allowlist resolves names only in the Agent category. The
 `Agents & Coordinators` menu separates them from Agents. Assigned Lead
-launch profiles offer Model, Thinking, and Details; runtime profiles offer
-Details only.
+launch profiles offer Model, Thinking, and Details; Chief-launched Manager
+profiles also offer launch configuration and Details.
 
 Ordinary unassigned Leads use their persisted execution choice: `flexible`
 selects `flexible-lead` and `orchestrate` selects `orchestrator-lead`. Without
@@ -171,17 +171,17 @@ setting. Assigned Leads use the profile selected for their assignment,
 independently of ordinary execution choice. Only the current exact
 `ProjectAssignment` establishes assignment authority.
 
-The ordinary Lead defaults and the Manager and Chief profiles configure runtime
-behavior, not Pi launch settings. A custom Manager profile is not a startup
-selector. These profiles may configure only `name`,
-`description`, `body`, `bodyMode` on matching overlays, `tools`,
-`excludeTools`, and `agents` as their direct-delegation allowlist. These
-profiles reject `model`, `thinking`, `systemPromptMode`, `enabled`, `permission`,
-`noTools`,
-`noBuiltinTools`, `skills`, `noSkills`, `inheritSkills`, `extensions`,
-`noExtensions`, `inheritGlobalContext`, `inheritAncestorContext`, and
-`inheritProjectContext`. `bodyMode` is valid only on a matching overlay as
-described below.
+Ordinary Lead defaults and the Chief profile configure runtime behavior, not
+Pi launch settings. Chief-launched Managers may select a named Manager
+definition; its launch settings apply when the exact Pi session starts, while
+its body is applied by the runtime profile. Runtime-only Manager behavior
+includes `name`, `description`, `body`, `bodyMode` on matching overlays,
+`tools`, `excludeTools`, and `agents` as the direct-delegation allowlist.
+Manager launch settings include `model`, `thinking`, tools and capability
+policy, skills, extensions, and context inheritance. `enabled` and
+`permission` are not supported. Chief profiles remain runtime-only and reject
+launch settings. `bodyMode` is valid only on a matching overlay as described
+below.
 
 An omitted `tools` field inherits the value from lower-precedence definition
 layers. The bundled Flexible Lead selects `tools: [+codemode]`,

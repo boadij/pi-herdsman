@@ -11,7 +11,7 @@ import {
   realpathSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import {
   basename,
@@ -34,8 +34,11 @@ import { snapshotTextFiles } from "./core.ts";
 import { herdsmanTempRoot } from "./storage.ts";
 import {
   CHIEF_DEFINITION_NAME,
+  FLEXIBLE_LEAD_DEFINITION_NAME,
   isAssignedLeadDefinitionName,
   isDefinitionName,
+  MANAGED_LEAD_DEFINITION_NAME,
+  ORCHESTRATOR_LEAD_DEFINITION_NAME,
   reservedDefinitionCategory,
 } from "./definition-identity.ts";
 
@@ -122,8 +125,14 @@ export function supportsDefinitionLaunchSettings(
 ): boolean {
   return (
     definition.category === "agent" ||
+    definition.category === "manager" ||
     (definition.category === "lead" &&
-      isAssignedLeadDefinitionName(definition.name))
+      (isAssignedLeadDefinitionName(definition.name) ||
+        ![
+          FLEXIBLE_LEAD_DEFINITION_NAME,
+          ORCHESTRATOR_LEAD_DEFINITION_NAME,
+          MANAGED_LEAD_DEFINITION_NAME,
+        ].includes(definition.name)))
   );
 }
 
@@ -1497,15 +1506,18 @@ export function resolveChildModel(input: {
   return { kind: "none" };
 }
 
-function configuredThinking(agent: AgentDefinition): string | undefined {
+export function configuredThinking(
+  agent: AgentDefinition,
+): (typeof VALID_THINKING_LEVELS)[number] | undefined {
   const configured = agent.frontmatter.thinking;
   if (configured === false) return "off";
   if (typeof configured !== "string") return undefined;
-  if (!THINKING_LEVELS.has(configured))
+  const level = VALID_THINKING_LEVELS.find((level) => level === configured);
+  if (!level)
     throw new Error(
       `agent ${agent.name} has invalid thinking level: ${JSON.stringify(configured)}`,
     );
-  return configured;
+  return level;
 }
 
 export function writePrivatePromptSnapshots(
@@ -1626,7 +1638,14 @@ export function agentDefinitionDelegationEnabled(
   return tools.length > 0;
 }
 
-export function contextInheritance(definition: AgentDefinition): {
+export function contextInheritance(
+  definition: AgentDefinition,
+  defaults: { global: boolean; ancestor: boolean; project: boolean } = {
+    global: false,
+    ancestor: false,
+    project: false,
+  },
+): {
   global: boolean;
   ancestor: boolean;
   project: boolean;
@@ -1634,13 +1653,15 @@ export function contextInheritance(definition: AgentDefinition): {
   const project =
     definition.frontmatter.inheritProjectContext === true ||
     (definition.frontmatter.inheritProjectContext === undefined &&
-      definition.name === "delegate");
+      (definition.name === "delegate" || defaults.project));
   const global =
     definition.frontmatter.inheritGlobalContext === true ||
-    (definition.frontmatter.inheritGlobalContext === undefined && project);
+    (definition.frontmatter.inheritGlobalContext === undefined &&
+      (definition.name === "delegate" || defaults.global || project));
   const ancestor =
     definition.frontmatter.inheritAncestorContext === true ||
-    (definition.frontmatter.inheritAncestorContext === undefined && project);
+    (definition.frontmatter.inheritAncestorContext === undefined &&
+      (definition.name === "delegate" || defaults.ancestor || project));
   return { global, ancestor, project };
 }
 
@@ -1699,8 +1720,8 @@ export function selectedAgentContextFiles(
   definition: AgentDefinition,
   cwd: string,
   loader: typeof loadProjectContextFiles = loadProjectContextFiles,
+  inheritance = contextInheritance(definition),
 ) {
-  const inheritance = contextInheritance(definition);
   if (!inheritance.global && !inheritance.ancestor && !inheritance.project)
     return [];
   const agentDir = getAgentDir();
@@ -1720,6 +1741,28 @@ export function selectedAgentContextFiles(
   });
 }
 
+export const EXPECTED_COORDINATOR_LAUNCH_ENV =
+  "PI_HERDSMAN_EXPECTED_COORDINATOR_LAUNCH";
+
+export function coordinatorLaunchConfiguration(
+  definition: AgentDefinition,
+  cwd: string,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        definition.category,
+        definition.name,
+        agentLaunchArgs(definition, {
+          cwd,
+          nativeCoordinatorDefaults: true,
+          omitBodyPrompt: true,
+        }),
+      ]),
+    )
+    .digest("hex");
+}
+
 export type AgentLaunchOptions = {
   bodyPromptPath?: string;
   sharedPromptPath?: string;
@@ -1737,6 +1780,10 @@ export type AgentLaunchOptions = {
    * model (configured, else inherited) is passed through unchanged.
    */
   modelDecision?: ChildModelDecision;
+  /** Coordinator launches retain Pi's native discovery and skill defaults. */
+  nativeCoordinatorDefaults?: boolean;
+  /** Runtime profile composition owns the definition body for this launch. */
+  omitBodyPrompt?: boolean;
 };
 
 export function agentLaunchArgs(
@@ -1760,9 +1807,14 @@ export function agentLaunchArgs(
     inheritedModel: options.inheritedModel,
     inheritedThinking: options.inheritedThinking,
   };
-  const bodyPromptPathForLaunch = agent.body ? bodyPromptPath : undefined;
+  const bodyPromptPathForLaunch =
+    !options.omitBodyPrompt && agent.body ? bodyPromptPath : undefined;
   const { frontmatter } = agent;
-  if (agent.body && bodyPromptPathForLaunch === undefined)
+  if (
+    agent.body &&
+    !options.omitBodyPrompt &&
+    bodyPromptPathForLaunch === undefined
+  )
     throw new Error(
       `agent ${agent.name} has a body but no bodyPromptPath was provided`,
     );
@@ -1800,13 +1852,19 @@ export function agentLaunchArgs(
       mode === "append" ? "--append-system-prompt" : "--system-prompt",
       bodyPromptPathForLaunch,
     );
-  const inheritance = contextInheritance(agent);
+  const inheritance = contextInheritance(
+    agent,
+    options.nativeCoordinatorDefaults
+      ? { global: true, ancestor: true, project: true }
+      : undefined,
+  );
   if (!inheritance.global || !inheritance.ancestor || !inheritance.project) {
     args.push("--no-context-files");
     for (const context of selectedAgentContextFiles(
       agent,
       cwd,
       options.loadProjectContextFiles ?? loadProjectContextFiles,
+      inheritance,
     ))
       args.push("--append-system-prompt", context.path);
   }
@@ -1860,7 +1918,9 @@ export function agentLaunchArgs(
   }
   if (excluded.length) args.push("--exclude-tools", excluded.join(","));
 
-  const noSkills = frontmatter.noSkills ?? frontmatter.inheritSkills !== true;
+  const noSkills = options.nativeCoordinatorDefaults
+    ? frontmatter.noSkills === true || frontmatter.inheritSkills === false
+    : (frontmatter.noSkills ?? frontmatter.inheritSkills !== true);
   if (noSkills) args.push("--no-skills");
   for (const skill of frontmatter.skills ?? []) args.push("--skill", skill);
 

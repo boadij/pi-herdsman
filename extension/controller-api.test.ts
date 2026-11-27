@@ -4144,6 +4144,7 @@ async function runManagerStartupScenario(
   let createCalls = 0;
   let openCalls = 0;
   let startCalls = 0;
+  let coordinatorTabCreated = started;
   const staleId = randomUUID();
   const gitInventories: string[] = [];
   let aliasedCheckoutDeleted = false;
@@ -4466,6 +4467,7 @@ async function runManagerStartupScenario(
         args[args.indexOf("--env") + 1],
         `PI_CODING_AGENT_DIR=${PI_AGENT_ROOT}`,
       );
+      coordinatorTabCreated = true;
       return respond({
         tab: { tab_id: "child-tab", workspace_id: childWorkspace },
         root_pane: {
@@ -4479,13 +4481,24 @@ async function runManagerStartupScenario(
     if (command === "herdr" && args[0] === "pane" && args[1] === "list") {
       return respond({
         panes: [
-          {
-            pane_id: "child-pane",
-            workspace_id: childWorkspace,
-            tab_id: "child-tab",
-            cwd: childPath,
-            terminal_id: "child-terminal",
-          },
+          ...(coordinatorTabCreated
+            ? [
+                {
+                  pane_id: "child-pane",
+                  workspace_id: childWorkspace,
+                  tab_id: "child-tab",
+                  cwd: childPath,
+                  terminal_id: "child-terminal",
+                },
+              ]
+            : [
+                {
+                  pane_id: "worktree-pane",
+                  workspace_id: childWorkspace,
+                  tab_id: "worktree-tab",
+                  cwd: childPath,
+                },
+              ]),
           ...ownedTree
             .filter((state) => !closedTreePanes.has(state.paneId))
             .map((state) => ({
@@ -4547,7 +4560,10 @@ async function runManagerStartupScenario(
     if (command === "herdr" && args[0] === "tab" && args[1] === "list")
       return respond({
         tabs: [
-          { tab_id: "child-tab", workspace_id: childWorkspace },
+          {
+            tab_id: coordinatorTabCreated ? "child-tab" : "worktree-tab",
+            workspace_id: childWorkspace,
+          },
           ...ownedTree
             .filter((state) => !closedTreePanes.has(state.paneId))
             .map((state) => ({
@@ -4855,20 +4871,44 @@ async function runManagerStartupScenario(
       }
       return respond({
         snapshot: {
-          workspaces: [],
-          panes: ownedTree
-            .filter((state) => !closedTreePanes.has(state.paneId))
-            .map((state) => ({
-              pane_id: state.paneId,
-              workspace_id: state.workspaceId,
-              cwd: state.cwd,
-              agent_session: {
-                source: "herdr:pi",
-                agent: "pi",
-                kind: "id",
-                value: state.piSessionId,
-              },
-            })),
+          workspaces:
+            created || openCalls || started || currentAssignment
+              ? [
+                  {
+                    workspace_id: childWorkspace,
+                    worktree: {
+                      checkout_path: childPath,
+                      repo_key: repoKey,
+                    },
+                  },
+                ]
+              : [],
+          panes: [
+            ...(coordinatorTabCreated
+              ? [
+                  {
+                    pane_id: "child-pane",
+                    workspace_id: childWorkspace,
+                    tab_id: "child-tab",
+                    cwd: childPath,
+                    ...(started ? { agent_session: childIdentity() } : {}),
+                  },
+                ]
+              : []),
+            ...ownedTree
+              .filter((state) => !closedTreePanes.has(state.paneId))
+              .map((state) => ({
+                pane_id: state.paneId,
+                workspace_id: state.workspaceId,
+                cwd: state.cwd,
+                agent_session: {
+                  source: "herdr:pi",
+                  agent: "pi",
+                  kind: "id",
+                  value: state.piSessionId,
+                },
+              })),
+          ],
           agents: [
             ...(["occupied", "multiple"].includes(mode)
               ? [
@@ -5722,6 +5762,7 @@ async function runManagerStartupScenario(
       childSession = staleId;
       created = true;
       started = true;
+      coordinatorTabCreated = true;
       writeLeadCoordinationState(supervisionRuntime(), {
         version: 1,
         role: "lead",

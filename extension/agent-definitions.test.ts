@@ -1428,10 +1428,15 @@ test("Manager and Chief overlays use reserved runtime-profile scope", () => {
         ),
         `---\nname: ${name}\n${field}: ${field === "skills" || field === "agents" ? '["scout"]' : field === "systemPromptMode" ? '"append"' : '"low"'}\n---\n`,
       );
-      assert.throws(
-        () => withPiAgentDir(global, () => discoverRoleDefinition(name)),
-        new RegExp(`${name} field ${field}: is not supported`),
-      );
+      if (name === "manager")
+        assert.doesNotThrow(() =>
+          withPiAgentDir(global, () => discoverRoleDefinition(name)),
+        );
+      else
+        assert.throws(
+          () => withPiAgentDir(global, () => discoverRoleDefinition(name)),
+          new RegExp(`${name} field ${field}: is not supported`),
+        );
     }
 });
 
@@ -3287,6 +3292,71 @@ test("passes native capability combinations through to Pi", () => {
       "--no-extensions",
       "--extension",
       "explicit-extension",
+    ],
+  );
+});
+
+test("Coordinator launch policy preserves native Pi context and skills", () => {
+  const definition: AgentDefinition = {
+    category: "manager",
+    name: "custom-manager",
+    path: "/manager.md",
+    frontmatter: {},
+    body: "runtime-owned body",
+  };
+  assert.deepEqual(
+    agentLaunchArgs(definition, {
+      nativeCoordinatorDefaults: true,
+      omitBodyPrompt: true,
+    }),
+    [],
+  );
+  assert.deepEqual(
+    agentLaunchArgs(
+      {
+        ...definition,
+        frontmatter: { noSkills: true, inheritProjectContext: false },
+      },
+      {
+        nativeCoordinatorDefaults: true,
+        omitBodyPrompt: true,
+        loadProjectContextFiles: () => [],
+      },
+    ),
+    ["--no-context-files", "--no-skills"],
+  );
+});
+
+test("Coordinator launch excludes only global context when configured", () => {
+  const global = join(tmpdir(), "coordinator-global");
+  const ancestor = join(tmpdir(), "AGENTS.md");
+  const project = join(tmpdir(), "coordinator-project", "AGENTS.md");
+  assert.deepEqual(
+    withPiAgentDir(global, () =>
+      agentLaunchArgs(
+        {
+          category: "manager",
+          name: "custom-manager",
+          path: "/manager.md",
+          frontmatter: { inheritGlobalContext: false },
+          body: "",
+        },
+        {
+          nativeCoordinatorDefaults: true,
+          loadProjectContextFiles: () =>
+            [join(global, "AGENTS.md"), ancestor, project].map((path) => ({
+              path,
+              content: path,
+            })),
+        },
+      ),
+    ),
+    [
+      "--no-context-files",
+      "--append-system-prompt",
+      ancestor,
+      "--append-system-prompt",
+      project,
     ],
   );
 });

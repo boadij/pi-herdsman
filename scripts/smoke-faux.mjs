@@ -852,6 +852,34 @@ function agentCrashRecoveryDecision(model, context) {
 export function decide(model, context) {
   const messages = context.messages;
   const prompt = text(lastUser(messages));
+  if (
+    model === "chief-manager" &&
+    typeof context.sessionId === "string" &&
+    context.sessionId &&
+    Number.isSafeInteger(context.invocationSequence) &&
+    context.invocationSequence <= 128 &&
+    process.env.PI_CODING_AGENT_DIR
+  ) {
+    const managerContext = getCurrentSystemPrompt(messages).includes(
+      "You are the verified Manager for this Pi session.",
+    );
+    appendFileSync(
+      join(
+        process.env.PI_CODING_AGENT_DIR,
+        "pi-herdsman",
+        "runtime",
+        "smoke-chief-manager-provider-entries.jsonl",
+      ),
+      `${JSON.stringify({
+        sessionId: context.sessionId,
+        modelId: model,
+        managerContext,
+        exactMarkerMatch: prompt === "CHIEF_MANAGER_SMOKE delegate",
+        lastUserLength: prompt.length,
+        invocationSequence: context.invocationSequence,
+      })}\n`,
+    );
+  }
 
   if (model === "terminal-error")
     return fauxAssistantMessage("CONTROLLED_PARTIAL_RESPONSE", {
@@ -1501,7 +1529,7 @@ export function decide(model, context) {
       return fauxAssistantMessage("CHIEF_MANAGER_SMOKE_STARTUP");
     }
     const request = prompt.match(
-      /^CHIEF_MANAGER_SMOKE \d+ (clone_repository|list_projects|start_manager|resume_manager) (\{.*\})$/u,
+      /^CHIEF_MANAGER_SMOKE \d+ (clone_repository|list_projects|start_lead|start_manager|resume_manager) (\{.*\})$/u,
     );
     if (request) {
       if (
@@ -1545,6 +1573,66 @@ export function decide(model, context) {
         );
       return fauxAssistantMessage("CHIEF_MANAGER_SMOKE_VERIFIED");
     }
+    if (prompt === "CHIEF_MANAGER_SMOKE delegate") {
+      appendFileSync(
+        join(
+          process.env.PI_CODING_AGENT_DIR,
+          "pi-herdsman",
+          "runtime",
+          "smoke-chief-manager-invocations.jsonl",
+        ),
+        `${JSON.stringify({ sessionId: context.sessionId, promptMarker: prompt })}\n`,
+      );
+      console.error(
+        JSON.stringify({
+          smokeDiagnostic: "chief-manager-agent",
+          event: "prompt_received",
+          exactMatch: true,
+        }),
+      );
+      if (
+        !getCurrentSystemPrompt(messages).includes(
+          "You are the verified Manager for this Pi session.",
+        )
+      )
+        throw new Error("Named Manager delegation lacked Manager context");
+      const existing = correlatedCall(messages, "delegate_agent");
+      console.error(
+        JSON.stringify({
+          smokeDiagnostic: "chief-manager-agent",
+          event: existing ? "tool_result_received" : "branch_selected",
+          delegateToolAvailable: getCurrentTools(messages).some(
+            (tool) => tool.name === "delegate_agent",
+          ),
+          resultError: existing?.result?.isError ?? null,
+        }),
+      );
+      if (existing) {
+        const result = text(existing.result);
+        const requestId = result.match(/^Request: ([^\n]+)$/m)?.[1];
+        const sessionId = result.match(/^Session: ([^\n]+)$/m)?.[1];
+        const expectedHeader = `Agent result · agent=chief-manager-smoke-agent · definition=smoke-agent · session=${sessionId} · status=completed`;
+        const delivered =
+          requestId &&
+          sessionId &&
+          messages.some(
+            (message) =>
+              message.role === "user" &&
+              text(message).startsWith(expectedHeader) &&
+              text(message).includes("CHIEF_MANAGER_AGENT_COMPLETED"),
+          );
+        return delivered
+          ? fauxAssistantMessage("CHIEF_MANAGER_AGENT_RESULT_DELIVERED")
+          : waitForResult("Waiting for the delegated Agent result.");
+      }
+      return call("delegate_agent", {
+        definition: "smoke-agent",
+        label: "chief-manager-smoke-agent",
+        task: "Return CHIEF_MANAGER_AGENT_COMPLETED.",
+      });
+    }
+    if (prompt.includes("CHIEF_MANAGER_AGENT_COMPLETED"))
+      return fauxAssistantMessage("CHIEF_MANAGER_AGENT_COMPLETED");
     throw new Error("Unexpected chief-manager request");
   }
   if (model === "chief-tree") {
@@ -1759,6 +1847,7 @@ export default function install(pi) {
     api: "smoke-faux-api",
     models: modelIds.map((id) => ({ id, reasoning: false, input: ["text"] })),
   });
+  const invocationSequences = new Map();
   function response(context, _options, _state, model) {
     faux.appendResponses([response]);
     logPeerCoreLifecycle({
@@ -1769,6 +1858,9 @@ export default function install(pi) {
     const currentSessionId = sessionId;
     if (typeof currentSessionId !== "string" || !currentSessionId)
       throw new Error("Faux provider request has no Pi session identity");
+    const invocationSequence =
+      (invocationSequences.get(currentSessionId) ?? 0) + 1;
+    invocationSequences.set(currentSessionId, invocationSequence);
     if (model.id === "manager-merge" || model.id === "manager-merge-lead") {
       const tools = getCurrentTools(context.messages).map((tool) => tool.name);
       const latestUser = lastUser(context.messages);
@@ -1974,6 +2066,8 @@ export default function install(pi) {
       answer = decide(model.id, {
         ...context,
         peerImportedBindingVisible,
+        sessionId: currentSessionId,
+        invocationSequence,
       });
     } catch (error) {
       if (

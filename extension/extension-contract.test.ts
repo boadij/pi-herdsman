@@ -390,6 +390,7 @@ const CHIEF_PROJECT_TOOLS = [
   "clone_repository",
   "start_manager",
   "resume_manager",
+  "start_lead",
 ];
 
 const REGISTERED_ROLE_TOOLS = [
@@ -1002,7 +1003,9 @@ test("Chief activation exposes only semantic staff and project tools", async (t)
           ? { url: "https://example.com/project" }
           : name === "list_projects"
             ? {}
-            : { repository: "/project" };
+            : name === "start_lead"
+              ? { workspace: "workspace-1" }
+              : { repository: "/project" };
       assertPortableToolSchema(tool);
       assert.equal(tool.defaultActive, false);
       assert.equal(tool.executionMode, "sequential");

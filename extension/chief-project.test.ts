@@ -21,8 +21,13 @@ import {
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { createChiefProjectRuntime } from "./chief-project.ts";
+import {
+  AGENT_COORDINATION_TOOLS,
+  EXPECTED_COORDINATOR_LAUNCH_ENV,
+} from "./agent-definitions.ts";
 import { fakeContext, PI_AGENT_ROOT } from "./support.ts";
 import {
+  COORDINATOR_DEFINITION_ENTRY,
   claimManagerLease,
   claimManagerStartupLock,
   getManagerStartIntent,
@@ -161,6 +166,7 @@ test("Chief clone provisions only a verified primary workspace", async (t) => {
         },
       );
       const result = await chief.clone(url, repository, fakeContext());
+      assert.ok("repository" in result);
       assert.equal(result.repository, repository);
       assert.ok(
         statSync(
@@ -296,6 +302,8 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
     "old generation",
     "malformed",
     "foreign",
+    "named",
+    "conflicting configuration",
   ] as const) {
     await t.test(scenario, async (t) => {
       const root = realpathSync.native(
@@ -311,6 +319,21 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
           join(agentDir, hook),
           readFileSync(join(PI_AGENT_ROOT, hook)),
         );
+      }
+      const namedDefinition = join(
+        agentDir,
+        "coordinators",
+        "managers",
+        "custom-manager.md",
+      );
+      const writeNamedDefinition = (toolPolicy: string) =>
+        writeFileSync(
+          namedDefinition,
+          `---\nname: custom-manager\nmodel: test-provider/test-model\nthinking: high\n${toolPolicy}\n---\nCustom manager profile body`,
+        );
+      if (scenario === "named") {
+        mkdirSync(dirname(namedDefinition), { recursive: true });
+        writeNamedDefinition("tools: [codemode]\nagents: [scout]");
       }
       const gitDirectory = join(root, "project", ".git");
       mkdirSync(gitDirectory, { recursive: true });
@@ -334,6 +357,7 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         rmSync(root, { force: true, recursive: true });
       });
       let tabCreated = false;
+      let launchConfiguration: string | undefined;
       const placementCalls: string[] = [];
       let denyChief = false;
       let observedPid = process.pid;
@@ -378,13 +402,31 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
           },
           runtime,
         );
+        const instanceId = randomUUID();
         writeLeadCoordinationState(runtime, {
           version: 1,
           role: "manager",
           piSessionId,
           build,
-          instanceId: randomUUID(),
+          instanceId,
           updatedAt: Date.now(),
+          ...(launchConfiguration
+            ? {
+                startupAttestation: {
+                  kind: "model_restore",
+                  assignmentId: piSessionId,
+                  generation: instanceId,
+                  result:
+                    scenario === "named"
+                      ? "definition_override"
+                      : "no_saved_model",
+                  launchConfiguration:
+                    scenario === "conflicting configuration"
+                      ? "0".repeat(64)
+                      : launchConfiguration,
+                },
+              }
+            : {}),
         });
       }
       const response = (result: unknown) => ({
@@ -437,6 +479,12 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
                 args[args.indexOf("--env") + 1],
                 `PI_CODING_AGENT_DIR=${agentDir}`,
               );
+              launchConfiguration = args
+                .find((arg) =>
+                  arg.startsWith(`${EXPECTED_COORDINATOR_LAUNCH_ENV}=`),
+                )
+                ?.split("=")[1];
+              assert.match(launchConfiguration ?? "", /^[0-9a-f]{64}$/);
               tabCreated = true;
               return response({
                 tab: { tab_id: pane.tab_id },
@@ -481,6 +529,31 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
             case "agent start": {
               launches++;
               assert.ok(args.includes(join(agentDir, hook)));
+              if (scenario === "named") {
+                assert.ok(args.includes("--model"), JSON.stringify(args));
+                assert.ok(args.includes("test-provider/test-model"));
+                assert.ok(args.includes("--thinking"));
+                assert.ok(args.includes("high"));
+                const tools =
+                  args[args.indexOf("--tools") + 1]?.split(",") ?? [];
+                for (const name of [
+                  ...AGENT_COORDINATION_TOOLS,
+                  "delegate_work",
+                ])
+                  assert.ok(tools.includes(name), name);
+                assert.equal(tools.includes("codemode"), launches === 1);
+                assert.equal(args.includes("--no-tools"), launches === 2);
+              }
+              assert.ok(!args.includes("--no-skills"));
+              assert.ok(!args.includes("--no-context-files"));
+              if (scenario !== "named") {
+                const tools =
+                  args[args.indexOf("--tools") + 1]?.split(",") ?? [];
+                assert.ok(
+                  tools.includes("delegate_work"),
+                  JSON.stringify(args),
+                );
+              }
               assert.equal(args.at(-2), "--session");
               assert.ok(!args.some((arg) => arg.includes("--trust")));
               const path = args.at(-1)!;
@@ -509,6 +582,10 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
                   getManagerStartIntent(runtime, id)?.paneId,
                   pane.pane_id,
                 );
+                assert.equal(
+                  getManagerStartIntent(runtime, id)?.definition,
+                  scenario === "named" ? "custom-manager" : "manager",
+                );
                 if (scenario === "safe refusal" && launches === 1) {
                   file = undefined;
                   id = undefined;
@@ -529,6 +606,13 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
                     sessionId: id,
                     role: "manager",
                     leadTools: [],
+                  });
+                if (scenario === "named")
+                  saved.appendCustomEntry(COORDINATOR_DEFINITION_ENTRY, {
+                    version: 1,
+                    sessionId: id,
+                    category: "manager",
+                    name: "custom-manager",
                   });
               } else {
                 assert.equal(path, file);
@@ -585,9 +669,21 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         runtime: () => currentRuntime,
         build,
         extensionPath: "/extension.ts",
+        managerTools: ["delegate_work"],
       });
       const ctx = fakeContext();
-      const start = () => chief.start(repository, undefined, ctx);
+      if (scenario === "named") {
+        await assert.rejects(
+          chief.startLead("workspace", "managed-lead", undefined, ctx),
+          /managed-lead is reserved for assigned Leads/,
+        );
+        assert.deepEqual(placementCalls, []);
+        assert.deepEqual(remainingIntents(), []);
+      }
+      const start = () =>
+        scenario === "named"
+          ? chief.startNamed(repository, undefined, "custom-manager", ctx)
+          : chief.start(repository, undefined, ctx);
       if (scenario === "missing integration") {
         await assert.rejects(
           start(),
@@ -647,12 +743,23 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         assert.deepEqual(remainingIntents(), []);
         denyChief = false;
         tabCreated = false;
-        assert.deepEqual(await start(), { status: "started", repository });
+        assert.deepEqual(await start(), {
+          status: "started",
+          repository,
+          definition: "manager",
+        });
         assert.equal(launches, 2);
         assert.equal(existsSync(guardPath), false);
         return;
       }
       assert.ok(file && id);
+      if (scenario === "conflicting configuration") {
+        assert.equal(first.status, "partial_failure");
+        assert.ok("stage" in first && first.stage === "readiness");
+        assert.match(first.reason, /different launch configuration/);
+        assert.ok(existsSync(guardPath));
+        return;
+      }
       if (scenario === "uncertain" || scenario === "uncertain resume") {
         assert.equal(first.status, "partial_failure");
         assert.equal(existsSync(guardPath), true);
@@ -733,7 +840,11 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         );
         return;
       }
-      assert.deepEqual(first, { status: "started", repository });
+      assert.deepEqual(first, {
+        status: "started",
+        repository,
+        definition: scenario === "named" ? "custom-manager" : "manager",
+      });
       assert.equal(existsSync(guardPath), false);
       if (scenario === "pending" || scenario === "old generation") {
         assert.equal(managerPublished, true);
@@ -780,11 +891,14 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
       assert.deepEqual(await start(), {
         status: "resume_required",
         repository,
+        ...(scenario === "named" ? { definition: "custom-manager" } : {}),
       });
       assert.equal(readFileSync(file, "utf8"), expectedHistoryAtLaunch);
+      if (scenario === "named") writeNamedDefinition("tools: []\nagents: []");
       assert.deepEqual(await chief.resume(repository, ctx), {
         status: "resumed",
         repository,
+        definition: scenario === "named" ? "custom-manager" : "manager",
       });
       assert.equal(launches, 2);
       assert.equal(existsSync(guardPath), false);

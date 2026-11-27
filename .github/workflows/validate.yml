@@ -304,6 +304,7 @@ jobs:
             core \
             continuation \
             chief-tree \
+            chief-manager \
             supervisor-agent \
             terminal-failure \
             agent-terminal-failure \
@@ -322,6 +323,14 @@ jobs:
           name: simulated-smoke-failure
           path: ${{ runner.temp }}/pi-herdsman-smoke-evidence-*/result.json
           if-no-files-found: warn
+          retention-days: 3
+      - name: Upload sanitized Manager delegation success evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: simulated-manager-delegation-success
+          path: ${{ runner.temp }}/pi-herdsman-smoke-success-*/chief-manager.json
+          if-no-files-found: ignore
           retention-days: 3
 
   peer-federation:
