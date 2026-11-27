@@ -25998,6 +25998,16 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
 });
 
 test("fresh assignment refreshes the widget after validation", async (t) => {
+  const waitForPhase = async (phase: string, condition: () => unknown) => {
+    try {
+      await t.waitFor(condition);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`waitFor phase "${phase}" failed: ${detail}`, {
+        cause: error,
+      });
+    }
+  };
   const previousPlacement = readConfig().spawnPlacement;
   const label = "fresh-start-widget-agent";
   let sessionPath = "";
@@ -26407,14 +26417,14 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
       undefined,
       context,
     );
-    await t.waitFor(() =>
+    await waitForPhase("initial-status-request", () =>
       assert.ok(
         resolveInitialStatus,
         "assignment did not request initial status",
       ),
     );
     resolveInitialStatus!({ stdout: snapshot(true), stderr: "", code: 0 });
-    await t.waitFor(() =>
+    await waitForPhase("integration-validation", () =>
       assert.ok(
         resolveIntegration,
         "assignment did not reach integration validation",
@@ -26426,7 +26436,7 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
       stderr: "",
       code: 0,
     });
-    await t.waitFor(() =>
+    await waitForPhase("initial-request-handoff", () =>
       assert.ok(
         releaseInitialHandoff,
         "assignment did not reach initial request handoff",
@@ -26464,7 +26474,7 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
       firstStatusAfterValidation >= 0,
       "fresh runtime refresh must occur after validation and before submit validation",
     );
-    await t.waitFor(() =>
+    await waitForPhase("post-validation-widget-refresh", () =>
       assert.match(widget!.render(160).join("\n"), /flexible.*● 1/),
     );
     const rendered = widget!.render(160).join("\n");
@@ -26486,7 +26496,9 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
     );
     assert.equal(failed.details.ok, true, JSON.stringify(failed.details));
     assert.equal(pi.sentMessageCalls.length, 1);
-    await t.waitFor(() => assert.match(widget!.render(160).join("\n"), /lead/));
+    await waitForPhase("widget-reset-after-failed-assignment", () =>
+      assert.match(widget!.render(160).join("\n"), /lead/),
+    );
     assert.match(widget!.render(160).join("\n"), /lead/);
 
     failValidation = true;
@@ -26504,7 +26516,9 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
       context,
     );
     assert.equal(invalid.details.ok, false);
-    await t.waitFor(() => assert.match(widget!.render(160).join("\n"), /lead/));
+    await waitForPhase("widget-reset-after-invalid-assignment", () =>
+      assert.match(widget!.render(160).join("\n"), /lead/),
+    );
     assert.match(widget!.render(160).join("\n"), /lead/);
   } finally {
     updateConfig("spawnPlacement", previousPlacement);
