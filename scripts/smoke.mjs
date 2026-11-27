@@ -11459,9 +11459,9 @@ async function runChiefManagerSmoke(ctx) {
     );
     return result.details;
   }
-  async function observeManager(stage) {
+  async function observeManager(stage, checkout = repository) {
     return wait(stage, async () => {
-      const project = await projectPanes();
+      const project = (await panes()).filter((pane) => pane.cwd === checkout);
       const workspaceIds = new Set(project.map((pane) => pane.workspace_id));
       if (workspaceIds.size === 0) return { done: false };
       assert.equal(
@@ -11472,7 +11472,7 @@ async function runChiefManagerSmoke(ctx) {
       const listing = await agents();
       const descriptor = JSON.parse(
         await readFile(
-          await smokeManagerDescriptorPath({ ...ctx, rootCwd: repository }),
+          await smokeManagerDescriptorPath({ ...ctx, rootCwd: checkout }),
           "utf8",
         ),
       );
@@ -11734,20 +11734,23 @@ async function runChiefManagerSmoke(ctx) {
   assert.notEqual(first.pane.workspace_id, ctx.rootWorkspaceId);
   // Herdr's fresh Pi can select another default in this fixture. Explicitly
   // select the simulated model in the verified child, not in production launch.
-  await submitPaneCommand(
-    ctx,
-    first.pane.pane_id,
-    "/model smoke-faux/chief-manager",
-  );
-  await nestedCommand(ctx, [
-    "pane",
-    "wait-output",
-    first.pane.pane_id,
-    "--match",
-    "Model: chief-manager",
-    "--timeout",
-    "15000",
-  ]);
+  const selectManagerModel = async ({ pane }) => {
+    await submitPaneCommand(
+      ctx,
+      pane.pane_id,
+      "/model smoke-faux/chief-manager",
+    );
+    await nestedCommand(ctx, [
+      "pane",
+      "wait-output",
+      pane.pane_id,
+      "--match",
+      "Model: chief-manager",
+      "--timeout",
+      "15000",
+    ]);
+  };
+  await selectManagerModel(first);
   await verifyManager(first, "first");
   const delegationPrompt = "CHIEF_MANAGER_SMOKE delegate";
   ctx.chiefManagerDelegationIdentity = {
@@ -11863,6 +11866,23 @@ async function runChiefManagerSmoke(ctx) {
     "repeated Manager start removed more than the completed Agent pane",
   );
 
+  const secondRoot = join(ctx.paths.root, "second-manager");
+  await mkdir(secondRoot);
+  const secondRepository = await realpath(
+    await prepareManagerRepository({ ...ctx.paths, root: secondRoot }),
+  );
+  new ProjectTrustStore(ctx.paths.piAgent).set(secondRepository, true);
+  await lifecycle("start_manager", "started", "start-second-manager", {
+    repository: secondRepository,
+  });
+  const second = await observeManager("second-manager", secondRepository);
+  assert.notEqual(second.pane.workspace_id, first.pane.workspace_id);
+  assert.notEqual(second.pane.workspace_id, ctx.rootWorkspaceId);
+  assert.notEqual(second.session.id, first.session.id);
+  assert.notEqual(second.pid, first.pid);
+  await selectManagerModel(second);
+  await verifyManager(second, "second");
+
   const branch = `herdsman/smoke-chief-manager-${randomUUID()}`;
   const checkout = join(ctx.paths.root, "chief-manager-worktree");
   await nestedCommand(ctx, [
@@ -11977,17 +11997,108 @@ async function runChiefManagerSmoke(ctx) {
   };
   const beforeStop = await verifyManager(first, "before-stop");
 
+  const observeOwnedAgent = (label, ownerId, leaf = true) =>
+    wait(label, async () => {
+      const records = await smokeManagedAgentRecords(ctx, await agents());
+      const matches = records.filter(
+        ({ mailbox }) => mailbox?.state.agentLabel === label,
+      );
+      assert.ok(matches.length <= 1, `duplicate Agent: ${label}`);
+      if (!matches.length) return { done: false };
+      const { agent, session, mailbox } = matches[0];
+      assert.equal(mailbox.state.ownerSessionId, ownerId);
+      assert.equal(mailbox.state.piSessionId, session.id);
+      assert.equal(mailbox.state.paneId, agent.pane_id);
+      const [process, ...extra] = await processIn(agent.pane_id);
+      assert.deepEqual(extra, []);
+      const waiting = sessionEntries(session.contents).some(
+        (entry) =>
+          entry.message?.role === "assistant" &&
+          entry.message.content.some(
+            (part) =>
+              part.type === "toolCall" &&
+              part.name === "await_owner" &&
+              part.arguments?.question === "CHIEF_MANAGER_SMOKE_AGENT_PENDING",
+          ),
+      );
+      return {
+        done:
+          !!mailbox.state.activeRequestId &&
+          process?.pid > 0 &&
+          (!leaf || waiting),
+        value: { paneId: agent.pane_id, session, pid: process?.pid },
+      };
+    });
+  const delegate = async (paneId, ownerId, owner) => {
+    const request = `CHIEF_MANAGER_SMOKE delegate ${owner}`;
+    await prompt(paneId, request);
+    await wait(`delegate-${owner}`, async () => {
+      const session = await exactIsolatedSession(ctx, ownerId);
+      if (!session) return { done: false };
+      assertNoFailedAgentDelegation(session.contents);
+      const { delegation } = coreDelegationEdge(
+        session.contents,
+        `smoke-${owner}-agent`,
+        ownerId,
+      );
+      return {
+        done: delegation === "accepted",
+        progress: rootDelegationDiagnostics(session.contents),
+      };
+    });
+  };
+  const chiefId = await agentSessionId(
+    ctx,
+    (await agents()).find((agent) => agent.pane_id === ctx.rootPaneId),
+  );
+  assert.ok(chiefId);
+  await delegate(ctx.rootPaneId, chiefId, "chief");
+  const chiefAgent = await observeOwnedAgent("smoke-chief-agent", chiefId);
+  await delegate(first.pane.pane_id, first.session.id, "first");
+  const firstAgent = await observeOwnedAgent(
+    "smoke-first-agent",
+    first.session.id,
+    false,
+  );
+  const nestedAgent = await observeOwnedAgent(
+    "smoke-nested-agent",
+    firstAgent.session.id,
+  );
+  await delegate(second.pane.pane_id, second.session.id, "second");
+  const secondAgent = await observeOwnedAgent(
+    "smoke-second-agent",
+    second.session.id,
+  );
+
   const staff = await lifecycle("list_staff", null, "staff-target", {});
   const managers = staff.reports.filter((report) => report.role === "manager");
-  assert.equal(managers.length, 1);
-  assert.match(managers[0].target, /^manager:/u);
+  const chiefHistory = await exactIsolatedSession(ctx, chiefId);
+  assert.ok(chiefHistory);
+  const targetBindings = sessionEntries(chiefHistory.contents).filter(
+    (entry) =>
+      entry.customType === "pi-herdsman-coordinator-target-v1" &&
+      entry.data?.role === "manager" &&
+      entry.data?.ownerSessionId === chiefId,
+  );
+  const managerTarget = (sessionId) => {
+    const binding = targetBindings.find(
+      (entry) => entry.data.sessionId === sessionId,
+    );
+    assert.match(binding?.data.target ?? "", /^manager:/u);
+    return binding.data.target;
+  };
+  const selected = managerTarget(first.session.id);
+  assert.deepEqual(
+    managers.map((report) => report.target).sort(),
+    [selected, managerTarget(second.session.id)].sort(),
+  );
   const targeted = await lifecycle(
     "stop_hierarchy",
     "complete",
     "targeted-stop",
     {
       scope: "manager",
-      target: managers[0].target,
+      target: selected,
     },
   );
   assert.deepEqual(targeted.stopped, [
@@ -12004,8 +12115,30 @@ async function runChiefManagerSmoke(ctx) {
     return true;
   };
   await wait("targeted-process-exit", async () => ({
-    done: pidExited(lead.pid) && pidExited(first.pid),
+    done: [lead, first, firstAgent, nestedAgent].every(({ pid }) =>
+      pidExited(pid),
+    ),
   }));
+  const assertUnselectedAgentsSurvive = async () => {
+    for (const [label, ownerId, original] of [
+      ["smoke-chief-agent", chiefId, chiefAgent],
+      ["smoke-second-agent", second.session.id, secondAgent],
+    ]) {
+      const observed = await observeOwnedAgent(label, ownerId);
+      assert.equal(observed.pid, original.pid);
+      assert.equal(observed.paneId, original.paneId);
+      assert.equal(observed.session.id, original.session.id);
+    }
+    assert.deepEqual(
+      (await processIn(second.pane.pane_id)).map(({ pid }) => pid),
+      [second.pid],
+    );
+    const report = (await agents()).find(
+      (agent) => agent.pane_id === second.pane.pane_id,
+    );
+    assert.equal(await agentSessionId(ctx, report), second.session.id);
+  };
+  await assertUnselectedAgentsSurvive();
   const assertOrdinaryLeadSurvives = async () => {
     assert.deepEqual(
       (await processIn(ordinaryLeadPane)).map(({ pid }) => pid),
@@ -12094,20 +12227,18 @@ async function runChiefManagerSmoke(ctx) {
       scope: "staff",
     },
   );
-  assert.equal(staffStop.stopped.length, 2);
-  assert.ok(
-    staffStop.stopped.some(
-      (record) =>
-        record.role === "manager" && record.session === resumed.session.id,
-    ),
-  );
-  assert.ok(
-    staffStop.stopped.some(
-      (record) => record.role === "lead" && record.session === ordinaryLeadId,
-    ),
+  assert.deepEqual(
+    staffStop.stopped.map(({ role, session }) => `${role}:${session}`).sort(),
+    [
+      `manager:${resumed.session.id}`,
+      `manager:${second.session.id}`,
+      `lead:${ordinaryLeadId}`,
+    ].sort(),
   );
   await wait("staff-process-exit", async () => ({
-    done: pidExited(resumed.pid) && pidExited(ordinaryLeadProcess.pid),
+    done: [resumed, ordinaryLeadProcess, second, chiefAgent, secondAgent].every(
+      ({ pid }) => pidExited(pid),
+    ),
   }));
   const savedOrdinaryLead = await exactIsolatedSession(ctx, ordinaryLeadId);
   assert.equal(savedOrdinaryLead?.path, ordinaryLeadSession.path);
@@ -12145,7 +12276,10 @@ async function runChiefManagerSmoke(ctx) {
   await assertAssignmentPreserved();
   ctx.chiefManager = {
     targetedShutdown: targeted.status,
+    targetedUnselectedSubtreesSurvived: true,
+    targetedNestedAgentExitObserved: true,
     staffShutdown: staffStop.status,
+    staffOwnedAgentExitsObserved: true,
     chiefSurvivedStaffShutdown: true,
     completeShutdown: complete.status,
     chiefExitObserved: true,
@@ -15014,6 +15148,27 @@ async function main() {
           scenario === "core" ? ["implementer", "scout"] : ["implementer"],
         );
       if (scenario === "chief-manager") {
+        await prepareFauxAgentOverlays(paths, ctx.simulatedProviderExtension, [
+          "implementer",
+          "scout",
+        ]);
+        for (const [path, role, agents] of [
+          ["chief.md", "chief", "scout"],
+          ["managers/manager.md", "manager", "implementer, scout"],
+        ]) {
+          const file = join(paths.piAgent, "coordinators", path);
+          await mkdir(dirname(file), { recursive: true });
+          // Fresh Manager Pi processes apply the profile's native tool allowlist.
+          const tools =
+            role === "manager"
+              ? "tools: [codemode, list_agents, delegate_agent, resume_agent]\n"
+              : "";
+          await writeFile(
+            file,
+            `---\nname: ${role}\nagents: [${agents}]\n${tools}---\n`,
+            { flag: "wx" },
+          );
+        }
         await writeFile(
           join(paths.piAgent, "settings.json"),
           JSON.stringify({

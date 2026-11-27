@@ -8202,11 +8202,14 @@ test("an accepted Agent can delegate immediately while shutdown waits to freeze 
         async (held) => {
           const grandchild = readAgentState(grandchildMailbox);
           assert.ok(grandchild);
-          assert.deepEqual([...held], [
-            `${WORKSPACE}\0${owner}`,
-            `${WORKSPACE}\0${child.piSessionId}`,
-            `${WORKSPACE}\0${grandchild.piSessionId}`,
-          ]);
+          assert.deepEqual(
+            [...held],
+            [
+              `${WORKSPACE}\0${owner}`,
+              `${WORKSPACE}\0${child.piSessionId}`,
+              `${WORKSPACE}\0${grandchild.piSessionId}`,
+            ],
+          );
           for (const action of [
             {
               action: "delegate",
