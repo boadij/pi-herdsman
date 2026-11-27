@@ -4138,6 +4138,63 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 ref !== destinationRef
               )
                 comparisonTarget = ref;
+              else if (
+                base.code === 0 &&
+                !base.stderr?.trim() &&
+                !ref &&
+                /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(operation.base)
+              ) {
+                const commit = await pi.exec(
+                  "git",
+                  [
+                    "rev-parse",
+                    "--verify",
+                    "--end-of-options",
+                    `${operation.base}^{commit}`,
+                  ],
+                  { cwd: localScope.checkoutPath, signal, timeout: 3_000 },
+                );
+                signal?.throwIfAborted();
+                if (
+                  commit.code !== 0 ||
+                  commit.killed ||
+                  commit.truncated ||
+                  commit.stderr?.trim()
+                )
+                  throw new Error("comparison commit lookup unavailable");
+                const sha = String(commit.stdout ?? "").trim();
+                if (sha === operation.base.toLowerCase()) {
+                  // ponytail: infer only from exact local branch tips at creation time;
+                  // Git ancestry alone cannot establish later PR retargeting intent.
+                  const parents = await pi.exec(
+                    "git",
+                    [
+                      "for-each-ref",
+                      `--points-at=${sha}`,
+                      "--format=%(refname)",
+                      "refs/heads/",
+                    ],
+                    { cwd: localScope.checkoutPath, signal, timeout: 3_000 },
+                  );
+                  signal?.throwIfAborted();
+                  if (
+                    parents.code !== 0 ||
+                    parents.killed ||
+                    parents.truncated ||
+                    parents.stderr?.trim()
+                  )
+                    throw new Error("comparison branch lookup unavailable");
+                  const candidates = String(parents.stdout ?? "")
+                    .split(/\r?\n/u)
+                    .filter(Boolean);
+                  if (
+                    candidates.length === 1 &&
+                    /^refs\/heads\/.+$/u.test(candidates[0]!) &&
+                    candidates[0] !== destinationRef
+                  )
+                    comparisonTarget = candidates[0];
+                }
+              }
             }
           } catch {
             if (signal?.aborted) throw signal.reason;
