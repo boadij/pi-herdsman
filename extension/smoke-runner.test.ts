@@ -1531,7 +1531,18 @@ test("root delegation diagnostics correlate results and exclude private data", (
   );
   const labeledCall = {
     ...call,
-    content: [{ ...call.content[0], arguments: { label: "expected-agent" } }],
+    content: [
+      {
+        ...call.content[0],
+        arguments: {
+          definition: "PRIVATE_DEFINITION",
+          task: "PRIVATE_TASK",
+          label: "expected-agent",
+          files: ["PRIVATE_PATH"],
+          extraSecret: "PRIVATE_EXTRA",
+        },
+      },
+    ],
   };
   const unrelatedFailedCall = {
     role: "assistant",
@@ -1568,13 +1579,85 @@ test("root delegation diagnostics correlate results and exclude private data", (
       "expected-agent",
     ),
   );
+  const successfulDiagnostics = rootDelegationDiagnostics(
+    labeledTranscript([
+      labeledCall,
+      result,
+      unrelatedFailedCall,
+      unrelatedFailure,
+    ]),
+    "expected-agent",
+  );
+  assert.equal(successfulDiagnostics.matchingResult, "success");
+  assert.deepEqual(successfulDiagnostics.requestShape, {
+    type: "object",
+    fields: {
+      definition: { present: true, type: "string" },
+      task: { present: true, type: "string" },
+      label: { present: true, type: "string" },
+      files: { present: true, type: "array" },
+      model: { present: false, type: "absent" },
+      thinking: { present: false, type: "absent" },
+      cwd: { present: false, type: "absent" },
+    },
+    definitionNonempty: true,
+    taskNonempty: true,
+    expectedLabel: true,
+    labelPattern: true,
+    filesArray: true,
+    filesCount: 1,
+    anyExtraProperty: true,
+  });
+  assert.equal(
+    JSON.stringify(successfulDiagnostics).includes("PRIVATE"),
+    false,
+  );
   const expectedFailure = {
     ...result,
     details: {
       ok: false,
-      error: { category: "invalid_request", message: "PRIVATE_ERROR" },
+      error: {
+        category: "invalid_request",
+        message: "PRIVATE_ERROR",
+        operation: "delegate_agent",
+        rollbackOccurred: false,
+        retryAttempted: true,
+        details: { diagnosticOutcome: "definition_not_allowed" },
+        ids: { session: "PRIVATE_ID" },
+      },
     },
   };
+  const failedDiagnostics = rootDelegationDiagnostics(
+    labeledTranscript([labeledCall, expectedFailure]),
+    "expected-agent",
+  );
+  assert.equal(failedDiagnostics.matchingResult, "error");
+  assert.deepEqual(failedDiagnostics.error, {
+    category: "invalid_request",
+    operation: "delegate_agent",
+    diagnosticOutcome: "definition_not_allowed",
+    rollbackOccurred: false,
+    retryAttempted: true,
+  });
+  assert.equal(JSON.stringify(failedDiagnostics).includes("PRIVATE"), false);
+  const unknownDiagnostic = rootDelegationDiagnostics(
+    labeledTranscript([
+      labeledCall,
+      {
+        ...expectedFailure,
+        details: {
+          ...expectedFailure.details,
+          error: {
+            ...expectedFailure.details.error,
+            details: { diagnosticOutcome: "PRIVATE_DIAGNOSTIC" },
+          },
+        },
+      },
+    ]),
+    "expected-agent",
+  );
+  assert.equal(unknownDiagnostic.error?.diagnosticOutcome, undefined);
+  assert.equal(JSON.stringify(unknownDiagnostic).includes("PRIVATE"), false);
   assert.throws(
     () =>
       assertNoFailedAgentDelegation(
