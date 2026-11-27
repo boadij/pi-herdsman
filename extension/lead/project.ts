@@ -30,7 +30,10 @@ import {
   normalizeHerdrLifecycleState,
   EXPECTED_ASSIGNED_LEAD_DEFINITION_ENV,
   readCoordinatorDefinitionBinding,
+  removeCoordinatorStartIntent,
+  type CoordinatorStartIntent,
   verifyAssignedLeadDefinition,
+  writeCoordinatorStartIntent,
 } from "../supervision.ts";
 import { OperationError } from "../errors.ts";
 import {
@@ -45,9 +48,15 @@ import {
   requireHerdrPiIntegration,
   prepareHerdrCoordinatorPane,
   startHerdrCoordinatorInPane,
+  HerdrStartFailure,
 } from "../herdr.ts";
 import { readResult, unacknowledgedRequestExists } from "../mailbox.ts";
-import { claimSessionActivationLock } from "../lock.ts";
+import {
+  acquireCoordinatorAdmission,
+  claimSessionActivationLock,
+  coordinatorAdmissionClaimIsCurrent,
+  type ProcessLockClaim,
+} from "../lock.ts";
 import {
   isWorktreeRemovalPreapproved,
   effectiveMergePolicy,
@@ -700,6 +709,64 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           signal,
         );
       },
+    );
+  };
+  const stopCoordinatorExecution = async (
+    target: {
+      role: "lead" | "manager";
+      sessionId: string;
+      workspaceId: string;
+      paneId: string;
+      tabId: string;
+      instanceId: string;
+    },
+    ctx: ExtensionContext,
+    revalidate: () => Promise<void>,
+    signal?: AbortSignal,
+  ) => {
+    const verify = async () => {
+      await revalidate();
+      const state = host.readLeadCoordinationState(
+        host.supervisionRuntime(),
+        target.sessionId,
+      );
+      if (
+        !state ||
+        state.piSessionId !== target.sessionId ||
+        state.role !== target.role ||
+        state.instanceId !== target.instanceId
+      )
+        throw new Error("Coordinator role or generation changed before stop");
+      const live = (await host.liveLead(ctx, target.sessionId)).filter(
+        (agent: any) =>
+          agent.workspace_id === target.workspaceId &&
+          agent.pane_id === target.paneId &&
+          agent.tab_id === target.tabId,
+      );
+      if (live.length !== 1)
+        throw new Error("Exact Coordinator execution is missing or ambiguous");
+      return live[0] as HerdrRecord;
+    };
+    await verify();
+    return host.withQuiescedTree(
+      ctx,
+      target.sessionId,
+      target.workspaceId,
+      async (heldLocks) => {
+        const exact = await verify();
+        const stopped = await stopExecution(
+          target.sessionId,
+          exact,
+          ctx,
+          signal,
+          heldLocks,
+        );
+        return {
+          closures: stopped.result.closures?.length ?? 0,
+          continuityProofs: stopped.persisted,
+        };
+      },
+      signal,
     );
   };
   const inspectRemovalTarget = async (
@@ -2318,6 +2385,40 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     ctx: ExtensionContext,
     signal?: AbortSignal,
   ) => {
+    const admission = acquireCoordinatorAdmission();
+    try {
+      return await activateProjectLeadUnderAdmission(
+        params,
+        ctx,
+        signal,
+        admission.claim,
+      );
+    } finally {
+      admission.release();
+    }
+  };
+  const activateProjectLeadUnderAdmission = async (
+    params:
+      | {
+          action: "delegate";
+          task: string;
+          branch?: string;
+          base?: string;
+          definition?: string;
+          files?: string[];
+        }
+      | {
+          action: "resume";
+          branch: string;
+          message: string;
+          definition?: string;
+          files?: string[];
+          retain?: boolean;
+        },
+    ctx: ExtensionContext,
+    signal: AbortSignal | undefined,
+    admissionClaim: ProcessLockClaim,
+  ) => {
     const repoKey = leadRuntime.managerLease?.descriptor.repoKey;
     if (!repoKey) throw new Error("Manager lease is no longer active");
     const operation: ProjectLeadActivation =
@@ -2349,7 +2450,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     )
       throw new Error("Base ref must not be empty");
     return withProjectWorkLock(`${repoKey}\0${operation.branch}`, () =>
-      activateProjectLeadLocked(operation, ctx, signal),
+      activateProjectLeadLocked(operation, ctx, signal, admissionClaim),
     );
   };
   const mergeProject = async (
@@ -3533,7 +3634,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     operation: ProjectLeadActivation,
     ctx: ExtensionContext,
     signal?: AbortSignal,
+    admissionClaim?: ProcessLockClaim,
   ) => {
+    if (!admissionClaim || !coordinatorAdmissionClaimIsCurrent(admissionClaim))
+      throw new Error("Coordinator admission claim is not current");
     let resumeMessageId: string | undefined;
     let resumeMessageQueued = false;
     let resumeMessageQueueAttempted = false;
@@ -4800,6 +4904,32 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             assignment.id,
           )?.instanceId;
           leadStartupStartedAt = Date.now();
+          if (!admissionClaim || !workspaceId || !tabId || !paneId || !cwd)
+            throw new Error(
+              "Assigned Lead launch is missing its Coordinator admission identity",
+            );
+          const agentArgs = [
+            ...launchArgs,
+            "--session-dir",
+            resumeSessionDirectory ?? sessionDirectory(cwd),
+            "--session-id",
+            assignment.id,
+          ];
+          const intent: CoordinatorStartIntent = {
+            version: 1,
+            sessionId: assignment.id,
+            role: "assigned-lead",
+            canonicalRepoKey: manager.canonicalRepoKey,
+            assignmentRepoKey: manager.repoKey,
+            branch,
+            checkoutPath: cwd,
+            workspaceId,
+            tabId,
+            paneId,
+            createdAt: Date.now(),
+            admission: admissionClaim,
+          };
+          writeCoordinatorStartIntent(runtime, intent);
           await (
             host.startHerdrCoordinatorInPane ?? startHerdrCoordinatorInPane
           )(pi, ctx, {
@@ -4831,14 +4961,23 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 await assertAssignedGitCheckout(cwd);
               else await assertResumePlacement();
             },
-            agentArgs: [
-              ...launchArgs,
-              "--session-dir",
-              resumeSessionDirectory ?? sessionDirectory(cwd!),
-              "--session-id",
-              assignment.id,
-            ],
+            agentArgs,
             signal,
+          }).catch((error: unknown) => {
+            if (
+              error instanceof HerdrStartFailure &&
+              !error.attempt.launchMayHaveStarted
+            ) {
+              try {
+                removeCoordinatorStartIntent(runtime, intent);
+              } catch (cleanupError) {
+                throw new Error(
+                  `${error.message}; unused Lead startup intent could not be removed: ${String(cleanupError)}`,
+                  { cause: error },
+                );
+              }
+            }
+            throw error;
           });
           startedLead = true;
         }
@@ -5237,6 +5376,40 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     _update: unknown,
     ctx: ExtensionContext,
   ): Promise<AgentToolResult<any>> => {
+    const action =
+      raw && typeof raw === "object"
+        ? (raw as { action?: unknown }).action
+        : undefined;
+    if (
+      action !== "delegate" &&
+      action !== "resume" &&
+      action !== "stop" &&
+      action !== "remove" &&
+      action !== "merge"
+    )
+      return executeStaffUnderAdmission(_id, raw, signal, _update, ctx);
+    const admission = acquireCoordinatorAdmission();
+    try {
+      return await executeStaffUnderAdmission(
+        _id,
+        raw,
+        signal,
+        _update,
+        ctx,
+        admission.claim,
+      );
+    } finally {
+      admission.release();
+    }
+  };
+  const executeStaffUnderAdmission = async (
+    _id: string,
+    raw: unknown,
+    signal: AbortSignal | undefined,
+    _update: unknown,
+    ctx: ExtensionContext,
+    admissionClaim?: ProcessLockClaim,
+  ): Promise<AgentToolResult<any>> => {
     if (activeRole() !== "chief" && activeRole() !== "manager")
       throw new Error("Staff is available only to active supervisors");
     const authority =
@@ -5296,7 +5469,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (params.action === "delegate" || params.action === "resume") {
       if (activeRole() !== "manager")
         throw new Error("Only Managers can control project work");
-      return activateProjectLead(params, ctx, signal);
+      if (!admissionClaim)
+        throw new Error("Coordinator admission claim is unavailable");
+      return activateProjectLeadUnderAdmission(
+        params,
+        ctx,
+        signal,
+        admissionClaim,
+      );
     }
     if (params.action === "merge") {
       if (activeRole() !== "manager")
@@ -6415,6 +6595,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     },
     persistNestedStopClosures,
     stop,
+    stopCoordinatorExecution,
     activateProjectLead,
     removeWorktree,
     listPendingRemovals,

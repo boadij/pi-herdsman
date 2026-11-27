@@ -910,6 +910,26 @@ function formatHealthAttentionDuration(ms: number): string {
 const AGENT_LABEL_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 const validAgentLabel = (value: unknown): value is string =>
   typeof value === "string" && AGENT_LABEL_PATTERN.test(value);
+type AgentActionDiagnosticOutcome =
+  | "assignment_definition_missing"
+  | "assignment_task_missing"
+  | "continuation_session_missing"
+  | "root_delegation_unavailable"
+  | "root_session_changed"
+  | "root_authority_changed"
+  | "agent_depth_unverifiable"
+  | "agent_depth_mismatch"
+  | "agent_depth_limit_exceeded"
+  | "continuation_unavailable"
+  | "definition_unavailable"
+  | "definition_not_allowed"
+  | "definition_disabled"
+  | "definition_references_unavailable"
+  | "active_session_conflict"
+  | "invalid_agent_label";
+const actionDiagnosticDetails = (outcome: AgentActionDiagnosticOutcome) => ({
+  details: { diagnosticOutcome: outcome },
+});
 const messageLimits = async () => {
   const config = readConfig();
   return {
@@ -3838,11 +3858,26 @@ function validateAgentThinkingOverride(
 export function validateAssignmentRequest(params: Params): void {
   if (params.action !== "delegate" && params.action !== "continue") return;
   if (params.action === "delegate" && typeof params.definition !== "string")
-    fail("invalid_request", "delegate requires definition", params.action);
+    fail(
+      "invalid_request",
+      "delegate requires definition",
+      params.action,
+      actionDiagnosticDetails("assignment_definition_missing"),
+    );
   if (typeof params.task !== "string")
-    fail("invalid_request", `${params.action} requires task`, params.action);
+    fail(
+      "invalid_request",
+      `${params.action} requires task`,
+      params.action,
+      actionDiagnosticDetails("assignment_task_missing"),
+    );
   if (params.action === "continue" && typeof params.session !== "string")
-    fail("invalid_request", "continue requires session", params.action);
+    fail(
+      "invalid_request",
+      "continue requires session",
+      params.action,
+      actionDiagnosticDetails("continuation_session_missing"),
+    );
 }
 
 export type Runtime = {
@@ -4725,6 +4760,8 @@ export type AgentControllerOptions = {
   managedAgentState?(ctx: ExtensionContext): ManagedAgentState;
   /** Current verified root-role delegation policy; managed-Agent scope ignores it. */
   rootDelegationPolicy?(): RootDelegationPolicy;
+  /** Local root shutdown gate, checked under that owner's delegation lock. */
+  rootAgentAdmissionBlocked?(): boolean;
   /** Stable authority/profile generation captured across assignment preflight. */
   rootDelegationGeneration?(): RootDelegationGeneration;
   projectEvidence?(
@@ -8461,6 +8498,7 @@ export function createAgentController(
         "invalid_request",
         "Root delegation authority is unavailable",
         p.action,
+        actionDiagnosticDetails("root_delegation_unavailable"),
       );
     const initiatingRootGeneration = rootAssignment
       ? options.rootDelegationGeneration!()
@@ -8473,12 +8511,18 @@ export function createAgentController(
         "invalid_request",
         "Root delegation authority is unavailable",
         p.action,
+        actionDiagnosticDetails("root_delegation_unavailable"),
       );
     if (
       rootAssignment &&
       initiatingRootGeneration!.sessionId !== initiatingSessionId
     )
-      fail("invalid_request", "Root delegation session changed", p.action);
+      fail(
+        "invalid_request",
+        "Root delegation session changed",
+        p.action,
+        actionDiagnosticDetails("root_session_changed"),
+      );
     const limits = await messageLimits();
     const assignment =
       p.action === "delegate" || p.action === "continue"
@@ -8518,6 +8562,7 @@ export function createAgentController(
             "invalid_request",
             `This Agent's depth could not be verified against the durable ownership records (${String(error instanceof Error ? error.message : error).replace(/^Error: /, "")}), so it cannot start another Agent; restart it from its owner or do the work directly`,
             p.action,
+            actionDiagnosticDetails("agent_depth_unverifiable"),
           );
         }
         if (durableDepth !== scope.depth)
@@ -8525,12 +8570,14 @@ export function createAgentController(
             "invalid_request",
             `This Agent's PI_HERDSMAN_DEPTH is ${scope.depth} but the durable ownership records place it at depth ${durableDepth}; the records are authoritative, so it cannot start another Agent. Restart it from its owner instead of editing its environment`,
             p.action,
+            actionDiagnosticDetails("agent_depth_mismatch"),
           );
         if (childAgentDepth(scope) > maxAgentDepth)
           fail(
             "invalid_request",
             `This Agent is at depth ${scope.depth} and maxAgentDepth is ${maxAgentDepth}, so it cannot start another Agent; do the work directly or ask the owner to raise maxAgentDepth in the Herdsman config`,
             p.action,
+            actionDiagnosticDetails("agent_depth_limit_exceeded"),
           );
       }
       const resumed =
@@ -8548,6 +8595,7 @@ export function createAgentController(
           "target_not_found",
           "The requested Agent continuation could not be resolved",
           "continue",
+          actionDiagnosticDetails("continuation_unavailable"),
         );
       const controllerCwd = ctx.cwd;
       const requestedCwd = p.action === "delegate" ? p.cwd : undefined;
@@ -8575,6 +8623,7 @@ export function createAgentController(
                 "target_not_found",
                 "The requested Agent continuation could not be resolved",
                 "continue",
+                actionDiagnosticDetails("continuation_unavailable"),
               )
             ).definition
           : p.definition;
@@ -8590,6 +8639,7 @@ export function createAgentController(
           "invalid_request",
           `Agent definition ${agentDefinition} was not found`,
           p.action,
+          actionDiagnosticDetails("definition_unavailable"),
         );
       if (
         scope.kind === "managed-agent" &&
@@ -8599,6 +8649,7 @@ export function createAgentController(
           "invalid_request",
           `Agent definition ${agentDefinition} is not allowed for this delegating agent`,
           p.action,
+          actionDiagnosticDetails("definition_not_allowed"),
         );
       const assertRootDelegationAllowed = (): void => {
         if (
@@ -8606,7 +8657,12 @@ export function createAgentController(
           (ctx.sessionManager.getSessionId() !== initiatingSessionId ||
             initiatingRootGeneration?.sessionId !== initiatingSessionId)
         )
-          fail("invalid_request", "Root delegation session changed", p.action);
+          fail(
+            "invalid_request",
+            "Root delegation session changed",
+            p.action,
+            actionDiagnosticDetails("root_session_changed"),
+          );
         if (
           scope.kind === "root" &&
           initiatingRootGeneration &&
@@ -8619,6 +8675,7 @@ export function createAgentController(
             "invalid_request",
             "Root role or authority changed during Agent assignment preflight",
             p.action,
+            actionDiagnosticDetails("root_authority_changed"),
           );
         if (scope.kind === "root") {
           const policy = options.rootDelegationPolicy!();
@@ -8627,12 +8684,14 @@ export function createAgentController(
               "invalid_request",
               "Root delegation authority is unavailable",
               p.action,
+              actionDiagnosticDetails("root_delegation_unavailable"),
             );
           if (!permitsRootDelegation(policy, agentDefinition))
             fail(
               "invalid_request",
               `Agent definition ${agentDefinition} is not allowed`,
               p.action,
+              actionDiagnosticDetails("definition_not_allowed"),
             );
         }
       };
@@ -8666,6 +8725,7 @@ export function createAgentController(
           "invalid_request",
           "Cannot continue the controller's currently active Pi session.",
           p.action,
+          actionDiagnosticDetails("active_session_conflict"),
         );
       const sessionArgs = resumed ? ["--session", resumed.path] : [];
       let releaseSessionActivation: (() => void) | undefined;
@@ -8679,6 +8739,7 @@ export function createAgentController(
           p.action,
           {
             nextAction: `Enable ${agentDefinition} through /herdsman → Definitions or choose another enabled definition.`,
+            ...actionDiagnosticDetails("definition_disabled"),
           },
         );
       try {
@@ -8688,6 +8749,7 @@ export function createAgentController(
           "invalid_request",
           error instanceof Error ? error.message : String(error),
           p.action,
+          actionDiagnosticDetails("definition_references_unavailable"),
         );
       }
       const labels = new Set(
@@ -11368,6 +11430,12 @@ export function createAgentController(
           ctx.sessionManager.getSessionId(),
         );
         try {
+          if (options.rootAgentAdmissionBlocked?.())
+            fail(
+              "agent_busy",
+              "Chief hierarchy shutdown is in progress",
+              "lifecycle",
+            );
           return await actionUnsafeWithRetentionOutcome();
         } finally {
           release();

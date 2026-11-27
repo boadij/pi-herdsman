@@ -39,6 +39,10 @@ import {
   writeManagerRecoveryReference,
 } from "./supervision.ts";
 
+test.before(() => {
+  process.env.HERDR_SOCKET_PATH = join(PI_AGENT_ROOT, "test-herdr.sock");
+});
+
 test("Chief clone provisions only a verified primary workspace", async (t) => {
   for (const scenario of [
     "create",
@@ -617,6 +621,13 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
               } else {
                 assert.equal(path, file);
                 assert.equal(saved.getSessionId(), id);
+                const intent = getManagerStartIntent(
+                  runtime,
+                  saved.getSessionId(),
+                );
+                assert.equal(intent?.recoverySessionFile, path);
+                assert.equal(intent?.paneId, pane.pane_id);
+                assert.ok(intent?.admission);
               }
               if (
                 (scenario === "uncertain" || scenario === "uncertain resume") &&
@@ -902,6 +913,7 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
       });
       assert.equal(launches, 2);
       assert.equal(existsSync(guardPath), false);
+      assert.deepEqual(remainingIntents(), []);
       assert.equal(readFileSync(file, "utf8"), history);
     });
   }

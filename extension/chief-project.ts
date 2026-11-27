@@ -11,6 +11,7 @@ import {
   fsyncSync,
   lstatSync,
   openSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -18,6 +19,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { acquireCoordinatorAdmission, type ProcessLockClaim } from "./lock.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   isRuntimeBuild,
@@ -105,6 +107,33 @@ type LaunchGuard = {
   launchConfiguration?: string;
 };
 const LAUNCH_GUARD_MAX_BYTES = 8192;
+
+export function listUnsettledManagerLaunches(runtime: SupervisionRuntime): {
+  complete: boolean;
+  sessions: string[];
+} {
+  let names: string[];
+  try {
+    names = readdirSync(runtime.managers);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return { complete: true, sessions: [] };
+    return { complete: false, sessions: [] };
+  }
+  const sessions: string[] = [];
+  let complete = true;
+  for (const name of names.filter((entry) =>
+    /^[0-9a-f]{64}\.json\.unsettled$/u.test(entry),
+  )) {
+    try {
+      const guard = readLaunchGuard(join(runtime.managers, name));
+      if (guard?.chiefRoot === runtime.root) sessions.push(guard.session.id);
+    } catch {
+      complete = false;
+    }
+  }
+  return { complete, sessions };
+}
 
 function readLaunchGuard(path: string): LaunchGuard | undefined {
   const stat = lstatSync(path, { throwIfNoEntry: false });
@@ -498,6 +527,29 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
     definitionName: string | undefined,
     ctx: ExtensionContext,
   ): Promise<ProjectResult> {
+    const admission = acquireCoordinatorAdmission();
+    try {
+      return await manageUnderAdmission(
+        action,
+        input,
+        destination,
+        definitionName,
+        ctx,
+        admission.claim,
+      );
+    } finally {
+      admission.release();
+    }
+  }
+
+  async function manageUnderAdmission(
+    action: "start" | "resume",
+    input: string,
+    destination: string | undefined,
+    definitionName: string | undefined,
+    ctx: ExtensionContext,
+    admissionClaim: ProcessLockClaim,
+  ): Promise<ProjectResult> {
     await host.assertChief(ctx);
     const { signal } = ctx;
     const source = parseRepositorySource(input);
@@ -623,8 +675,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
                 throw new Error(
                   "The exact Manager has not reached verified readiness",
                 );
-              if (guard.action === "start")
-                removeManagerStartIntent(runtime, guard.session.id);
+              removeManagerStartIntent(runtime, guard.session.id);
               clearLaunchGuard(guardPath);
               return { status: "already_running", repository: repositoryPath };
             } catch (error) {
@@ -801,22 +852,23 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
 
         stage = "session";
         await host.assertChief(ctx);
-        if (!session) {
-          session = reserveManagerSession(repositoryPath);
-          hasIntent = true;
-          writeManagerStartIntent(runtime, {
-            version: 1,
-            sessionId: session.id,
-            role: "manager",
-            canonicalRepoKey,
-            checkoutPath: repositoryPath,
-            workspaceId: pane.workspaceId,
-            paneId: pane.paneId,
-            tabId: pane.tabId,
-            createdAt: Date.now(),
-            definition: selectedName,
-          });
-        }
+        const recoverySessionFile = session?.path;
+        session ??= reserveManagerSession(repositoryPath);
+        writeManagerStartIntent(runtime, {
+          version: 1,
+          sessionId: session.id,
+          role: "manager",
+          canonicalRepoKey,
+          checkoutPath: repositoryPath,
+          workspaceId: pane.workspaceId,
+          paneId: pane.paneId,
+          tabId: pane.tabId,
+          createdAt: Date.now(),
+          definition: selectedName,
+          admission: admissionClaim,
+          ...(recoverySessionFile ? { recoverySessionFile } : {}),
+        });
+        hasIntent = true;
 
         stage = "launch";
         const launchSession = session;
@@ -972,6 +1024,27 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
     requestedDefinition: string | undefined,
     message: string | undefined,
     ctx: ExtensionContext,
+  ): Promise<ProjectResult> => {
+    const admission = acquireCoordinatorAdmission();
+    try {
+      return await startLeadUnderAdmission(
+        workspaceId,
+        requestedDefinition,
+        message,
+        ctx,
+        admission.claim,
+      );
+    } finally {
+      admission.release();
+    }
+  };
+
+  const startLeadUnderAdmission = async (
+    workspaceId: string,
+    requestedDefinition: string | undefined,
+    message: string | undefined,
+    ctx: ExtensionContext,
+    admissionClaim: ProcessLockClaim,
   ): Promise<ProjectResult> => {
     await host.assertChief(ctx);
     if (requestedDefinition === "managed-lead")
@@ -1149,6 +1222,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
         leadMode: mode,
         definition: definitionName,
         createdAt: Date.now(),
+        admission: admissionClaim,
       };
       writeManagerStartIntent(host.runtime(), intent);
       const previousInstance = readLeadCoordinationState(
@@ -1287,6 +1361,8 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
 
   return {
     clone,
+    unsettledManagerLaunches: () =>
+      listUnsettledManagerLaunches(host.runtime()),
     verifyActive,
     start: (
       repository: string,

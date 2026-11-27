@@ -137,7 +137,7 @@ Group routine tests by area rather than enumerating every test file.
 - `extension/managed-agent-runtime.ts`: Managed-Agent request, result, context, metadata, and nested-delegation runtime.
 - `extension/lead-runtime.ts`: Lead lifecycle, role composition, supervision, project integration wiring, and Manager activation and persisted-role restoration.
 - `extension/lead/commands.ts`: Lead command menus, settings UI, and command dispatch.
-- `extension/lead/project.ts`: Managed project work operations and Git worktree inspection.
+- `extension/lead/project.ts`: Managed project work operations, exact child-first Coordinator stop, and Git worktree inspection.
 - `extension/lead/coordination.ts`: Lead coordination, peer messaging, and session discovery.
 - `extension/agent-definitions.ts`: Category-aware definition discovery, layering, validation, edit targets, and launch arguments.
 - `extension/definition-identity.ts`: Pure definition-name and reserved-category validation shared with standalone peer supervision.
@@ -156,7 +156,7 @@ Group routine tests by area rather than enumerating every test file.
 - `extension/compatibility.ts`: Runtime build identity and compatibility validation.
 - `extension/core.ts`: Shared lifecycle and message-preparation logic.
 - `extension/errors.ts`: Structured extension error categories.
-- `extension/lock.ts`: Process-lock ownership.
+- `extension/lock.ts`: Process-lock ownership, exact-session activation, and profile/socket-scoped Coordinator admission.
 - `extension/presentation.ts`: Model, TUI, and status presentation.
 - `extension/config.ts`: Flat Pi Herdsman configuration.
 - `extension/supervision.ts`: Chief, Manager, and Lead authority, leases, supervision state, and staff tool contracts; exact-session Coordinator definition bindings and repository-scoped Manager lifecycle records.

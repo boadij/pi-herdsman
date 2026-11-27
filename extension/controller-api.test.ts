@@ -6923,7 +6923,9 @@ async function runManagerStartupScenario(
         results.filter(
           (result) =>
             result.status === "rejected" &&
-            /Work already exists/.test(String(result.reason)),
+            /Work already exists|Coordinator admission is busy/.test(
+              String(result.reason),
+            ),
         ).length,
         1,
       );
@@ -8091,14 +8093,28 @@ test("empty stop inventory reports a valid Agent discovered in final verificatio
   }
 });
 
-test("quiesced Agent tree waits for the root delegation lock and retains it in callback", async () => {
-  const { createAgentController } = await import("./agent-controller.ts");
+test("an accepted Agent can delegate immediately while shutdown waits to freeze the selected tree", async () => {
+  const { createAgentController, claimDelegationLock } =
+    await import("./agent-controller.ts");
   setLeadEnvironment();
-  const owner = "quiesced-tree-owner";
-  const pi = fakePi({ exec: cascadeExecutor([]).exec });
-  const context = fakeContext() as any;
-  const controller = createAgentController(pi.pi as never, {
-    scope: { kind: "root" },
+  realFs.writeFileSync(
+    join(PI_AGENTS_DIR, "agent.md"),
+    '---\nname: agent\nagents: ["child"]\n---\nparent\n',
+  );
+  const unrelated = managedState(
+    "unrelated-agent",
+    undefined,
+    recoveryIdentity("unrelated-agent"),
+  );
+  unrelated.ownerSessionId = PARENT_SESSION_ID;
+  unrelated.rootSessionId = PARENT_SESSION_ID;
+  const unrelatedMailbox = agentMailboxPath(WORKSPACE, unrelated.agentLabel);
+  writeAgentState(unrelatedMailbox, unrelated);
+  const lifecycle = delegatedLifecycleExecutor(unrelated);
+  const pi = fakePi({ exec: lifecycle.exec });
+  const context = fakeContext();
+  const owner = context.sessionManager.getSessionId();
+  const services = {
     build: HERDSMAN_BUILD,
     extensionPath: "test",
     isContextRetired: () => false,
@@ -8119,40 +8135,126 @@ test("quiesced Agent tree waits for the root delegation lock and retains it in c
     onChanged: () => undefined,
     onWorkChanged: () => undefined,
     reportWatcherError: () => undefined,
+  };
+  const childMailbox = agentMailboxPath(WORKSPACE, "immediate-agent");
+  const grandchildMailbox = agentMailboxPath(WORKSPACE, "immediate-child");
+  const nestedContext = fakeContext();
+  const nested = createAgentController(pi.pi as never, {
+    ...services,
+    scope: {
+      kind: "managed-agent",
+      allowedAgentDefinitions: new Set(["child"]),
+      depth: 1,
+    },
+    managedAgentState: () => readAgentState(childMailbox)!,
+    managedAgentRootSessionId: () => owner,
   });
-  const release = claimProcessLock(
-    delegationLockPathForTest(WORKSPACE, owner),
-    { name: "test delegation lifecycle" },
-  );
-  let entered = false;
+  nested.setReady(true);
+  let nestedResult: Promise<Record<string, unknown>> | undefined;
+  let quiesced: Promise<void> | undefined;
+  const controller = createAgentController(pi.pi as never, {
+    ...services,
+    scope: { kind: "root" },
+    rootDelegationPolicy: () => "all",
+    rootDelegationGeneration: () => ({
+      sessionId: owner,
+      roleGeneration: 1,
+      role: "lead",
+      sessionKind: "ordinary",
+      authority: undefined,
+      profile: undefined,
+    }),
+    afterRequestPublishedForTest: (mailbox, request) => {
+      assert.equal(mailbox, childMailbox);
+      const child = readAgentState(mailbox)!;
+      writeAgentState(mailbox, {
+        ...child,
+        activeRequestId: request.requestId,
+        lastAck: {
+          requestId: request.requestId,
+          accepted: true,
+          acknowledgedAt: Date.now(),
+        },
+      });
+      // Enter the child's delegate path before the parent observes the ack.
+      process.env.HERDR_PANE_ID = child.paneId;
+      process.env.PI_HERDSMAN_LABEL = child.agentLabel;
+      process.env.PI_HERDSMAN_AGENT_DEFINITION = "agent";
+      Object.assign(nestedContext.sessionManager, {
+        getSessionId: () => child.piSessionId,
+      });
+      nestedResult = nested
+        .action(nestedContext, {
+          action: "delegate",
+          definition: "child",
+          label: "immediate-child",
+          task: "start immediately after acceptance",
+        })
+        .catch((error: unknown) => ({ error }));
+      assert.throws(
+        () => claimDelegationLock(WORKSPACE, owner)(),
+        /Delegation lifecycle is already in progress/,
+      );
+      quiesced = controller.withQuiescedTree(
+        context,
+        owner,
+        WORKSPACE,
+        async (held) => {
+          const grandchild = readAgentState(grandchildMailbox);
+          assert.ok(grandchild);
+          assert.deepEqual(
+            [...held],
+            [
+              `${WORKSPACE}\0${owner}`,
+              `${WORKSPACE}\0${child.piSessionId}`,
+              `${WORKSPACE}\0${grandchild.piSessionId}`,
+            ],
+          );
+          for (const action of [
+            {
+              action: "delegate",
+              definition: "child",
+              task: "must not start",
+            },
+            {
+              action: "continue",
+              session: grandchild.piSessionId,
+              task: "must not resume",
+            },
+          ] as const)
+            await assert.rejects(
+              nested.action(nestedContext, action),
+              /Delegation lifecycle is already in progress/,
+            );
+          claimDelegationLock(WORKSPACE, unrelated.piSessionId)();
+        },
+      );
+      void quiesced.catch(() => {});
+      return undefined;
+    },
+  });
   try {
-    const pending = controller.withQuiescedTree(
-      context,
-      owner,
-      WORKSPACE,
-      async (held) => {
-        entered = true;
-        assert.equal(held.has(`${WORKSPACE}\0${owner}`), true);
-        assert.throws(() =>
-          claimProcessLock(delegationLockPathForTest(WORKSPACE, owner), {
-            name: "test delegation lifecycle",
-          }),
-        );
-      },
-    );
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    assert.equal(entered, false);
-    release();
-    await pending;
-    assert.equal(entered, true);
+    const started = await controller.action(context, {
+      action: "delegate",
+      definition: "agent",
+      label: "immediate-agent",
+      task: "start a nested owner",
+    });
+    assert.equal(started.ok, true);
+    assert.ok(nestedResult);
+    const nestedStarted = await nestedResult;
+    assert.equal(nestedStarted.ok, true, String(nestedStarted.error));
+    assert.ok(quiesced);
+    await quiesced;
+    claimDelegationLock(WORKSPACE, owner)();
   } finally {
-    release();
+    await quiesced?.catch(() => {});
+    nested.shutdown();
+    controller.shutdown();
+    for (const mailbox of [childMailbox, grandchildMailbox, unrelatedMailbox])
+      resetAgentMailbox(mailbox);
+    setLeadEnvironment();
   }
-  const reacquired = claimProcessLock(
-    delegationLockPathForTest(WORKSPACE, owner),
-    { name: "test delegation lifecycle" },
-  );
-  reacquired();
 });
 
 test("new delegation may start from a remaining Git branch", () =>

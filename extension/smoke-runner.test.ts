@@ -1417,7 +1417,7 @@ test("parent Herdr environment retains nesting context and clears caller routing
   assert.equal(base.HERDR_SOCKET_PATH, "/wrong/server.sock");
 });
 
-test("root delegation diagnostics correlate results and exclude private data", () => {
+test("root delegation diagnostics correlate results and exclude private data", async () => {
   const call = {
     role: "assistant",
     stopReason: "toolUse",
@@ -1469,7 +1469,6 @@ test("root delegation diagnostics correlate results and exclude private data", (
   ] as [unknown[], string][]) {
     const projected = project(messages);
     assert.equal(projected.matchingResult, expected);
-    assert.equal(projected.delegationCallObserved, expected !== "absent");
     assert.doesNotMatch(JSON.stringify(projected), /PRIVATE|unrelated/u);
   }
   assert.deepEqual(
@@ -1481,18 +1480,7 @@ test("root delegation diagnostics correlate results and exclude private data", (
         content: "PRIVATE_TEXT",
       },
     ]),
-    {
-      delegationCallObserved: false,
-      matchingResult: "absent",
-      assistantObserved: true,
-      assistantStopReason: "error",
-      assistantErrorObserved: true,
-    },
-  );
-  assert.equal(
-    project([{ role: "assistant", stopReason: "PRIVATE_REASON" }])
-      .assistantStopReason,
-    "unknown",
+    { expectedLabelMatched: false, matchingResult: "absent" },
   );
   const failed = [
     call,
@@ -1529,48 +1517,273 @@ test("root delegation diagnostics correlate results and exclude private data", (
         .join("\n"),
     ),
   );
+  const labeledCall = {
+    ...call,
+    content: [
+      {
+        ...call.content[0],
+        arguments: {
+          definition: "PRIVATE_DEFINITION",
+          task: "PRIVATE_TASK",
+          label: "expected-agent",
+          files: ["PRIVATE_PATH"],
+          extraSecret: "PRIVATE_EXTRA",
+        },
+      },
+    ],
+  };
+  const unrelatedFailedCall = {
+    role: "assistant",
+    content: [
+      {
+        type: "toolCall",
+        name: "delegate_agent",
+        id: "UNRELATED_ID",
+        arguments: { label: "unrelated-agent" },
+      },
+    ],
+  };
+  const unrelatedFailure = {
+    ...result,
+    toolCallId: "UNRELATED_ID",
+    isError: true,
+    details: {
+      ok: false,
+      error: { category: "internal_failure", message: "PRIVATE_ERROR" },
+    },
+  };
+  const labeledTranscript = (messages: unknown[]) =>
+    messages
+      .map((message) => JSON.stringify({ type: "message", message }))
+      .join("\n");
+  assert.doesNotThrow(() =>
+    assertNoFailedAgentDelegation(
+      labeledTranscript([
+        labeledCall,
+        result,
+        unrelatedFailedCall,
+        unrelatedFailure,
+      ]),
+      "expected-agent",
+    ),
+  );
+  const successfulDiagnostics = rootDelegationDiagnostics(
+    labeledTranscript([
+      labeledCall,
+      result,
+      unrelatedFailedCall,
+      unrelatedFailure,
+    ]),
+    "expected-agent",
+  );
+  assert.equal(successfulDiagnostics.matchingResult, "success");
+  assert.equal(
+    JSON.stringify(successfulDiagnostics).includes("PRIVATE"),
+    false,
+  );
+  const expectedFailure = {
+    ...result,
+    details: {
+      ok: false,
+      error: {
+        category: "invalid_request",
+        message: "PRIVATE_ERROR",
+        operation: "delegate_agent",
+        rollbackOccurred: false,
+        retryAttempted: true,
+        details: { diagnosticOutcome: "definition_not_allowed" },
+        ids: { session: "PRIVATE_ID" },
+      },
+    },
+  };
+  const failedDiagnostics = rootDelegationDiagnostics(
+    labeledTranscript([labeledCall, expectedFailure]),
+    "expected-agent",
+  );
+  assert.equal(failedDiagnostics.matchingResult, "error");
+  assert.equal(failedDiagnostics.errorCategory, "invalid_request");
+  assert.equal(failedDiagnostics.diagnosticOutcome, "definition_not_allowed");
+  assert.equal(JSON.stringify(failedDiagnostics).includes("PRIVATE"), false);
+  const unknownDiagnostic = rootDelegationDiagnostics(
+    labeledTranscript([
+      labeledCall,
+      {
+        ...expectedFailure,
+        details: {
+          ...expectedFailure.details,
+          error: {
+            ...expectedFailure.details.error,
+            details: { diagnosticOutcome: "PRIVATE_DIAGNOSTIC" },
+          },
+        },
+      },
+    ]),
+    "expected-agent",
+  );
+  assert.equal(unknownDiagnostic.diagnosticOutcome, undefined);
+  assert.equal(JSON.stringify(unknownDiagnostic).includes("PRIVATE"), false);
+
+  const serializedDiagnostics = sanitizedFailureEvidence(
+    { scenario: "continuation" },
+    { error: { smoke: { stage: "continuation-first-generation" } } },
+    "SCENARIO_FAIL",
+    "PASS",
+    {
+      stage: "continuation-first-generation",
+      rootDelegation: failedDiagnostics,
+    },
+  );
+  const artifact = await preserveFailureEvidence(serializedDiagnostics);
+  try {
+    const persisted = JSON.parse(await readFile(artifact, "utf8"));
+    assert.deepEqual(persisted.diagnostics.rootDelegation, {
+      expectedLabelMatched: true,
+      matchingResult: "error",
+      errorCategory: "invalid_request",
+      diagnosticOutcome: "definition_not_allowed",
+    });
+    assert.doesNotMatch(
+      JSON.stringify(persisted),
+      /PRIVATE|expected-agent|PRIVATE_ID/,
+    );
+  } finally {
+    await rm(dirname(artifact), { recursive: true, force: true });
+  }
+
+  assert.throws(
+    () =>
+      assertNoFailedAgentDelegation(
+        labeledTranscript([labeledCall, expectedFailure]),
+        "expected-agent",
+      ),
+    (error) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "SMOKE_DELEGATION_FAILED" &&
+      error.message === "delegate_agent failed (invalid_request)" &&
+      !error.message.includes("PRIVATE"),
+  );
 });
 
-test("continuation failure diagnostics retain sanitized root delegation state", async () => {
+test("Chief Manager failure artifact persists sanitized root delegation diagnostics", async () => {
   const projection = await collectDiagnostics(
     {
-      scenario: "continuation",
-      stage: "continuation-first-generation",
+      scenario: "chief-manager",
+      stage: "chief-manager-delegate-first",
+      chiefManagerDelegationIdentity: {
+        managerSessionId: "PRIVATE_MANAGER_ID",
+      },
       paths: {},
       sessionName: "isolated",
       rootPaneId: "root",
     },
     { hostPaneId: "host" },
     null,
-    {
-      execute: async () => ({ stdout: "PRIVATE_PANE" }),
-      observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
-      snapshot: async () => ({
-        path: "PRIVATE_PATH",
-        status: "saved",
-        contents: JSON.stringify({
-          type: "message",
-          message: {
-            role: "assistant",
-            stopReason: "error",
-            errorMessage: "PRIVATE_ERROR",
-          },
-        }),
-      }),
-    },
+    Object.assign(
+      {
+        execute: async () => ({ stdout: "PRIVATE_PANE" }),
+        observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
+        snapshot: async (...args: unknown[]) => {
+          const ownerSessionId = args[1];
+          assert.equal(ownerSessionId, "PRIVATE_MANAGER_ID");
+          return {
+            path: "PRIVATE_PATH",
+            status: "saved",
+            contents: [
+              {
+                type: "message",
+                message: {
+                  role: "assistant",
+                  content: [
+                    {
+                      type: "toolCall",
+                      id: "PRIVATE_CALL_ID",
+                      name: "delegate_agent",
+                      arguments: {
+                        definition: "PRIVATE_DEFINITION",
+                        task: "PRIVATE_TASK",
+                        label: "smoke-first-agent",
+                        files: ["PRIVATE_FILE"],
+                        privateExtra: "PRIVATE_EXTRA",
+                      },
+                    },
+                  ],
+                },
+              },
+              {
+                type: "message",
+                message: {
+                  role: "toolResult",
+                  toolName: "delegate_agent",
+                  toolCallId: "PRIVATE_CALL_ID",
+                  isError: true,
+                  content: "PRIVATE_RESULT",
+                  details: {
+                    ok: false,
+                    error: {
+                      category: "invalid_request",
+                      operation: "delegate_agent",
+                      message: "PRIVATE_ERROR_TEXT",
+                      rollbackOccurred: false,
+                      retryAttempted: true,
+                      details: { diagnosticOutcome: "definition_not_allowed" },
+                      ids: { session: "PRIVATE_SESSION_ID" },
+                    },
+                  },
+                },
+              },
+              {
+                type: "message",
+                message: {
+                  role: "assistant",
+                  content: [
+                    {
+                      type: "toolCall",
+                      id: "PRIVATE_LATER_CALL_ID",
+                      name: "delegate_agent",
+                      arguments: {
+                        definition: "PRIVATE_LATER_DEFINITION",
+                        task: "PRIVATE_LATER_TASK",
+                        label: "unrelated-private-label",
+                      },
+                    },
+                  ],
+                },
+              },
+              {
+                type: "message",
+                message: {
+                  role: "toolResult",
+                  toolName: "delegate_agent",
+                  toolCallId: "PRIVATE_LATER_CALL_ID",
+                  isError: false,
+                  content: "PRIVATE_LATER_SUCCESS",
+                },
+              },
+            ]
+              .map((entry) => JSON.stringify(entry))
+              .join("\n"),
+          };
+        },
+      },
+      { expectedLabel: "smoke-first-agent" },
+    ),
   );
-  assert.deepEqual(projection.rootDelegation, {
-    delegationCallObserved: false,
-    matchingResult: "absent",
-    assistantObserved: true,
-    assistantStopReason: "error",
-    assistantErrorObserved: true,
-  });
+  assert.ok(projection.rootDelegation);
+  const rootDelegation = projection.rootDelegation;
+  assert.equal(
+    "expectedLabelMatched" in rootDelegation &&
+      rootDelegation.expectedLabelMatched,
+    true,
+  );
+  assert.equal(rootDelegation.matchingResult, "error");
+  assert.equal(rootDelegation.errorCategory, "invalid_request");
+  assert.equal(rootDelegation.diagnosticOutcome, "definition_not_allowed");
   const evidence = sanitizedFailureEvidence(
     {
-      scenario: "continuation",
+      scenario: "chief-manager",
       simulated: true,
-      stage: "continuation-first-generation",
+      stage: "chief-manager-delegate-first",
     },
     { error: new Error("PRIVATE_ERROR") },
     "STALLED",
@@ -1580,21 +1793,108 @@ test("continuation failure diagnostics retain sanitized root delegation state", 
       path: "PRIVATE_PATH",
       rootSession: { summary: "PRIVATE_TRANSCRIPT" },
       rootDelegation: {
-        ...projection.rootDelegation,
+        ...rootDelegation,
         task: "PRIVATE_TASK",
         message: "PRIVATE_MESSAGE",
       },
     },
   );
-  const rootDelegation = evidence.diagnostics?.rootDelegation;
-  assert.ok(rootDelegation && typeof rootDelegation === "object");
-  assert.ok("matchingResult" in rootDelegation);
-  assert.equal(rootDelegation.matchingResult, "absent");
   const artifact = await preserveFailureEvidence(evidence);
   try {
     const saved = JSON.parse(await readFile(artifact, "utf8"));
-    assert.equal(saved.diagnostics.rootDelegation.matchingResult, "absent");
-    assert.doesNotMatch(JSON.stringify(saved), /PRIVATE/u);
+    assert.deepEqual(saved.diagnostics.rootDelegation, {
+      expectedLabelMatched: true,
+      matchingResult: "error",
+      errorCategory: "invalid_request",
+      diagnosticOutcome: "definition_not_allowed",
+    });
+    assert.doesNotMatch(
+      JSON.stringify(saved),
+      /PRIVATE|definition_not_allowed.+PRIVATE/u,
+    );
+  } finally {
+    await rm(dirname(artifact), { recursive: true, force: true });
+  }
+});
+
+test("Chief Manager diagnostics do not attribute a successful other-label call to the expected call", async () => {
+  const projection = await collectDiagnostics(
+    {
+      scenario: "chief-manager",
+      stage: "chief-manager-delegate-first",
+      chiefManagerDelegationIdentity: {
+        managerSessionId: "PRIVATE_MANAGER_ID",
+      },
+      paths: {},
+      sessionName: "isolated",
+      rootPaneId: "root",
+    },
+    { hostPaneId: "host" },
+    null,
+    Object.assign(
+      {
+        execute: async () => ({ stdout: "PRIVATE_PANE" }),
+        observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
+        snapshot: async (...args: unknown[]) => {
+          const ownerSessionId = args[1];
+          assert.equal(ownerSessionId, "PRIVATE_MANAGER_ID");
+          return {
+            path: "PRIVATE_PATH",
+            status: "saved",
+            contents: [
+              {
+                type: "message",
+                message: {
+                  role: "assistant",
+                  content: [
+                    {
+                      type: "toolCall",
+                      id: "PRIVATE_OTHER_CALL_ID",
+                      name: "delegate_agent",
+                      arguments: {
+                        definition: "PRIVATE_DEFINITION",
+                        task: "PRIVATE_TASK",
+                        label: "other-private-label",
+                      },
+                    },
+                  ],
+                },
+              },
+              {
+                type: "message",
+                message: {
+                  role: "toolResult",
+                  toolName: "delegate_agent",
+                  toolCallId: "PRIVATE_OTHER_CALL_ID",
+                  isError: false,
+                  content: "PRIVATE_SUCCESS",
+                },
+              },
+            ]
+              .map((entry) => JSON.stringify(entry))
+              .join("\n"),
+          };
+        },
+      },
+      { expectedLabel: "smoke-first-agent" },
+    ),
+  );
+  const artifact = await preserveFailureEvidence(
+    sanitizedFailureEvidence(
+      { scenario: "chief-manager", simulated: true },
+      { error: new Error("PRIVATE_ERROR") },
+      "STALLED",
+      "PASS",
+      projection,
+    ),
+  );
+  try {
+    const saved = JSON.parse(await readFile(artifact, "utf8"));
+    assert.deepEqual(saved.diagnostics.rootDelegation, {
+      expectedLabelMatched: false,
+      matchingResult: "absent",
+    });
+    assert.doesNotMatch(JSON.stringify(saved), /PRIVATE|other-private-label/u);
   } finally {
     await rm(dirname(artifact), { recursive: true, force: true });
   }

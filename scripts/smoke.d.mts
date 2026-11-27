@@ -598,16 +598,45 @@ export function assistantResponseCompletedForSession(
   session: { contents: string },
   prompt: string,
 ): boolean;
-export function rootDelegationDiagnostics(contents: string): {
-  delegationCallObserved: boolean;
+export function rootDelegationDiagnostics(
+  contents: string,
+  expectedLabel?: string,
+): {
+  expectedLabelMatched: boolean;
   matchingResult: "absent" | "pending" | "error" | "success" | "unknown";
-  errorCategory?: "agent_busy";
-  assistantObserved: boolean;
-  assistantStopReason:
-    "stop" | "length" | "toolUse" | "error" | "aborted" | "unknown";
-  assistantErrorObserved: boolean;
+  errorCategory?:
+    | "agent_busy"
+    | "agent_label_exists"
+    | "incompatible_build"
+    | "internal_failure"
+    | "invalid_request"
+    | "not_running_inside_herdr"
+    | "pane_not_ready"
+    | "rollback_failure"
+    | "target_ambiguous"
+    | "target_not_found";
+  diagnosticOutcome?:
+    | "assignment_definition_missing"
+    | "assignment_task_missing"
+    | "continuation_session_missing"
+    | "root_delegation_unavailable"
+    | "root_session_changed"
+    | "root_authority_changed"
+    | "agent_depth_unverifiable"
+    | "agent_depth_mismatch"
+    | "agent_depth_limit_exceeded"
+    | "continuation_unavailable"
+    | "definition_unavailable"
+    | "definition_not_allowed"
+    | "definition_disabled"
+    | "definition_references_unavailable"
+    | "active_session_conflict"
+    | "invalid_agent_label";
 };
-export function assertNoFailedAgentDelegation(contents: string): void;
+export function assertNoFailedAgentDelegation(
+  contents: string,
+  expectedLabel?: string,
+): void;
 export function parseHerdrOutput(
   stdout: string,
   args: readonly string[],
@@ -875,15 +904,7 @@ export function collectDiagnostics(
   panesObserved: number | null;
   rootSessionObserved: boolean;
   candidateProcessesObserved: number | null;
-  rootDelegation?: {
-    delegationCallObserved: boolean;
-    matchingResult: "absent" | "pending" | "error" | "success" | "unknown";
-    errorCategory?: "agent_busy";
-    assistantObserved: boolean;
-    assistantStopReason:
-      "stop" | "length" | "toolUse" | "error" | "aborted" | "unknown";
-    assistantErrorObserved: boolean;
-  } | null;
+  rootDelegation?: ReturnType<typeof rootDelegationDiagnostics> | null;
   coreDelegation?: CoreDelegation;
   coreHandoff?: CoreHandoff | null;
   supervisorAgent?: {

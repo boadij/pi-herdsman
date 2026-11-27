@@ -33,6 +33,7 @@ import { matchesProjectMessageContent } from "./smoke-faux.mjs";
 import {
   chiefManagerSuccessEvidence,
   matchesChiefManagerHandoff,
+  ownedAgentReadinessEvidence,
 } from "./chief-manager-smoke.mjs";
 
 export { matchesProjectMessageContent };
@@ -943,6 +944,24 @@ const STRUCTURED_TOOL_ERROR_CATEGORIES = new Set([
   "invalid_request",
   "incompatible_build",
   "internal_failure",
+]);
+const AGENT_ACTION_DIAGNOSTIC_OUTCOMES = new Set([
+  "assignment_definition_missing",
+  "assignment_task_missing",
+  "continuation_session_missing",
+  "root_delegation_unavailable",
+  "root_session_changed",
+  "root_authority_changed",
+  "agent_depth_unverifiable",
+  "agent_depth_mismatch",
+  "agent_depth_limit_exceeded",
+  "continuation_unavailable",
+  "definition_unavailable",
+  "definition_not_allowed",
+  "definition_disabled",
+  "definition_references_unavailable",
+  "active_session_conflict",
+  "invalid_agent_label",
 ]);
 
 export function supervisorAgentCompletionMatches(
@@ -2476,20 +2495,23 @@ export function assistantResponseCompletedForSession(session, prompt) {
   );
 }
 
-export function rootDelegationDiagnostics(contents) {
+export function rootDelegationDiagnostics(contents, expectedLabel) {
   const messages = sessionEntries(contents)
     .filter((entry) => entry.type === "message")
     .map((entry) => entry.message ?? {});
   let call;
   let result;
-  let assistant;
   for (const message of messages) {
     if (message.role === "assistant") {
-      assistant = message;
       for (const block of Array.isArray(message.content)
         ? message.content
         : []) {
-        if (block?.type === "toolCall" && block.name === "delegate_agent") {
+        if (
+          block?.type === "toolCall" &&
+          block.name === "delegate_agent" &&
+          (expectedLabel === undefined ||
+            block.arguments?.label === expectedLabel)
+        ) {
           call = block;
           result = undefined;
         }
@@ -2504,8 +2526,21 @@ export function rootDelegationDiagnostics(contents) {
     )
       result = message;
   }
+  const args = call?.arguments;
+  const errorDetail = result?.details?.error;
+  const category = STRUCTURED_TOOL_ERROR_CATEGORIES.has(errorDetail?.category)
+    ? errorDetail.category
+    : undefined;
+  const diagnosticOutcome = AGENT_ACTION_DIAGNOSTIC_OUTCOMES.has(
+    errorDetail?.details?.diagnosticOutcome,
+  )
+    ? errorDetail.details.diagnosticOutcome
+    : undefined;
   return {
-    delegationCallObserved: Boolean(call),
+    expectedLabelMatched:
+      expectedLabel === undefined
+        ? false
+        : Boolean(call && args?.label === expectedLabel),
     matchingResult: !call
       ? "absent"
       : !result
@@ -2515,30 +2550,13 @@ export function rootDelegationDiagnostics(contents) {
           : result.isError === false
             ? "success"
             : "unknown",
-    ...(result?.details?.error?.category === "agent_busy"
-      ? { errorCategory: "agent_busy" }
-      : {}),
-    assistantObserved: Boolean(assistant),
-    assistantStopReason: [
-      "stop",
-      "length",
-      "toolUse",
-      "error",
-      "aborted",
-    ].includes(assistant?.stopReason)
-      ? assistant.stopReason
-      : "unknown",
-    assistantErrorObserved: Boolean(
-      assistant &&
-      (assistant.stopReason === "error" ||
-        (typeof assistant.errorMessage === "string" &&
-          assistant.errorMessage.length > 0)),
-    ),
+    ...(category ? { errorCategory: category } : {}),
+    ...(diagnosticOutcome ? { diagnosticOutcome } : {}),
   };
 }
 
-export function assertNoFailedAgentDelegation(contents) {
-  const diagnostics = rootDelegationDiagnostics(contents);
+export function assertNoFailedAgentDelegation(contents, expectedLabel) {
+  const diagnostics = rootDelegationDiagnostics(contents, expectedLabel);
   if (diagnostics.matchingResult !== "error") return;
   const category = diagnostics.errorCategory ?? "tool_error";
   const error = new Error(`delegate_agent failed (${category})`);
@@ -11211,7 +11229,7 @@ async function runChiefManagerSmoke(ctx) {
   await mkdir(agentDirectory, { recursive: true });
   await writeFile(
     join(managerDirectory, "smoke-manager.md"),
-    `---\nname: smoke-manager\nmodel: smoke-faux/chief-manager\ntools: [codemode]\nagents: [smoke-agent]\nextensions: [${JSON.stringify(ctx.simulatedProviderExtension)}]\n---\n`,
+    `---\nname: smoke-manager\nmodel: smoke-faux/chief-manager\ntools: [codemode]\nagents: [smoke-agent, implementer]\nextensions: [${JSON.stringify(ctx.simulatedProviderExtension)}]\n---\n`,
   );
   await writeFile(
     join(agentDirectory, "smoke-agent.md"),
@@ -11254,12 +11272,20 @@ async function runChiefManagerSmoke(ctx) {
     nestedCommand(ctx, ["agent", "prompt", pane, text]);
   let turn = 0;
   async function lifecycle(tool, expected, stage, args = { repository }) {
+    const exitsChief = tool === "stop_hierarchy" && args.scope === "all";
+    const chiefSessionId = exitsChief
+      ? sessionEntries((await rootSessionSnapshot(ctx)).contents).find(
+          (entry) => entry.type === "session",
+        ).id
+      : undefined;
     const request = `CHIEF_MANAGER_SMOKE ${++turn} ${tool} ${JSON.stringify(args)}`;
     await prompt(ctx.rootPaneId, request);
     const result = await wait(
       stage,
       async () => {
-        const session = await rootSessionSnapshot(ctx);
+        const session = chiefSessionId
+          ? await exactIsolatedSession(ctx, chiefSessionId)
+          : await rootSessionSnapshot(ctx);
         const turns = sessionEntries(session?.contents ?? "");
         const index = turns.findIndex(
           (entry) =>
@@ -11276,10 +11302,7 @@ async function runChiefManagerSmoke(ctx) {
             ? message.content.filter((part) => part.type === "toolCall")
             : [],
         );
-        assert.ok(
-          calls.length <= 1,
-          "Chief turn must not repeat a project call",
-        );
+        assert.ok(calls.length <= 1, "Chief turn must not repeat a tool call");
         if (calls.length === 1) {
           assert.equal(calls[0].name, tool);
           assert.deepEqual(calls[0].arguments, args);
@@ -11391,15 +11414,29 @@ async function runChiefManagerSmoke(ctx) {
     if (expected) {
       assert.equal(result.isError, false, `${stage} returned a tool error`);
       const failure =
-        result.details?.status === "partial_failure"
-          ? ` (${result.details.stage}: ${sanitizeManagerBootstrapText(result.details.reason, ctx).slice(0, 350)})`
+        result.details?.status === "partial_failure" ||
+        tool === "stop_hierarchy"
+          ? ` (${sanitizeManagerBootstrapText(
+              [
+                result.details?.stage,
+                result.details?.reason,
+                ...(result.details?.remaining ?? []).map((item) => item.reason),
+              ]
+                .filter(Boolean)
+                .join("; "),
+              ctx,
+            ).slice(0, 350)})`
           : "";
       assert.equal(
         result.details?.status,
         expected,
-        `${stage} project status${failure}`,
+        `${stage} tool status${failure}`,
       );
-    } else if (tool === "list_projects") {
+      if (tool === "stop_hierarchy") {
+        assert.equal(result.details.scope, args.scope);
+        assert.deepEqual(result.details.remaining, []);
+      }
+    } else if (tool === "list_projects" || tool === "list_staff") {
       assert.equal(
         result.isError,
         false,
@@ -11419,6 +11456,7 @@ async function runChiefManagerSmoke(ctx) {
         "mismatched saved session must block lifecycle action at recovery",
       );
     }
+    if (exitsChief) return result.details;
     await wait(
       `${stage}-settlement`,
       async () => {
@@ -11439,9 +11477,9 @@ async function runChiefManagerSmoke(ctx) {
     );
     return result.details;
   }
-  async function observeManager(stage) {
+  async function observeManager(stage, checkout = repository) {
     return wait(stage, async () => {
-      const project = await projectPanes();
+      const project = (await panes()).filter((pane) => pane.cwd === checkout);
       const workspaceIds = new Set(project.map((pane) => pane.workspace_id));
       if (workspaceIds.size === 0) return { done: false };
       assert.equal(
@@ -11452,7 +11490,7 @@ async function runChiefManagerSmoke(ctx) {
       const listing = await agents();
       const descriptor = JSON.parse(
         await readFile(
-          await smokeManagerDescriptorPath({ ...ctx, rootCwd: repository }),
+          await smokeManagerDescriptorPath({ ...ctx, rootCwd: checkout }),
           "utf8",
         ),
       );
@@ -11686,6 +11724,11 @@ async function runChiefManagerSmoke(ctx) {
   const ordinaryLeadId = await agentSessionId(ctx, ordinaryLeadAgents[0]);
   assert.ok(ordinaryLeadId, "ordinary Lead has no exact Pi session ID");
   const ordinaryLeadSession = await exactIsolatedSession(ctx, ordinaryLeadId);
+  const ordinaryLeadPane = ordinaryLeadAgents[0].pane_id;
+  const [ordinaryLeadProcess, ...extraLeadProcesses] =
+    await processIn(ordinaryLeadPane);
+  assert.ok(ordinaryLeadProcess?.pid > 0);
+  assert.deepEqual(extraLeadProcesses, []);
   assert.ok(
     ordinaryLeadSession,
     "ordinary Lead exact saved session is missing",
@@ -11709,20 +11752,23 @@ async function runChiefManagerSmoke(ctx) {
   assert.notEqual(first.pane.workspace_id, ctx.rootWorkspaceId);
   // Herdr's fresh Pi can select another default in this fixture. Explicitly
   // select the simulated model in the verified child, not in production launch.
-  await submitPaneCommand(
-    ctx,
-    first.pane.pane_id,
-    "/model smoke-faux/chief-manager",
-  );
-  await nestedCommand(ctx, [
-    "pane",
-    "wait-output",
-    first.pane.pane_id,
-    "--match",
-    "Model: chief-manager",
-    "--timeout",
-    "15000",
-  ]);
+  const selectManagerModel = async ({ pane }) => {
+    await submitPaneCommand(
+      ctx,
+      pane.pane_id,
+      "/model smoke-faux/chief-manager",
+    );
+    await nestedCommand(ctx, [
+      "pane",
+      "wait-output",
+      pane.pane_id,
+      "--match",
+      "Model: chief-manager",
+      "--timeout",
+      "15000",
+    ]);
+  };
+  await selectManagerModel(first);
   await verifyManager(first, "first");
   const delegationPrompt = "CHIEF_MANAGER_SMOKE delegate";
   ctx.chiefManagerDelegationIdentity = {
@@ -11838,6 +11884,23 @@ async function runChiefManagerSmoke(ctx) {
     "repeated Manager start removed more than the completed Agent pane",
   );
 
+  const secondRoot = join(ctx.paths.root, "second-manager");
+  await mkdir(secondRoot);
+  const secondRepository = await realpath(
+    await prepareManagerRepository({ ...ctx.paths, root: secondRoot }),
+  );
+  new ProjectTrustStore(ctx.paths.piAgent).set(secondRepository, true);
+  await lifecycle("start_manager", "started", "start-second-manager", {
+    repository: secondRepository,
+  });
+  const second = await observeManager("second-manager", secondRepository);
+  assert.notEqual(second.pane.workspace_id, first.pane.workspace_id);
+  assert.notEqual(second.pane.workspace_id, ctx.rootWorkspaceId);
+  assert.notEqual(second.session.id, first.session.id);
+  assert.notEqual(second.pid, first.pid);
+  await selectManagerModel(second);
+  await verifyManager(second, "second");
+
   const branch = `herdsman/smoke-chief-manager-${randomUUID()}`;
   const checkout = join(ctx.paths.root, "chief-manager-worktree");
   await nestedCommand(ctx, [
@@ -11945,36 +12008,181 @@ async function runChiefManagerSmoke(ctx) {
       (await run("git", ["rev-parse", "HEAD"], { cwd: checkout })).stdout,
       expectedHead,
     );
-    const live = await assignedLead();
-    assert.equal(live?.paneId, lead.paneId);
-    assert.equal(
-      live.pid,
-      lead.pid,
-      "Manager turnover must not restart the Lead",
-    );
-    assert.equal(live.session.path, lead.session.path);
-    assert.ok(live.session.contents.startsWith(lead.session.contents));
+    const savedLead = await exactIsolatedSession(ctx, assignment.session);
+    assert.equal(savedLead?.path, lead.session.path);
+    assert.ok(savedLead.contents.startsWith(lead.session.contents));
+    assert.deepEqual(await processIn(lead.paneId), []);
   };
   const beforeStop = await verifyManager(first, "before-stop");
 
-  // Quit Pi, not the Manager role or its Herdr workspace.
-  await submitPaneCommand(ctx, first.pane.pane_id, "/quit");
-  await wait("stopped", async () => {
-    const observed = await projectPanes();
-    if (observed.some((pane) => pane.pane_id === first.pane.pane_id)) {
-      const live = (await processIn(first.pane.pane_id)).some(
-        (process) => process.pid === first.pid,
+  const observeOwnedAgent = (label, ownerId, leaf = true) =>
+    wait(label, async () => {
+      const records = await smokeManagedAgentRecords(ctx, await agents());
+      const matches = records.filter(
+        ({ mailbox }) => mailbox?.state.agentLabel === label,
       );
-      if (live) return { done: false };
-    }
+      assert.ok(matches.length <= 1, `duplicate Agent: ${label}`);
+      if (!matches.length) return { done: false };
+      const { agent, session, mailbox } = matches[0];
+      assert.equal(mailbox.state.ownerSessionId, ownerId);
+      assert.equal(mailbox.state.piSessionId, session.id);
+      assert.equal(mailbox.state.paneId, agent.pane_id);
+      const [process, ...extra] = await processIn(agent.pane_id);
+      assert.deepEqual(extra, []);
+      const waiting = sessionEntries(session.contents).some(
+        (entry) =>
+          entry.message?.role === "assistant" &&
+          entry.message.content.some(
+            (part) =>
+              part.type === "toolCall" &&
+              part.name === "await_owner" &&
+              part.arguments?.question === "CHIEF_MANAGER_SMOKE_AGENT_PENDING",
+          ),
+      );
+      const activeMailboxRequestPresent = !!mailbox.state.activeRequestId;
+      const positiveChildPidPresent = process?.pid > 0;
+      return {
+        done:
+          activeMailboxRequestPresent &&
+          positiveChildPidPresent &&
+          (!leaf || waiting),
+        value: { paneId: agent.pane_id, session, pid: process?.pid },
+        ...(label === "smoke-chief-agent" || label === "smoke-first-agent"
+          ? {
+              evidence: ownedAgentReadinessEvidence({
+                activeMailboxRequestPresent,
+                positiveChildPidPresent,
+                ...(label === "smoke-chief-agent"
+                  ? { expectedAwaitOwnerPresent: waiting }
+                  : {}),
+              }),
+            }
+          : {}),
+      };
+    });
+  const delegate = async (paneId, ownerId, owner) => {
+    const request = `CHIEF_MANAGER_SMOKE delegate ${owner}`;
+    await prompt(paneId, request);
+    await wait(`delegate-${owner}`, async () => {
+      const session = await exactIsolatedSession(ctx, ownerId);
+      if (!session) return { done: false };
+      assertNoFailedAgentDelegation(session.contents, `smoke-${owner}-agent`);
+      const { delegation } = coreDelegationEdge(
+        session.contents,
+        `smoke-${owner}-agent`,
+        ownerId,
+      );
+      return {
+        done: delegation === "accepted",
+        progress: rootDelegationDiagnostics(session.contents),
+      };
+    });
+  };
+  const chiefId = await agentSessionId(
+    ctx,
+    (await agents()).find((agent) => agent.pane_id === ctx.rootPaneId),
+  );
+  assert.ok(chiefId);
+  await delegate(ctx.rootPaneId, chiefId, "chief");
+  const chiefAgent = await observeOwnedAgent("smoke-chief-agent", chiefId);
+  markStage(ctx, "chief-manager-delegate-first");
+  await delegate(first.pane.pane_id, first.session.id, "first");
+  const firstAgent = await observeOwnedAgent(
+    "smoke-first-agent",
+    first.session.id,
+    false,
+  );
+  const nestedAgent = await observeOwnedAgent(
+    "smoke-nested-agent",
+    firstAgent.session.id,
+  );
+  await delegate(second.pane.pane_id, second.session.id, "second");
+  const secondAgent = await observeOwnedAgent(
+    "smoke-second-agent",
+    second.session.id,
+  );
+
+  const staff = await lifecycle("list_staff", null, "staff-target", {});
+  const managers = staff.reports.filter((report) => report.role === "manager");
+  const chiefHistory = await exactIsolatedSession(ctx, chiefId);
+  assert.ok(chiefHistory);
+  const targetBindings = sessionEntries(chiefHistory.contents).filter(
+    (entry) =>
+      entry.customType === "pi-herdsman-coordinator-target-v1" &&
+      entry.data?.role === "manager" &&
+      entry.data?.ownerSessionId === chiefId,
+  );
+  const managerTarget = (sessionId) => {
+    const binding = targetBindings.find(
+      (entry) => entry.data.sessionId === sessionId,
+    );
+    assert.match(binding?.data.target ?? "", /^manager:/u);
+    return binding.data.target;
+  };
+  const selected = managerTarget(first.session.id);
+  assert.deepEqual(
+    managers.map((report) => report.target).sort(),
+    [selected, managerTarget(second.session.id)].sort(),
+  );
+  const targeted = await lifecycle(
+    "stop_hierarchy",
+    "complete",
+    "targeted-stop",
+    {
+      scope: "manager",
+      target: selected,
+    },
+  );
+  assert.deepEqual(targeted.stopped, [
+    { role: "lead", session: assignment.session },
+    { role: "manager", session: first.session.id },
+  ]);
+  const pidExited = (pid) => {
     try {
-      process.kill(first.pid, 0);
-      return { done: false };
+      process.kill(pid, 0);
+      return false;
     } catch (error) {
       if (error.code !== "ESRCH") throw error;
     }
-    return { done: true };
-  });
+    return true;
+  };
+  await wait("targeted-process-exit", async () => ({
+    done: [lead, first, firstAgent, nestedAgent].every(({ pid }) =>
+      pidExited(pid),
+    ),
+  }));
+  const assertUnselectedAgentsSurvive = async () => {
+    for (const [label, ownerId, original] of [
+      ["smoke-chief-agent", chiefId, chiefAgent],
+      ["smoke-second-agent", second.session.id, secondAgent],
+    ]) {
+      const observed = await observeOwnedAgent(label, ownerId);
+      assert.equal(observed.pid, original.pid);
+      assert.equal(observed.paneId, original.paneId);
+      assert.equal(observed.session.id, original.session.id);
+    }
+    assert.deepEqual(
+      (await processIn(second.pane.pane_id)).map(({ pid }) => pid),
+      [second.pid],
+    );
+    const report = (await agents()).find(
+      (agent) => agent.pane_id === second.pane.pane_id,
+    );
+    assert.equal(await agentSessionId(ctx, report), second.session.id);
+  };
+  await assertUnselectedAgentsSurvive();
+  const assertOrdinaryLeadSurvives = async () => {
+    assert.deepEqual(
+      (await processIn(ordinaryLeadPane)).map(({ pid }) => pid),
+      [ordinaryLeadProcess.pid],
+    );
+    const live = (await agents()).find(
+      (agent) => agent.pane_id === ordinaryLeadPane,
+    );
+    assert.ok(live);
+    assert.equal(await agentSessionId(ctx, live), ordinaryLeadId);
+  };
+  await assertOrdinaryLeadSurvives();
   const workspace = await nestedCommand(ctx, [
     "workspace",
     "get",
@@ -12037,7 +12245,76 @@ async function runChiefManagerSmoke(ctx) {
     "resume replaced the saved history",
   );
   await assertAssignmentPreserved();
+  await assertOrdinaryLeadSurvives();
+  const [chiefProcess, ...extraChiefProcesses] = await processIn(
+    ctx.rootPaneId,
+  );
+  assert.ok(chiefProcess?.pid > 0);
+  assert.deepEqual(extraChiefProcesses, []);
+  const staffStop = await lifecycle(
+    "stop_hierarchy",
+    "complete",
+    "staff-stop",
+    {
+      scope: "staff",
+    },
+  );
+  assert.deepEqual(
+    staffStop.stopped.map(({ role, session }) => `${role}:${session}`).sort(),
+    [
+      `manager:${resumed.session.id}`,
+      `manager:${second.session.id}`,
+      `lead:${ordinaryLeadId}`,
+    ].sort(),
+  );
+  await wait("staff-process-exit", async () => ({
+    done: [resumed, ordinaryLeadProcess, second, chiefAgent, secondAgent].every(
+      ({ pid }) => pidExited(pid),
+    ),
+  }));
+  const savedOrdinaryLead = await exactIsolatedSession(ctx, ordinaryLeadId);
+  assert.equal(savedOrdinaryLead?.path, ordinaryLeadSession.path);
+  assert.ok(
+    savedOrdinaryLead.contents.startsWith(ordinaryLeadSession.contents),
+  );
+  assert.deepEqual(
+    (await processIn(ctx.rootPaneId)).map(({ pid }) => pid),
+    [chiefProcess.pid],
+  );
+  await assertAssignmentPreserved();
+
+  // Restaff so the complete scope proves descendant settlement as well as exit.
+  await lifecycle("resume_manager", "resumed", "restaff");
+  const restaffed = await observeManager("restaffed-manager");
+  assert.equal(restaffed.session.id, first.session.id);
+  assert.equal(restaffed.session.path, first.session.path);
+  const complete = await lifecycle(
+    "stop_hierarchy",
+    "shutdown_requested",
+    "complete-stop",
+    {
+      scope: "all",
+    },
+  );
+  assert.deepEqual(complete.stopped, [
+    { role: "manager", session: restaffed.session.id },
+  ]);
+  await wait("complete-process-exit", async () => ({
+    done: pidExited(restaffed.pid) && pidExited(chiefProcess.pid),
+  }));
+  const finalManager = await exactIsolatedSession(ctx, first.session.id);
+  assert.equal(finalManager?.path, first.session.path);
+  assert.ok(finalManager.contents.startsWith(resumedHistory.contents));
+  await assertAssignmentPreserved();
   ctx.chiefManager = {
+    targetedShutdown: targeted.status,
+    targetedUnselectedSubtreesSurvived: true,
+    targetedNestedAgentExitObserved: true,
+    staffShutdown: staffStop.status,
+    staffOwnedAgentExitsObserved: true,
+    chiefSurvivedStaffShutdown: true,
+    completeShutdown: complete.status,
+    chiefExitObserved: true,
     assignmentPreserved: true,
     mismatchedRecoveryBlocked: true,
     managerAgentDelegation: chiefManagerSuccessEvidence(
@@ -12987,7 +13264,15 @@ export async function collectDiagnostics(
   ctx,
   owned,
   failure,
-  { execute = run, observe = tryHerdr, snapshot = rootSessionSnapshot } = {},
+  {
+    execute = run,
+    observe = tryHerdr,
+    snapshot = (context, ownerSessionId) =>
+      ownerSessionId
+        ? exactIsolatedSession(context, ownerSessionId)
+        : rootSessionSnapshot(context),
+    expectedLabel,
+  } = {},
 ) {
   const diagnostics = {};
   const env = nestedControlEnv(process.env, ctx.paths, ctx.sessionName);
@@ -13002,7 +13287,13 @@ export async function collectDiagnostics(
     await Promise.allSettled([
       observe(["agent", "list"], { env, timeout: OBSERVATION_TIMEOUT_MS }),
       observe(["pane", "list"], { env, timeout: OBSERVATION_TIMEOUT_MS }),
-      snapshot(ctx),
+      snapshot(
+        ctx,
+        ctx.scenario === "chief-manager" &&
+          ctx.stage === "chief-manager-delegate-first"
+          ? ctx.chiefManagerDelegationIdentity?.managerSessionId
+          : undefined,
+      ),
       ctx.rootPaneId
         ? execute(
             "herdr",
@@ -13404,11 +13695,14 @@ export async function collectDiagnostics(
     rootSessionObserved: Boolean(
       diagnostics.rootSession && !diagnostics.rootSession.error,
     ),
-    ...(ctx.scenario === "continuation"
+    ...(ctx.scenario === "continuation" || ctx.scenario === "chief-manager"
       ? {
           rootDelegation:
             rootSession.status === "fulfilled" && rootSession.value
-              ? rootDelegationDiagnostics(rootSession.value.contents)
+              ? rootDelegationDiagnostics(
+                  rootSession.value.contents,
+                  expectedLabel,
+                )
               : null,
         }
       : {}),
@@ -14057,9 +14351,9 @@ function sanitizedFailureDiagnostics(value) {
     ...(root && typeof root === "object"
       ? {
           rootDelegation: {
-            delegationCallObserved:
-              typeof root.delegationCallObserved === "boolean"
-                ? root.delegationCallObserved
+            expectedLabelMatched:
+              typeof root.expectedLabelMatched === "boolean"
+                ? root.expectedLabelMatched
                 : false,
             matchingResult: [
               "absent",
@@ -14070,24 +14364,12 @@ function sanitizedFailureDiagnostics(value) {
             ].includes(root.matchingResult)
               ? root.matchingResult
               : "unknown",
-            assistantObserved:
-              typeof root.assistantObserved === "boolean"
-                ? root.assistantObserved
-                : false,
-            assistantStopReason: [
-              "stop",
-              "length",
-              "toolUse",
-              "error",
-              "aborted",
-              "unknown",
-            ].includes(root.assistantStopReason)
-              ? root.assistantStopReason
-              : "unknown",
-            assistantErrorObserved:
-              typeof root.assistantErrorObserved === "boolean"
-                ? root.assistantErrorObserved
-                : false,
+            ...(STRUCTURED_TOOL_ERROR_CATEGORIES.has(root.errorCategory)
+              ? { errorCategory: root.errorCategory }
+              : {}),
+            ...(AGENT_ACTION_DIAGNOSTIC_OUTCOMES.has(root.diagnosticOutcome)
+              ? { diagnosticOutcome: root.diagnosticOutcome }
+              : {}),
           },
         }
       : {}),
@@ -14454,6 +14736,12 @@ export function sanitizedFailureEvidence(
     ...(terminalFailureProgress ? { terminalFailureProgress } : {}),
     ...(ctx.scenario === "chief-manager"
       ? { chiefManagerDelegationProgress: chiefManagerProgress }
+      : {}),
+    ...(ctx.scenario === "chief-manager" &&
+    smoke?.stage === "chief-manager-smoke-first-agent"
+      ? {
+          ownedAgentReadiness: ownedAgentReadinessEvidence(smoke.lastEvidence),
+        }
       : {}),
     ...(coreObservation ? { coreObservation } : {}),
     ...(smoke?.stage === "candidate-start"
@@ -14903,6 +15191,27 @@ async function main() {
           scenario === "core" ? ["implementer", "scout"] : ["implementer"],
         );
       if (scenario === "chief-manager") {
+        await prepareFauxAgentOverlays(paths, ctx.simulatedProviderExtension, [
+          "implementer",
+          "scout",
+        ]);
+        for (const [path, role, agents] of [
+          ["chief.md", "chief", "scout"],
+          ["managers/manager.md", "manager", "implementer, scout"],
+        ]) {
+          const file = join(paths.piAgent, "coordinators", path);
+          await mkdir(dirname(file), { recursive: true });
+          // Fresh Manager Pi processes apply the profile's native tool allowlist.
+          const tools =
+            role === "manager"
+              ? "tools: [codemode, list_agents, delegate_agent, resume_agent]\n"
+              : "";
+          await writeFile(
+            file,
+            `---\nname: ${role}\nagents: [${agents}]\n${tools}---\n`,
+            { flag: "wx" },
+          );
+        }
         await writeFile(
           join(paths.piAgent, "settings.json"),
           JSON.stringify({
@@ -15170,7 +15479,14 @@ async function main() {
     try {
       const diagnosticProjection = ctx.sessionName
         ? await bestEffortDiagnostics(ctx, () =>
-            collectDiagnostics(ctx, owned, failure),
+            collectDiagnostics(ctx, owned, failure, {
+              expectedLabel:
+                ctx.scenario === "chief-manager"
+                  ? ctx.stage === "chief-manager-delegate-first"
+                    ? "smoke-first-agent"
+                    : "smoke-chief-agent"
+                  : undefined,
+            }),
           )
         : null;
       const markerPath = join(

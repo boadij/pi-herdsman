@@ -2477,9 +2477,13 @@ export type ManagerStartIntent = Readonly<{
   paneId: string;
   tabId?: string;
   createdAt: number;
-  role?: "manager" | "lead";
+  role?: "manager" | "lead" | "assigned-lead";
   leadMode?: "flexible" | "orchestrate";
   definition?: string;
+  admission?: ProcessLockClaim;
+  recoverySessionFile?: string;
+  assignmentRepoKey?: string;
+  branch?: string;
 }>;
 
 export type CoordinatorStartIntent = ManagerStartIntent;
@@ -2720,7 +2724,7 @@ function validManagerStartIntent(value: unknown): value is ManagerStartIntent {
   const record = value as Record<string, unknown>;
   return (
     Object.keys(record).length >= 7 &&
-    Object.keys(record).length <= 11 &&
+    Object.keys(record).length <= 15 &&
     Object.keys(record).every((key) =>
       [
         "version",
@@ -2734,28 +2738,47 @@ function validManagerStartIntent(value: unknown): value is ManagerStartIntent {
         "role",
         "leadMode",
         "definition",
+        "admission",
+        "recoverySessionFile",
+        "assignmentRepoKey",
+        "branch",
       ].includes(key),
     ) &&
     record.version === 1 &&
     validSession(record.sessionId) &&
     ((record.role === "lead" && record.canonicalRepoKey === undefined) ||
       ((record.role === undefined || record.role === "manager") &&
-        validCanonicalRepoKey(record.canonicalRepoKey))) &&
+        validCanonicalRepoKey(record.canonicalRepoKey)) ||
+      (record.role === "assigned-lead" &&
+        validCanonicalRepoKey(record.canonicalRepoKey) &&
+        validNativeIdentity(record.assignmentRepoKey) &&
+        validNativeIdentity(record.branch))) &&
     validCanonicalRepoKey(record.checkoutPath) &&
     validNativeIdentity(record.workspaceId) &&
     validNativeIdentity(record.paneId) &&
     (record.tabId === undefined || validNativeIdentity(record.tabId)) &&
-    (record.role !== "lead" || validNativeIdentity(record.tabId)) &&
+    ((record.role !== "lead" && record.role !== "assigned-lead") ||
+      validNativeIdentity(record.tabId)) &&
     (record.role === undefined ||
       record.role === "manager" ||
-      record.role === "lead") &&
+      record.role === "lead" ||
+      record.role === "assigned-lead") &&
+    (record.role === "assigned-lead" ||
+      (record.assignmentRepoKey === undefined &&
+        record.branch === undefined)) &&
     (record.leadMode === undefined ||
       record.leadMode === "flexible" ||
       record.leadMode === "orchestrate") &&
     typeof record.createdAt === "number" &&
     Number.isSafeInteger(record.createdAt) &&
     record.createdAt >= 0 &&
-    (record.definition === undefined || isDefinitionName(record.definition))
+    (record.definition === undefined || isDefinitionName(record.definition)) &&
+    (record.admission === undefined || isProcessLockClaim(record.admission)) &&
+    (record.recoverySessionFile === undefined ||
+      (record.role === "manager" &&
+        validCanonicalRepoKey(record.recoverySessionFile) &&
+        validNativeIdentity(record.tabId) &&
+        isProcessLockClaim(record.admission)))
   );
 }
 
@@ -2809,7 +2832,21 @@ export function getManagerStartIntent(
 export const writeCoordinatorStartIntent = writeManagerStartIntent;
 export const getCoordinatorStartIntent = getManagerStartIntent;
 export const consumeCoordinatorStartIntent = consumeManagerStartIntent;
-export const removeCoordinatorStartIntent = removeManagerStartIntent;
+
+/** Discard only the exact attempt that the launcher proved was not dispatched. */
+export function removeCoordinatorStartIntent(
+  runtime: SupervisionRuntime,
+  expected: CoordinatorStartIntent,
+): void {
+  const path = managerStartIntentPath(runtime, expected.sessionId);
+  withManagerLifecycleLock(path, () => {
+    const intent = readManagerStartIntent(path, expected.sessionId);
+    if (!intent) return;
+    if (!isDeepStrictEqual(intent, expected))
+      throw new Error("Coordinator startup intent changed before removal");
+    unlinkManagerLifecycleRecord(path);
+  });
+}
 
 /** Bounded read-only inventory used to prevent retrying unsettled ordinary starts. */
 export function listCoordinatorStartIntents(runtime: SupervisionRuntime): {
