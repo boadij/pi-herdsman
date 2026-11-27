@@ -2476,7 +2476,7 @@ export function assistantResponseCompletedForSession(session, prompt) {
   );
 }
 
-export function rootDelegationDiagnostics(contents) {
+export function rootDelegationDiagnostics(contents, expectedLabel) {
   const messages = sessionEntries(contents)
     .filter((entry) => entry.type === "message")
     .map((entry) => entry.message ?? {});
@@ -2489,7 +2489,12 @@ export function rootDelegationDiagnostics(contents) {
       for (const block of Array.isArray(message.content)
         ? message.content
         : []) {
-        if (block?.type === "toolCall" && block.name === "delegate_agent") {
+        if (
+          block?.type === "toolCall" &&
+          block.name === "delegate_agent" &&
+          (expectedLabel === undefined ||
+            block.arguments?.label === expectedLabel)
+        ) {
           call = block;
           result = undefined;
         }
@@ -2515,8 +2520,19 @@ export function rootDelegationDiagnostics(contents) {
           : result.isError === false
             ? "success"
             : "unknown",
-    ...(result?.details?.error?.category === "agent_busy"
-      ? { errorCategory: "agent_busy" }
+    ...([
+      "agent_busy",
+      "agent_label_exists",
+      "incompatible_build",
+      "internal_failure",
+      "invalid_request",
+      "not_running_inside_herdr",
+      "pane_not_ready",
+      "rollback_failure",
+      "target_ambiguous",
+      "target_not_found",
+    ].includes(result?.details?.error?.category)
+      ? { errorCategory: result.details.error.category }
       : {}),
     assistantObserved: Boolean(assistant),
     assistantStopReason: [
@@ -2537,8 +2553,8 @@ export function rootDelegationDiagnostics(contents) {
   };
 }
 
-export function assertNoFailedAgentDelegation(contents) {
-  const diagnostics = rootDelegationDiagnostics(contents);
+export function assertNoFailedAgentDelegation(contents, expectedLabel) {
+  const diagnostics = rootDelegationDiagnostics(contents, expectedLabel);
   if (diagnostics.matchingResult !== "error") return;
   const category = diagnostics.errorCategory ?? "tool_error";
   const error = new Error(`delegate_agent failed (${category})`);
@@ -12035,7 +12051,7 @@ async function runChiefManagerSmoke(ctx) {
     await wait(`delegate-${owner}`, async () => {
       const session = await exactIsolatedSession(ctx, ownerId);
       if (!session) return { done: false };
-      assertNoFailedAgentDelegation(session.contents);
+      assertNoFailedAgentDelegation(session.contents, `smoke-${owner}-agent`);
       const { delegation } = coreDelegationEdge(
         session.contents,
         `smoke-${owner}-agent`,
