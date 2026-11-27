@@ -13762,7 +13762,7 @@ export async function collectDiagnostics(
     rootSessionObserved: Boolean(
       diagnostics.rootSession && !diagnostics.rootSession.error,
     ),
-    ...(ctx.scenario === "continuation"
+    ...(ctx.scenario === "continuation" || ctx.scenario === "chief-manager"
       ? {
           rootDelegation:
             rootSession.status === "fulfilled" && rootSession.value
@@ -14525,6 +14525,11 @@ function sanitizedFailureDiagnostics(value) {
                       "launch_agent",
                     ].includes(root.error.operation)
                       ? { operation: root.error.operation }
+                      : {}),
+                    ...(AGENT_ACTION_DIAGNOSTIC_OUTCOMES.has(
+                      root.error.diagnosticOutcome,
+                    )
+                      ? { diagnosticOutcome: root.error.diagnosticOutcome }
                       : {}),
                     rollbackOccurred:
                       typeof root.error.rollbackOccurred === "boolean"

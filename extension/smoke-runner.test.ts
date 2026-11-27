@@ -1693,6 +1693,7 @@ test("root delegation diagnostics correlate results and exclude private data", a
     assert.deepEqual(persisted.diagnostics.rootDelegation.error, {
       category: "invalid_request",
       operation: "delegate_agent",
+      diagnosticOutcome: "definition_not_allowed",
       rollbackOccurred: false,
       retryAttempted: true,
     });
@@ -1719,11 +1720,11 @@ test("root delegation diagnostics correlate results and exclude private data", a
   );
 });
 
-test("continuation failure diagnostics retain sanitized root delegation state", async () => {
+test("Chief Manager failure artifact persists sanitized root delegation diagnostics", async () => {
   const projection = await collectDiagnostics(
     {
-      scenario: "continuation",
-      stage: "continuation-first-generation",
+      scenario: "chief-manager",
+      stage: "chief-manager-delegate-first",
       paths: {},
       sessionName: "isolated",
       rootPaneId: "root",
@@ -1736,29 +1737,72 @@ test("continuation failure diagnostics retain sanitized root delegation state", 
       snapshot: async () => ({
         path: "PRIVATE_PATH",
         status: "saved",
-        contents: JSON.stringify({
-          type: "message",
-          message: {
-            role: "assistant",
-            stopReason: "error",
-            errorMessage: "PRIVATE_ERROR",
+        contents: [
+          {
+            type: "message",
+            message: {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "PRIVATE_CALL_ID",
+                  name: "delegate_agent",
+                  arguments: {
+                    definition: "PRIVATE_DEFINITION",
+                    task: "PRIVATE_TASK",
+                    label: "PRIVATE_LABEL",
+                    files: ["PRIVATE_FILE"],
+                    privateExtra: "PRIVATE_EXTRA",
+                  },
+                },
+              ],
+            },
           },
-        }),
+          {
+            type: "message",
+            message: {
+              role: "toolResult",
+              toolName: "delegate_agent",
+              toolCallId: "PRIVATE_CALL_ID",
+              isError: true,
+              content: "PRIVATE_RESULT",
+              details: {
+                ok: false,
+                error: {
+                  category: "invalid_request",
+                  operation: "delegate_agent",
+                  message: "PRIVATE_ERROR_TEXT",
+                  rollbackOccurred: false,
+                  retryAttempted: true,
+                  details: { diagnosticOutcome: "definition_not_allowed" },
+                  ids: { session: "PRIVATE_SESSION_ID" },
+                },
+              },
+            },
+          },
+        ]
+          .map((entry) => JSON.stringify(entry))
+          .join("\n"),
       }),
     },
   );
-  assert.deepEqual(projection.rootDelegation, {
-    delegationCallObserved: false,
-    matchingResult: "absent",
-    assistantObserved: true,
-    assistantStopReason: "error",
-    assistantErrorObserved: true,
+  assert.ok(projection.rootDelegation);
+  const rootDelegation = projection.rootDelegation;
+  assert.equal(rootDelegation.matchingResult, "error");
+  assert.deepEqual(rootDelegation.requestShape?.fields?.definition, {
+    present: true,
+    type: "string",
   });
+  assert.equal(rootDelegation.error?.category, "invalid_request");
+  assert.equal(
+    rootDelegation.error?.diagnosticOutcome,
+    "definition_not_allowed",
+  );
   const evidence = sanitizedFailureEvidence(
     {
-      scenario: "continuation",
+      scenario: "chief-manager",
       simulated: true,
-      stage: "continuation-first-generation",
+      stage: "chief-manager-delegate-first",
     },
     { error: new Error("PRIVATE_ERROR") },
     "STALLED",
@@ -1768,21 +1812,34 @@ test("continuation failure diagnostics retain sanitized root delegation state", 
       path: "PRIVATE_PATH",
       rootSession: { summary: "PRIVATE_TRANSCRIPT" },
       rootDelegation: {
-        ...projection.rootDelegation,
+        ...rootDelegation,
         task: "PRIVATE_TASK",
         message: "PRIVATE_MESSAGE",
       },
     },
   );
-  const rootDelegation = evidence.diagnostics?.rootDelegation;
-  assert.ok(rootDelegation && typeof rootDelegation === "object");
-  assert.ok("matchingResult" in rootDelegation);
-  assert.equal(rootDelegation.matchingResult, "absent");
   const artifact = await preserveFailureEvidence(evidence);
   try {
     const saved = JSON.parse(await readFile(artifact, "utf8"));
-    assert.equal(saved.diagnostics.rootDelegation.matchingResult, "absent");
-    assert.doesNotMatch(JSON.stringify(saved), /PRIVATE/u);
+    assert.equal(saved.diagnostics.rootDelegation.matchingResult, "error");
+    assert.deepEqual(
+      saved.diagnostics.rootDelegation.requestShape.fields.definition,
+      {
+        present: true,
+        type: "string",
+      },
+    );
+    assert.deepEqual(saved.diagnostics.rootDelegation.error, {
+      category: "invalid_request",
+      operation: "delegate_agent",
+      rollbackOccurred: false,
+      retryAttempted: true,
+      diagnosticOutcome: "definition_not_allowed",
+    });
+    assert.doesNotMatch(
+      JSON.stringify(saved),
+      /PRIVATE|definition_not_allowed.+PRIVATE/u,
+    );
   } finally {
     await rm(dirname(artifact), { recursive: true, force: true });
   }

@@ -935,15 +935,7 @@ export function collectDiagnostics(
   panesObserved: number | null;
   rootSessionObserved: boolean;
   candidateProcessesObserved: number | null;
-  rootDelegation?: {
-    delegationCallObserved: boolean;
-    matchingResult: "absent" | "pending" | "error" | "success" | "unknown";
-    errorCategory?: "agent_busy";
-    assistantObserved: boolean;
-    assistantStopReason:
-      "stop" | "length" | "toolUse" | "error" | "aborted" | "unknown";
-    assistantErrorObserved: boolean;
-  } | null;
+  rootDelegation?: ReturnType<typeof rootDelegationDiagnostics> | null;
   coreDelegation?: CoreDelegation;
   coreHandoff?: CoreHandoff | null;
   supervisorAgent?: {
