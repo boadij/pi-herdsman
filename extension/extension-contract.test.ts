@@ -3774,10 +3774,21 @@ test("chief activation reports unresolved mailbox state instead of owned work", 
     WORKSPACE,
     `chief-activation-invalid-state-${randomUUID()}`,
   );
+  const flexibleRole = join(
+    PI_AGENT_ROOT,
+    "coordinators",
+    "leads",
+    "flexible-lead.md",
+  );
+  realFs.mkdirSync(dirname(flexibleRole), { recursive: true });
+  writeFileSync(flexibleRole, "---\nname: flexible-lead\n---\nFlexible Lead\n");
   const notices: string[] = [];
   realFs.mkdirSync(mailbox, { recursive: true });
   realFs.writeFileSync(join(mailbox, "state.json"), "not json");
-  const pi = fakePi({ allTools: REGISTERED_ROLE_TOOLS });
+  const pi = fakePi({
+    activeTools: ["read", "bash"],
+    allTools: [{ name: "read" }, { name: "bash" }, ...REGISTERED_ROLE_TOOLS],
+  });
   registerExtension!(pi.pi as never);
   const context = fakeContext(pi.entries) as any;
   context.hasUI = true;
@@ -3833,8 +3844,21 @@ test("chief activation reports unresolved mailbox state instead of owned work", 
       ["list_staff", "inspect_staff", "read_staff_transcript", "message_staff"],
       JSON.stringify(notices),
     );
+    writeFileSync(flexibleRole, "---\nname: [invalid\n---\nBroken profile\n");
     await pi.commandOptions.get("chief-leave").handler("", context);
-    assert.equal(pi.pi.getSessionName(), "Flexible Lead");
+    assert.ok(pi.pi.getActiveTools().includes("read"));
+    assert.ok(pi.pi.getActiveTools().includes("bash"));
+    assert.ok(!pi.pi.getActiveTools().includes("delegate_agent"));
+    const denied = await pi.tools
+      .find((tool) => tool.name === "delegate_agent")!
+      .execute(
+        "invalid-flexible-profile",
+        { definition: "agent", task: "must not start" },
+        undefined,
+        undefined,
+        context,
+      );
+    assert.match(denied.details.error.message, /not allowed/);
     const restoredEvent = {
       systemPrompt: "base",
       systemPromptOptions: {
@@ -3852,6 +3876,7 @@ test("chief activation reports unresolved mailbox state instead of owned work", 
     assert.doesNotMatch(restored, /workspace-neutral supervision/);
   } finally {
     realFs.rmSync(mailbox, { recursive: true, force: true });
+    realFs.rmSync(flexibleRole, { force: true });
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_SOCKET_PATH;
@@ -4865,15 +4890,33 @@ test("malformed definitions do not abort ordinary lead startup", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
   const malformed = join(PI_AGENTS_DIR, "malformed.md");
+  const role = join(PI_AGENT_ROOT, "coordinators", "leads", "flexible-lead.md");
+  realFs.mkdirSync(dirname(role), { recursive: true });
+  writeFileSync(
+    role,
+    "---\nname: flexible-lead\ntools: [read]\nagents: [agent]\n---\nRead only",
+  );
   writeFileSync(
     malformed,
     "---\nname: malformed\nmodel: {not valid json\n---\nmalformed\n",
   );
-  const pi = fakePi();
+  const pi = fakePi({
+    activeTools: ["read", "bash", "write"],
+    allTools: [
+      { name: "read" },
+      { name: "bash" },
+      { name: "write" },
+      ...REGISTERED_ROLE_TOOLS,
+    ],
+  });
   registerExtension!(pi.pi as never);
   const context = fakeContext() as any;
   try {
     await pi.events.get("session_start")![0](undefined, context);
+    assert.ok(pi.pi.getActiveTools().includes("read"));
+    assert.ok(!pi.pi.getActiveTools().includes("bash"));
+    assert.ok(!pi.pi.getActiveTools().includes("write"));
+    assert.ok(!pi.pi.getActiveTools().includes("delegate_agent"));
     const promptEvent: any = {
       systemPrompt: "base",
       systemPromptOptions: { sections: {}, contextFiles: [] },
@@ -4881,7 +4924,7 @@ test("malformed definitions do not abort ordinary lead startup", async () => {
     await invokeBeforeAgentStart(pi, promptEvent, context);
     assert.match(
       promptEvent.systemPromptOptions.sections.pi_herdsman_lead_execution,
-      /Delegate bounded execution work when an Agent can reasonably own it/,
+      /Read only/,
       "Agent discovery failure must preserve the valid role profile",
     );
     assert.ok(
@@ -4898,6 +4941,7 @@ test("malformed definitions do not abort ordinary lead startup", async () => {
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     realFs.rmSync(malformed, { force: true });
+    realFs.rmSync(role, { force: true });
     delete process.env.HERDR_PANE_ID;
   }
 });
@@ -5005,7 +5049,7 @@ test("ordinary Lead exposes only allowlisted Agents and initializes its model ca
   }
 });
 
-test("role discovery failure denies the Lead Agent roster", async () => {
+test("unidentifiable Lead definition preserves verified native Flexible execution", async () => {
   setLeadEnvironment();
   const roleDirectory = join(PI_AGENT_ROOT, "coordinators", "leads");
   realFs.mkdirSync(roleDirectory, { recursive: true });
@@ -5014,11 +5058,24 @@ test("role discovery failure denies the Lead Agent roster", async () => {
     malformedRole,
     "---\nname: malformed-session-role\nagents: [\n---\nmalformed role\n",
   );
-  const pi = fakePi();
+  const pi = fakePi({
+    activeTools: ["read", "bash"],
+    allTools: [
+      { name: "read" },
+      { name: "bash" },
+      { name: "write" },
+      ...REGISTERED_ROLE_TOOLS,
+    ],
+  });
   registerExtension!(pi.pi as never);
   const context = fakeContext(pi.entries) as any;
   try {
     await pi.events.get("session_start")![0](undefined, context);
+    assert.ok(pi.pi.getActiveTools().includes("read"));
+    assert.ok(pi.pi.getActiveTools().includes("bash"));
+    assert.ok(!pi.pi.getActiveTools().includes("write"));
+    assert.ok(!pi.pi.getActiveTools().includes("delegate_agent"));
+    assert.ok(!pi.pi.getActiveTools().includes("list_agents"));
     const event: any = {
       systemPrompt: "base",
       systemPromptOptions: { sections: {}, contextFiles: [] },
@@ -5033,7 +5090,20 @@ test("role discovery failure denies the Lead Agent roster", async () => {
     assert.equal(
       event.systemPromptOptions.sections.pi_herdsman_lead_execution,
       undefined,
-      "role discovery failure must not activate a Lead execution profile",
+      "an unidentifiable definition must not supply profile instructions",
+    );
+    assert.match(
+      event.systemPromptOptions.sections.pi_herdsman_role,
+      /selected native Pi tools; new Agent delegation is unavailable/u,
+    );
+    assert.doesNotMatch(snapshot, /Use list_agents/u);
+    assert.deepEqual(
+      await pi.events.get("tool_call")?.[0]({ toolName: "write" }, context),
+      {
+        block: true,
+        reason: "Tool is unavailable in the active Lead profile.",
+      },
+      "dispatch authorization must match the selected native tool baseline",
     );
     assert.ok(
       pi.entries.some(
@@ -5046,6 +5116,203 @@ test("role discovery failure denies the Lead Agent roster", async () => {
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     realFs.rmSync(malformedRole, { force: true });
+    delete process.env.HERDR_PANE_ID;
+  }
+});
+
+test("invalid selected Flexible profile preserves native selection but no delegation", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  const role = join(PI_AGENT_ROOT, "coordinators", "leads", "flexible-lead.md");
+  realFs.mkdirSync(dirname(role), { recursive: true });
+  writeFileSync(
+    role,
+    "---\nname: flexible-lead\ntools: [read]\nunsupported: true\n---\n",
+  );
+  const pi = fakePi({
+    activeTools: ["read", "bash"],
+    allTools: [
+      { name: "read" },
+      { name: "bash" },
+      { name: "write" },
+      ...REGISTERED_ROLE_TOOLS,
+    ],
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(pi.entries) as any;
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    for (const name of ["read", "bash"])
+      assert.ok(pi.pi.getActiveTools().includes(name), name);
+    for (const name of [
+      "write",
+      "delegate_agent",
+      "resume_agent",
+      "list_agents",
+    ])
+      assert.ok(!pi.pi.getActiveTools().includes(name), name);
+
+    const event: any = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await invokeBeforeAgentStart(pi, event, context);
+    assert.equal(
+      event.systemPromptOptions.sections.pi_herdsman_lead_execution,
+      undefined,
+    );
+    assert.doesNotMatch(
+      event.systemPromptOptions.sections.agent_definitions,
+      /Use list_agents/u,
+    );
+
+    const delegate = pi.tools.find((tool) => tool.name === "delegate_agent")!;
+    const denied = await delegate.execute(
+      "invalid-profile",
+      { definition: "agent", task: "must not start" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.match(denied.details.error.message, /not allowed/u);
+
+    pi.pi.setActiveTools(["read", "write"]);
+    const changedEvent: any = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await invokeBeforeAgentStart(pi, changedEvent, context);
+    const changedActiveTools = pi.pi.getActiveTools();
+    assert.ok(changedActiveTools.includes("read"));
+    assert.ok(changedActiveTools.includes("write"));
+    assert.ok(!changedActiveTools.includes("bash"));
+    for (const name of ["list_peers", "message_peer"])
+      assert.ok(changedActiveTools.includes(name), name);
+    const saved = pi.entries
+      .filter(
+        (entry: any) =>
+          entry.customType === "pi-herdsman-lead-execution" &&
+          entry.data?.sessionId === context.sessionManager.getSessionId(),
+      )
+      .at(-1) as { data?: { leadTools?: string[] } } | undefined;
+    assert.deepEqual(saved?.data?.leadTools, ["read", "write"]);
+    assert.ok(!pi.pi.getActiveTools().includes("delegate_agent"));
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(role, { force: true });
+    delete process.env.HERDR_PANE_ID;
+  }
+});
+
+test("invalid Flexible references keep valid execution restrictions and deny delegation", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  const role = join(PI_AGENT_ROOT, "coordinators", "leads", "flexible-lead.md");
+  realFs.mkdirSync(dirname(role), { recursive: true });
+  writeFileSync(
+    role,
+    "---\nname: flexible-lead\ntools: [read]\nagents: [missing-agent]\n---\n",
+  );
+  const pi = fakePi({
+    activeTools: ["read", "bash", "write"],
+    allTools: [
+      { name: "read" },
+      { name: "bash" },
+      { name: "write" },
+      ...REGISTERED_ROLE_TOOLS,
+    ],
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(pi.entries) as any;
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const active = pi.pi.getActiveTools();
+    assert.ok(active.includes("read"));
+    assert.ok(!active.includes("bash"));
+    assert.ok(!active.includes("write"));
+    assert.ok(!active.includes("delegate_agent"));
+    assert.ok(!active.includes("resume_agent"));
+    assert.ok(!active.includes("list_agents"));
+    assert.ok(
+      pi.entries.some(
+        (entry: any) =>
+          entry.customType === "pi_herdsman_definition_error" &&
+          /missing agent definition missing-agent/.test(entry.data?.error),
+      ),
+      "invalid references are diagnosed without dropping the execution policy",
+    );
+
+    const delegate = pi.tools.find((tool) => tool.name === "delegate_agent")!;
+    const result = await delegate.execute(
+      "invalid-reference",
+      { definition: "agent", task: "must not start" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.match(result.details.error.message, /not allowed/u);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(role, { force: true });
+    delete process.env.HERDR_PANE_ID;
+  }
+});
+
+test("failed Flexible profile refresh retains the previous policy until repaired", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  const role = join(PI_AGENT_ROOT, "coordinators", "leads", "flexible-lead.md");
+  realFs.mkdirSync(dirname(role), { recursive: true });
+  writeFileSync(
+    role,
+    "---\nname: flexible-lead\ntools: [read]\nagents: [agent]\n---\nRead-only instructions",
+  );
+  const pi = fakePi({
+    activeTools: ["read", "bash", "write"],
+    allTools: [
+      { name: "read" },
+      { name: "bash" },
+      { name: "write" },
+      ...REGISTERED_ROLE_TOOLS,
+    ],
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(pi.entries) as any;
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const previousTools = pi.pi.getActiveTools();
+    assert.ok(previousTools.includes("read"));
+    assert.ok(!previousTools.includes("bash"));
+    assert.ok(previousTools.includes("delegate_agent"));
+
+    writeFileSync(role, "---\nname: [invalid\n---\nBroken profile");
+    await pi.commandOptions.get("lead-flexible")!.handler("", context);
+    assert.deepEqual(
+      pi.pi.getActiveTools(),
+      previousTools,
+      "a failed explicit refresh must retain the current restrictive policy",
+    );
+
+    writeFileSync(
+      role,
+      "---\nname: flexible-lead\ntools: [bash]\nagents: [agent]\n---\nRepaired instructions",
+    );
+    await pi.commandOptions.get("lead-flexible")!.handler("", context);
+    const repairedTools = pi.pi.getActiveTools();
+    assert.ok(repairedTools.includes("bash"));
+    assert.ok(!repairedTools.includes("read"));
+    assert.ok(repairedTools.includes("delegate_agent"));
+    assert.ok(
+      !pi.entries.some(
+        (entry: any) =>
+          entry.customType === "pi_herdsman_definition_error" &&
+          /missing agent definition agent/.test(entry.data?.error),
+      ),
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(role, { force: true });
+    delete process.env.HERDR_PANE_ID;
   }
 });
 
@@ -5434,10 +5701,16 @@ test("ordinary Lead custom startup receives the exact-session definition roster"
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
     /available direct supervisor/,
   );
-  assert.match(
-    promptEvent.systemPromptOptions.sections.agent_definitions,
-    /Use list_agents for live Agent state/,
-  );
+  if (pi.pi.getActiveTools().includes("list_agents"))
+    assert.match(
+      promptEvent.systemPromptOptions.sections.agent_definitions,
+      /Use list_agents for live Agent state/,
+    );
+  else
+    assert.doesNotMatch(
+      promptEvent.systemPromptOptions.sections.agent_definitions,
+      /Use list_agents/u,
+    );
   const roster = JSON.parse(
     promptEvent.systemPromptOptions.sections.agent_definitions.split(
       "\n\nThis is the session-start definition snapshot.",
