@@ -1849,7 +1849,7 @@ test("failed inherited-tool persistence enforces policy and retries", async (t) 
   }
 });
 
-test("failed inherited capture still enforces invalid-profile fail-closed tools", async (t) => {
+test("invalid profile on branch restore preserves only the saved native baseline", async (t) => {
   setLeadEnvironment();
   const cwd = mkdtempSync(join(tmpdir(), "herdsman-invalid-inherited-tools-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
@@ -1872,26 +1872,37 @@ test("failed inherited capture still enforces invalid-profile fail-closed tools"
   });
   const context = fakeContext(entries) as any;
   context.cwd = cwd;
-  const appendEntry = pi.pi.appendEntry;
-  let failPersistence = false;
-  pi.pi.appendEntry = (type: string, data: unknown) => {
-    if (type === "pi-herdsman-lead-execution" && failPersistence)
-      throw new Error("baseline write failed");
-    appendEntry(type, data);
-  };
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, context);
     writeFileSync(definition, "---\nname: [malformed\n---\nbad\n");
     pi.pi.setActiveTools(["read", "history"]);
-    failPersistence = true;
     await pi.events.get("session_tree")![0](undefined, context);
-    assert.deepEqual(pi.pi.getActiveTools(), leadToolsWithoutAgents);
+    const active = pi.pi.getActiveTools();
+    assert.ok(active.includes("read"));
+    assert.ok(active.includes("bash"));
+    assert.ok(!active.includes("history"));
+    assert.ok(active.includes("list_peers"));
+    assert.ok(active.includes("message_peer"));
+    for (const name of ["list_agents", "delegate_agent", "resume_agent"])
+      assert.ok(!active.includes(name), name);
+    assert.deepEqual(
+      sessionLeadExecutionState(entries)?.leadTools,
+      ["read", "bash"],
+      "branch restoration uses the persisted native baseline, not transient tools",
+    );
     assert.deepEqual(
       pi.events.get("tool_call")![0]({ toolName: "load_skill" }, context),
       {
         block: true,
         reason: "Skill loading is unavailable in the active role.",
+      },
+    );
+    assert.deepEqual(
+      pi.events.get("tool_call")![0]({ toolName: "history" }, context),
+      {
+        block: true,
+        reason: "Tool is unavailable in the active Lead profile.",
       },
     );
   } finally {
@@ -2069,6 +2080,38 @@ test("session tree restoration respects checkpoint order and tool policies", asy
       expected: ["read", ...leadToolsWithSkill],
     },
     {
+      name: "native-only Flexible restoration respects a newer native tool removal",
+      profile: "unsupported: true",
+      nativeOnly: true,
+      branch: [
+        checkpoint("flexible", ["read", "bash"]),
+        toolChange([], ["bash"]),
+      ],
+      restored: ["read"],
+      expected: ["read", "list_peers", "message_peer"],
+    },
+    {
+      name: "native-only Flexible restoration keeps a later removal across Chief-to-Lead restoration",
+      profile: "unsupported: true",
+      nativeOnly: true,
+      chiefToLead: true,
+      branch: [
+        checkpoint("flexible", ["read", "bash"]),
+        {
+          type: "custom",
+          customType: "pi-herdsman-role",
+          data: {
+            sessionId: LEAD_SESSION_ID,
+            role: "lead",
+            leadTools: ["read", "bash"],
+          },
+        },
+        toolChange([], ["bash"]),
+      ],
+      restored: ["read"],
+      expected: ["read", "list_peers", "message_peer"],
+    },
+    {
       name: "relative CodeMode is projected without entering the inherited baseline",
       branch: [checkpoint("flexible", ["read"]), toolChange(["history"])],
       restored: ["read", "history", "codemode"],
@@ -2097,8 +2140,20 @@ test("session tree restoration respects checkpoint order and tool policies", asy
           ...(scenario.extraTools ?? []).map((name) => ({ name })),
         ],
       });
-      const context = fakeContext(pi.entries, scenario.branch) as any;
+      let selectedBranch = "chiefToLead" in scenario ? [] : scenario.branch;
+      const context = fakeContext(pi.entries, selectedBranch) as any;
+      context.sessionManager.getBranch = () => selectedBranch;
       context.cwd = cwd;
+      if ("chiefToLead" in scenario) {
+        process.env.HERDR_PANE_ID = `tree-policy-${randomUUID()}`;
+        process.env.HERDR_TAB_ID = `tree-policy-${randomUUID()}`;
+        process.env.HERDR_SOCKET_PATH = join(
+          tmpdir(),
+          `tree-policy-chief-${randomUUID()}.sock`,
+        );
+        context.mode = "rpc";
+        context.ui.notify = () => undefined;
+      }
       registerExtension!(pi.pi as never);
       if (scenario.loaderFiltered) {
         const getAllTools = pi.pi.getAllTools;
@@ -2109,27 +2164,58 @@ test("session tree restoration respects checkpoint order and tool policies", asy
       }
       try {
         await pi.events.get("session_start")![0](undefined, context);
+        const toolSelections: string[][] = [];
+        if ("chiefToLead" in scenario) {
+          await pi.commandOptions.get("chief").handler("", context);
+          assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
+          const setActiveTools = pi.pi.setActiveTools.bind(pi.pi);
+          pi.pi.setActiveTools = (tools: string[]) => {
+            toolSelections.push([...tools]);
+            setActiveTools(tools);
+          };
+        }
+        selectedBranch = scenario.branch;
         pi.pi.setActiveTools(scenario.restored);
+        toolSelections.length = 0;
         const entriesBefore = pi.entries.length;
         await pi.events.get("session_tree")![0](undefined, context);
         assert.deepEqual(
           new Set(pi.pi.getActiveTools()),
           new Set(scenario.expected),
         );
+        if ("chiefToLead" in scenario)
+          assert.ok(
+            toolSelections
+              .slice(0, -1)
+              .every(
+                (tools) => !tools.includes("read") && !tools.includes("bash"),
+              ),
+            "native tools must not be projected before Lead activation",
+          );
         const skillCall = pi.events.get("tool_call")![0](
           { toolName: "load_skill" },
           context,
         );
         assert.deepEqual(
           skillCall,
-          scenario.loaderFiltered
+          scenario.loaderFiltered || scenario.nativeOnly
             ? {
                 block: true,
                 reason: "Skill loading is unavailable in the active role.",
               }
             : undefined,
         );
-        assert.equal(pi.entries.length, entriesBefore);
+        if (scenario.nativeOnly) {
+          assert.ok(
+            pi.entries
+              .slice(entriesBefore)
+              .some(
+                (entry: any) =>
+                  entry.customType === "pi_herdsman_definition_error",
+              ),
+            "native-only branch restoration retains the profile diagnostic",
+          );
+        } else assert.equal(pi.entries.length, entriesBefore);
         if ("extraTools" in scenario) {
           await pi.commandOptions.get("lead-orchestrate").handler("", context);
           assert.deepEqual(sessionLeadExecutionState(pi.entries)?.leadTools, [
@@ -2151,6 +2237,12 @@ test("session tree restoration respects checkpoint order and tool policies", asy
         }
       } finally {
         await pi.events.get("session_shutdown")?.[0]();
+        if ("chiefToLead" in scenario) {
+          delete process.env.HERDR_SOCKET_PATH;
+          delete process.env.HERDR_TAB_ID;
+          delete process.env.HERDR_PANE_ID;
+          setLeadEnvironment();
+        }
       }
     });
   }

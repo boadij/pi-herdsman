@@ -13,15 +13,7 @@ import {
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import {
-  basename,
-  dirname,
-  isAbsolute,
-  join,
-  relative,
-  resolve,
-  sep,
-} from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CONFIG_DIR_NAME,
@@ -208,6 +200,7 @@ function readDefinitionLayer(
   scopeRoot: string,
   category: DefinitionCategory,
   onWarning?: (message: string) => void,
+  targetName?: string,
 ): AgentDefinition[] {
   const root = definitionDirectory(scopeRoot, category);
   const stats = statSync(root, { throwIfNoEntry: false });
@@ -228,6 +221,8 @@ function readDefinitionLayer(
       const parsed = readDefinitionFile(path);
       const frontmatter = parsed.frontmatter as Frontmatter;
       const name = typeof frontmatter.name === "string" ? frontmatter.name : "";
+      if (category !== "agent" && !isDefinitionName(name))
+        throw new Error(`${path}: invalid ${category} definition name`);
       const reserved = reservedDefinitionCategory(name);
       if (reserved && reserved !== category) {
         const destination = join(
@@ -242,6 +237,7 @@ function readDefinitionLayer(
       }
       if (category === "chief" && name !== CHIEF_DEFINITION_NAME)
         throw new Error(`${path}: chief.md must define chief`);
+      if (targetName !== undefined && name !== targetName) return [];
       const definition: AgentDefinition = {
         category,
         name,
@@ -630,48 +626,6 @@ export function toolPolicyAllowsName(
   );
 }
 
-function assertNoLegacyCoordinatorProfiles(
-  scopeRoot: string,
-  legacy: string,
-): void {
-  const canonical = definitionDirectory(scopeRoot, "chief");
-  const legacyStats = statSync(legacy, { throwIfNoEntry: false });
-  if (legacyStats && !legacyStats.isDirectory())
-    throw new Error(
-      `legacy coordinator path is not a directory: ${legacy}; use ${canonical}`,
-    );
-  const file = (legacyStats ? markdownFiles(legacy) : [])
-    .concat(
-      statSync(canonical, { throwIfNoEntry: false })?.isDirectory()
-        ? readdirSync(canonical, { withFileTypes: true })
-            .filter(
-              (entry) =>
-                (entry.isFile() || entry.isSymbolicLink()) &&
-                entry.name.endsWith(".md") &&
-                entry.name !== "chief.md",
-            )
-            .map((entry) => join(canonical, entry.name))
-        : [],
-    )
-    .find((path) => !path.endsWith(".example.md"));
-  if (!file) return;
-  let name = basename(file, ".md");
-  try {
-    const configuredName = readDefinitionFile(file).frontmatter.name;
-    if (typeof configuredName === "string") name = configuredName;
-  } catch {
-    // An obsolete file still needs a migration diagnostic when it cannot be parsed.
-  }
-  const category = reservedDefinitionCategory(name);
-  const destination = category
-    ? definitionDirectory(scopeRoot, category)
-    : `${definitionDirectory(scopeRoot, "lead")} (Lead) or ${definitionDirectory(scopeRoot, "manager")} (Manager)`;
-  throw new Error(
-    `${file}: legacy coordinator profile is no longer loaded; ` +
-      `move the profile and its relative assets to ${destination}`,
-  );
-}
-
 function privateRepositoryRoot(projectRoot: string): string | undefined {
   let output: string;
   try {
@@ -844,6 +798,7 @@ export type DiscoverAgentDefinitionsOptions = {
   projectRoot?: string;
   onWarning?: (message: string) => void;
   usage?: "assigned-lead";
+  validateAgentReferences?: boolean;
 };
 
 function validateEffectiveAgentReferences(
@@ -905,6 +860,7 @@ function discoverEffectiveDefinitions(
   category: DefinitionCategory,
   validateReferences = true,
   trace?: DefinitionTraceCapture,
+  targetName?: string,
 ): AgentDefinition[] {
   const projectRoot = options.projectRoot
     ? join(options.projectRoot, CONFIG_DIR_NAME)
@@ -913,30 +869,24 @@ function discoverEffectiveDefinitions(
     ? privateRepositoryRoot(options.projectRoot)
     : undefined;
   const globalRoot = getAgentDir();
-  if (category !== "agent") {
-    assertNoLegacyCoordinatorProfiles(
-      globalRoot,
-      join(globalRoot, "pi-herdsman", "roles"),
-    );
-    if (projectRoot)
-      assertNoLegacyCoordinatorProfiles(
-        projectRoot,
-        join(projectRoot, "pi-herdsman", "roles"),
-      );
-    if (privateRoot)
-      assertNoLegacyCoordinatorProfiles(
-        privateRoot,
-        join(privateRoot, "roles"),
-      );
-  }
-  const bundled = readDefinitionLayer(BUNDLED_DEFINITION_ROOT, category);
+  const bundled = readDefinitionLayer(
+    BUNDLED_DEFINITION_ROOT,
+    category,
+    undefined,
+    targetName,
+  );
   const project = projectRoot
-    ? readDefinitionLayer(projectRoot, category, options.onWarning)
+    ? readDefinitionLayer(projectRoot, category, options.onWarning, targetName)
     : [];
   const privateRepository = privateRoot
-    ? readDefinitionLayer(privateRoot, category, options.onWarning)
+    ? readDefinitionLayer(privateRoot, category, options.onWarning, targetName)
     : [];
-  const user = readDefinitionLayer(globalRoot, category, options.onWarning);
+  const user = readDefinitionLayer(
+    globalRoot,
+    category,
+    options.onWarning,
+    targetName,
+  );
   const definitions = new Map(
     bundled.map((definition) => [definition.name, definition]),
   );
@@ -1013,12 +963,17 @@ function findDefinition(
     category,
     true,
     trace,
+    category === "agent" ? undefined : name,
   ).find((candidate) => candidate.name === name);
   if (!definition)
     throw new Error(
       `${category} ${category === "agent" ? "" : "definition "}${name} not found`,
     );
-  if (category !== "agent" && definition.frontmatter.agents?.length)
+  if (
+    category !== "agent" &&
+    options.validateAgentReferences !== false &&
+    definition.frontmatter.agents?.length
+  )
     validateRoleAgentDefinitionReferences(
       definition,
       discoverAgentDefinitions(options),

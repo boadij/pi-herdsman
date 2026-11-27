@@ -167,7 +167,6 @@ import {
   VALID_THINKING_LEVELS,
   configuredToolPolicy,
   notifyDefinitionWarning,
-  discoverRoleDefinitions,
   discoverAgentDefinitions,
   validateRoleAgentDefinitionReferences,
   matchesToolPattern,
@@ -1346,11 +1345,9 @@ export function createLeadSessionStartRuntime(host: {
     signal: AbortSignal,
     skipProfileResolution?: boolean,
     skipAssignmentLookup?: boolean,
-    roleDefinitions?: readonly AgentDefinition[],
   ): Promise<void>;
   discoverSessionDefinitions(ctx: ExtensionContext): Promise<{
     definitions: AgentDefinition[];
-    roleDefinitions: AgentDefinition[];
     projectTrusted: boolean;
   }>;
   setLeadExecutionPending(pending: boolean): void;
@@ -1693,7 +1690,6 @@ export function createLeadSessionStartRuntime(host: {
       let definitionSnapshot:
         | {
             definitions: AgentDefinition[];
-            roleDefinitions: AgentDefinition[];
           }
         | undefined;
       const needsLeadRoster = !(
@@ -1706,7 +1702,7 @@ export function createLeadSessionStartRuntime(host: {
         } catch (error) {
           if (sessionSignal.aborted) return;
           host.appendDefinitionError(ctx, error);
-          definitionSnapshot = { definitions: [], roleDefinitions: [] };
+          definitionSnapshot = { definitions: [] };
         }
       }
       if (sessionSignal.aborted) return;
@@ -1717,7 +1713,6 @@ export function createLeadSessionStartRuntime(host: {
             sessionSignal,
             skipLeadExecutionProfileResolution,
             malformedRole,
-            definitionSnapshot?.roleDefinitions,
           );
           if (!sessionSignal.aborted && !malformedRole) {
             try {
@@ -1811,6 +1806,7 @@ export function createLeadAgentEventRuntime(host: {
   ): Promise<number>;
   isCurrentChief(ctx: ExtensionContext): boolean;
   setActiveTools(tools: readonly string[]): void;
+  canListAgents?(): boolean;
   chiefTools: readonly string[];
   managerTools?: readonly string[];
   leadInboxRuntime: Pick<
@@ -1975,8 +1971,10 @@ export function createLeadAgentEventRuntime(host: {
       if (roster && roster.sessionId === ctx.sessionManager.getSessionId())
         sections.agent_definitions =
           `${JSON.stringify(roster.definitions)}\n\n` +
-          `This is the session-start definition snapshot. ` +
-          `Use list_agents for live Agent state or to refresh Agent definitions after configuration changes.`;
+          `This is the session-start definition snapshot.` +
+          (host.canListAgents?.() === false
+            ? ""
+            : " Use list_agents for live Agent state or to refresh Agent definitions after configuration changes.");
       else delete sections.agent_definitions;
       const catalog = activeLead ? host.modelCatalog?.(ctx) : undefined;
       if (catalog) sections.agent_models = catalog;
@@ -2110,7 +2108,12 @@ export function registerLeadRuntime(
         valid: true;
         managed: boolean;
       }
-    | { mode: LeadExecutionMode; valid: false; managed: boolean }
+    | {
+        mode: LeadExecutionMode;
+        valid: false;
+        managed: boolean;
+        nativeOnly?: true;
+      }
     | undefined;
   let sessionKind: SessionKindEntry | undefined;
   let assignedLeadDefinitionName = MANAGED_LEAD_DEFINITION_NAME;
@@ -2133,6 +2136,8 @@ export function registerLeadRuntime(
         injected: readonly string[];
       }
     | undefined;
+  let reportedDelegationFailureSessionId: string | undefined;
+  const reportedDelegationFailures = new Set<string>();
   const prepareSupervisoryProfile = (
     ctx: ExtensionContext,
     role: "manager" | "chief",
@@ -2271,6 +2276,70 @@ export function registerLeadRuntime(
     }
     return undefined;
   };
+  const verifiedNativeOnlyFlexibleExecution = (
+    ctx?: ExtensionContext,
+  ): boolean => {
+    const currentContext = ctx ?? leadRuntime.leadContext;
+    const executionSessionId = currentContext?.sessionManager.getSessionId();
+    if (
+      !currentContext ||
+      !executionSessionId ||
+      !leadExecution ||
+      leadExecution.valid ||
+      !leadExecution.nativeOnly ||
+      leadExecution.managed ||
+      leadExecution.mode !== "flexible" ||
+      sessionKind?.kind !== "ordinary" ||
+      sessionKind.sessionId !== executionSessionId ||
+      isQuarantinedSession(currentContext) ||
+      leadRuntime.roleSuspended ||
+      verifiedActiveRootRole() !== "lead"
+    )
+      return false;
+    try {
+      return !readCoordinatorDefinitionBinding(
+        currentContext.sessionManager.getEntries(),
+        executionSessionId,
+      );
+    } catch {
+      return false;
+    }
+  };
+  const leadDelegationPolicy = (
+    ctx: ExtensionContext,
+    definition: AgentDefinition,
+  ): RootDelegationPolicy => {
+    const agents = definition.frontmatter.agents;
+    if (agents?.length === 0) return new Set<string>();
+    try {
+      const definitions = discoverAgentDefinitions(
+        ctx.isProjectTrusted()
+          ? {
+              projectRoot: ctx.cwd,
+              onWarning: (message) => notifyDefinitionWarning(ctx, message),
+            }
+          : {
+              onWarning: (message) => notifyDefinitionWarning(ctx, message),
+            },
+      );
+      validateRoleAgentDefinitionReferences(definition, definitions);
+      reportedDelegationFailureSessionId = undefined;
+      reportedDelegationFailures.clear();
+      return agents === undefined ? "all" : new Set(agents);
+    } catch (error) {
+      const sessionId = ctx.sessionManager.getSessionId();
+      if (reportedDelegationFailureSessionId !== sessionId) {
+        reportedDelegationFailureSessionId = sessionId;
+        reportedDelegationFailures.clear();
+      }
+      const message = String(error);
+      if (!reportedDelegationFailures.has(message)) {
+        reportedDelegationFailures.add(message);
+        options.sessionStartOptions.appendDefinitionError(ctx, error);
+      }
+      return new Set<string>();
+    }
+  };
   const syncRootSessionName = (ctx: ExtensionContext): void => {
     try {
       if (
@@ -2288,8 +2357,9 @@ export function registerLeadRuntime(
       else if (role === "manager") syncAutomaticSessionName(pi, ctx, "Manager");
       else if (
         role === "lead" &&
-        leadExecution?.valid &&
-        !leadExecution.managed
+        leadExecution &&
+        !leadExecution.managed &&
+        (leadExecution.valid || verifiedNativeOnlyFlexibleExecution(ctx))
       )
         syncAutomaticSessionName(
           pi,
@@ -2313,8 +2383,10 @@ export function registerLeadRuntime(
       return new Set<string>();
     if (role === "lead") {
       if (!leadExecution?.valid) return new Set<string>();
-      const agents = leadExecution.definition.frontmatter.agents;
-      return agents === undefined ? "all" : new Set(agents);
+      const ctx = leadRuntime.leadContext;
+      if (!ctx || sessionKind?.sessionId !== ctx.sessionManager.getSessionId())
+        return new Set<string>();
+      return leadDelegationPolicy(ctx, leadExecution.definition);
     }
     if (role === "manager" || role === "chief") {
       const profile = currentSupervisoryProfile(leadRuntime.leadContext!, role);
@@ -2472,6 +2544,11 @@ export function registerLeadRuntime(
         .filter((name) => !baseline.includes(name)),
     };
   };
+  const nativeInheritedProjectionFor = (mode: LeadExecutionMode) => ({
+    mode,
+    excluded: [] as string[],
+    injected: [] as string[],
+  });
   const captureInheritedTools = (): void => {
     const projection = inheritedProjection;
     if (!projection) return;
@@ -2483,21 +2560,26 @@ export function registerLeadRuntime(
     const saved = leadToolState.getLeadTools() ?? [];
     const excluded = (name: string) =>
       projection.excluded.some((pattern) => matchesToolPattern(pattern, name));
+    const preserveNativeProjection =
+      verifiedNativeOnlyFlexibleExecution() &&
+      projection.mode === "flexible" &&
+      projection.excluded.length === 0 &&
+      projection.injected.length === 0;
     const active = leadToolState
       .normalizeBaseTools(pi.getActiveTools())
       .filter((name) => !excluded(name) && !projection.injected.includes(name));
     const next = leadToolState.normalizeBaseTools([
       ...active,
-      ...saved.filter(excluded),
+      ...(preserveNativeProjection ? [] : saved.filter(excluded)),
     ]);
     if (sameToolSelection(saved, next)) {
-      inheritedProjection = undefined;
+      if (!preserveNativeProjection) inheritedProjection = undefined;
       return;
     }
 
     persistLeadExecution(projection.mode, next);
     leadToolState.setLeadTools(next);
-    inheritedProjection = undefined;
+    if (!preserveNativeProjection) inheritedProjection = undefined;
   };
   let roleTransitions!: ReturnType<typeof createLeadRoleTransitions>;
   let identityRuntime!: ReturnType<typeof createLeadIdentityRuntime>;
@@ -3031,8 +3113,10 @@ export function registerLeadRuntime(
       return restrict(leadToolState.normalizeLeadTools([]));
     if (!leadExecution)
       return restrict(leadToolState.normalizeLeadTools(baseline));
-    if (!leadExecution.valid)
-      return restrict(leadToolState.normalizeLeadTools([]));
+    if (!leadExecution.valid) {
+      const nativeTools = verifiedNativeOnlyFlexibleExecution() ? baseline : [];
+      return restrict(leadToolState.normalizeLeadTools(nativeTools));
+    }
     return restrict(
       leadToolState.projectLeadTools(baseline, leadExecution.definition),
     );
@@ -3084,18 +3168,25 @@ export function registerLeadRuntime(
       coordinationRuntime.setCoordinationHealthy(healthy),
     normalizeBaseTools: leadToolState.normalizeBaseTools,
     captureInheritedTools,
-    inheritedProjection: () =>
-      sessionKind?.kind === "ordinary" &&
-      !leadExecutionPending &&
-      leadExecution?.valid &&
-      !leadExecution.managed
-        ? inheritedProjectionFor(
-            leadExecution.mode,
-            leadExecution.definition,
-            leadToolState.getLeadTools() ?? [],
-            executionTools(),
-          )
-        : undefined,
+    inheritedProjection: () => {
+      if (
+        sessionKind?.kind !== "ordinary" ||
+        leadExecutionPending ||
+        !leadExecution ||
+        leadExecution.managed
+      )
+        return undefined;
+      if (leadExecution.valid)
+        return inheritedProjectionFor(
+          leadExecution.mode,
+          leadExecution.definition,
+          leadToolState.getLeadTools() ?? [],
+          executionTools(),
+        );
+      return verifiedNativeOnlyFlexibleExecution()
+        ? nativeInheritedProjectionFor(leadExecution.mode)
+        : undefined;
+    },
     setInheritedProjection: (
       projection:
         | {
@@ -4527,7 +4618,6 @@ export function registerLeadRuntime(
   const resolveExecutionDefinition = (
     ctx: ExtensionContext,
     mode: LeadExecutionMode,
-    definitions?: readonly AgentDefinition[],
   ): AgentDefinition => {
     const binding =
       sessionKind?.kind === "ordinary"
@@ -4544,15 +4634,14 @@ export function registerLeadRuntime(
         MANAGED_LEAD_DEFINITION_NAME,
       ].includes(binding.name)
     ) {
-      const custom =
-        definitions?.find(
-          (candidate) =>
-            candidate.category === "lead" && candidate.name === binding.name,
-        ) ??
-        options.commandHost.resolveDefinition("lead", binding.name, {
+      const custom = options.commandHost.resolveDefinition(
+        "lead",
+        binding.name,
+        {
           ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
           onWarning: (message) => notifyDefinitionWarning(ctx, message),
-        });
+        },
+      );
       return {
         ...custom,
         body: expandAgentBodyFiles(
@@ -4566,24 +4655,15 @@ export function registerLeadRuntime(
       mode === "flexible"
         ? FLEXIBLE_LEAD_DEFINITION_NAME
         : ORCHESTRATOR_LEAD_DEFINITION_NAME;
-    const definition = definitions
-      ? definitions.find(
-          (candidate) =>
-            candidate.category === "lead" && candidate.name === name,
-        )
-      : options.commandHost.resolveDefinition("lead", name, {
-          ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
-          onWarning: (message) => notifyDefinitionWarning(ctx, message),
-        });
-    if (!definition) throw new Error(`Lead definition ${name} not found`);
-    if (definitions && definition.frontmatter.agents?.length)
-      validateRoleAgentDefinitionReferences(
-        definition,
-        discoverAgentDefinitions({
-          ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
-          onWarning: (message) => notifyDefinitionWarning(ctx, message),
-        }),
-      );
+    const definition = options.commandHost.resolveDefinition("lead", name, {
+      ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
+      onWarning: (message) => notifyDefinitionWarning(ctx, message),
+      ...(sessionKind?.kind === "ordinary" &&
+      binding === undefined &&
+      mode === "flexible"
+        ? { validateAgentReferences: false }
+        : {}),
+    });
     return {
       ...definition,
       body: expandAgentBodyFiles(
@@ -4705,7 +4785,6 @@ export function registerLeadRuntime(
     signal: AbortSignal,
     skipProfileResolution = false,
     skipAssignmentLookup = false,
-    roleDefinitions?: readonly AgentDefinition[],
   ): Promise<void> => {
     if (signal.aborted) return;
     const currentBaseline = () =>
@@ -4778,9 +4857,29 @@ export function registerLeadRuntime(
       leadExecution = { mode, valid: false, managed: false };
       return;
     }
+    let nativeOnlyEligible = false;
+    if (
+      sessionKind?.kind === "ordinary" &&
+      sessionKind.sessionId === ctx.sessionManager.getSessionId() &&
+      assignment === undefined &&
+      mode === "flexible" &&
+      !isQuarantinedSession(ctx) &&
+      !leadRuntime.roleSuspended &&
+      verifiedActiveRootRole() === "lead"
+    ) {
+      try {
+        nativeOnlyEligible =
+          readCoordinatorDefinitionBinding(
+            ctx.sessionManager.getEntries(),
+            ctx.sessionManager.getSessionId(),
+          ) === undefined;
+      } catch {
+        nativeOnlyEligible = false;
+      }
+    }
     try {
       if (signal.aborted) return;
-      const definition = resolveExecutionDefinition(ctx, mode, roleDefinitions);
+      const definition = resolveExecutionDefinition(ctx, mode);
       if (signal.aborted) return;
       leadExecution = {
         mode,
@@ -4789,7 +4888,17 @@ export function registerLeadRuntime(
         managed: false,
       };
     } catch (error) {
-      leadExecution = { mode, valid: false, managed: false };
+      leadExecution = {
+        mode,
+        valid: false,
+        managed: false,
+        ...(nativeOnlyEligible ? { nativeOnly: true } : {}),
+      };
+      inheritedProjection = nativeOnlyEligible
+        ? nativeInheritedProjectionFor(mode)
+        : undefined;
+      if (nativeOnlyEligible)
+        pi.setActiveTools(leadToolState.normalizeBaseTools(baseline));
       options.sessionStartOptions.appendDefinitionError(ctx, error);
     }
   };
@@ -4800,13 +4909,34 @@ export function registerLeadRuntime(
     if (signal?.aborted) return;
     const mode = leadExecution?.mode;
     if (!mode) return;
+    let nativeOnlyEligible = false;
     try {
-      await currentProjectAssignment(ctx);
+      const assignment = await currentProjectAssignment(ctx);
       if (signal?.aborted) return;
       if (sessionKind?.kind === "managed") {
         statusRuntime.requestRefresh();
         publishLeadRole(ctx, "inactive", leadRuntime.chiefModeGeneration);
         return;
+      }
+      // Restoration records fallback eligibility independently; active Lead
+      // authorization still gates native tool projection.
+      if (
+        sessionKind?.kind === "ordinary" &&
+        sessionKind.sessionId === ctx.sessionManager.getSessionId() &&
+        assignment === undefined &&
+        mode === "flexible" &&
+        !isQuarantinedSession(ctx) &&
+        !leadRuntime.roleSuspended
+      ) {
+        try {
+          nativeOnlyEligible =
+            readCoordinatorDefinitionBinding(
+              ctx.sessionManager.getEntries(),
+              ctx.sessionManager.getSessionId(),
+            ) === undefined;
+        } catch {
+          nativeOnlyEligible = false;
+        }
       }
       publishLeadRole(ctx, "inactive", leadRuntime.chiefModeGeneration);
     } catch (error) {
@@ -4834,7 +4964,21 @@ export function registerLeadRuntime(
       statusRuntime.requestRefresh();
     } catch (error) {
       if (signal?.aborted) return;
-      leadExecution = { mode, valid: false, managed: false };
+      leadExecution = {
+        mode,
+        valid: false,
+        managed: false,
+        ...(nativeOnlyEligible ? { nativeOnly: true } : {}),
+      };
+      const canProjectNativeTools = verifiedNativeOnlyFlexibleExecution();
+      // Until Lead activation, Pi's active tools are not the Lead baseline.
+      inheritedProjection = canProjectNativeTools
+        ? nativeInheritedProjectionFor(mode)
+        : undefined;
+      if (canProjectNativeTools)
+        pi.setActiveTools(
+          leadToolState.normalizeBaseTools(leadToolState.getLeadTools() ?? []),
+        );
       statusRuntime.requestRefresh();
       options.sessionStartOptions.appendDefinitionError(ctx, error);
     }
@@ -4861,10 +5005,9 @@ export function registerLeadRuntime(
       leadToolState.getLeadTools() ??
       leadToolState.normalizeBaseTools(pi.getActiveTools());
     const baseline = [...saved];
-    const agents = definition.frontmatter.agents;
     const targetTools = restrictLeadAgentTools(
       leadToolState.projectLeadTools(baseline, definition),
-      agents === undefined ? "all" : new Set(agents),
+      leadDelegationPolicy(ctx, definition),
       ctx,
     );
     const previousExecution = leadExecution;
@@ -4973,16 +5116,23 @@ export function registerLeadRuntime(
       saved &&
       sessionKind?.kind === "ordinary" &&
       (branchRole?.role ?? "lead") === "lead" &&
-      restoredExecution?.valid &&
+      restoredExecution &&
       !restoredExecution.managed &&
       toolChangeIndex > checkpointIndex
     ) {
-      const projection = inheritedProjectionFor(
-        mode,
-        restoredExecution.definition,
-        baseline,
-        leadToolState.projectLeadTools(baseline, restoredExecution.definition),
-      );
+      const projection = restoredExecution.valid
+        ? inheritedProjectionFor(
+            mode,
+            restoredExecution.definition,
+            baseline,
+            leadToolState.projectLeadTools(
+              baseline,
+              restoredExecution.definition,
+            ),
+          )
+        : restoredExecution.nativeOnly
+          ? nativeInheritedProjectionFor(mode)
+          : undefined;
       if (projection) {
         const excluded = (name: string) =>
           projection.excluded.some((pattern) =>
@@ -5002,6 +5152,7 @@ export function registerLeadRuntime(
   };
   const agentEvents = createLeadAgentEventRuntime({
     ...options.agentEventOptions,
+    canListAgents: () => pi.getActiveTools().includes("list_agents"),
     selectSupervisorTool: (destination) => {
       const selected =
         sessionKind?.kind === "managed" &&
@@ -5095,15 +5246,6 @@ export function registerLeadRuntime(
     normalizeBaseTools: leadToolState.normalizeBaseTools,
     prepareLeadExecution,
     discoverSessionDefinitions: async (ctx: ExtensionContext) => {
-      let roleDefinitions: AgentDefinition[] = [];
-      try {
-        roleDefinitions = discoverRoleDefinitions({
-          ...(ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
-          onWarning: (message) => notifyDefinitionWarning(ctx, message),
-        });
-      } catch (error) {
-        options.sessionStartOptions.appendDefinitionError(ctx, error);
-      }
       let definitions: AgentDefinition[] = [];
       try {
         definitions = (await options.commandHost.contextAgentDefinitions(ctx))
@@ -5113,7 +5255,6 @@ export function registerLeadRuntime(
       }
       return {
         definitions,
-        roleDefinitions,
         projectTrusted: ctx.isProjectTrusted(),
       };
     },
@@ -5142,6 +5283,7 @@ export function registerLeadRuntime(
       sessionKind = undefined;
       managedLifecycle = "unavailable";
       leadExecution = undefined;
+      inheritedProjection = undefined;
     },
     setLeadExecutionPending: (pending: boolean) => {
       leadExecutionPending = pending;
@@ -5379,7 +5521,11 @@ export function registerLeadRuntime(
             mode: leadExecution?.mode ?? "orchestrate",
             lifecycle: managedLifecycle,
           }
-        : { managed: false, mode: leadExecution?.mode ?? "flexible" },
+        : {
+            managed: false,
+            mode: leadExecution?.mode ?? "flexible",
+            nativeOnly: verifiedNativeOnlyFlexibleExecution(),
+          },
     supervisoryProfileBody: (
       ctx: ExtensionContext,
       role: "manager" | "chief",

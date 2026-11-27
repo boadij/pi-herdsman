@@ -143,6 +143,7 @@ type LeadCommandHost = {
   leadExecutionPresentation(): {
     managed: boolean;
     mode: LeadExecutionMode;
+    nativeOnly?: boolean;
     lifecycle?: "assigned" | "unavailable" | "retired";
   };
   agentDefinitionEnabled(definition: AgentDefinition): boolean;
@@ -1364,7 +1365,15 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           {
             value: "flexible",
             label: "flexible",
-            description: execution.mode === "flexible" ? "current" : undefined,
+            description:
+              execution.mode === "flexible"
+                ? execution.nativeOnly
+                  ? "current · native tools only · delegation unavailable"
+                  : "current"
+                : undefined,
+            help: execution.nativeOnly
+              ? "The Flexible Lead profile could not be applied. Native Pi tools remain available, but new Agent delegation is unavailable. Repair the profile and run /lead-flexible to reapply it."
+              : undefined,
           },
           {
             value: "orchestrate",
@@ -2303,8 +2312,12 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   {
                     value: "execution",
                     label: "Lead mode",
-                    description: execution.mode,
-                    help: "Choose whether this Lead works directly or primarily delegates tasks.",
+                    description: execution.nativeOnly
+                      ? `${execution.mode} · native tools only`
+                      : execution.mode,
+                    help: execution.nativeOnly
+                      ? "The Flexible Lead profile could not be applied. Native Pi tools remain available, but new Agent delegation is unavailable. Repair the profile and run /lead-flexible to reapply it."
+                      : "Choose whether this Lead works directly or primarily delegates tasks.",
                   },
                 ]
               : []),

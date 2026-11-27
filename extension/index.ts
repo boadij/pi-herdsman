@@ -1383,7 +1383,12 @@ function registerExtensionImpl(
     if (role === "manager")
       return `${MANAGER_ROLE_CONTRACT}\n\n${leadRuntimes.supervisoryProfileBody(ctx, "manager")}`;
     const kind = leadRuntimes.sessionKindForPrompt(ctx);
-    if (kind === "ordinary") return ORDINARY_LEAD_CHARTER;
+    if (kind === "ordinary")
+      return `${ORDINARY_LEAD_CHARTER}${
+        leadRuntimes.leadExecutionPresentation().nativeOnly
+          ? "\n\nThe configured Flexible Lead execution profile could not be applied. Continue using only the selected native Pi tools; new Agent delegation is unavailable. Repair the profile and run /lead-flexible to reapply it."
+          : ""
+      }`;
     if (kind === "managed") return MANAGED_LEAD_CHARTER;
     return `## Herdsman role\nNo active Herdsman role is verified for this Pi session.`;
   };
