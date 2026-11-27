@@ -10816,7 +10816,6 @@ async function managerDelegateAssignmentTest(
   const trustPath = extendedPaths ? toNamespacedPath(childCwd) : childCwd;
   new ProjectTrustStore(PI_AGENT_ROOT).set(trustPath, targetDecision);
   t.after(() => new ProjectTrustStore(PI_AGENT_ROOT).set(trustPath, null));
-  const targetTrusted = targetDecision ?? ancestorDecision ?? false;
   const managedLeadDir = join(childCwd, ".pi", "coordinators", "leads");
   realFs.mkdirSync(managedLeadDir, { recursive: true });
   realFs.writeFileSync(
@@ -11212,13 +11211,13 @@ async function managerDelegateAssignmentTest(
       assert.equal(args.includes("--no-extensions"), true);
       const thinkingIndex = args.indexOf("--thinking");
       assert.notEqual(thinkingIndex, -1);
-      assert.equal(args[thinkingIndex + 1] === "low", targetTrusted);
-      assert.equal(args.includes("--approve"), targetTrusted);
-      assert.equal(args.includes("--no-approve"), !targetTrusted);
+      assert.equal(args[thinkingIndex + 1] === "low", projectTrusted);
+      assert.equal(args.includes("--approve"), projectTrusted);
+      assert.equal(args.includes("--no-approve"), !projectTrusted);
       const promptIndex = args.indexOf("--append-system-prompt");
       assert.notEqual(promptIndex, -1);
       const childPrompt = readFileSync(args[promptIndex + 1]!, "utf8");
-      if (targetTrusted) {
+      if (projectTrusted) {
         assert.match(childPrompt, /TARGET_WORKTREE_MANAGED_LEAD/);
       } else {
         assert.doesNotMatch(childPrompt, /TARGET_WORKTREE_MANAGED_LEAD/);
@@ -11624,7 +11623,7 @@ async function managerDelegateAssignmentTest(
     else registerExtension!(lead.pi as never);
     leadCtx = fakeContext(lead.entries) as any;
     leadCtx.cwd = childCwd;
-    leadCtx.isProjectTrusted = () => targetTrusted;
+    leadCtx.isProjectTrusted = () => projectTrusted;
     leadCtx.hasUI = true;
     leadCtx.sessionManager.getSessionId = () => childSession;
     leadCtx.sessionManager.getSessionFile = childSessionPath;
@@ -11834,7 +11833,7 @@ async function managerDelegateAssignmentTest(
     assert.equal(outcome.details.ok, true);
     assert.equal(
       outcome.details.trust,
-      targetTrusted ? "trusted" : "restricted",
+      projectTrusted ? "trusted" : "restricted",
     );
     if (outcome.details.trust === "restricted") {
       assert.equal(outcome.details.project_definitions, "unavailable");
@@ -12774,13 +12773,13 @@ test(
     ),
 );
 
-test("trusted Manager does not approve an undecided delegated worktree", (t) =>
+test("trusted Manager approves an undecided delegated worktree", (t) =>
   managerDelegateAssignmentTest(t, true, undefined, null));
-test("trusted Manager respects a saved target denial", (t) =>
+test("trusted Manager overrides a saved target denial", (t) =>
   managerDelegateAssignmentTest(t, true, undefined, false, true));
-test("untrusted Manager uses the target's saved approval", (t) =>
+test("untrusted Manager restricts a saved-approved target", (t) =>
   managerDelegateAssignmentTest(t, false, undefined, true));
-test("delegated target inherits its saved ancestor approval independently of Manager trust", (t) =>
+test("untrusted Manager does not inherit saved ancestor approval", (t) =>
   managerDelegateAssignmentTest(t, false, undefined, null, true));
 
 test("Manager session binding holds the assignment lock before Lead publication", (t) =>

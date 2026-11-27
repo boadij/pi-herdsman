@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { test, type TestContext } from "node:test";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -821,6 +821,7 @@ function projectLifecycle(options: {
   pinnedBaseRefs?: string[];
   pinnedBaseLookupFailure?: "killed" | "truncated" | "nonzero";
   definition?: string;
+  managerTrusted?: boolean;
   trustTarget?: boolean;
 }) {
   const repoKey = realFs.realpathSync(process.cwd());
@@ -1018,7 +1019,7 @@ function projectLifecycle(options: {
           `${EXPECTED_ASSIGNED_LEAD_DEFINITION_ENV}=${JSON.stringify({
             sessionId: id,
             name: options.definition ?? "managed-lead",
-            projectTrusted: options.trustTarget === true,
+            projectTrusted: options.managerTrusted === true,
           })}`,
           ...(options.inheritedModel
             ? [
@@ -1163,6 +1164,7 @@ function projectLifecycle(options: {
   } as any);
   const ctx = fakeContext() as any;
   ctx.cwd = managerCheckout;
+  ctx.isProjectTrusted = () => options.managerTrusted === true;
   if (options.inheritedModel) {
     const model = options.inheritedModel;
     ctx.model = model;
@@ -1215,11 +1217,11 @@ function projectLifecycle(options: {
   };
 }
 
-test("fresh delegation launches the named profile in the trusted target worktree", async (t) => {
+test("fresh delegation launches the named profile in a Manager-trusted undecided worktree", async (t) => {
   const definition = "delivery-launch";
   const lifecycle = projectLifecycle({
     definition,
-    trustTarget: true,
+    managerTrusted: true,
     launch: (options) => {
       assert.equal(lifecycle.published?.definition, definition);
       const intent = getCoordinatorStartIntent(
@@ -1238,6 +1240,7 @@ test("fresh delegation launches the named profile in the trusted target worktree
         true,
       );
       assert.ok(options.agentArgs.includes("--approve"));
+      assert.equal(options.agentArgs.includes("--no-approve"), false);
       assert.equal(
         options.agentArgs[options.agentArgs.indexOf("--thinking") + 1],
         "high",
@@ -2262,6 +2265,10 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
   const checkout = realFs.realpathSync.native(
     realFs.mkdtempSync(join(tmpdir(), "resume-")),
   );
+  const trustStore = new ProjectTrustStore(getAgentDir());
+  trustStore.set(checkout, null);
+  assert.equal(trustStore.get(checkout), null);
+  t.after(() => trustStore.set(checkout, null));
   const previousSessionDirectory = process.env.PI_CODING_AGENT_SESSION_DIR;
   process.env.PI_CODING_AGENT_SESSION_DIR = "custom-sessions";
   t.after(() => {
@@ -2323,9 +2330,24 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
     profilePath,
     `---\nname: ${assignment.definition}\nnoExtensions: true\n---\n`,
   );
+  const targetProfilePath = join(
+    checkout,
+    ".pi",
+    "coordinators",
+    "leads",
+    `${assignment.definition}.md`,
+  );
+  realFs.mkdirSync(join(checkout, ".pi", "coordinators", "leads"), {
+    recursive: true,
+  });
+  realFs.writeFileSync(
+    targetProfilePath,
+    `---\nname: ${assignment.definition}\nthinking: high\nbodyMode: append\n---\nRECOVERY_TARGET_OVERLAY`,
+  );
   t.after(() => {
     nativeSessions.delete(id);
     realFs.unlinkSync(profilePath);
+    realFs.unlinkSync(targetProfilePath);
   });
   const events: any[] = [];
   const topologyCalls: string[][] = [];
@@ -2366,6 +2388,7 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
   let openedSessionId = id;
   const ctx = fakeContext() as any;
   ctx.cwd = repoKey;
+  ctx.isProjectTrusted = () => true;
   ctx.modelRegistry = {
     find: () => undefined,
   };
@@ -2589,6 +2612,18 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
       assert.equal(options.agentDir, resolve(getAgentDir()));
       launches++;
       launchedArgs = options.agentArgs;
+      if (launches === 1) {
+        const launchPrompts = launchedArgs!.flatMap((arg, index) =>
+          arg === "--append-system-prompt" && launchedArgs![index + 1]
+            ? [readFileSync(launchedArgs![index + 1]!, "utf8")]
+            : [],
+        );
+        assert.ok(
+          launchPrompts.some((prompt) =>
+            prompt.includes("RECOVERY_TARGET_OVERLAY"),
+          ),
+        );
+      }
       launchPlacement = [
         options.workspaceId,
         options.tabId,
@@ -2725,7 +2760,7 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
       `${EXPECTED_ASSIGNED_LEAD_DEFINITION_ENV}=${JSON.stringify({
         sessionId: id,
         name: assignment.definition,
-        projectTrusted: false,
+        projectTrusted: true,
       })}`,
       "--no-focus",
     ],
@@ -2739,6 +2774,11 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
   assert.ok(launchedArgs);
   assert.equal(launchedArgs!.includes("--model"), false);
   assert.equal(launchedArgs!.includes("--no-extensions"), true);
+  assert.equal(launchedArgs!.includes("--approve"), true);
+  assert.equal(launchedArgs!.includes("--no-approve"), false);
+  const thinkingIndex = launchedArgs!.indexOf("--thinking");
+  assert.notEqual(thinkingIndex, -1);
+  assert.equal(launchedArgs![thinkingIndex + 1], "high");
   assert.deepEqual(launchedArgs!.slice(-2), ["--session-id", id]);
   assert.deepEqual(launchedArgs!.slice(-4, -2), [
     "--session-dir",
