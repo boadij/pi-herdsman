@@ -12047,12 +12047,14 @@ async function runChiefManagerSmoke(ctx) {
           positiveChildPidPresent &&
           (!leaf || waiting),
         value: { paneId: agent.pane_id, session, pid: process?.pid },
-        ...(label === "smoke-chief-agent"
+        ...(label === "smoke-chief-agent" || label === "smoke-first-agent"
           ? {
               evidence: ownedAgentReadinessEvidence({
                 activeMailboxRequestPresent,
                 positiveChildPidPresent,
-                expectedAwaitOwnerPresent: waiting,
+                ...(label === "smoke-chief-agent"
+                  ? { expectedAwaitOwnerPresent: waiting }
+                  : {}),
               }),
             }
           : {}),
@@ -14734,6 +14736,12 @@ export function sanitizedFailureEvidence(
     ...(terminalFailureProgress ? { terminalFailureProgress } : {}),
     ...(ctx.scenario === "chief-manager"
       ? { chiefManagerDelegationProgress: chiefManagerProgress }
+      : {}),
+    ...(ctx.scenario === "chief-manager" &&
+    smoke?.stage === "chief-manager-smoke-first-agent"
+      ? {
+          ownedAgentReadiness: ownedAgentReadinessEvidence(smoke.lastEvidence),
+        }
       : {}),
     ...(coreObservation ? { coreObservation } : {}),
     ...(smoke?.stage === "candidate-start"

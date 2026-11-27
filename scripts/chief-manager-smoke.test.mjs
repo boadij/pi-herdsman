@@ -83,3 +83,24 @@ test("owned Agent readiness evidence contains only prerequisite booleans", () =>
   );
   assert.doesNotMatch(JSON.stringify(evidence), /private|421|\//u);
 });
+
+test("non-leaf Agent readiness evidence contains only its two prerequisites", () => {
+  const evidence = ownedAgentReadinessEvidence({
+    activeMailboxRequestPresent: true,
+    positiveChildPidPresent: false,
+    pid: 421,
+    mailboxId: "private-mailbox-id",
+    sessionId: "private-session-id",
+    content: "private session content",
+    path: "/private/session/path",
+  });
+
+  assert.deepEqual(evidence, {
+    activeMailboxRequestPresent: true,
+    positiveChildPidPresent: false,
+  });
+  assert.ok(
+    Object.values(evidence).every((value) => typeof value === "boolean"),
+  );
+  assert.doesNotMatch(JSON.stringify(evidence), /private|421|\//u);
+});
