@@ -48,7 +48,7 @@
   },
   "piHerdsman": {
     "runtime": {
-      "pi": "1.6.1",
+      "pi": "1.7.0",
       "herdr": {
         "version": "0.9.5",
         "sha256": {
@@ -83,9 +83,9 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "1.6.1",
-    "@earendil-works/pi-coding-agent": "1.6.1",
-    "@earendil-works/pi-tui": "1.6.1",
+    "@earendil-works/pi-ai": "1.7.0",
+    "@earendil-works/pi-coding-agent": "1.7.0",
+    "@earendil-works/pi-tui": "1.7.0",
     "@modelcontextprotocol/sdk": "1.32.2",
     "@types/node": "22.20.7",
     "@types/proper-lockfile": "4.1.4",
