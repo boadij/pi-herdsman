@@ -23,20 +23,24 @@ license change stop automation and require maintainer intervention. Closing an
 update PR without merging does not suppress the same update from a later run.
 The reconciler preserves upstream bytes, including whitespace.
 
-Before updating an existing automation branch, the workflow compares its full
-branch-only tree changes with the current reconciled snapshot. An unexpected or
-stale proposal fails closed and leaves the branch and PR untouched; a
-maintainer must inspect and resolve it before automation can continue. Unrelated
-advances to `main` and a proposal already present on `main` remain safe to
-rebase or close.
+Before invoking the PR action, the workflow checks the existing branch's
+changes from its merge base with `main`. Only managed snapshot files in
+ordinary, non-executable Git mode may change. It rejects conflicting PRs but
+does not require the old proposal to match the new snapshot or have a PR.
+This lets the action refresh successive updates, retire obsolete proposals,
+and recover if a branch push succeeded but PR creation failed.
 
-**Deployment prerequisite:** before enabling the workflow, configure and verify
-a narrowly scoped branch ruleset for `automation/upstream-skills` that restricts
-creation and updates to the automation actor as appropriate. The GitHub Actions
-App needs an **Always allow** bypass for direct branch pushes and branch deletion
-while `delete-branch: true` is enabled. This bypass is app-level, not
-workflow-specific: any workflow able to obtain a sufficiently write-enabled
-`GITHUB_TOKEN` may share it. Without effective protection, a writer can push
-after the read-only verification and before the PR action fetches the branch;
-the action may then overwrite that work. Do not enable the automation until the
-ruleset and bypass behavior have been verified by a maintainer.
+**Deployment authorization:** Leave the repository Actions variable
+`VENDORED_SKILLS_PR_ENABLED` unset until a maintainer verifies effective
+writer protection for `automation/upstream-skills` and that the Actions token
+can create and update PRs and push and delete the reserved branch. Only the
+exact value `true` authorizes the PR action; any other value disables all its
+branch and PR writes, including deletion. The variable records maintainer
+authorization, not proof of settings or an atomic safety guarantee.
+
+Restrict creation, updates, and deletion of the reserved branch to the
+automation actor. A ruleset bypass for the GitHub Actions App must permit
+direct writes and deletion; it is app-level, not workflow-specific. Other
+workflows with sufficiently write-enabled tokens can share it. The PR action
+fetches the branch separately after verification, so the read-only checks
+cannot protect against other writers in that interval.

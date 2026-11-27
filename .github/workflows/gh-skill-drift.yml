@@ -35,11 +35,19 @@ jobs:
           PR_BODY_PATH: ${{ runner.temp }}/skill-update-pr.md
 
       - name: Verify automation branch ownership
+        id: publication
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          DEPLOYMENT_AUTHORIZATION: ${{ vars.VENDORED_SKILLS_PR_ENABLED }}
         run: |
           set -euo pipefail
+          # Actions expression string comparisons are case-insensitive.
+          if [ "${DEPLOYMENT_AUTHORIZATION:-}" != 'true' ]; then
+            echo 'Maintenance PR publication is not authorized.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
           branch='automation/upstream-skills'
           bot_login='github-actions[bot]'
           pr_title='chore(deps): update vendored GitHub skills'
@@ -56,7 +64,8 @@ jobs:
             exit 1
           fi
 
-          # Commit author metadata is user-controlled; only accept GitHub's PR creator and recorded head.
+          # Commit author metadata is user-controlled; reject conflicting PRs
+          # using GitHub's PR creator and recorded head.
           prs=$(gh api --paginate --method GET "repos/${GITHUB_REPOSITORY}/pulls" \
             -f state=all \
             -f "head=${repo_owner}:${branch}" \
@@ -72,6 +81,7 @@ jobs:
                .title == $title and
                (.state == "open" or .state == "closed") and
                .head.ref == $branch and
+               (.head.sha | strings | test("^[a-f0-9]{40}$")) and
                .head.repo.full_name == $repo and
                .base.ref == "main" and
                .base.repo.full_name == $repo
@@ -81,26 +91,21 @@ jobs:
             exit 1
           fi
 
+          open_pr_sha=$(jq -r '.[] | select(.state == "open") | .head.sha' <<<"$prs")
+          if [[ -n "$open_pr_sha" && "$open_pr_sha" != "${branch_sha:-}" ]]; then
+            echo "Refusing to update $branch: open PR head does not match the current branch head" >&2
+            exit 1
+          fi
           if [[ "$branch_exists" == true ]]; then
-            if ! jq -e \
-              --arg bot "$bot_login" \
-              --arg title "$pr_title" \
-              --arg branch_sha "$branch_sha" \
-              '[.[] | select(.user.login == $bot and .title == $title) | .head.sha] | index($branch_sha) != null' \
-              <<<"$prs" >/dev/null; then
-              echo "Refusing to update $branch: existing branch head is not tied to a known automation-created PR" >&2
-              exit 1
-            fi
-            open_pr_sha=$(jq -r '[.[] | select(.state == "open")] | if length == 1 then .[0].head.sha else empty end' <<<"$prs")
-            if [[ -n "$open_pr_sha" && "$open_pr_sha" != "$branch_sha" ]]; then
-              echo "Refusing to update $branch: open PR head does not match the current branch head" >&2
-              exit 1
-            fi
+            # Writer protection, not PR history, authorizes recovery after a
+            # successful branch push followed by failed PR creation.
             BRANCH_SHA="$branch_sha" node scripts/verify-vendored-skills-branch.mjs
           fi
+          echo 'authorized=true' >> "$GITHUB_OUTPUT"
 
       - name: Create or update maintenance PR
         id: pr
+        if: steps.publication.outputs.authorized == 'true'
         uses: peter-evans/create-pull-request@3ffccacd46053766916f087ce41d627c0b8cf2d1 # v8.1.3
         with:
           token: ${{ github.token }}

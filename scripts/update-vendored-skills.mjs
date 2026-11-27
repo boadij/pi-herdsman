@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -44,6 +45,16 @@ function isManagedFile(source, path) {
     path === "SKILL.md" ||
     (source.includeReferences &&
       /^references\/(?:[a-zA-Z0-9_-][a-zA-Z0-9_.-]*\/)*[a-zA-Z0-9_-][a-zA-Z0-9_.-]*\.md$/u.test(
+        path,
+      ))
+  );
+}
+
+function isManagedDirectory(source, path) {
+  return (
+    source.includeReferences &&
+    (path === "references" ||
+      /^references\/(?:[a-zA-Z0-9_-][a-zA-Z0-9_.-]*\/)*[a-zA-Z0-9_-][a-zA-Z0-9_.-]*$/u.test(
         path,
       ))
   );
@@ -118,7 +129,12 @@ function safeStat(path) {
   }
 }
 
-function checkedPath(root, source, relativePath, { create = false } = {}) {
+function checkedPath(
+  root,
+  source,
+  relativePath,
+  { create = false, removed } = {},
+) {
   if (!isManagedFile(source, relativePath)) {
     throw new Error(`Unsupported managed path: ${source.name}/${relativePath}`);
   }
@@ -146,6 +162,11 @@ function checkedPath(root, source, relativePath, { create = false } = {}) {
       );
     }
     if (stat && current !== fullPath && !stat.isDirectory()) {
+      if (
+        stat.isFile() &&
+        removed?.has(relative(destination, current).split(sep).join("/"))
+      )
+        return fullPath;
       throw new Error(
         `Non-directory in managed path: ${source.name}/${relativePath}`,
       );
@@ -153,6 +174,32 @@ function checkedPath(root, source, relativePath, { create = false } = {}) {
     if (!stat && create && current !== fullPath) mkdirSync(current);
   }
   const stat = safeStat(fullPath);
+  if (
+    (create || removed) &&
+    stat?.isDirectory() &&
+    isManagedDirectory(source, relativePath)
+  ) {
+    const directories = [];
+    function visit(path, relativePath) {
+      for (const name of readdirSync(path)) {
+        const child = join(path, name);
+        const childRelative = `${relativePath}/${name}`;
+        const entry = safeStat(child);
+        if (entry?.isDirectory() && isManagedDirectory(source, childRelative)) {
+          visit(child, childRelative);
+        } else if (!(entry?.isFile() && removed?.has(childRelative))) {
+          throw new Error(
+            `Directory blocks managed write: ${source.name}/${childRelative}`,
+          );
+        }
+      }
+      directories.push(path);
+    }
+    visit(fullPath, relativePath);
+    // Only directories blocking this write are candidates; rmdir requires emptiness.
+    if (create) for (const directory of directories) rmdirSync(directory);
+    return fullPath;
+  }
   if (stat && !stat.isFile()) {
     throw new Error(`Non-file in managed path: ${source.name}/${relativePath}`);
   }
@@ -284,34 +331,11 @@ async function upstreamLicense(source, commit, options) {
 
 async function enumerateUpstream(source, commit, options) {
   const result = new Map();
-  const api = { ...options };
-  if (!source.includeReferences) {
-    const path = `${source.upstreamPath}/SKILL.md`;
-    const file = await lookup(
-      source,
-      `contents/${path}?ref=${commit}`,
-      `${source.name} SKILL.md`,
-      { ...api, missing: true },
-    );
-    if (
-      file?.type !== "file" ||
-      file.path !== path ||
-      typeof file.sha !== "string" ||
-      !shaPattern.test(file.sha)
-    ) {
-      throw new Error(
-        `Invalid upstream response: expected exact ${source.name} SKILL.md and blob SHA`,
-      );
-    }
-    result.set("SKILL.md", file.sha);
-    return result;
-  }
-
   const tree = await lookup(
     source,
     `git/trees/${commit}?recursive=1`,
     `${source.name} skill tree`,
-    api,
+    options,
   );
   if (tree?.truncated !== false || !Array.isArray(tree.tree)) {
     throw new Error(
@@ -343,10 +367,7 @@ async function enumerateUpstream(source, commit, options) {
     if (entry.type === "tree") {
       if (
         entry.mode !== "040000" ||
-        (relativePath !== "references" &&
-          !/^references\/(?:[a-zA-Z0-9_-][a-zA-Z0-9_.-]*\/)*[a-zA-Z0-9_-][a-zA-Z0-9_.-]*$/u.test(
-            relativePath,
-          ))
+        !isManagedDirectory(source, relativePath)
       ) {
         throw new Error(`Unsupported upstream directory: ${entry.path}`);
       }
@@ -412,6 +433,10 @@ async function prepare(source, root, options) {
   const removed = [...local.files.keys()]
     .filter((path) => !upstream.has(path))
     .sort();
+  const plannedRemovals = new Set(removed);
+  for (const path of [...added, ...modified]) {
+    checkedPath(root, source, path, { removed: plannedRemovals });
+  }
   const writes = new Map();
   for (const path of [...added, ...modified]) {
     writes.set(
@@ -439,27 +464,15 @@ function apply(prepared, root) {
       !update.removed.length
     )
       continue;
+    for (const path of update.removed) {
+      const destination = checkedPath(root, update.source, path);
+      rmSync(destination);
+    }
     for (const [path, bytes] of update.writes) {
       const destination = checkedPath(root, update.source, path, {
         create: true,
       });
       writeFileSync(destination, bytes);
-    }
-    for (const path of update.removed) {
-      const destination = checkedPath(root, update.source, path);
-      rmSync(destination);
-    }
-    if (update.source.includeReferences) {
-      const references = join(root, update.source.destination, "references");
-      const prune = (directory) => {
-        for (const entry of readdirSync(directory, { withFileTypes: true })) {
-          const child = join(directory, entry.name);
-          if (entry.isDirectory()) prune(child);
-        }
-        if (directory !== references && readdirSync(directory).length === 0)
-          rmSync(directory, { recursive: false });
-      };
-      if (safeStat(references)?.isDirectory()) prune(references);
     }
     writeFileSync(
       join(root, update.source.destination, "source.json"),
@@ -515,13 +528,14 @@ function changedPaths(root) {
 }
 
 export function allowedChange(path) {
-  return (
-    path === "vendor/github-cli/SKILL.md" ||
-    path === "vendor/github-cli/source.json" ||
-    path === "vendor/gh-stack/SKILL.md" ||
-    path === "vendor/gh-stack/source.json" ||
-    /^vendor\/gh-stack\/references\/(?:[^/]+\/)*[^/]+\.md$/u.test(path)
-  );
+  return sources.some((source) => {
+    const prefix = `${source.destination}/`;
+    if (!path.startsWith(prefix)) return false;
+    const relativePath = path.slice(prefix.length);
+    return (
+      relativePath === "source.json" || isManagedFile(source, relativePath)
+    );
+  });
 }
 
 function reviewBody(prepared) {

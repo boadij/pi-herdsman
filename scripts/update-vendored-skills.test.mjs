@@ -14,10 +14,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { updateVendoredSkills } from "./update-vendored-skills.mjs";
+import {
+  allowedChange,
+  updateVendoredSkills,
+} from "./update-vendored-skills.mjs";
 
 const cliCommit = "a".repeat(40);
 const stackCommit = "b".repeat(40);
+const cliTreeUrl = `https://api.github.com/repos/cli/cli/git/trees/${cliCommit}?recursive=1`;
+const stackTreeUrl = `https://api.github.com/repos/github/gh-stack/git/trees/${stackCommit}?recursive=1`;
 const cliLicense = Buffer.from("CLI license\n");
 const stackLicense = Buffer.from("Stack license\n");
 const initial = {
@@ -25,7 +30,7 @@ const initial = {
   stack: new Map([
     ["SKILL.md", Buffer.from("stack old\n")],
     ["references/keep.md", Buffer.from("keep\n")],
-    ["references/remove.md", Buffer.from("remove\n")],
+    ["references/obsolete/remove.md", Buffer.from("remove\n")],
   ]),
 };
 
@@ -83,20 +88,19 @@ function upstream({
   stack = initial.stack,
   failStackTree = false,
   license = stackLicense,
-  malformed = new Set(),
   truncateTree = false,
 } = {}) {
   const requests = [];
-  const cliTree = [...cli].map(([path, bytes]) => [path, bytes]);
-  const stackTree = [...stack].map(([path, bytes]) => [path, bytes]);
   const blobByHash = new Map(
-    [...cliTree, ...stackTree].map(([, bytes]) => [blobHash(bytes), bytes]),
+    [...cli.values(), ...stack.values()].map((bytes) => [
+      blobHash(bytes),
+      bytes,
+    ]),
   );
   const response = (value, status = 200) =>
     new Response(JSON.stringify(value), { status });
   const request = async (url) => {
     requests.push(url);
-    if (malformed.has(url)) return new Response("not json");
     if (url.endsWith("/repos/cli/cli/git/ref/heads/trunk")) {
       return response({
         ref: "refs/heads/trunk",
@@ -123,26 +127,38 @@ function upstream({
         sha: blobHash(license),
       });
     }
-    if (url.includes("/repos/cli/cli/contents/skills/gh/SKILL.md?ref=")) {
-      const bytes = cli.get("SKILL.md");
-      return response({
-        type: "file",
-        path: "skills/gh/SKILL.md",
-        sha: blobHash(bytes),
-      });
-    }
-    if (url.includes("/repos/github/gh-stack/git/trees/")) {
-      if (failStackTree) return response({ message: "failed" }, 503);
+    if (url === cliTreeUrl || url === stackTreeUrl) {
+      if (url === stackTreeUrl && failStackTree)
+        return response({ message: "failed" }, 503);
+      const [root, files] =
+        url === cliTreeUrl ? ["skills/gh", cli] : ["skills/gh-stack", stack];
+      const directories = new Set([root]);
+      for (const path of files.keys()) {
+        const segments = path.split("/");
+        segments.pop();
+        let parent = root;
+        for (const segment of segments) {
+          parent += `/${segment}`;
+          directories.add(parent);
+        }
+      }
       const tree = [
-        { path: "skills/gh-stack", type: "tree", mode: "040000" },
-        ...stackTree.map(([path, bytes]) => ({
-          path: `skills/gh-stack/${path}`,
+        ...[...directories].map((path) => ({
+          path,
+          type: "tree",
+          mode: "040000",
+        })),
+        ...[...files].map(([path, bytes]) => ({
+          path: `${root}/${path}`,
           type: "blob",
           mode: "100644",
           sha: blobHash(bytes),
         })),
       ];
-      return response({ tree, truncated: truncateTree });
+      return response({
+        tree,
+        truncated: url === stackTreeUrl && truncateTree,
+      });
     }
     const match = url.match(
       /\/repos\/(cli\/cli|github\/gh-stack)\/git\/blobs\/([a-f0-9]{40})$/u,
@@ -219,7 +235,7 @@ test("reconciles bytes, additions, removals and provenance; repeat is idempotent
     stack.get("references/nested/new.md"),
   );
   assert.equal(
-    existsSync(join(root, "vendor/gh-stack/references/remove.md")),
+    existsSync(join(root, "vendor/gh-stack/references/obsolete/remove.md")),
     false,
   );
   assert.equal(
@@ -258,6 +274,69 @@ test("reconciles bytes, additions, removals and provenance; repeat is idempotent
   );
 });
 
+test("reconciles reference file and directory transitions in both directions", async (t) => {
+  const root = fixture();
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const topic = "references/topic.md";
+  const intro = `${topic}/nested/intro.md`;
+  const bytes = Buffer.from("topic\n");
+  const stackRoot = join(root, "vendor/gh-stack");
+  const untouched = join(stackRoot, "references/unrelated");
+  mkdirSync(untouched);
+  writeFileSync(join(stackRoot, topic), bytes);
+  const stack = new Map([...initial.stack, [topic, bytes]]);
+  for (const [from, to] of [
+    [topic, intro],
+    [intro, topic],
+  ]) {
+    stack.delete(from);
+    stack.set(to, bytes);
+    const { request } = upstream({ stack });
+    const [, update] = await reconcile(root, { request, checkGit: false });
+    assert.deepEqual(update.removed, [from]);
+    assert.deepEqual(update.added, [to]);
+    assert.deepEqual(readFileSync(join(stackRoot, to)), bytes);
+    assert.equal(existsSync(untouched), true);
+  }
+});
+
+test("rejects unmanaged contents blocking a managed write during preparation and application", async (t) => {
+  for (const stage of ["preparation", "application"]) {
+    await t.test(stage, async (subtest) => {
+      const root = fixture();
+      subtest.after(() => rmSync(root, { recursive: true, force: true }));
+      const topic = "references/topic.md";
+      const destination = join(root, "vendor/gh-stack", topic);
+      mkdirSync(destination);
+      const blocker = join(destination, "unmanaged directory");
+      if (stage === "preparation") mkdirSync(blocker);
+      const before = contents(root);
+      const bytes = Buffer.from("replacement\n");
+      const stack = new Map([...initial.stack, [topic, bytes]]);
+      const cli =
+        stage === "preparation"
+          ? new Map([["SKILL.md", Buffer.from("must not apply\n")]])
+          : initial.cli;
+      const base = upstream({ cli, stack });
+      const request = async (url, init) => {
+        if (
+          stage === "application" &&
+          url.endsWith(`/git/blobs/${blobHash(bytes)}`)
+        ) {
+          symlinkSync(join(root, "vendor/gh-stack/README.md"), blocker);
+        }
+        return base.request(url, init);
+      };
+      await assert.rejects(
+        reconcile(root, { request, checkGit: false }),
+        /Directory blocks managed write: gh-stack\/references\/topic\.md\/unmanaged directory/,
+      );
+      assert.equal(existsSync(blocker), true);
+      assert.deepEqual(contents(root), before);
+    });
+  }
+});
+
 test("does not apply either source when preparation of the second source fails", async (t) => {
   const root = fixture();
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -292,9 +371,9 @@ test("rejects invalid upstream data", async (t) => {
       /expected github-cli trunk commit/,
     ],
     [
-      "wrong content identity",
+      "wrong skill root",
       (state) => (state.wrongIdentity = true),
-      /expected exact github-cli SKILL.md/,
+      /Missing upstream skill root: cli\/cli\/skills\/gh/,
     ],
   ];
   for (const [label, configure, expected] of cases) {
@@ -316,14 +395,10 @@ test("rejects invalid upstream data", async (t) => {
             object: { type: "commit", sha: "bad" },
           });
         }
-        if (
-          state.wrongIdentity &&
-          url.includes("/repos/cli/cli/contents/skills/gh/SKILL.md?ref=")
-        ) {
+        if (state.wrongIdentity && url === cliTreeUrl) {
           return Response.json({
-            type: "file",
-            path: "other/SKILL.md",
-            sha: blobHash(initial.cli.get("SKILL.md")),
+            truncated: false,
+            tree: [{ type: "tree", mode: "040000", path: "skills/other" }],
           });
         }
         return base.request(url, init);
@@ -375,7 +450,7 @@ test("rejects executable, unsupported and metadata-overwriting upstream paths", 
       const base = upstream();
       const request = async (url, init) => {
         const result = await base.request(url, init);
-        if (!url.includes("/repos/github/gh-stack/git/trees/")) return result;
+        if (url !== stackTreeUrl) return result;
         const body = await result.json();
         body.tree.push(unsafe);
         return Response.json(body);
@@ -389,10 +464,80 @@ test("rejects executable, unsupported and metadata-overwriting upstream paths", 
   }
 });
 
+test("requires a complete CLI tree containing only an ordinary SKILL.md", async (t) => {
+  const cases = [
+    ...[
+      ["executable", { mode: "100755" }],
+      ["symlink", { mode: "120000" }],
+      ["submodule", { type: "commit", mode: "160000" }],
+      ["bad SHA", { sha: "bad" }],
+      ["wrong filename", { path: "skills/gh/skill.md" }],
+    ].map(([label, override]) => [
+      label,
+      ({ tree }) => Object.assign(tree[1], override),
+      /Unsupported upstream file/,
+    ]),
+    [
+      "truncated",
+      (body) => (body.truncated = true),
+      /expected complete github-cli tree/,
+    ],
+    [
+      "missing",
+      ({ tree }) => tree.pop(),
+      /Missing upstream file: github-cli\/SKILL.md/,
+    ],
+    ["duplicate", ({ tree }) => tree.push(tree[1]), /duplicate tree path/],
+    [
+      "supporting file",
+      ({ tree }) => tree.push({ ...tree[1], path: "skills/gh/README.md" }),
+      /Unsupported upstream file: skills\/gh\/README.md/,
+    ],
+    [
+      "reference directory",
+      ({ tree }) => tree.push({ ...tree[0], path: "skills/gh/references" }),
+      /Unsupported upstream directory/,
+    ],
+  ];
+  for (const [label, mutate, expected] of cases) {
+    await t.test(label, async (subtest) => {
+      const root = fixture();
+      subtest.after(() => rmSync(root, { recursive: true, force: true }));
+      const before = contents(root);
+      const base = upstream();
+      const request = async (url, init) => {
+        const result = await base.request(url, init);
+        if (url !== cliTreeUrl) return result;
+        const body = await result.json();
+        mutate(body);
+        return Response.json(body);
+      };
+      await assert.rejects(
+        reconcile(root, { request, checkGit: false }),
+        expected,
+      );
+      assert.deepEqual(contents(root), before);
+    });
+  }
+});
+
+test("allows only managed snapshot and provenance paths for publication", () => {
+  for (const [path, expected] of [
+    ["vendor/gh-stack/references/nested/example.md", true],
+    ["vendor/gh-stack/references/nested/my file.md", false],
+    ["vendor/gh-stack/references/my folder/example.md", false],
+    ["vendor/github-cli/references/example.md", false],
+    ["vendor/github-cli/SKILL.md", true],
+    ["vendor/github-cli/source.json", true],
+  ]) {
+    assert.equal(allowedChange(path), expected, path);
+  }
+});
+
 test("rejects symlinks in existing managed reference paths", async (t) => {
   const root = fixture();
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const refs = join(root, "vendor/gh-stack/references");
+  const refs = join(root, "vendor/gh-stack/references/obsolete");
   rmSync(join(refs, "remove.md"));
   symlinkSync(join(root, "vendor/gh-stack/SKILL.md"), join(refs, "remove.md"));
   const { request } = upstream();

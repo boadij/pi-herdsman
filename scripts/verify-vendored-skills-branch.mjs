@@ -1,6 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { lstatSync } from "node:fs";
-import { join } from "node:path";
 import { allowedChange } from "./update-vendored-skills.mjs";
 
 const shaPattern = /^[a-f0-9]{40}$/u;
@@ -43,23 +41,6 @@ function apiJson(request, url, label) {
       }
       throw new Error(`Lookup failed: ${label} (request error)`);
     });
-}
-
-function parseGitTree(bytes, label) {
-  const result = new Map();
-  const seen = new Set();
-  for (const row of bytes.toString("utf8").split("\0").filter(Boolean)) {
-    const separator = row.indexOf("\t");
-    if (separator < 0) throw new Error(`Invalid Git tree entry: ${label}`);
-    const [mode, type, sha] = row.slice(0, separator).split(" ");
-    const path = row.slice(separator + 1);
-    if (!path || seen.has(path) || !shaPattern.test(sha ?? "")) {
-      throw new Error(`Invalid or duplicate Git tree path: ${label}`);
-    }
-    seen.add(path);
-    result.set(path, { mode, type, sha });
-  }
-  return result;
 }
 
 function apiTree(tree, label) {
@@ -108,100 +89,24 @@ function apiTree(tree, label) {
 }
 
 /**
- * Confirms that branch-only changes are exactly the reconciler's intended
- * snapshot, allowing changes already present in current main to be obsolete.
+ * Checks only the old proposal's scope. Safe regeneration additionally
+ * requires exclusive writer protection on the reserved branch.
  */
-export function verifyBranchSnapshot({
-  mainTree,
-  mergeBaseTree,
-  branchTree,
-  intendedChanges,
-}) {
+export function verifyBranchScope({ mergeBaseTree, branchTree }) {
   const branchPaths = new Set([...mergeBaseTree.keys(), ...branchTree.keys()]);
   for (const path of branchPaths) {
+    const baseEntry = mergeBaseTree.get(path);
     const branchEntry = branchTree.get(path);
-    if (sameEntry(branchEntry, mergeBaseTree.get(path))) continue;
-    if (intendedChanges.has(path)) {
-      if (!sameEntry(branchEntry, intendedChanges.get(path))) {
-        throw new Error(
-          `Reserved branch content differs from intended snapshot: ${path}`,
-        );
-      }
-    } else if (!sameEntry(branchEntry, mainTree.get(path))) {
+    if (sameEntry(branchEntry, baseEntry)) continue;
+    if (!allowedChange(path)) {
       throw new Error(`Unexpected reserved branch change: ${path}`);
     }
-  }
-
-  for (const [path, expected] of intendedChanges) {
-    if (!sameEntry(branchTree.get(path), expected)) {
-      throw new Error(
-        `Reserved branch is not the current intended snapshot: ${path}`,
-      );
-    }
-  }
-}
-
-function git(root, args, { encoding = "buffer" } = {}) {
-  return execFileSync("git", args, {
-    cwd: root,
-    encoding: encoding === "buffer" ? undefined : encoding,
-    maxBuffer: 16 * 1024 * 1024,
-  });
-}
-
-function intendedChanges(root, mainSha, mainTree) {
-  const tracked = git(root, [
-    "diff",
-    "--no-renames",
-    "--name-only",
-    "-z",
-    mainSha,
-  ]);
-  const untracked = git(root, [
-    "ls-files",
-    "--others",
-    "--exclude-standard",
-    "-z",
-  ]);
-  const paths = new Set(
-    [
-      ...tracked.toString("utf8").split("\0"),
-      ...untracked.toString("utf8").split("\0"),
-    ].filter(Boolean),
-  );
-  const result = new Map();
-  for (const path of paths) {
-    if (!allowedChange(path)) {
-      throw new Error(
-        `Cannot verify reserved branch: unexpected local change ${path}`,
-      );
-    }
-    let stat;
-    try {
-      stat = lstatSync(join(root, path));
-    } catch (error) {
-      if (error.code === "ENOENT") {
-        result.set(path, undefined);
-        continue;
+    for (const entry of [baseEntry, branchEntry]) {
+      if (entry && (entry.type !== "blob" || entry.mode !== "100644")) {
+        throw new Error(`Unsafe reserved branch change: ${path}`);
       }
-      throw error;
     }
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.mode & 0o111) {
-      throw new Error(
-        `Cannot verify reserved branch: unsafe intended file ${path}`,
-      );
-    }
-    const sha = git(root, ["hash-object", "--no-filters", "--", path], {
-      encoding: "utf8",
-    }).trim();
-    if (!shaPattern.test(sha))
-      throw new Error(
-        `Cannot verify reserved branch: invalid intended blob ${path}`,
-      );
-    const entry = { type: "blob", mode: "100644", sha };
-    if (!sameEntry(entry, mainTree.get(path))) result.set(path, entry);
   }
-  return result;
 }
 
 async function reference(request, repository, ref, label) {
@@ -245,7 +150,10 @@ export async function verifyExistingBranch({
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
     });
-  const mainSha = git(root, ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const mainSha = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: root,
+    encoding: "utf8",
+  }).trim();
   if (!shaPattern.test(mainSha))
     throw new Error(
       "Cannot verify reserved branch: invalid checked-out main SHA",
@@ -287,17 +195,7 @@ export async function verifyExistingBranch({
   ]);
   const mergeBaseTree = apiTree(mergeBaseResponse, "merge-base");
   const branchTree = apiTree(branchResponse, "reserved branch");
-  const mainTree = parseGitTree(
-    git(root, ["ls-tree", "-r", "--full-tree", "-z", mainSha]),
-    "checked-out main",
-  );
-  const intended = intendedChanges(root, mainSha, mainTree);
-  verifyBranchSnapshot({
-    mainTree,
-    mergeBaseTree,
-    branchTree,
-    intendedChanges: intended,
-  });
+  verifyBranchScope({ mergeBaseTree, branchTree });
 
   const [latestMainSha, latestBranchSha] = await Promise.all([
     reference(authenticatedRequest, repository, "main", "main"),

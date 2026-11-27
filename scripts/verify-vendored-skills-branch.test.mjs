@@ -6,110 +6,77 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
-  verifyBranchSnapshot,
+  verifyBranchScope,
   verifyExistingBranch,
 } from "./verify-vendored-skills-branch.mjs";
 
 const snapshotPath = "vendor/github-cli/SKILL.md";
-const notesPath = "docs/notes.md";
-const entry = (sha, mode = "100644") => ({
-  type: "blob",
+const secondSkillPath = "vendor/gh-stack/SKILL.md";
+const referencePath = "vendor/gh-stack/references/example.md";
+const entry = (sha, mode = "100644", type = "blob") => ({
+  type,
   mode,
   sha: sha.repeat(40),
 });
 
-test("accepts the exact intended snapshot while ignoring unrelated main advancement", () => {
-  const oldNotes = entry("a");
-  const newNotes = entry("b");
-  const oldSkill = entry("c");
-  const intendedSkill = entry("d");
+test("permits ordinary snapshot additions, replacements and removals", () => {
   const mergeBaseTree = new Map([
-    [notesPath, oldNotes],
-    [snapshotPath, oldSkill],
-  ]);
-  const mainTree = new Map([
-    [notesPath, newNotes],
-    [snapshotPath, oldSkill],
+    [snapshotPath, entry("a")],
+    [referencePath, entry("b")],
+    ["docs/notes.md", entry("c", "100755")],
   ]);
   const branchTree = new Map([
-    [notesPath, oldNotes],
-    [snapshotPath, intendedSkill],
+    [snapshotPath, entry("d")],
+    [secondSkillPath, entry("e")],
+    ["docs/notes.md", entry("c", "100755")],
   ]);
-
-  assert.doesNotThrow(() =>
-    verifyBranchSnapshot({
-      mainTree,
-      mergeBaseTree,
-      branchTree,
-      intendedChanges: new Map([[snapshotPath, intendedSkill]]),
-    }),
-  );
+  verifyBranchScope({ mergeBaseTree, branchTree });
 });
 
-test("rejects injected extra or altered branch content", async (t) => {
-  await t.test("extra path", () => {
-    const oldSkill = entry("a");
-    const intendedSkill = entry("b");
-    const injected = entry("c");
-    assert.throws(
-      () =>
-        verifyBranchSnapshot({
-          mainTree: new Map([[snapshotPath, oldSkill]]),
-          mergeBaseTree: new Map([[snapshotPath, oldSkill]]),
-          branchTree: new Map([
-            [snapshotPath, intendedSkill],
-            ["extension/injected.ts", injected],
-          ]),
-          intendedChanges: new Map([[snapshotPath, intendedSkill]]),
-        }),
-      /Unexpected reserved branch change: extension\/injected\.ts/u,
-    );
-  });
-
-  await t.test("altered managed bytes", () => {
-    const oldSkill = entry("a");
-    const intendedSkill = entry("b");
-    const alteredSkill = entry("c");
-    assert.throws(
-      () =>
-        verifyBranchSnapshot({
-          mainTree: new Map([[snapshotPath, oldSkill]]),
-          mergeBaseTree: new Map([[snapshotPath, oldSkill]]),
-          branchTree: new Map([[snapshotPath, alteredSkill]]),
-          intendedChanges: new Map([[snapshotPath, intendedSkill]]),
-        }),
-      /differs from intended snapshot/u,
-    );
-  });
-});
-
-test("accepts an obsolete PR when main already contains its proposed snapshot", () => {
-  const oldSkill = entry("a");
-  const proposedSkill = entry("b");
-  assert.doesNotThrow(() =>
-    verifyBranchSnapshot({
-      mainTree: new Map([[snapshotPath, proposedSkill]]),
-      mergeBaseTree: new Map([[snapshotPath, oldSkill]]),
-      branchTree: new Map([[snapshotPath, proposedSkill]]),
-      intendedChanges: new Map(),
-    }),
-  );
-});
-
-test("rejects a stale proposal instead of regenerating it", () => {
-  const oldSkill = entry("a");
-  const previousProposal = entry("b");
-  const currentProposal = entry("c");
-  assert.throws(
-    () =>
-      verifyBranchSnapshot({
-        mainTree: new Map([[snapshotPath, oldSkill]]),
-        mergeBaseTree: new Map([[snapshotPath, oldSkill]]),
-        branchTree: new Map([[snapshotPath, previousProposal]]),
-        intendedChanges: new Map([[snapshotPath, currentProposal]]),
-      }),
-    /differs from intended snapshot/u,
-  );
+test("rejects changes outside managed ordinary files", async (t) => {
+  for (const [label, path, before, after, expected] of [
+    [
+      "unrelated addition",
+      "extension/injected.ts",
+      undefined,
+      entry("a"),
+      /Unexpected/,
+    ],
+    [
+      "unrelated deletion",
+      "vendor/gh-stack/README.md",
+      entry("a"),
+      undefined,
+      /Unexpected/,
+    ],
+    [
+      "unsupported reference",
+      "vendor/gh-stack/references/space name.md",
+      undefined,
+      entry("a"),
+      /Unexpected/,
+    ],
+    ["executable", snapshotPath, entry("a"), entry("a", "100755"), /Unsafe/],
+    ["symlink", snapshotPath, entry("a"), entry("b", "120000"), /Unsafe/],
+    [
+      "gitlink",
+      snapshotPath,
+      entry("a"),
+      entry("b", "160000", "commit"),
+      /Unsafe/,
+    ],
+  ]) {
+    await t.test(label, () => {
+      assert.throws(
+        () =>
+          verifyBranchScope({
+            mergeBaseTree: new Map(before ? [[path, before]] : []),
+            branchTree: new Map(after ? [[path, after]] : []),
+          }),
+        expected,
+      );
+    });
+  }
 });
 
 function integrationFixture() {
@@ -131,23 +98,15 @@ function integrationFixture() {
     input: "main snapshot\n",
     encoding: "utf8",
   }).trim();
-  writeFileSync(skillPath, "intended snapshot\n");
   const mainSha = execFileSync("git", ["rev-parse", "HEAD"], {
     cwd: root,
     encoding: "utf8",
   }).trim();
-  const intendedBlob = execFileSync(
-    "git",
-    ["hash-object", "--no-filters", "--", snapshotPath],
-    { cwd: root, encoding: "utf8" },
-  ).trim();
   const branchSha = "c".repeat(40);
   const baseTree = [
     { path: snapshotPath, mode: "100644", type: "blob", sha: mainBlob },
   ];
-  const intendedTree = [
-    { path: snapshotPath, mode: "100644", type: "blob", sha: intendedBlob },
-  ];
+  const branchTree = [{ path: snapshotPath, ...entry("d") }];
   const response = (body) => Response.json(body);
   const request = async (url) => {
     if (url.endsWith("/git/ref/heads/main")) {
@@ -169,49 +128,44 @@ function integrationFixture() {
       return response({ truncated: false, tree: baseTree });
     }
     if (url.endsWith(`/git/trees/${branchSha}?recursive=1`)) {
-      return response({ truncated: false, tree: intendedTree });
+      return response({ truncated: false, tree: branchTree });
     }
     throw new Error(`Unexpected API request: ${url}`);
   };
-  return { root, request, branchTree: intendedTree };
+  return { root, request, skillPath };
 }
 
-test("workflow verifier accepts only the complete reconciler snapshot", async (t) => {
-  for (const [label, mutate, expected] of [
-    ["exact intended bytes", () => {}, undefined],
+test("workflow verifies the old proposal independently of the reconciler", async (t) => {
+  for (const [label, reconcile] of [
     [
-      "injected extra file",
-      (tree) =>
-        tree.push({
-          path: "extension/injected.ts",
-          mode: "100644",
-          type: "blob",
-          sha: "d".repeat(40),
-        }),
-      /Unexpected reserved branch change/,
+      "successive upstream upgrade",
+      ({ skillPath }) => {
+        writeFileSync(skillPath, "newer upstream snapshot\n");
+      },
     ],
     [
-      "altered intended bytes",
-      (tree) => (tree[0].sha = "e".repeat(40)),
-      /differs from intended snapshot/,
+      "second skill joins pending update",
+      ({ root, skillPath }) => {
+        writeFileSync(skillPath, "newer upstream snapshot\n");
+        mkdirSync(join(root, "vendor/gh-stack"));
+        writeFileSync(join(root, secondSkillPath), "second skill snapshot\n");
+      },
     ],
+    ["obsolete proposal after upstream reverts", () => {}],
   ]) {
     await t.test(label, async (subtest) => {
       const fixture = integrationFixture();
       subtest.after(() =>
         rmSync(fixture.root, { recursive: true, force: true }),
       );
-      mutate(fixture.branchTree);
-      const verify = () =>
-        verifyExistingBranch({
-          request: fixture.request,
-          token: "test-token",
-          repository: "example/repo",
-          branchSha: "c".repeat(40),
-          root: fixture.root,
-        });
-      if (expected) await assert.rejects(verify, expected);
-      else await verify();
+      reconcile(fixture);
+      await verifyExistingBranch({
+        request: fixture.request,
+        token: "test-token",
+        repository: "example/repo",
+        branchSha: "c".repeat(40),
+        root: fixture.root,
+      });
     });
   }
 });
