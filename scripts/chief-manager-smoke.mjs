@@ -25,3 +25,12 @@ export function chiefManagerSuccessEvidence(progress = {}) {
       progress.completionMarkerObserved === true,
   };
 }
+
+export function ownedAgentReadinessEvidence(progress = {}) {
+  return {
+    activeMailboxRequestPresent:
+      progress.activeMailboxRequestPresent === true,
+    positiveChildPidPresent: progress.positiveChildPidPresent === true,
+    expectedAwaitOwnerPresent: progress.expectedAwaitOwnerPresent === true,
+  };
+}

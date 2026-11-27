@@ -33,6 +33,7 @@ import { matchesProjectMessageContent } from "./smoke-faux.mjs";
 import {
   chiefManagerSuccessEvidence,
   matchesChiefManagerHandoff,
+  ownedAgentReadinessEvidence,
 } from "./chief-manager-smoke.mjs";
 
 export { matchesProjectMessageContent };
@@ -12038,12 +12039,23 @@ async function runChiefManagerSmoke(ctx) {
               part.arguments?.question === "CHIEF_MANAGER_SMOKE_AGENT_PENDING",
           ),
       );
+      const activeMailboxRequestPresent = !!mailbox.state.activeRequestId;
+      const positiveChildPidPresent = process?.pid > 0;
       return {
         done:
-          !!mailbox.state.activeRequestId &&
-          process?.pid > 0 &&
+          activeMailboxRequestPresent &&
+          positiveChildPidPresent &&
           (!leaf || waiting),
         value: { paneId: agent.pane_id, session, pid: process?.pid },
+        ...(label === "smoke-chief-agent"
+          ? {
+              evidence: ownedAgentReadinessEvidence({
+                activeMailboxRequestPresent,
+                positiveChildPidPresent,
+                expectedAwaitOwnerPresent: waiting,
+              }),
+            }
+          : {}),
       };
     });
   const delegate = async (paneId, ownerId, owner) => {

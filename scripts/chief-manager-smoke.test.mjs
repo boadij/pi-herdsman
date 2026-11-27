@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   chiefManagerSuccessEvidence,
   matchesChiefManagerHandoff,
+  ownedAgentReadinessEvidence,
 } from "./chief-manager-smoke.mjs";
 
 test("Manager smoke accepts only the completed correlated persisted handoff", () => {
@@ -58,4 +59,25 @@ test("Manager success evidence is bounded and excludes correlation identifiers",
     }).completedAgentResultReceiptCorrelated,
     false,
   );
+});
+
+test("owned Agent readiness evidence contains only prerequisite booleans", () => {
+  const evidence = ownedAgentReadinessEvidence({
+    activeMailboxRequestPresent: true,
+    positiveChildPidPresent: false,
+    expectedAwaitOwnerPresent: true,
+    pid: 421,
+    mailboxId: "private-mailbox-id",
+    sessionId: "private-session-id",
+    content: "private session content",
+    path: "/private/session/path",
+  });
+
+  assert.deepEqual(evidence, {
+    activeMailboxRequestPresent: true,
+    positiveChildPidPresent: false,
+    expectedAwaitOwnerPresent: true,
+  });
+  assert.ok(Object.values(evidence).every((value) => typeof value === "boolean"));
+  assert.doesNotMatch(JSON.stringify(evidence), /private|421|\//u);
 });
