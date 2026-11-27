@@ -2076,6 +2076,17 @@ test("session tree restoration respects checkpoint order and tool policies", asy
       expected: ["read", ...leadToolsWithSkill],
     },
     {
+      name: "native-only Flexible restoration respects a newer native tool removal",
+      profile: "unsupported: true",
+      nativeOnly: true,
+      branch: [
+        checkpoint("flexible", ["read", "bash"]),
+        toolChange([], ["bash"]),
+      ],
+      restored: ["read"],
+      expected: ["read", "list_peers", "message_peer"],
+    },
+    {
       name: "relative CodeMode is projected without entering the inherited baseline",
       branch: [checkpoint("flexible", ["read"]), toolChange(["history"])],
       restored: ["read", "history", "codemode"],
@@ -2129,14 +2140,24 @@ test("session tree restoration respects checkpoint order and tool policies", asy
         );
         assert.deepEqual(
           skillCall,
-          scenario.loaderFiltered
+          scenario.loaderFiltered || scenario.nativeOnly
             ? {
                 block: true,
                 reason: "Skill loading is unavailable in the active role.",
               }
             : undefined,
         );
-        assert.equal(pi.entries.length, entriesBefore);
+        if (scenario.nativeOnly) {
+          assert.ok(
+            pi.entries
+              .slice(entriesBefore)
+              .some(
+                (entry: any) =>
+                  entry.customType === "pi_herdsman_definition_error",
+              ),
+            "native-only branch restoration retains the profile diagnostic",
+          );
+        } else assert.equal(pi.entries.length, entriesBefore);
         if ("extraTools" in scenario) {
           await pi.commandOptions.get("lead-orchestrate").handler("", context);
           assert.deepEqual(sessionLeadExecutionState(pi.entries)?.leadTools, [

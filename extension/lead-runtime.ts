@@ -4911,20 +4911,22 @@ export function registerLeadRuntime(
     if (!mode) return;
     let nativeOnlyEligible = false;
     try {
-      await currentProjectAssignment(ctx);
+      const assignment = await currentProjectAssignment(ctx);
       if (signal?.aborted) return;
       if (sessionKind?.kind === "managed") {
         statusRuntime.requestRefresh();
         publishLeadRole(ctx, "inactive", leadRuntime.chiefModeGeneration);
         return;
       }
+      // Restoration records fallback eligibility before Lead activation; tool
+      // projection remains gated by verifiedNativeOnlyFlexibleExecution.
       if (
         sessionKind?.kind === "ordinary" &&
         sessionKind.sessionId === ctx.sessionManager.getSessionId() &&
+        assignment === undefined &&
         mode === "flexible" &&
         !isQuarantinedSession(ctx) &&
-        !leadRuntime.roleSuspended &&
-        verifiedActiveRootRole() === "lead"
+        !leadRuntime.roleSuspended
       ) {
         try {
           nativeOnlyEligible =
@@ -5112,16 +5114,23 @@ export function registerLeadRuntime(
       saved &&
       sessionKind?.kind === "ordinary" &&
       (branchRole?.role ?? "lead") === "lead" &&
-      restoredExecution?.valid &&
+      restoredExecution &&
       !restoredExecution.managed &&
       toolChangeIndex > checkpointIndex
     ) {
-      const projection = inheritedProjectionFor(
-        mode,
-        restoredExecution.definition,
-        baseline,
-        leadToolState.projectLeadTools(baseline, restoredExecution.definition),
-      );
+      const projection = restoredExecution.valid
+        ? inheritedProjectionFor(
+            mode,
+            restoredExecution.definition,
+            baseline,
+            leadToolState.projectLeadTools(
+              baseline,
+              restoredExecution.definition,
+            ),
+          )
+        : verifiedNativeOnlyFlexibleExecution()
+          ? nativeInheritedProjectionFor(mode)
+          : undefined;
       if (projection) {
         const excluded = (name: string) =>
           projection.excluded.some((pattern) =>

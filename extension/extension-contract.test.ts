@@ -3774,10 +3774,21 @@ test("chief activation reports unresolved mailbox state instead of owned work", 
     WORKSPACE,
     `chief-activation-invalid-state-${randomUUID()}`,
   );
+  const flexibleRole = join(
+    PI_AGENT_ROOT,
+    "coordinators",
+    "leads",
+    "flexible-lead.md",
+  );
+  realFs.mkdirSync(dirname(flexibleRole), { recursive: true });
+  writeFileSync(flexibleRole, "---\nname: flexible-lead\n---\nFlexible Lead\n");
   const notices: string[] = [];
   realFs.mkdirSync(mailbox, { recursive: true });
   realFs.writeFileSync(join(mailbox, "state.json"), "not json");
-  const pi = fakePi({ allTools: REGISTERED_ROLE_TOOLS });
+  const pi = fakePi({
+    activeTools: ["read", "bash"],
+    allTools: [{ name: "read" }, { name: "bash" }, ...REGISTERED_ROLE_TOOLS],
+  });
   registerExtension!(pi.pi as never);
   const context = fakeContext(pi.entries) as any;
   context.hasUI = true;
@@ -3833,8 +3844,21 @@ test("chief activation reports unresolved mailbox state instead of owned work", 
       ["list_staff", "inspect_staff", "read_staff_transcript", "message_staff"],
       JSON.stringify(notices),
     );
+    writeFileSync(flexibleRole, "---\nname: [invalid\n---\nBroken profile\n");
     await pi.commandOptions.get("chief-leave").handler("", context);
-    assert.equal(pi.pi.getSessionName(), "Flexible Lead");
+    assert.ok(pi.pi.getActiveTools().includes("read"));
+    assert.ok(pi.pi.getActiveTools().includes("bash"));
+    assert.ok(!pi.pi.getActiveTools().includes("delegate_agent"));
+    const denied = await pi.tools
+      .find((tool) => tool.name === "delegate_agent")!
+      .execute(
+        "invalid-flexible-profile",
+        { definition: "agent", task: "must not start" },
+        undefined,
+        undefined,
+        context,
+      );
+    assert.match(denied.details.error.message, /not allowed/);
     const restoredEvent = {
       systemPrompt: "base",
       systemPromptOptions: {
@@ -3852,6 +3876,7 @@ test("chief activation reports unresolved mailbox state instead of owned work", 
     assert.doesNotMatch(restored, /workspace-neutral supervision/);
   } finally {
     realFs.rmSync(mailbox, { recursive: true, force: true });
+    realFs.rmSync(flexibleRole, { force: true });
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_SOCKET_PATH;
