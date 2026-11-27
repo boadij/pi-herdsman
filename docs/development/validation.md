@@ -61,8 +61,15 @@ The test runner uses:
 
 ```text
 --experimental-test-module-mocks
+--import=./scripts/test-env.mjs
 --test
 ```
+
+The check keeps Node's detailed spec reporter on a terminal and TAP when piped.
+A secondary reporter writes best-effort file-worker starts and completions
+to stderr using repository-relative paths. An unmatched start means no
+completion was observed; it does not establish that a process is still alive.
+Checks and cleanup do not depend on this attribution.
 
 ## Process containment
 
