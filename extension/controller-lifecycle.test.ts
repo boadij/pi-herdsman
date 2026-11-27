@@ -851,6 +851,27 @@ test("read_evidence is added only to assigned project Lead tools", async () => {
   assert.deepEqual(state.normalizeLeadTools(["read"]), ["read"]);
 });
 const { claimAgentMailbox, removeAgentMailbox } = await import("./mailbox.ts");
+
+async function observeLifecycleStage<T>(
+  stage: string,
+  observation: Promise<T>,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      observation,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Timed out waiting for ${stage}`)),
+          5_000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function holdProjectAuthorityInChild(lockPath: string) {
   const name = "project assignment authority";
   const lockModule = pathToFileURL(join(process.cwd(), "extension/lock.ts"));
@@ -9768,18 +9789,26 @@ test("managed Lead cancellation during final authority wait publishes and accept
     context,
   );
   void pending.catch(() => {});
-  await Promise.race([
-    startupReached,
-    pending.then(() => {
-      throw new Error("delegation ended before reaching final publication");
-    }),
-  ]);
-  await Promise.race([
-    startupIdentityObserved.promise,
-    pending.then(() => {
-      throw new Error("delegation ended before startup identity was observed");
-    }),
-  ]);
+  await observeLifecycleStage(
+    "Agent startup before final publication",
+    Promise.race([
+      startupReached,
+      pending.then(() => {
+        throw new Error("delegation ended before reaching final publication");
+      }),
+    ]),
+  );
+  await observeLifecycleStage(
+    "startup identity observation",
+    Promise.race([
+      startupIdentityObserved.promise,
+      pending.then(() => {
+        throw new Error(
+          "delegation ended before startup identity was observed",
+        );
+      }),
+    ]),
+  );
   assert.equal(published, 0);
   const settledWhileOccupied = await Promise.race([
     pending.then(
@@ -9795,20 +9824,12 @@ test("managed Lead cancellation during final authority wait publishes and accept
   );
   rollbackStopped = true;
   abort.abort();
-  let settlementDeadline: ReturnType<typeof setTimeout> | undefined;
-  const settled = await Promise.race([
+  await observeLifecycleStage(
+    "cancelled delegation and startup rollback to settle",
     pending.then(
-      () => true,
-      () => true,
+      () => {},
+      () => {},
     ),
-    new Promise<boolean>((resolve) => {
-      settlementDeadline = setTimeout(() => resolve(false), 5_000);
-    }),
-  ]).finally(() => clearTimeout(settlementDeadline));
-  assert.equal(
-    settled,
-    true,
-    "cancelled delegation and startup rollback must settle within a bounded interval",
   );
   assert.equal(published, 0, "cancelled delegation must not publish a request");
   assert.equal(accepted, 0, "cancelled delegation must not be accepted");
@@ -11698,7 +11719,10 @@ test("Lead delegation holds the shared lifecycle lock through gated startup", as
   );
   await fixture.sessionStart;
   fixture.context.ui.notify = () => {};
-  await fixture.initialStatusReached;
+  await observeLifecycleStage(
+    "initial status request",
+    fixture.initialStatusReached,
+  );
   starting = registeredAgentTool(fixture.pi, "delegate").execute(
     "id",
     { definition: "agent", task: "hold stop while startup is unresolved" },
@@ -11707,14 +11731,17 @@ test("Lead delegation holds the shared lifecycle lock through gated startup", as
     fixture.context,
   );
   const reached = (gate: Promise<void>, name: string) =>
-    Promise.race([
-      gate,
-      starting!.then((result) => {
-        throw new Error(
-          `delegation settled before ${name}: ${JSON.stringify(result.details)}`,
-        );
-      }),
-    ]);
+    observeLifecycleStage(
+      name,
+      Promise.race([
+        gate,
+        starting!.then((result) => {
+          throw new Error(
+            `delegation settled before ${name}: ${JSON.stringify(result.details)}`,
+          );
+        }),
+      ]),
+    );
   await reached(fixture.startReached, "Agent start");
   let busy: unknown;
   try {
