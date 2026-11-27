@@ -14446,6 +14446,97 @@ function sanitizedFailureDiagnostics(value) {
               typeof root.assistantErrorObserved === "boolean"
                 ? root.assistantErrorObserved
                 : false,
+            ...(root.requestShape && typeof root.requestShape === "object"
+              ? {
+                  requestShape: {
+                    type: [
+                      "object",
+                      "array",
+                      "string",
+                      "number",
+                      "boolean",
+                      "null",
+                      "undefined",
+                    ].includes(root.requestShape.type)
+                      ? root.requestShape.type
+                      : "unknown",
+                    ...(root.requestShape.fields &&
+                    typeof root.requestShape.fields === "object"
+                      ? {
+                          fields: Object.fromEntries(
+                            [
+                              "definition",
+                              "task",
+                              "label",
+                              "files",
+                              "model",
+                              "thinking",
+                              "cwd",
+                            ].map((name) => {
+                              const field = root.requestShape.fields[name];
+                              return [
+                                name,
+                                {
+                                  present: field?.present === true,
+                                  type: [
+                                    "absent",
+                                    "array",
+                                    "null",
+                                    "string",
+                                    "number",
+                                    "boolean",
+                                    "object",
+                                    "undefined",
+                                  ].includes(field?.type)
+                                    ? field.type
+                                    : "unknown",
+                                },
+                              ];
+                            }),
+                          ),
+                        }
+                      : {}),
+                    ...[
+                      "definitionNonempty",
+                      "taskNonempty",
+                      "expectedLabel",
+                      "labelPattern",
+                      "filesArray",
+                      "anyExtraProperty",
+                    ].reduce((safe, key) => {
+                      if (typeof root.requestShape[key] === "boolean")
+                        safe[key] = root.requestShape[key];
+                      return safe;
+                    }, {}),
+                  },
+                }
+              : {}),
+            ...(root.error && typeof root.error === "object"
+              ? {
+                  error: {
+                    ...(STRUCTURED_TOOL_ERROR_CATEGORIES.has(
+                      root.error.category,
+                    )
+                      ? { category: root.error.category }
+                      : {}),
+                    ...([
+                      "delegate_agent",
+                      "prepare_agent",
+                      "launch_agent",
+                    ].includes(root.error.operation)
+                      ? { operation: root.error.operation }
+                      : {}),
+                    rollbackOccurred:
+                      typeof root.error.rollbackOccurred === "boolean"
+                        ? root.error.rollbackOccurred
+                        : null,
+                    retryAttempted:
+                      typeof root.error.retryAttempted === "boolean"
+                        ? root.error.retryAttempted
+                        : null,
+                  },
+                }
+              : {}),
           },
         }
       : {}),
