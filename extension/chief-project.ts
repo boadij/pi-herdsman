@@ -557,7 +557,9 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
     if (action === "resume" && source.kind !== "local")
       throw new Error("resume_manager requires a local repository path");
     const effectiveCheckoutOrigin =
-      action === "start" && source.kind === "local" && destination !== undefined;
+      action === "start" &&
+      source.kind === "local" &&
+      destination !== undefined;
     let repositoryPath = source.kind === "local" ? source.path : input;
     let stage = "repository";
     let preparationChanged = false;

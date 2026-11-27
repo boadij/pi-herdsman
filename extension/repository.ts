@@ -268,7 +268,12 @@ export async function resolveCheckoutCloneSource(
         maxBuffer: 16 * 1024,
       });
       signal?.throwIfAborted();
-      if (result.code !== 0 || result.killed || result.truncated || result.stderr)
+      if (
+        result.code !== 0 ||
+        result.killed ||
+        result.truncated ||
+        result.stderr
+      )
         throw new Error("Git observation failed");
       return result;
     },

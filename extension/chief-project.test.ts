@@ -461,14 +461,20 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
             let stdout = "";
             if (args[0] === "rev-parse") {
               assert.ok(
-                cwd === repository || (cloneFromCheckout && cwd === sourceCheckout),
+                cwd === repository ||
+                  (cloneFromCheckout && cwd === sourceCheckout),
               );
               stdout =
                 args.at(-1) === "--show-toplevel" ? cwd : join(cwd, ".git");
             } else {
               assert.ok(cloneFromCheckout);
               if (args[0] === "remote" && args[1] === "get-url") {
-                assert.deepEqual(args, ["remote", "get-url", "--all", "origin"]);
+                assert.deepEqual(args, [
+                  "remote",
+                  "get-url",
+                  "--all",
+                  "origin",
+                ]);
                 assert.ok(cwd === sourceCheckout || cwd === repository);
                 cloneCalls.push(
                   cwd === sourceCheckout ? "read origin" : "verify origin",
@@ -500,7 +506,11 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
               } else {
                 assert.equal(cwd, repository);
                 assert.deepEqual(args, [
-                  "remote", "set-url", "--", "origin", origin,
+                  "remote",
+                  "set-url",
+                  "--",
+                  "origin",
+                  origin,
                 ]);
                 cloneCalls.push("record origin");
               }
@@ -532,7 +542,11 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
               });
             case "workspace create":
               assert.ok(cloneFromCheckout && !workspaceCreated);
-              assert.deepEqual(args.slice(2), ["--cwd", repository, "--no-focus"]);
+              assert.deepEqual(args.slice(2), [
+                "--cwd",
+                repository,
+                "--no-focus",
+              ]);
               assert.ok(statSync(canonicalRepoKey).isDirectory());
               workspaceCreated = true;
               return response({ workspace });
@@ -805,13 +819,23 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
           repository,
           definition: "manager",
         });
-        const expectedPlacement = ["workspace create", "tab create", "agent start"];
+        const expectedPlacement = [
+          "workspace create",
+          "tab create",
+          "agent start",
+        ];
         assert.deepEqual(placementCalls, expectedPlacement);
         assert.equal(launches, 1);
-        const destination = readManagerDescriptorStatus(runtime, canonicalRepoKey);
+        const destination = readManagerDescriptorStatus(
+          runtime,
+          canonicalRepoKey,
+        );
         assert.ok(destination?.live);
         assert.equal(destination.descriptor.canonicalRepoKey, canonicalRepoKey);
-        assert.equal(destination.descriptor.workspaceId, workspace.workspace_id);
+        assert.equal(
+          destination.descriptor.workspaceId,
+          workspace.workspace_id,
+        );
         assert.equal(destination.descriptor.piSessionId, id);
         assert.notEqual(
           destination.descriptor.piSessionId,
@@ -822,10 +846,17 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         writeFileSync(destinationFile, "existing destination");
         await assert.rejects(start(), /Clone destination already exists/);
         assert.deepEqual(cloneCalls, [
-          "read origin", "git clone", "record origin", "verify origin", "read origin",
+          "read origin",
+          "git clone",
+          "record origin",
+          "verify origin",
+          "read origin",
         ]);
         assert.deepEqual(placementCalls, expectedPlacement);
-        assert.equal(readFileSync(destinationFile, "utf8"), "existing destination");
+        assert.equal(
+          readFileSync(destinationFile, "utf8"),
+          "existing destination",
+        );
         assert.equal(statSync(sourceCheckout).ino, sourceStat.ino);
         assert.equal(readFileSync(sourceFile, "utf8"), "source-only changes");
         assert.ok(!existsSync(join(repository, "uncommitted.txt")));
