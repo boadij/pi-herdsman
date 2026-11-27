@@ -621,7 +621,7 @@ const peerTopologyExec = (_command: string, args: string[]) =>
         code: 0,
       }
     : { stdout: "{}", stderr: "", code: 0 };
-import {
+import support, {
   CHILD_SESSION_ID,
   DEFAULT_PI_SESSION_ID,
   NON_PI_AGENT,
@@ -12833,7 +12833,7 @@ test("registered delegate_work cancellation during authority wait publishes noth
 test("Lead publication holds the assignment lock before Manager session binding", (t) =>
   managerDelegateAssignmentTest(t, false, "lead-first"));
 
-test("Manager supervision keeps incompatible Leads observational", async () => {
+test("staff transcripts stay within verified Chief and Manager supervision", async () => {
   setLeadEnvironment();
   process.env.HERDR_SOCKET_PATH = join(
     tmpdir(),
@@ -12984,6 +12984,21 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
     cwd: "/tmp",
     entries: [],
   });
+  const managerSessionPath = join(PI_AGENT_ROOT, "staff-manager.jsonl");
+  const replacementSessionPath = join(PI_AGENT_ROOT, "staff-manager-copy.jsonl");
+  const managerTranscript = realFs
+    .readFileSync(ordinarySessionPath, "utf8")
+    .replace(ordinaryLeadSession, LEAD_SESSION_ID)
+    .replace("ordinary transcript content", "manager transcript content");
+  realFs.writeFileSync(managerSessionPath, managerTranscript);
+  realFs.writeFileSync(replacementSessionPath, managerTranscript);
+  const managerSession = {
+    id: LEAD_SESSION_ID,
+    path: managerSessionPath,
+    cwd: managerAgent.cwd,
+    entries: [],
+  };
+  nativeSessions.set(managerSessionPath, managerSession);
   const ordinaryLead = {
     agent_session: {
       source: "herdr:pi",
@@ -13482,6 +13497,78 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
       assert.ok(
         listed.details.reports[0].available_tools.includes("message_staff"),
       );
+      const managerReport = listed.details.reports[0];
+      assert.ok(managerReport.available_tools.includes("read_staff_transcript"));
+      assert.doesNotMatch(JSON.stringify(managerReport), /staff-manager\.jsonl/);
+      const readStaffTranscript = chief.tools.find(
+        (tool) => tool.name === "read_staff_transcript",
+      )!;
+      const readManagerTranscript = () =>
+        readStaffTranscript.execute(
+          "transcript",
+          { target: managerReport.target },
+          undefined,
+          undefined,
+          chiefCtx,
+        );
+      const saved = await readManagerTranscript();
+      assert.equal(saved.details.target, managerReport.target);
+      assert.match(saved.details.transcript, /manager transcript content/);
+      assert.doesNotMatch(JSON.stringify(saved), /staff-manager\.jsonl/);
+      const originalState = readLeadCoordinationState(
+        supervisionRuntime(),
+        LEAD_SESSION_ID,
+      )!;
+      const canonicalSession = realFs.realpathSync(managerSessionPath);
+      for (const [change, mutate] of [
+        [
+          "Coordinator generation",
+          () =>
+            writeLeadCoordinationState(supervisionRuntime(), {
+              ...originalState,
+              instanceId: randomUUID(),
+            }),
+        ],
+        ["session file", () => (managerSession.path = replacementSessionPath)],
+        ["direct report", () => liveAgents.splice(0, 1)],
+      ] as const) {
+        let read = false;
+        support.fileReadHook = (path) => {
+          if (path !== canonicalSession) return;
+          read = true;
+          mutate();
+        };
+        try {
+          await assert.rejects(
+            readManagerTranscript(),
+            /Staff changed during transcript read/,
+            change,
+          );
+          assert.equal(read, true, change);
+        } finally {
+          support.fileReadHook = undefined;
+          managerSession.path = managerSessionPath;
+          if (!liveAgents.includes(managerAgent)) liveAgents.unshift(managerAgent);
+          writeLeadCoordinationState(supervisionRuntime(), originalState);
+        }
+      }
+      await assert.rejects(
+        readStaffTranscript.execute(
+          "transcript",
+          {
+            target: rememberCoordinatorTarget(
+              chief.pi as never,
+              chiefCtx,
+              "lead",
+              ordinaryLeadSession,
+            ),
+          },
+          undefined,
+          undefined,
+          chiefCtx,
+        ),
+        /not found or is no longer eligible/,
+      );
       assert.equal(listed.details.reports[0].leads.length, 36);
       assert.ok(
         listed.details.reports[0].leads.every(
@@ -13656,6 +13743,9 @@ test("Manager supervision keeps incompatible Leads observational", async () => {
     }
   } finally {
     realFs.rmSync(assignedCheckoutPath, { recursive: true, force: true });
+    nativeSessions.delete(managerSessionPath);
+    realFs.rmSync(managerSessionPath, { force: true });
+    realFs.rmSync(replacementSessionPath, { force: true });
     nativeSessions.delete(ordinarySessionPath);
     realFs.rmSync(ordinarySessionPath, { force: true });
     incompatibleManagerLease.release();

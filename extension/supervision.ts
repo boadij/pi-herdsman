@@ -4662,6 +4662,8 @@ export function staffToolName(
 /** Chief can act on these Managers only; nested Leads are observational. */
 export type SupervisedManager = {
   session: string;
+  /** Internal: path to a non-empty persisted session candidate. */
+  piSessionFile?: string;
   instanceId?: string;
   displayName: string;
   project: string;
