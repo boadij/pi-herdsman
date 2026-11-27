@@ -598,16 +598,32 @@ export function assistantResponseCompletedForSession(
   session: { contents: string },
   prompt: string,
 ): boolean;
-export function rootDelegationDiagnostics(contents: string): {
+export function rootDelegationDiagnostics(
+  contents: string,
+  expectedLabel?: string,
+): {
   delegationCallObserved: boolean;
   matchingResult: "absent" | "pending" | "error" | "success" | "unknown";
-  errorCategory?: "agent_busy";
+  errorCategory?:
+    | "agent_busy"
+    | "agent_label_exists"
+    | "incompatible_build"
+    | "internal_failure"
+    | "invalid_request"
+    | "not_running_inside_herdr"
+    | "pane_not_ready"
+    | "rollback_failure"
+    | "target_ambiguous"
+    | "target_not_found";
   assistantObserved: boolean;
   assistantStopReason:
     "stop" | "length" | "toolUse" | "error" | "aborted" | "unknown";
   assistantErrorObserved: boolean;
 };
-export function assertNoFailedAgentDelegation(contents: string): void;
+export function assertNoFailedAgentDelegation(
+  contents: string,
+  expectedLabel?: string,
+): void;
 export function parseHerdrOutput(
   stdout: string,
   args: readonly string[],

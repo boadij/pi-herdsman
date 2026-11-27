@@ -1529,6 +1529,65 @@ test("root delegation diagnostics correlate results and exclude private data", (
         .join("\n"),
     ),
   );
+  const labeledCall = {
+    ...call,
+    content: [{ ...call.content[0], arguments: { label: "expected-agent" } }],
+  };
+  const unrelatedFailedCall = {
+    role: "assistant",
+    content: [
+      {
+        type: "toolCall",
+        name: "delegate_agent",
+        id: "UNRELATED_ID",
+        arguments: { label: "unrelated-agent" },
+      },
+    ],
+  };
+  const unrelatedFailure = {
+    ...result,
+    toolCallId: "UNRELATED_ID",
+    isError: true,
+    details: {
+      ok: false,
+      error: { category: "internal_failure", message: "PRIVATE_ERROR" },
+    },
+  };
+  const labeledTranscript = (messages: unknown[]) =>
+    messages
+      .map((message) => JSON.stringify({ type: "message", message }))
+      .join("\n");
+  assert.doesNotThrow(() =>
+    assertNoFailedAgentDelegation(
+      labeledTranscript([
+        labeledCall,
+        result,
+        unrelatedFailedCall,
+        unrelatedFailure,
+      ]),
+      "expected-agent",
+    ),
+  );
+  const expectedFailure = {
+    ...result,
+    details: {
+      ok: false,
+      error: { category: "invalid_request", message: "PRIVATE_ERROR" },
+    },
+  };
+  assert.throws(
+    () =>
+      assertNoFailedAgentDelegation(
+        labeledTranscript([labeledCall, expectedFailure]),
+        "expected-agent",
+      ),
+    (error) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "SMOKE_DELEGATION_FAILED" &&
+      error.message === "delegate_agent failed (invalid_request)" &&
+      !error.message.includes("PRIVATE"),
+  );
 });
 
 test("continuation failure diagnostics retain sanitized root delegation state", async () => {
