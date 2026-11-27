@@ -1,10 +1,5 @@
-import {
-  appendFileSync,
-  existsSync,
-  readFileSync,
-  realpathSync,
-  watch,
-} from "node:fs";
+import { appendFileSync, readFileSync, realpathSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
@@ -1610,31 +1605,50 @@ export function decide(model, context) {
 
 export async function waitForSmokeObservation(directory, filename, signal) {
   signal?.throwIfAborted();
-  let watcher;
+  const observationPath = join(directory, filename);
+  const pollInterval = 25;
   let timeout;
+  let poll;
   let abort;
   try {
     await new Promise((resolve, reject) => {
-      const check = () => {
-        if (existsSync(join(directory, filename))) resolve();
+      let settled = false;
+      const finish = (error) => {
+        if (settled) return;
+        settled = true;
+        if (error) reject(error);
+        else resolve();
       };
-      watcher = watch(directory, check);
-      watcher.on("error", reject);
+      const check = async () => {
+        if (settled) return;
+        try {
+          await stat(directory);
+          await stat(observationPath);
+          finish();
+        } catch (error) {
+          if (settled) return;
+          if (error.code !== "ENOENT" || error.path !== observationPath) {
+            finish(error);
+            return;
+          }
+          poll = setTimeout(check, pollInterval);
+        }
+      };
       timeout = setTimeout(
         () =>
-          reject(
+          finish(
             new Error(`Smoke live evidence was not acknowledged: ${filename}`),
           ),
         120_000,
       );
-      abort = () => reject(signal.reason);
+      abort = () => finish(signal.reason);
       signal?.addEventListener("abort", abort, { once: true });
       if (signal?.aborted) abort();
-      else check();
+      else void check();
     });
   } finally {
-    watcher?.close();
     clearTimeout(timeout);
+    clearTimeout(poll);
     if (abort) signal?.removeEventListener("abort", abort);
   }
 }
