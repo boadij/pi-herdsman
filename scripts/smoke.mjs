@@ -2500,10 +2500,8 @@ export function rootDelegationDiagnostics(contents, expectedLabel) {
     .map((entry) => entry.message ?? {});
   let call;
   let result;
-  let assistant;
   for (const message of messages) {
     if (message.role === "assistant") {
-      assistant = message;
       for (const block of Array.isArray(message.content)
         ? message.content
         : []) {
@@ -2528,84 +2526,16 @@ export function rootDelegationDiagnostics(contents, expectedLabel) {
       result = message;
   }
   const args = call?.arguments;
-  const knownRequestFields = [
-    "definition",
-    "task",
-    "label",
-    "files",
-    "model",
-    "thinking",
-    "cwd",
-  ];
-  const fieldShape = (name) => {
-    const present =
-      args !== null && typeof args === "object" && Object.hasOwn(args, name);
-    const value = present ? args[name] : undefined;
-    return {
-      present,
-      type: !present
-        ? "absent"
-        : Array.isArray(value)
-          ? "array"
-          : value === null
-            ? "null"
-            : typeof value,
-    };
-  };
   const errorDetail = result?.details?.error;
-  const safeOperation = [
-    "delegate_agent",
-    "prepare_agent",
-    "launch_agent",
-  ].includes(errorDetail?.operation)
-    ? errorDetail.operation
+  const category = STRUCTURED_TOOL_ERROR_CATEGORIES.has(errorDetail?.category)
+    ? errorDetail.category
     : undefined;
-  const requestShape =
-    args === null || typeof args !== "object"
-      ? { type: args === null ? "null" : typeof args }
-      : {
-          type: Array.isArray(args) ? "array" : "object",
-          fields: Object.fromEntries(
-            knownRequestFields.map((name) => [name, fieldShape(name)]),
-          ),
-          definitionNonempty:
-            typeof args.definition === "string" && args.definition.length > 0,
-          taskNonempty: typeof args.task === "string" && args.task.length > 0,
-          expectedLabel:
-            expectedLabel === undefined ? false : args.label === expectedLabel,
-          labelPattern:
-            typeof args.label === "string" &&
-            /^[a-z][a-z0-9_-]{0,31}$/.test(args.label),
-          filesArray: Array.isArray(args.files),
-          filesCount: Array.isArray(args.files) ? args.files.length : null,
-          anyExtraProperty: Object.keys(args).some(
-            (name) => !knownRequestFields.includes(name),
-          ),
-        };
-  const safeError =
-    errorDetail && typeof errorDetail === "object"
-      ? {
-          ...(STRUCTURED_TOOL_ERROR_CATEGORIES.has(errorDetail.category)
-            ? { category: errorDetail.category }
-            : {}),
-          ...(safeOperation ? { operation: safeOperation } : {}),
-          ...(AGENT_ACTION_DIAGNOSTIC_OUTCOMES.has(
-            errorDetail.details?.diagnosticOutcome,
-          )
-            ? { diagnosticOutcome: errorDetail.details.diagnosticOutcome }
-            : {}),
-          rollbackOccurred:
-            typeof errorDetail.rollbackOccurred === "boolean"
-              ? errorDetail.rollbackOccurred
-              : null,
-          retryAttempted:
-            typeof errorDetail.retryAttempted === "boolean"
-              ? errorDetail.retryAttempted
-              : null,
-        }
-      : undefined;
+  const diagnosticOutcome = AGENT_ACTION_DIAGNOSTIC_OUTCOMES.has(
+    errorDetail?.details?.diagnosticOutcome,
+  )
+    ? errorDetail.details.diagnosticOutcome
+    : undefined;
   return {
-    delegationCallObserved: Boolean(call),
     expectedLabelMatched:
       expectedLabel === undefined
         ? false
@@ -2619,38 +2549,8 @@ export function rootDelegationDiagnostics(contents, expectedLabel) {
           : result.isError === false
             ? "success"
             : "unknown",
-    ...([
-      "agent_busy",
-      "agent_label_exists",
-      "incompatible_build",
-      "internal_failure",
-      "invalid_request",
-      "not_running_inside_herdr",
-      "pane_not_ready",
-      "rollback_failure",
-      "target_ambiguous",
-      "target_not_found",
-    ].includes(result?.details?.error?.category)
-      ? { errorCategory: result.details.error.category }
-      : {}),
-    ...(call ? { requestShape } : {}),
-    ...(safeError ? { error: safeError } : {}),
-    assistantObserved: Boolean(assistant),
-    assistantStopReason: [
-      "stop",
-      "length",
-      "toolUse",
-      "error",
-      "aborted",
-    ].includes(assistant?.stopReason)
-      ? assistant.stopReason
-      : "unknown",
-    assistantErrorObserved: Boolean(
-      assistant &&
-      (assistant.stopReason === "error" ||
-        (typeof assistant.errorMessage === "string" &&
-          assistant.errorMessage.length > 0)),
-    ),
+    ...(category ? { errorCategory: category } : {}),
+    ...(diagnosticOutcome ? { diagnosticOutcome } : {}),
   };
 }
 
@@ -11328,7 +11228,7 @@ async function runChiefManagerSmoke(ctx) {
   await mkdir(agentDirectory, { recursive: true });
   await writeFile(
     join(managerDirectory, "smoke-manager.md"),
-    `---\nname: smoke-manager\nmodel: smoke-faux/chief-manager\ntools: [codemode]\nagents: [smoke-agent]\nextensions: [${JSON.stringify(ctx.simulatedProviderExtension)}]\n---\n`,
+    `---\nname: smoke-manager\nmodel: smoke-faux/chief-manager\ntools: [codemode]\nagents: [smoke-agent, implementer]\nextensions: [${JSON.stringify(ctx.simulatedProviderExtension)}]\n---\n`,
   );
   await writeFile(
     join(agentDirectory, "smoke-agent.md"),
@@ -12171,6 +12071,7 @@ async function runChiefManagerSmoke(ctx) {
   assert.ok(chiefId);
   await delegate(ctx.rootPaneId, chiefId, "chief");
   const chiefAgent = await observeOwnedAgent("smoke-chief-agent", chiefId);
+  markStage(ctx, "chief-manager-delegate-first");
   await delegate(first.pane.pane_id, first.session.id, "first");
   const firstAgent = await observeOwnedAgent(
     "smoke-first-agent",
@@ -13352,7 +13253,10 @@ export async function collectDiagnostics(
   {
     execute = run,
     observe = tryHerdr,
-    snapshot = rootSessionSnapshot,
+    snapshot = (context, ownerSessionId) =>
+      ownerSessionId
+        ? exactIsolatedSession(context, ownerSessionId)
+        : rootSessionSnapshot(context),
     expectedLabel,
   } = {},
 ) {
@@ -13369,7 +13273,13 @@ export async function collectDiagnostics(
     await Promise.allSettled([
       observe(["agent", "list"], { env, timeout: OBSERVATION_TIMEOUT_MS }),
       observe(["pane", "list"], { env, timeout: OBSERVATION_TIMEOUT_MS }),
-      snapshot(ctx),
+      snapshot(
+        ctx,
+        ctx.scenario === "chief-manager" &&
+          ctx.stage === "chief-manager-delegate-first"
+          ? ctx.chiefManagerDelegationIdentity?.managerSessionId
+          : undefined,
+      ),
       ctx.rootPaneId
         ? execute(
             "herdr",
@@ -14427,10 +14337,6 @@ function sanitizedFailureDiagnostics(value) {
     ...(root && typeof root === "object"
       ? {
           rootDelegation: {
-            delegationCallObserved:
-              typeof root.delegationCallObserved === "boolean"
-                ? root.delegationCallObserved
-                : false,
             expectedLabelMatched:
               typeof root.expectedLabelMatched === "boolean"
                 ? root.expectedLabelMatched
@@ -14444,119 +14350,11 @@ function sanitizedFailureDiagnostics(value) {
             ].includes(root.matchingResult)
               ? root.matchingResult
               : "unknown",
-            assistantObserved:
-              typeof root.assistantObserved === "boolean"
-                ? root.assistantObserved
-                : false,
-            assistantStopReason: [
-              "stop",
-              "length",
-              "toolUse",
-              "error",
-              "aborted",
-              "unknown",
-            ].includes(root.assistantStopReason)
-              ? root.assistantStopReason
-              : "unknown",
-            assistantErrorObserved:
-              typeof root.assistantErrorObserved === "boolean"
-                ? root.assistantErrorObserved
-                : false,
-            ...(root.requestShape && typeof root.requestShape === "object"
-              ? {
-                  requestShape: {
-                    type: [
-                      "object",
-                      "array",
-                      "string",
-                      "number",
-                      "boolean",
-                      "null",
-                      "undefined",
-                    ].includes(root.requestShape.type)
-                      ? root.requestShape.type
-                      : "unknown",
-                    ...(root.requestShape.fields &&
-                    typeof root.requestShape.fields === "object"
-                      ? {
-                          fields: Object.fromEntries(
-                            [
-                              "definition",
-                              "task",
-                              "label",
-                              "files",
-                              "model",
-                              "thinking",
-                              "cwd",
-                            ].map((name) => {
-                              const field = root.requestShape.fields[name];
-                              return [
-                                name,
-                                {
-                                  present: field?.present === true,
-                                  type: [
-                                    "absent",
-                                    "array",
-                                    "null",
-                                    "string",
-                                    "number",
-                                    "boolean",
-                                    "object",
-                                    "undefined",
-                                  ].includes(field?.type)
-                                    ? field.type
-                                    : "unknown",
-                                },
-                              ];
-                            }),
-                          ),
-                        }
-                      : {}),
-                    ...[
-                      "definitionNonempty",
-                      "taskNonempty",
-                      "expectedLabel",
-                      "labelPattern",
-                      "filesArray",
-                      "anyExtraProperty",
-                    ].reduce((safe, key) => {
-                      if (typeof root.requestShape[key] === "boolean")
-                        safe[key] = root.requestShape[key];
-                      return safe;
-                    }, {}),
-                  },
-                }
+            ...(STRUCTURED_TOOL_ERROR_CATEGORIES.has(root.errorCategory)
+              ? { errorCategory: root.errorCategory }
               : {}),
-            ...(root.error && typeof root.error === "object"
-              ? {
-                  error: {
-                    ...(STRUCTURED_TOOL_ERROR_CATEGORIES.has(
-                      root.error.category,
-                    )
-                      ? { category: root.error.category }
-                      : {}),
-                    ...([
-                      "delegate_agent",
-                      "prepare_agent",
-                      "launch_agent",
-                    ].includes(root.error.operation)
-                      ? { operation: root.error.operation }
-                      : {}),
-                    ...(AGENT_ACTION_DIAGNOSTIC_OUTCOMES.has(
-                      root.error.diagnosticOutcome,
-                    )
-                      ? { diagnosticOutcome: root.error.diagnosticOutcome }
-                      : {}),
-                    rollbackOccurred:
-                      typeof root.error.rollbackOccurred === "boolean"
-                        ? root.error.rollbackOccurred
-                        : null,
-                    retryAttempted:
-                      typeof root.error.retryAttempted === "boolean"
-                        ? root.error.retryAttempted
-                        : null,
-                  },
-                }
+            ...(AGENT_ACTION_DIAGNOSTIC_OUTCOMES.has(root.diagnosticOutcome)
+              ? { diagnosticOutcome: root.diagnosticOutcome }
               : {}),
           },
         }
@@ -15664,7 +15462,9 @@ async function main() {
             collectDiagnostics(ctx, owned, failure, {
               expectedLabel:
                 ctx.scenario === "chief-manager"
-                  ? "smoke-chief-agent"
+                  ? ctx.stage === "chief-manager-delegate-first"
+                    ? "smoke-first-agent"
+                    : "smoke-chief-agent"
                   : undefined,
             }),
           )

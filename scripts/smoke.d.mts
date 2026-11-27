@@ -602,7 +602,7 @@ export function rootDelegationDiagnostics(
   contents: string,
   expectedLabel?: string,
 ): {
-  delegationCallObserved: boolean;
+  expectedLabelMatched: boolean;
   matchingResult: "absent" | "pending" | "error" | "success" | "unknown";
   errorCategory?:
     | "agent_busy"
@@ -615,54 +615,23 @@ export function rootDelegationDiagnostics(
     | "rollback_failure"
     | "target_ambiguous"
     | "target_not_found";
-  requestShape?: {
-    type: string;
-    fields?: Record<string, { present: boolean; type: string }>;
-    definitionNonempty?: boolean;
-    taskNonempty?: boolean;
-    expectedLabel?: boolean;
-    labelPattern?: boolean;
-    filesArray?: boolean;
-    filesCount?: number | null;
-    anyExtraProperty?: boolean;
-  };
-  error?: {
-    category?:
-      | "not_running_inside_herdr"
-      | "agent_label_exists"
-      | "pane_not_ready"
-      | "target_not_found"
-      | "target_ambiguous"
-      | "rollback_failure"
-      | "agent_busy"
-      | "invalid_request"
-      | "incompatible_build"
-      | "internal_failure";
-    operation?: "delegate_agent" | "prepare_agent" | "launch_agent";
-    diagnosticOutcome?:
-      | "assignment_definition_missing"
-      | "assignment_task_missing"
-      | "continuation_session_missing"
-      | "root_delegation_unavailable"
-      | "root_session_changed"
-      | "root_authority_changed"
-      | "agent_depth_unverifiable"
-      | "agent_depth_mismatch"
-      | "agent_depth_limit_exceeded"
-      | "continuation_unavailable"
-      | "definition_unavailable"
-      | "definition_not_allowed"
-      | "definition_disabled"
-      | "definition_references_unavailable"
-      | "active_session_conflict"
-      | "invalid_agent_label";
-    rollbackOccurred: boolean | null;
-    retryAttempted: boolean | null;
-  };
-  assistantObserved: boolean;
-  assistantStopReason:
-    "stop" | "length" | "toolUse" | "error" | "aborted" | "unknown";
-  assistantErrorObserved: boolean;
+  diagnosticOutcome?:
+    | "assignment_definition_missing"
+    | "assignment_task_missing"
+    | "continuation_session_missing"
+    | "root_delegation_unavailable"
+    | "root_session_changed"
+    | "root_authority_changed"
+    | "agent_depth_unverifiable"
+    | "agent_depth_mismatch"
+    | "agent_depth_limit_exceeded"
+    | "continuation_unavailable"
+    | "definition_unavailable"
+    | "definition_not_allowed"
+    | "definition_disabled"
+    | "definition_references_unavailable"
+    | "active_session_conflict"
+    | "invalid_agent_label";
 };
 export function assertNoFailedAgentDelegation(
   contents: string,
