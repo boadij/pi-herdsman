@@ -1483,6 +1483,7 @@ test("root delegation diagnostics correlate results and exclude private data", a
     ]),
     {
       delegationCallObserved: false,
+      expectedLabelMatched: false,
       matchingResult: "absent",
       assistantObserved: true,
       assistantStopReason: "error",
@@ -1731,63 +1732,99 @@ test("Chief Manager failure artifact persists sanitized root delegation diagnost
     },
     { hostPaneId: "host" },
     null,
-    {
-      execute: async () => ({ stdout: "PRIVATE_PANE" }),
-      observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
-      snapshot: async () => ({
-        path: "PRIVATE_PATH",
-        status: "saved",
-        contents: [
-          {
-            type: "message",
-            message: {
-              role: "assistant",
-              content: [
-                {
-                  type: "toolCall",
-                  id: "PRIVATE_CALL_ID",
-                  name: "delegate_agent",
-                  arguments: {
-                    definition: "PRIVATE_DEFINITION",
-                    task: "PRIVATE_TASK",
-                    label: "PRIVATE_LABEL",
-                    files: ["PRIVATE_FILE"],
-                    privateExtra: "PRIVATE_EXTRA",
+    Object.assign(
+      {
+        execute: async () => ({ stdout: "PRIVATE_PANE" }),
+        observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
+        snapshot: async () => ({
+          path: "PRIVATE_PATH",
+          status: "saved",
+          contents: [
+            {
+              type: "message",
+              message: {
+                role: "assistant",
+                content: [
+                  {
+                    type: "toolCall",
+                    id: "PRIVATE_CALL_ID",
+                    name: "delegate_agent",
+                    arguments: {
+                      definition: "PRIVATE_DEFINITION",
+                      task: "PRIVATE_TASK",
+                      label: "smoke-chief-agent",
+                      files: ["PRIVATE_FILE"],
+                      privateExtra: "PRIVATE_EXTRA",
+                    },
                   },
-                },
-              ],
+                ],
+              },
             },
-          },
-          {
-            type: "message",
-            message: {
-              role: "toolResult",
-              toolName: "delegate_agent",
-              toolCallId: "PRIVATE_CALL_ID",
-              isError: true,
-              content: "PRIVATE_RESULT",
-              details: {
-                ok: false,
-                error: {
-                  category: "invalid_request",
-                  operation: "delegate_agent",
-                  message: "PRIVATE_ERROR_TEXT",
-                  rollbackOccurred: false,
-                  retryAttempted: true,
-                  details: { diagnosticOutcome: "definition_not_allowed" },
-                  ids: { session: "PRIVATE_SESSION_ID" },
+            {
+              type: "message",
+              message: {
+                role: "toolResult",
+                toolName: "delegate_agent",
+                toolCallId: "PRIVATE_CALL_ID",
+                isError: true,
+                content: "PRIVATE_RESULT",
+                details: {
+                  ok: false,
+                  error: {
+                    category: "invalid_request",
+                    operation: "delegate_agent",
+                    message: "PRIVATE_ERROR_TEXT",
+                    rollbackOccurred: false,
+                    retryAttempted: true,
+                    details: { diagnosticOutcome: "definition_not_allowed" },
+                    ids: { session: "PRIVATE_SESSION_ID" },
+                  },
                 },
               },
             },
-          },
-        ]
-          .map((entry) => JSON.stringify(entry))
-          .join("\n"),
-      }),
-    },
+            {
+              type: "message",
+              message: {
+                role: "assistant",
+                content: [
+                  {
+                    type: "toolCall",
+                    id: "PRIVATE_LATER_CALL_ID",
+                    name: "delegate_agent",
+                    arguments: {
+                      definition: "PRIVATE_LATER_DEFINITION",
+                      task: "PRIVATE_LATER_TASK",
+                      label: "unrelated-private-label",
+                    },
+                  },
+                ],
+              },
+            },
+            {
+              type: "message",
+              message: {
+                role: "toolResult",
+                toolName: "delegate_agent",
+                toolCallId: "PRIVATE_LATER_CALL_ID",
+                isError: false,
+                content: "PRIVATE_LATER_SUCCESS",
+              },
+            },
+          ]
+            .map((entry) => JSON.stringify(entry))
+            .join("\n"),
+        }),
+      },
+      { expectedLabel: "smoke-chief-agent" },
+    ),
   );
   assert.ok(projection.rootDelegation);
   const rootDelegation = projection.rootDelegation;
+  assert.equal(
+    "expectedLabelMatched" in rootDelegation &&
+      rootDelegation.expectedLabelMatched,
+    true,
+  );
   assert.equal(rootDelegation.matchingResult, "error");
   assert.deepEqual(rootDelegation.requestShape?.fields?.definition, {
     present: true,
@@ -1821,6 +1858,7 @@ test("Chief Manager failure artifact persists sanitized root delegation diagnost
   const artifact = await preserveFailureEvidence(evidence);
   try {
     const saved = JSON.parse(await readFile(artifact, "utf8"));
+    assert.equal(saved.diagnostics.rootDelegation.expectedLabelMatched, true);
     assert.equal(saved.diagnostics.rootDelegation.matchingResult, "error");
     assert.deepEqual(
       saved.diagnostics.rootDelegation.requestShape.fields.definition,
@@ -1840,6 +1878,86 @@ test("Chief Manager failure artifact persists sanitized root delegation diagnost
       JSON.stringify(saved),
       /PRIVATE|definition_not_allowed.+PRIVATE/u,
     );
+  } finally {
+    await rm(dirname(artifact), { recursive: true, force: true });
+  }
+});
+
+test("Chief Manager diagnostics do not attribute a successful other-label call to the expected call", async () => {
+  const projection = await collectDiagnostics(
+    {
+      scenario: "chief-manager",
+      stage: "chief-manager-delegate-first",
+      paths: {},
+      sessionName: "isolated",
+      rootPaneId: "root",
+    },
+    { hostPaneId: "host" },
+    null,
+    Object.assign(
+      {
+        execute: async () => ({ stdout: "PRIVATE_PANE" }),
+        observe: async () => ({ ok: true, value: { agents: [], panes: [] } }),
+        snapshot: async () => ({
+          path: "PRIVATE_PATH",
+          status: "saved",
+          contents: [
+            {
+              type: "message",
+              message: {
+                role: "assistant",
+                content: [
+                  {
+                    type: "toolCall",
+                    id: "PRIVATE_OTHER_CALL_ID",
+                    name: "delegate_agent",
+                    arguments: {
+                      definition: "PRIVATE_DEFINITION",
+                      task: "PRIVATE_TASK",
+                      label: "other-private-label",
+                    },
+                  },
+                ],
+              },
+            },
+            {
+              type: "message",
+              message: {
+                role: "toolResult",
+                toolName: "delegate_agent",
+                toolCallId: "PRIVATE_OTHER_CALL_ID",
+                isError: false,
+                content: "PRIVATE_SUCCESS",
+              },
+            },
+          ]
+            .map((entry) => JSON.stringify(entry))
+            .join("\n"),
+        }),
+      },
+      { expectedLabel: "smoke-chief-agent" },
+    ),
+  );
+  const artifact = await preserveFailureEvidence(
+    sanitizedFailureEvidence(
+      { scenario: "chief-manager", simulated: true },
+      { error: new Error("PRIVATE_ERROR") },
+      "STALLED",
+      "PASS",
+      projection,
+    ),
+  );
+  try {
+    const saved = JSON.parse(await readFile(artifact, "utf8"));
+    assert.deepEqual(saved.diagnostics.rootDelegation, {
+      delegationCallObserved: false,
+      expectedLabelMatched: false,
+      matchingResult: "absent",
+      assistantObserved: true,
+      assistantStopReason: "unknown",
+      assistantErrorObserved: false,
+    });
+    assert.doesNotMatch(JSON.stringify(saved), /PRIVATE|other-private-label/u);
   } finally {
     await rm(dirname(artifact), { recursive: true, force: true });
   }
