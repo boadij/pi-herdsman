@@ -797,6 +797,8 @@ function projectLifecycle(options: {
   existingComparison?: string;
   failComparisonWrite?: boolean;
   baseLookupFailure?: "killed" | "truncated";
+  pinnedBaseRefs?: string[];
+  pinnedBaseLookupFailure?: "killed" | "truncated" | "nonzero";
 }) {
   const repoKey = realFs.realpathSync(process.cwd());
   const managerCheckout = repoKey;
@@ -809,6 +811,7 @@ function projectLifecycle(options: {
   const branch = "feature/baseline";
   let checkoutBranch = branch;
   let worktreeCreates = 0;
+  let createdBase: string | undefined;
   const gitCommands: string[][] = [];
   let comparisonValues = options.existingComparison;
   let lead: Record<string, unknown> | undefined;
@@ -860,6 +863,21 @@ function projectLifecycle(options: {
           };
         }
         gitCommands.push(args);
+        if (
+          args[0] === "for-each-ref" &&
+          args.some((arg) => arg.startsWith("--points-at="))
+        ) {
+          assert.equal(worktreeCreates, 0);
+          const refs = options.pinnedBaseRefs ?? [];
+          const failure = options.pinnedBaseLookupFailure;
+          return {
+            stdout: refs.length ? `${refs.join("\n")}\n` : "",
+            stderr: "",
+            code: failure === "nonzero" ? 1 : 0,
+            ...(failure === "killed" ? { killed: true } : {}),
+            ...(failure === "truncated" ? { truncated: true } : {}),
+          };
+        }
         if (args[0] === "for-each-ref")
           return {
             stdout: options.existingBranch ? `refs/heads/${branch}\n` : "",
@@ -876,12 +894,23 @@ function projectLifecycle(options: {
           return {
             stdout: ref ? `${ref}\n` : "",
             stderr: "",
-            code: ref ? 0 : 1,
+            code:
+              ref ||
+              /^[0-9a-f]{40}$/iu.test(input ?? "") ||
+              /^[0-9a-f]{64}$/iu.test(input ?? "")
+                ? 0
+                : 1,
             ...(options.baseLookupFailure
               ? { [options.baseLookupFailure]: true }
               : {}),
           };
         }
+        if (args[0] === "rev-parse" && args.includes("--verify"))
+          return {
+            stdout: `${options.base?.toLowerCase()}\n`,
+            stderr: "",
+            code: 0,
+          };
         if (args[0] === "config" && args.includes("--get-all"))
           return comparisonValues
             ? { stdout: `${comparisonValues}\0`, stderr: "", code: 0 }
@@ -924,6 +953,7 @@ function projectLifecycle(options: {
         return { workspace: { workspace_id: WORKSPACE } };
       if (args[0] === "worktree" && args[1] === "create") {
         worktreeCreates++;
+        createdBase = args[args.indexOf("--base") + 1];
         return {
           workspace: { workspace_id: workspaceId },
           root_pane: { pane_id: "pane" },
@@ -1100,6 +1130,9 @@ function projectLifecycle(options: {
     get worktreeCreates() {
       return worktreeCreates;
     },
+    get createdBase() {
+      return createdBase;
+    },
     gitCommands,
     get comparisonValues() {
       return comparisonValues;
@@ -1159,7 +1192,7 @@ test("fresh delegation launches in the profile-aware worktree tab", async () => 
   assert.ok(lifecycle.published);
 });
 
-test("fresh delegation initializes comparison metadata only for a new branch with a named base", async () => {
+test("fresh delegation initializes comparison metadata from an unambiguous creation base", async () => {
   const launch = () => {
     throw new Error("launch observed");
   };
@@ -1200,6 +1233,65 @@ test("fresh delegation initializes comparison metadata only for a new branch wit
   const implicitBase = projectLifecycle({ launch });
   await assert.rejects(implicitBase.activate(), /launch observed/);
   assert.equal(implicitBase.comparisonValues, undefined);
+
+  const pinnedBase = "a".repeat(40);
+  const pinnedScenarios: {
+    refs: string[];
+    expected: string | undefined;
+    existingComparison?: string;
+    existingBranch?: boolean;
+    pinnedBaseLookupFailure?: "killed" | "truncated" | "nonzero";
+    warning?: string;
+  }[] = [
+    {
+      refs: ["refs/heads/feature/parent"],
+      expected: "refs/heads/feature/parent",
+    },
+    { refs: [], expected: undefined },
+    {
+      refs: ["refs/heads/feature/parent", "refs/heads/feature/other"],
+      expected: undefined,
+    },
+    {
+      refs: ["refs/heads/feature/parent"],
+      existingComparison: "refs/heads/other-parent",
+      expected: "refs/heads/other-parent",
+    },
+    {
+      refs: ["refs/heads/feature/parent"],
+      existingBranch: true,
+      expected: undefined,
+    },
+    ...(["killed", "truncated", "nonzero"] as const).map((failure) => ({
+      refs: ["refs/heads/feature/parent"],
+      pinnedBaseLookupFailure: failure,
+      expected: undefined,
+      warning: "Could not initialize the branch comparison target.",
+    })),
+  ];
+  for (const scenario of pinnedScenarios) {
+    const lifecycle = projectLifecycle({
+      base: pinnedBase,
+      pinnedBaseRefs: scenario.refs,
+      ...(scenario.existingComparison
+        ? { existingComparison: scenario.existingComparison }
+        : {}),
+      ...(scenario.existingBranch ? { existingBranch: true } : {}),
+      ...(scenario.pinnedBaseLookupFailure
+        ? { pinnedBaseLookupFailure: scenario.pinnedBaseLookupFailure }
+        : {}),
+      completeLaunch: true,
+    });
+    const result = await lifecycle.activate();
+    assert.equal(result.details.ok, true);
+    assert.equal(lifecycle.comparisonValues, scenario.expected);
+    assert.equal(lifecycle.createdBase, pinnedBase);
+    const rendered = JSON.parse(result.content[0].text);
+    for (const response of [result.details, rendered]) {
+      assert.equal(response.ok, true);
+      assert.equal(response.comparison_warning, scenario.warning);
+    }
+  }
 
   for (const scenario of [
     { base: "a1b2c3d" },

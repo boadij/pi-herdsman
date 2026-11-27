@@ -249,11 +249,13 @@ writer.
 
 When Herdsman creates a genuinely new branch from an explicit named local or
 remote-tracking branch base, it initializes the branch's repository-local Git
-comparison target to that base. Existing branches, reused worktrees, omitted
-bases, and bases that do not unambiguously name a branch do not initialize or
-overwrite this advisory setting. Initialization failure does not prevent
-otherwise successful delegation; the result includes a `comparison_warning`.
-`resume_work` never changes comparison metadata.
+comparison target to that base. A full pinned commit ID also initializes the
+target when exactly one local branch points to that commit at creation time.
+Existing branches, reused worktrees, omitted bases, and ambiguous or unmatched
+commit bases do not initialize or overwrite this advisory setting.
+Initialization failure does not prevent otherwise successful delegation; the
+result includes a `comparison_warning`. `resume_work` never changes comparison
+metadata.
 
 For new work, `files` uses the same configured attachment sizing policy as
 Agent delegation: `inlineAttachmentLimitBytes` controls per-file embedding and
