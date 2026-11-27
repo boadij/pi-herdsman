@@ -4918,8 +4918,8 @@ export function registerLeadRuntime(
         publishLeadRole(ctx, "inactive", leadRuntime.chiefModeGeneration);
         return;
       }
-      // Restoration records fallback eligibility before Lead activation; tool
-      // projection remains gated by verifiedNativeOnlyFlexibleExecution.
+      // Restoration records fallback eligibility independently; active Lead
+      // authorization still gates native tool projection.
       if (
         sessionKind?.kind === "ordinary" &&
         sessionKind.sessionId === ctx.sessionManager.getSessionId() &&
@@ -4970,10 +4970,12 @@ export function registerLeadRuntime(
         managed: false,
         ...(nativeOnlyEligible ? { nativeOnly: true } : {}),
       };
-      inheritedProjection = nativeOnlyEligible
+      const canProjectNativeTools = verifiedNativeOnlyFlexibleExecution();
+      // Until Lead activation, Pi's active tools are not the Lead baseline.
+      inheritedProjection = canProjectNativeTools
         ? nativeInheritedProjectionFor(mode)
         : undefined;
-      if (nativeOnlyEligible)
+      if (canProjectNativeTools)
         pi.setActiveTools(
           leadToolState.normalizeBaseTools(leadToolState.getLeadTools() ?? []),
         );
@@ -5128,7 +5130,7 @@ export function registerLeadRuntime(
               restoredExecution.definition,
             ),
           )
-        : verifiedNativeOnlyFlexibleExecution()
+        : restoredExecution.nativeOnly
           ? nativeInheritedProjectionFor(mode)
           : undefined;
       if (projection) {

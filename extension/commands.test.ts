@@ -2091,6 +2091,27 @@ test("session tree restoration respects checkpoint order and tool policies", asy
       expected: ["read", "list_peers", "message_peer"],
     },
     {
+      name: "native-only Flexible restoration keeps a later removal across Chief-to-Lead restoration",
+      profile: "unsupported: true",
+      nativeOnly: true,
+      chiefToLead: true,
+      branch: [
+        checkpoint("flexible", ["read", "bash"]),
+        {
+          type: "custom",
+          customType: "pi-herdsman-role",
+          data: {
+            sessionId: LEAD_SESSION_ID,
+            role: "lead",
+            leadTools: ["read", "bash"],
+          },
+        },
+        toolChange([], ["bash"]),
+      ],
+      restored: ["read"],
+      expected: ["read", "list_peers", "message_peer"],
+    },
+    {
       name: "relative CodeMode is projected without entering the inherited baseline",
       branch: [checkpoint("flexible", ["read"]), toolChange(["history"])],
       restored: ["read", "history", "codemode"],
@@ -2119,8 +2140,20 @@ test("session tree restoration respects checkpoint order and tool policies", asy
           ...(scenario.extraTools ?? []).map((name) => ({ name })),
         ],
       });
-      const context = fakeContext(pi.entries, scenario.branch) as any;
+      let selectedBranch = "chiefToLead" in scenario ? [] : scenario.branch;
+      const context = fakeContext(pi.entries, selectedBranch) as any;
+      context.sessionManager.getBranch = () => selectedBranch;
       context.cwd = cwd;
+      if ("chiefToLead" in scenario) {
+        process.env.HERDR_PANE_ID = `tree-policy-${randomUUID()}`;
+        process.env.HERDR_TAB_ID = `tree-policy-${randomUUID()}`;
+        process.env.HERDR_SOCKET_PATH = join(
+          tmpdir(),
+          `tree-policy-chief-${randomUUID()}.sock`,
+        );
+        context.mode = "rpc";
+        context.ui.notify = () => undefined;
+      }
       registerExtension!(pi.pi as never);
       if (scenario.loaderFiltered) {
         const getAllTools = pi.pi.getAllTools;
@@ -2131,13 +2164,34 @@ test("session tree restoration respects checkpoint order and tool policies", asy
       }
       try {
         await pi.events.get("session_start")![0](undefined, context);
+        const toolSelections: string[][] = [];
+        if ("chiefToLead" in scenario) {
+          await pi.commandOptions.get("chief").handler("", context);
+          assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
+          const setActiveTools = pi.pi.setActiveTools.bind(pi.pi);
+          pi.pi.setActiveTools = (tools: string[]) => {
+            toolSelections.push([...tools]);
+            setActiveTools(tools);
+          };
+        }
+        selectedBranch = scenario.branch;
         pi.pi.setActiveTools(scenario.restored);
+        toolSelections.length = 0;
         const entriesBefore = pi.entries.length;
         await pi.events.get("session_tree")![0](undefined, context);
         assert.deepEqual(
           new Set(pi.pi.getActiveTools()),
           new Set(scenario.expected),
         );
+        if ("chiefToLead" in scenario)
+          assert.ok(
+            toolSelections
+              .slice(0, -1)
+              .every(
+                (tools) => !tools.includes("read") && !tools.includes("bash"),
+              ),
+            "native tools must not be projected before Lead activation",
+          );
         const skillCall = pi.events.get("tool_call")![0](
           { toolName: "load_skill" },
           context,
@@ -2183,6 +2237,12 @@ test("session tree restoration respects checkpoint order and tool policies", asy
         }
       } finally {
         await pi.events.get("session_shutdown")?.[0]();
+        if ("chiefToLead" in scenario) {
+          delete process.env.HERDR_SOCKET_PATH;
+          delete process.env.HERDR_TAB_ID;
+          delete process.env.HERDR_PANE_ID;
+          setLeadEnvironment();
+        }
       }
     });
   }
