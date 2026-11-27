@@ -944,6 +944,24 @@ const STRUCTURED_TOOL_ERROR_CATEGORIES = new Set([
   "incompatible_build",
   "internal_failure",
 ]);
+const AGENT_ACTION_DIAGNOSTIC_OUTCOMES = new Set([
+  "assignment_definition_missing",
+  "assignment_task_missing",
+  "continuation_session_missing",
+  "root_delegation_unavailable",
+  "root_session_changed",
+  "root_authority_changed",
+  "agent_depth_unverifiable",
+  "agent_depth_mismatch",
+  "agent_depth_limit_exceeded",
+  "continuation_unavailable",
+  "definition_unavailable",
+  "definition_not_allowed",
+  "definition_disabled",
+  "definition_references_unavailable",
+  "active_session_conflict",
+  "invalid_agent_label",
+]);
 
 export function supervisorAgentCompletionMatches(
   message,
@@ -2509,6 +2527,83 @@ export function rootDelegationDiagnostics(contents, expectedLabel) {
     )
       result = message;
   }
+  const args = call?.arguments;
+  const knownRequestFields = [
+    "definition",
+    "task",
+    "label",
+    "files",
+    "model",
+    "thinking",
+    "cwd",
+  ];
+  const fieldShape = (name) => {
+    const present =
+      args !== null && typeof args === "object" && Object.hasOwn(args, name);
+    const value = present ? args[name] : undefined;
+    return {
+      present,
+      type: !present
+        ? "absent"
+        : Array.isArray(value)
+          ? "array"
+          : value === null
+            ? "null"
+            : typeof value,
+    };
+  };
+  const errorDetail = result?.details?.error;
+  const safeOperation = [
+    "delegate_agent",
+    "prepare_agent",
+    "launch_agent",
+  ].includes(errorDetail?.operation)
+    ? errorDetail.operation
+    : undefined;
+  const requestShape =
+    args === null || typeof args !== "object"
+      ? { type: args === null ? "null" : typeof args }
+      : {
+          type: Array.isArray(args) ? "array" : "object",
+          fields: Object.fromEntries(
+            knownRequestFields.map((name) => [name, fieldShape(name)]),
+          ),
+          definitionNonempty:
+            typeof args.definition === "string" && args.definition.length > 0,
+          taskNonempty: typeof args.task === "string" && args.task.length > 0,
+          expectedLabel:
+            expectedLabel === undefined ? false : args.label === expectedLabel,
+          labelPattern:
+            typeof args.label === "string" &&
+            /^[a-z][a-z0-9_-]{0,31}$/.test(args.label),
+          filesArray: Array.isArray(args.files),
+          filesCount: Array.isArray(args.files) ? args.files.length : null,
+          anyExtraProperty: Object.keys(args).some(
+            (name) => !knownRequestFields.includes(name),
+          ),
+        };
+  const safeError =
+    errorDetail && typeof errorDetail === "object"
+      ? {
+          ...(STRUCTURED_TOOL_ERROR_CATEGORIES.has(errorDetail.category)
+            ? { category: errorDetail.category }
+            : {}),
+          ...(safeOperation ? { operation: safeOperation } : {}),
+          ...(AGENT_ACTION_DIAGNOSTIC_OUTCOMES.has(
+            errorDetail.details?.diagnosticOutcome,
+          )
+            ? { diagnosticOutcome: errorDetail.details.diagnosticOutcome }
+            : {}),
+          rollbackOccurred:
+            typeof errorDetail.rollbackOccurred === "boolean"
+              ? errorDetail.rollbackOccurred
+              : null,
+          retryAttempted:
+            typeof errorDetail.retryAttempted === "boolean"
+              ? errorDetail.retryAttempted
+              : null,
+        }
+      : undefined;
   return {
     delegationCallObserved: Boolean(call),
     matchingResult: !call
@@ -2534,6 +2629,8 @@ export function rootDelegationDiagnostics(contents, expectedLabel) {
     ].includes(result?.details?.error?.category)
       ? { errorCategory: result.details.error.category }
       : {}),
+    ...(call ? { requestShape } : {}),
+    ...(safeError ? { error: safeError } : {}),
     assistantObserved: Boolean(assistant),
     assistantStopReason: [
       "stop",
