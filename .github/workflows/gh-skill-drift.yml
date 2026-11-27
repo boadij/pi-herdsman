@@ -117,11 +117,8 @@ jobs:
           body-path: ${{ runner.temp }}/skill-update-pr.md
           author: "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
           add-paths: |
-            vendor/github-cli/SKILL.md
-            vendor/github-cli/source.json
-            vendor/gh-stack/SKILL.md
-            vendor/gh-stack/source.json
-            vendor/gh-stack/references/
+            vendor/github-cli/
+            vendor/gh-stack/
 
       - name: Report maintenance PR operation
         if: always() && steps.pr.outcome == 'success'

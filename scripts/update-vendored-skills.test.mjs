@@ -41,11 +41,11 @@ function blobHash(bytes) {
     .digest("hex");
 }
 
-function fixture() {
+function fixture(stack = initial.stack) {
   const root = mkdtempSync(join(tmpdir(), "vendored-skills-"));
   for (const [vendor, files, license, commit] of [
     ["github-cli", initial.cli, cliLicense, "1".repeat(40)],
-    ["gh-stack", initial.stack, stackLicense, "2".repeat(40)],
+    ["gh-stack", stack, stackLicense, "2".repeat(40)],
   ]) {
     const directory = join(root, "vendor", vendor);
     mkdirSync(directory, { recursive: true });
@@ -271,6 +271,53 @@ test("reconciles bytes, additions, removals and provenance; repeat is idempotent
   assert.equal(
     second.requests.some((url) => url.includes("/git/blobs/")),
     false,
+  );
+});
+
+test("workflow stages the next update when the checkout has no references directory", async (t) => {
+  const stack = new Map([["SKILL.md", initial.stack.get("SKILL.md")]]);
+  const root = fixture(stack);
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const git = (...args) =>
+    execFileSync("git", args, { cwd: root, encoding: "utf8" });
+  git("init", "--quiet");
+  git("add", ".");
+  git(
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "commit",
+    "--quiet",
+    "--no-gpg-sign",
+    "-m",
+    "accepted snapshot without references",
+  );
+  assert.equal(existsSync(join(root, "vendor/gh-stack/references")), false);
+  assert.equal(git("status", "--porcelain"), "");
+
+  const cli = new Map([["SKILL.md", Buffer.from("cli revised\n")]]);
+  const { request } = upstream({ cli, stack });
+  await reconcile(root, { request });
+
+  // Read the workflow's literal block rather than duplicating its pathspecs.
+  const workflow = readFileSync(
+    new URL("../.github/workflows/gh-skill-drift.yml", import.meta.url),
+    "utf8",
+  );
+  const addPaths = workflow.match(
+    /^ {10}add-paths: \|\r?\n((?: {12}\S[^\r\n]*\r?\n)+)/mu,
+  );
+  assert.ok(addPaths, "expected the workflow's add-paths literal block");
+  // The pinned create-pull-request action uses one git add for all paths.
+  const paths = addPaths[1]
+    .split(/[\n,]+/u)
+    .map((path) => path.trim())
+    .filter(Boolean);
+  git("add", "--", ...paths);
+  assert.equal(
+    git("diff", "--cached", "--name-only").trim(),
+    "vendor/github-cli/SKILL.md\nvendor/github-cli/source.json",
   );
 });
 
