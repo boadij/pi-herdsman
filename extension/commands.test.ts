@@ -1845,7 +1845,7 @@ test("failed inherited-tool persistence enforces policy and retries", async (t) 
   }
 });
 
-test("failed inherited capture still enforces invalid-profile fail-closed tools", async (t) => {
+test("invalid profile on branch restore preserves only the saved native baseline", async (t) => {
   setLeadEnvironment();
   const cwd = mkdtempSync(join(tmpdir(), "herdsman-invalid-inherited-tools-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
@@ -1868,26 +1868,37 @@ test("failed inherited capture still enforces invalid-profile fail-closed tools"
   });
   const context = fakeContext(entries) as any;
   context.cwd = cwd;
-  const appendEntry = pi.pi.appendEntry;
-  let failPersistence = false;
-  pi.pi.appendEntry = (type: string, data: unknown) => {
-    if (type === "pi-herdsman-lead-execution" && failPersistence)
-      throw new Error("baseline write failed");
-    appendEntry(type, data);
-  };
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, context);
     writeFileSync(definition, "---\nname: [malformed\n---\nbad\n");
     pi.pi.setActiveTools(["read", "history"]);
-    failPersistence = true;
     await pi.events.get("session_tree")![0](undefined, context);
-    assert.deepEqual(pi.pi.getActiveTools(), leadToolsWithoutAgents);
+    const active = pi.pi.getActiveTools();
+    assert.ok(active.includes("read"));
+    assert.ok(active.includes("bash"));
+    assert.ok(!active.includes("history"));
+    assert.ok(active.includes("list_peers"));
+    assert.ok(active.includes("message_peer"));
+    for (const name of ["list_agents", "delegate_agent", "resume_agent"])
+      assert.ok(!active.includes(name), name);
+    assert.deepEqual(
+      sessionLeadExecutionState(entries)?.leadTools,
+      ["read", "bash"],
+      "branch restoration uses the persisted native baseline, not transient tools",
+    );
     assert.deepEqual(
       pi.events.get("tool_call")![0]({ toolName: "load_skill" }, context),
       {
         block: true,
         reason: "Skill loading is unavailable in the active role.",
+      },
+    );
+    assert.deepEqual(
+      pi.events.get("tool_call")![0]({ toolName: "history" }, context),
+      {
+        block: true,
+        reason: "Tool is unavailable in the active Lead profile.",
       },
     );
   } finally {

@@ -71,6 +71,24 @@ Coordinator profiles live under the scope's `coordinators/` root:
 at the root. Chief is bundled and global only. Definitions layer by category
 and frontmatter name; an unmatched profile is standalone. See the
 [canonical paths and scope rules](../reference/agent-definition-schema.md#sources-and-precedence).
+Only these canonical locations participate in discovery. Resolving a specific
+Coordinator does not require unrelated Coordinator definitions to validate;
+complete inventory discovery remains strict, and malformed or unidentifiable
+files still fail conservatively.
+
+An invalid Agent roster or Coordinator `agents` reference disables fresh Agent
+delegation without discarding an otherwise valid ordinary Flexible Lead tool
+policy. If the optional Flexible Lead profile cannot be resolved during
+ordinary startup or branch restoration, a verified ordinary, unbound session
+retains its saved native Pi tool selection, but does not receive profile
+additions or exclusions and cannot start new Agent delegations. This fallback
+deliberately may allow a native tool the unreadable profile meant to exclude.
+It does not apply to managed, assigned, bound, supervisory, quarantined, or
+identity-invalid sessions. Failed explicit `/lead-flexible` refreshes keep the
+previous valid policy. Repair the definition and run `/lead-flexible` to
+reapply it. The
+[schema reference](../reference/agent-definition-schema.md#coordinator-definitions)
+documents the complete failure contract and boundaries.
 
 Definition configuration and runtime Agent discovery are separate views. The
 Definitions UI and Markdown files expose editable configuration and source

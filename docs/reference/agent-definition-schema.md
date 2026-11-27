@@ -152,9 +152,19 @@ Herdsman-owned authority and required coordination tools
 remain protected by runtime policy.
 
 All effective Agent definitions are sorted and validated together, including
-every `agents` reference. A selected Coordinator profile's `agents` allowlist is validated
-against the effective Agent roster; invalid references are not silently
-discarded. Agent discovery does not validate every Coordinator profile.
+every `agents` reference. Only the canonical directories above participate in
+Coordinator discovery. Resolving one Coordinator validates and composes only
+the requested identity, so identifiable unrelated definitions do not need
+execution-field or body-asset validation for that operation. Invalid or
+unidentifiable YAML still fails conservatively, and full Coordinator inventory
+discovery validates every applicable definition. Namespace checks and the
+global-only Chief rule apply to targeted resolution as well.
+
+A selected Coordinator profile's `agents` allowlist is validated against the
+current effective Agent roster before fresh delegation is authorized. Invalid
+Agent discovery or references deny fresh delegation; they do not invalidate a
+verified ordinary Flexible Lead's otherwise valid execution policy. Assigned,
+bound, Manager, and Chief profile resolution remains strict.
 
 ### Coordinator definitions
 
@@ -208,11 +218,23 @@ configuration blocks explicit activation; an invalid profile during verified
 role restoration retains authority but restricts tools to mandatory role tools
 and uses the runtime-owned role contract without configurable instructions.
 
-If a persisted ordinary mode resolves to an invalid profile, Herdsman keeps the
-saved mode rather than silently switching to the other profile. The ordinary
-Lead denies fresh delegation, retains applicable owned-Agent controls, and surfaces the
-definition error. Repair the selected definition, or explicitly choose the
-other mode with `/lead`; either action resolves the profile again.
+If an optional Flexible Lead execution profile cannot be resolved during
+ordinary startup or branch restoration, a verified ordinary, unbound Flexible
+Lead keeps its saved native Pi tool baseline rather than disabling ordinary
+execution. Only tools already in that selected baseline remain available;
+configured additions and exclusions are not applied. Fresh Agent delegation
+is denied, while verified controls for already-owned Agents remain available.
+This deliberate fallback can expose a native tool that the unreadable profile
+intended to exclude, because that policy cannot be enforced when it cannot be
+read. It does not apply to assigned or exact-session-bound profiles, managed
+sessions, supervisory roles, failed identity or persisted-state validation, or
+quarantine.
+
+If the Flexible profile is valid but its `agents` references or current Agent
+roster are invalid, its valid tool restrictions still apply while fresh
+delegation is denied. A failed explicit `/lead-flexible` refresh retains the
+previous valid execution policy and tool selection. Repair the configuration
+and run `/lead-flexible` again to reapply it.
 
 An assigned Lead uses a full launch definition: `managed-lead` by default or
 a named Lead profile. Applicable layers are resolved for the verified target

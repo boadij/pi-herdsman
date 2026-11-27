@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
 import { resolveCliModel } from "@earendil-works/pi-coding-agent";
@@ -1520,6 +1520,41 @@ test("role agent allowlists validate effective targets", () => {
       /reserved agent definition chief/,
     );
   });
+});
+
+test("execution-only Coordinator resolution defers only Agent references", () => {
+  const global = mkdtempSync(join(tmpdir(), "pi-herdsman-deferred-refs-"));
+  const path = join(global, "coordinators", "leads", "flexible-lead.md");
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(
+    path,
+    "---\nname: flexible-lead\ntools: [read]\nagents: [missing]\n---\n",
+  );
+  withPiAgentDir(global, () => {
+    assert.throws(
+      () => resolveDefinition("lead", "flexible-lead"),
+      /references missing agent definition missing/u,
+    );
+    const execution = resolveDefinition("lead", "flexible-lead", {
+      validateAgentReferences: false,
+    });
+    assert.deepEqual(execution.frontmatter.tools, ["read"]);
+    assert.deepEqual(execution.frontmatter.agents, ["missing"]);
+
+    writeFileSync(
+      path,
+      "---\nname: flexible-lead\ntools: [read]\nagents: [42]\n---\n",
+    );
+    assert.throws(
+      () =>
+        resolveDefinition("lead", "flexible-lead", {
+          validateAgentReferences: false,
+        }),
+      /field agents:/u,
+      "deferring external references does not skip structural validation",
+    );
+  });
+  rmSync(global, { recursive: true, force: true });
 });
 
 test("supervisor allowlists use effective overlays and layered Agent targets", () => {
@@ -4541,11 +4576,14 @@ test("Agent and Coordinator namespaces isolate misplaced user definitions", () =
   mkdirSync(agents, { recursive: true });
   mkdirSync(roles, { recursive: true });
   withPiAgentDir(root, () => {
-    writeFileSync(join(roles, "bad.md"), "---\nname: custom\n---\n");
+    writeFileSync(
+      join(roles, "bad.md"),
+      "---\nname: custom\nunsupported: true\n---\n",
+    );
     assert.ok(discoverAgentDefinitions().length);
-    assert.throws(
-      () => discoverRoleDefinitions(),
-      /bad\.md: legacy coordinator profile.*coordinators.*leads.*coordinators.*managers/u,
+    assert.ok(
+      discoverRoleDefinitions().length,
+      "flat Coordinator files are ignored",
     );
     unlinkSync(join(roles, "bad.md"));
     writeFileSync(join(agents, "bad.md"), "---\nname: manager\n---\n");
@@ -4613,57 +4651,24 @@ test("contextual definition warnings are reported once per session", async () =>
   }
 });
 
-test("legacy coordinator profiles diagnose only applicable trusted scopes", () => {
+test("Coordinator discovery ignores unsupported legacy locations in every scope", () => {
   const root = mkdtempSync(join(tmpdir(), "herdsman-legacy-coordinators-"));
   const global = join(root, "global");
   const project = join(root, "project");
   mkdirSync(global);
   mkdirSync(project);
   const legacyGlobal = join(global, "pi-herdsman", "roles");
-  const canonicalGlobal = join(global, "coordinators");
   const legacyProject = join(project, ".pi", "pi-herdsman", "roles");
-  const canonicalProject = join(project, ".pi", "coordinators");
   const put = (path: string, body: string) => {
     mkdirSync(join(path, ".."), { recursive: true });
     writeFileSync(path, body);
   };
-  const manager = "---\nname: manager\n---\nCustom manager";
+  const valid = "---\nname: manager\n---\nObsolete profile";
+  const malformed = "---\nname: [manager\n---\nMalformed obsolete file";
 
-  mkdirSync(legacyGlobal, { recursive: true });
-  put(join(legacyGlobal, "manager.md"), manager);
-  withPiAgentDir(global, () => {
-    assert.throws(
-      () => discoverRoleDefinition("manager"),
-      (error: Error) => {
-        assert.ok(error.message.includes(legacyGlobal));
-        assert.ok(error.message.includes(canonicalGlobal));
-        return true;
-      },
-    );
-    assert.ok(discoverAgentDefinitions().length);
-  });
-  unlinkSync(join(legacyGlobal, "manager.md"));
-  put(join(legacyGlobal, "manager.example.md"), "not parsed");
-  mkdirSync(canonicalGlobal, { recursive: true });
-  put(join(canonicalGlobal, "managers", "manager.md"), manager);
-  withPiAgentDir(global, () => {
-    assert.equal(
-      discoverRoleDefinition("manager").overrideSource,
-      join(canonicalGlobal, "managers", "manager.md"),
-    );
-    assert.ok(discoverRoleDefinition("manager", { projectRoot: project }));
-  });
-
-  put(join(legacyProject, "manager.md"), manager);
-  withPiAgentDir(global, () => {
-    assert.ok(discoverAgentDefinitions());
-    assert.throws(
-      () => discoverRoleDefinition("manager", { projectRoot: project }),
-      /legacy coordinator profile is no longer loaded/u,
-    );
-  });
-  rmSync(legacyProject, { recursive: true, force: true });
-  mkdirSync(canonicalProject, { recursive: true });
+  put(join(legacyGlobal, "manager.md"), valid);
+  put(join(legacyGlobal, "flexible-lead.md"), malformed);
+  put(join(legacyProject, "manager.md"), malformed);
 
   const git = join(root, "git");
   mkdirSync(git);
@@ -4674,14 +4679,86 @@ test("legacy coordinator profiles diagnose only applicable trusted scopes", () =
     { cwd: git, encoding: "utf8" },
   ).trim();
   const legacyPrivate = join(common, "pi-herdsman", "roles");
-  put(join(legacyPrivate, "manager.md"), manager);
+  put(join(legacyPrivate, "manager.md"), valid);
+  put(join(legacyPrivate, "flexible-lead.md"), malformed);
   withPiAgentDir(global, () => {
-    assert.throws(
-      () => discoverRoleDefinition("manager", { projectRoot: git }),
-      /legacy coordinator profile is no longer loaded/u,
-    );
-    assert.ok(discoverRoleDefinition("manager"));
+    for (const options of [
+      {},
+      { projectRoot: project },
+      { projectRoot: git },
+    ]) {
+      const manager = discoverRoleDefinition("manager", options);
+      const flexible = discoverRoleDefinition("flexible-lead", options);
+      assert.notEqual(manager.path, join(legacyGlobal, "manager.md"));
+      assert.notEqual(flexible.path, join(legacyGlobal, "flexible-lead.md"));
+      assert.equal(manager.name, "manager");
+      assert.equal(flexible.name, "flexible-lead");
+    }
+    assert.ok(discoverAgentDefinitions().length);
   });
+});
+
+test("targeted Coordinator resolution isolates unrelated definition failures", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "herdsman-targeted-coordinators-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const global = join(root, "global");
+  const leads = join(global, "coordinators", "leads");
+  const managers = join(global, "coordinators", "managers");
+  const put = (path: string, contents: string) => {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, contents);
+  };
+  const flexible = join(leads, "flexible-lead.md");
+  const unrelated = join(leads, "unrelated.md");
+  const manager = join(managers, "manager.md");
+
+  put(flexible, "---\nname: flexible-lead\ntools: [read]\n---\n");
+  put(
+    unrelated,
+    "---\nname: unrelated\nunsupported: true\n---\n@./missing-prompt.md\n",
+  );
+  put(manager, "---\nname: manager\nunsupported: true\n---\n");
+  withPiAgentDir(global, () => {
+    assert.equal(
+      resolveDefinition("lead", "flexible-lead").frontmatter.tools?.[0],
+      "read",
+    );
+    assert.throws(() => discoverRoleDefinitions(), /unsupported/u);
+
+    put(flexible, "---\nname: flexible-lead\nunsupported: true\n---\n");
+    assert.throws(
+      () => resolveDefinition("lead", "flexible-lead"),
+      /unsupported/u,
+    );
+
+    put(flexible, "---\nname: flexible-lead\n---\n");
+    put(join(leads, "duplicate.md"), "---\nname: flexible-lead\n---\n");
+    assert.throws(
+      () => resolveDefinition("lead", "flexible-lead"),
+      /multiple definitions found for lead flexible-lead/u,
+    );
+
+    unlinkSync(join(leads, "duplicate.md"));
+    put(unrelated, "---\nname: [unrelated\n---\n");
+    assert.throws(
+      () => resolveDefinition("lead", "flexible-lead"),
+      /unrelated\.md/u,
+      "an unidentifiable file remains a conservative discovery failure",
+    );
+    assert.throws(() => discoverRoleDefinitions(), /unrelated\.md/u);
+  });
+
+  const project = join(root, "project");
+  put(
+    join(project, ".pi", "coordinators", "chief.md"),
+    "---\nname: chief\n---\n",
+  );
+  withPiAgentDir(global, () =>
+    assert.throws(
+      () => resolveDefinition("chief", "chief", { projectRoot: project }),
+      /project overrides are not supported/u,
+    ),
+  );
 });
 
 test("named Coordinator definitions layer only within their category", (t) => {
