@@ -4462,7 +4462,7 @@ async function runTerminalFailureSmoke(ctx) {
   const attemptsPath = join(evidenceDir, "smoke-faux-attempts.jsonl");
   const settledPath = join(evidenceDir, "smoke-faux-settled.jsonl");
   const provenancePath = join(evidenceDir, "smoke-faux-provenance.jsonl");
-  const definitionDir = join(ctx.rootCwd, ".pi", "coordinators");
+  const definitionDir = join(ctx.rootCwd, ".pi", "coordinators", "leads");
   await mkdir(definitionDir, { recursive: true });
   await writeFile(
     join(definitionDir, "managed-lead.md"),
@@ -4484,7 +4484,7 @@ async function runTerminalFailureSmoke(ctx) {
       2,
     ) + "\n",
   );
-  await run("git", ["add", ".pi/coordinators/managed-lead.md"], {
+  await run("git", ["add", ".pi/coordinators/leads/managed-lead.md"], {
     cwd: ctx.rootCwd,
   });
   await run(
@@ -5216,12 +5216,12 @@ async function smokeRootManagerLease(ctx, managerPath) {
 }
 
 async function runManagerHandoffSmoke(ctx) {
-  // Reuses the established Manager assignment and project-message paths; only the turnover under test is exercised.
   const branch = `herdsman/smoke-manager-handoff-${randomUUID()}`;
+  const definition = "manager-handoff-lead";
   const marker = `MANAGER_HANDOFF_PENDING_${randomUUID()}`;
   ctx.managerRecovery = { branch };
   ctx.owned.managerBranch = branch;
-  await run("git", ["add", ".pi/coordinators/managed-lead.md"], {
+  await run("git", ["add", `.pi/coordinators/leads/${definition}.md`], {
     cwd: ctx.rootCwd,
   });
   await run(
@@ -5265,7 +5265,7 @@ async function runManagerHandoffSmoke(ctx) {
     "--timeout",
     "15000",
   ]);
-  const prompt = `Use delegate_work exactly once with branch ${branch} and task exactly "Do not modify files. Call message_manager with MANAGER_HANDOFF_READY, then end the turn."`;
+  const prompt = `Use delegate_work exactly once with branch ${branch} and task exactly "Do not modify files. Call message_manager with MANAGER_HANDOFF_READY, then end the turn." Set definition to exactly ${definition}.`;
   await submitPaneCommand(ctx, ctx.rootPaneId, prompt);
   const assignment = await waitForEvidence(
     ctx,
@@ -5546,6 +5546,9 @@ async function runManagerHandoffSmoke(ctx) {
   };
   const initialLeadPid = assignment.initialLeadPid;
   const initialBytes = await readFile(assignmentPath, "utf8");
+  const savedAssignment = JSON.parse(initialBytes);
+  assert.equal(savedAssignment.id, leadSessionId);
+  assert.equal(savedAssignment.definition, definition);
   const previousLease = await smokeRootManagerLease(ctx, managerPath);
   await submitPaneCommand(ctx, ctx.rootPaneId, "/manager-leave");
   await waitForEvidence(
@@ -5562,8 +5565,29 @@ async function runManagerHandoffSmoke(ctx) {
     },
     { timeoutMs: 15_000, stallMs: CONTROL_STALL_MS },
   );
-  const assertLeadContinuity = async () => {
+  const assertSavedDefinition = async (savedSession) => {
     assert.equal(await readFile(assignmentPath, "utf8"), initialBytes);
+    assert.equal(savedSession?.id, leadSessionId);
+    assert.deepEqual(
+      sessionEntries(savedSession.contents)
+        .filter(
+          (entry) =>
+            entry.type === "custom" &&
+            entry.customType === "pi-herdsman-coordinator-definition",
+        )
+        .map((entry) => entry.data),
+      [
+        {
+          version: 1,
+          sessionId: leadSessionId,
+          category: "lead",
+          name: definition,
+        },
+      ],
+      "Assigned Lead must retain its exact saved definition binding",
+    );
+  };
+  const assertLeadContinuity = async () => {
     if (!managerHandoffLeadPidContinues(initialLeadPid, await leadProcessPid()))
       throw new Error(
         "Assigned Lead Pi process changed during Manager handoff",
@@ -5576,6 +5600,7 @@ async function runManagerHandoffSmoke(ctx) {
     );
     if (!sameLead || (await agentSessionId(ctx, sameLead)) !== leadSessionId)
       throw new Error("Assigned Lead did not remain in its exact session");
+    await assertSavedDefinition(await isolatedSessionDetails(ctx, sameLead));
     const panes = (await nestedCommand(ctx, ["pane", "list"])).panes ?? [];
     if (
       resolve(
@@ -5712,6 +5737,128 @@ async function runManagerHandoffSmoke(ctx) {
     ) !== resolve(worktreePath)
   )
     throw new Error("Assigned Lead workspace changed during Manager handoff");
+
+  const listExactLeads = async () =>
+    agentsForPiSession(
+      ctx,
+      (await nestedCommand(ctx, ["agent", "list"])).agents ?? [],
+      leadSessionId,
+    );
+  const statePath = join(
+    runtime,
+    "coordinators",
+    `${hash(leadSessionId)}.json`,
+  );
+  const readLeadState = async () =>
+    JSON.parse(await readFile(statePath, "utf8"));
+  const initialState = await readLeadState();
+  assert.ok(initialState.instanceId);
+  const staffAction = async (tool, action, prompt) => {
+    await nestedCommand(ctx, ["agent", "prompt", ctx.rootPaneId, prompt]);
+    return waitForEvidence(
+      ctx,
+      `manager-handoff-${action}`,
+      async () => {
+        const session = await root();
+        if (!session) return { done: false };
+        const results = staffActionResults(
+          session.contents,
+          tool,
+          action,
+          prompt,
+        );
+        assert.ok(results.length <= 1);
+        const entries = sessionEntries(session.contents);
+        const failed = entries.find(
+          ({ message }) =>
+            message?.role === "toolResult" &&
+            message.toolName === tool &&
+            (message.isError || message.details?.ok === false),
+        );
+        if (failed)
+          throw new Error(
+            `${tool} failed: ${messageText(failed.message.content)}`,
+          );
+        return {
+          done: results.length === 1,
+          value: results[0],
+          progress: {
+            promptObserved: entries.some(
+              ({ message }) =>
+                message?.role === "user" &&
+                messageText(message.content) === prompt,
+            ),
+            toolResultObserved: entries.some(
+              ({ message }) =>
+                message?.role === "toolResult" && message.toolName === tool,
+            ),
+          },
+        };
+      },
+      { timeoutMs: 90_000, stallMs: MODEL_STALL_MS },
+    );
+  };
+  const stopped = await staffAction(
+    "stop_lead",
+    "stop",
+    "MANAGER_HANDOFF_STOP",
+  );
+  assert.equal(stopped.branch, branch);
+  assert.equal(stopped.session, leadSessionId);
+  assert.deepEqual(await listExactLeads(), []);
+  const stoppedPane = await nestedCommand(ctx, [
+    "pane",
+    "process-info",
+    "--pane",
+    lead.pane_id,
+  ]);
+  assert.deepEqual(
+    candidateProcess(
+      stoppedPane,
+      ctx.candidateExtension,
+      ctx.herdrStateExtension,
+    ),
+    [],
+  );
+  const stoppedSession = await exactIsolatedSession(ctx, leadSessionId);
+  await assertSavedDefinition(stoppedSession);
+
+  const resumed = await staffAction(
+    "resume_work",
+    "resume",
+    "MANAGER_HANDOFF_RESUME",
+  );
+  assert.equal(resumed.recovered, true);
+  assert.equal(resumed.branch, branch);
+  assert.equal(resumed.session, leadSessionId);
+  assert.equal(resumed.workspace_id, row.workspace_id);
+  const resumedLeads = await listExactLeads();
+  assert.equal(resumedLeads.length, 1);
+  const [resumedLead] = resumedLeads;
+  assert.equal(resumedLead.workspace_id, row.workspace_id);
+  const resumedSession = await isolatedSessionDetails(ctx, resumedLead);
+  assert.equal(resumedSession?.path, stoppedSession.path);
+  await assertSavedDefinition(resumedSession);
+  const resumedPane = await nestedCommand(ctx, [
+    "pane",
+    "process-info",
+    "--pane",
+    resumedLead.pane_id,
+  ]);
+  const processes = candidateProcess(
+    resumedPane,
+    ctx.candidateExtension,
+    ctx.herdrStateExtension,
+  );
+  assert.equal(processes.length, 1);
+  assert.notEqual(processes[0].pid, initialLeadPid);
+  const ready = await readLeadState();
+  assert.equal(ready.piSessionId, leadSessionId);
+  assert.ok(ready.instanceId);
+  assert.notEqual(ready.instanceId, initialState.instanceId);
+  assert.equal(ready.startupAttestation?.kind, "model_restore");
+  assert.equal(ready.startupAttestation.assignmentId, leadSessionId);
+  assert.equal(ready.startupAttestation.generation, ready.instanceId);
 }
 
 function managerMergeToolRows(contents) {
@@ -5771,7 +5918,7 @@ async function runManagerMergeSmoke(ctx) {
       ["direct_response", "herd_settlement"].includes(entry.details?.kind),
     );
 
-  await run("git", ["add", ".pi/coordinators/managed-lead.md"], {
+  await run("git", ["add", ".pi/coordinators/leads/managed-lead.md"], {
     cwd: ctx.rootCwd,
   });
   await run(
@@ -14492,9 +14639,11 @@ async function main() {
           { flag: "wx" },
         );
         // Add the isolated provider without replacing normal extension discovery.
-        await mkdir(join(paths.piAgent, "coordinators"), { recursive: true });
+        await mkdir(join(paths.piAgent, "coordinators", "leads"), {
+          recursive: true,
+        });
         await writeFile(
-          join(paths.piAgent, "coordinators", "managed-lead.md"),
+          join(paths.piAgent, "coordinators", "leads", "managed-lead.md"),
           `---\nname: managed-lead\nmodel: smoke-faux/chief-manager\nextensions: [${JSON.stringify(`+${ctx.simulatedProviderExtension}`)}]\n---\n`,
           { flag: "wx" },
         );
@@ -14524,20 +14673,26 @@ async function main() {
       );
     }
     if (scenario === "manager-handoff") {
-      await mkdir(join(ctx.rootCwd, ".pi", "coordinators"), {
+      await mkdir(join(ctx.rootCwd, ".pi", "coordinators", "leads"), {
         recursive: true,
       });
       await writeFile(
-        join(ctx.rootCwd, ".pi", "coordinators", "managed-lead.md"),
-        `---\nname: managed-lead\nmodel: smoke-faux/manager-handoff-lead\nextensions: [${JSON.stringify(`+${ctx.simulatedProviderExtension}`)}]\n---\n`,
+        join(
+          ctx.rootCwd,
+          ".pi",
+          "coordinators",
+          "leads",
+          "manager-handoff-lead.md",
+        ),
+        `---\nname: manager-handoff-lead\nmodel: smoke-faux/manager-handoff-lead\nnoExtensions: true\nnoSkills: true\ntools: [codemode]\nextensions: [builtin:codemode, ${JSON.stringify(ctx.simulatedProviderExtension)}]\n---\n`,
       );
     }
     if (scenario === "manager-merge") {
-      await mkdir(join(ctx.rootCwd, ".pi", "coordinators"), {
+      await mkdir(join(ctx.rootCwd, ".pi", "coordinators", "leads"), {
         recursive: true,
       });
       await writeFile(
-        join(ctx.rootCwd, ".pi", "coordinators", "managed-lead.md"),
+        join(ctx.rootCwd, ".pi", "coordinators", "leads", "managed-lead.md"),
         `---\nname: managed-lead\nmodel: smoke-faux/manager-merge-lead\ntools: [bash]\nextensions: [${JSON.stringify(ctx.simulatedProviderExtension)}]\n---\n`,
       );
       await mkdir(join(paths.piAgent, "pi-herdsman"), { recursive: true });

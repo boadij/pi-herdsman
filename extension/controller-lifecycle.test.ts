@@ -13305,7 +13305,7 @@ test("automatic prompt failures happen before topology or mailbox mutation", asy
 
 test("Lead allowlist rejects direct continuation of a historical session", async () => {
   setLeadEnvironment();
-  const role = join(PI_AGENT_ROOT, "coordinators", "flexible-lead.md");
+  const role = join(PI_AGENT_ROOT, "coordinators", "leads", "flexible-lead.md");
   realFs.mkdirSync(dirname(role), { recursive: true });
   realFs.writeFileSync(role, "---\nname: flexible-lead\nagents: []\n---\n");
   const session = {

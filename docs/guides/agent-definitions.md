@@ -66,44 +66,11 @@ private files are not created. Project edits may appear in Git changes.
 When Pi uses a custom agent directory, the global definitions live under that
 agent directory's `agents/` subdirectory.
 
-Coordinator profiles use sibling directories: `dist/coordinators/` for bundled
-profiles, `<cwd>/.pi/coordinators/` for trusted project overlays,
-`<agentDir>/coordinators/` for global overlays, and
-`<git-common-dir>/pi-herdsman/coordinators/` for private repository overlays.
-`<agentDir>` is Pi's agent directory (normally `~/.pi/agent`). The same
-precedence applies. Reserved Coordinator names are invalid in Agent directories,
-and ordinary Agent names are invalid in Coordinator directories. Chief is
-global-only; project and private repository Chief profiles are errors.
-
-Coordinator discovery rejects active Markdown profiles left at the former
-locations; it does not load them as fallback. Move customized profiles and
-their relative prompt assets, preserving both file contents and the assets'
-relative paths, as follows:
-
-```text
-<agentDir>/pi-herdsman/roles/
-    -> <agentDir>/coordinators/
-
-<project>/.pi/pi-herdsman/roles/
-    -> <project>/.pi/coordinators/
-
-<git-common-dir>/pi-herdsman/roles/
-    -> <git-common-dir>/pi-herdsman/coordinators/
-```
-
-Update symlinks that manage these definitions so they point to the canonical
-directories. Files left under an applicable legacy `roles/` path cause an
-actionable Coordinator-discovery error; Agent discovery is independent. No
-configuration files are automatically copied, moved, or deleted.
-
-Recognizable definitions placed in the opposite namespace are excluded from
-discovery with a warning that identifies the source and intended destination.
-Other valid definitions in that category continue loading; the misplaced file
-is not automatically loaded from its intended category. Malformed definitions
-and the existing legacy-path errors remain strict and still fail discovery.
-
-A project or global definition whose `name` matches a lower-precedence
-definition overlays it. An unmatched definition is standalone.
+Coordinator profiles live under the scope's `coordinators/` root:
+`leads/` for Lead profiles, `managers/` for Manager profiles, and `chief.md`
+at the root. Chief is bundled and global only. Definitions layer by category
+and frontmatter name; an unmatched profile is standalone. See the
+[canonical paths and scope rules](../reference/agent-definition-schema.md#sources-and-precedence).
 
 Definition configuration and runtime Agent discovery are separate views. The
 Definitions UI and Markdown files expose editable configuration and source
@@ -116,16 +83,11 @@ overlays when changing them; never infer identity from filenames.
 `list_agents` validates Agent discovery, not the complete Coordinator
 configuration.
 
-`flexible-lead`, `orchestrator-lead`, `managed-lead`, `manager`, and `chief`
-are reserved Coordinator definitions. They use the layered definition engine but are
-not Agents available through discovery or delegation. The first two configure
-ordinary Lead runtime instructions and ordinary tools; `managed-lead` configures
-launch policy for Manager-assigned project Leads; `manager` and `chief`
-customize supervisory role instructions and ordinary tools. They appear under
-`Coordinators` in canonical order; ordinary definitions appear under `Agents`.
-Runtime profiles offer Details only;
-`managed-lead` offers Model, Thinking, and Details. See
-[customizing Coordinator profiles](customizing-agents.md#manager-and-chief-profiles).
+Coordinator profiles do not appear in the delegable Agent roster.
+`flexible-lead` and `orchestrator-lead` configure ordinary Lead runtime
+behavior; `managed-lead` is the default assigned Lead launch profile.
+`manager` and `chief` configure supervisory role instructions and ordinary
+tools. See [customizing Coordinator profiles](customizing-agents.md#manager-and-chief-profiles).
 
 ### Permission-aware extensions
 
@@ -498,7 +460,7 @@ saved model before it accepts work; ambiguous history, an unavailable model,
 or a mismatch stops startup. An explicit definition model overrides saved
 history; Pi resolves the unchanged selector. Restarted Manager-assigned
 managed Leads apply the same check before inbox activation; a model explicitly
-set by the effective `managed-lead` definition overrides the saved selection. See the
+set by the effective assigned Lead profile overrides the saved selection. See the
 [execution-settings contract](../reference/agent-definition-schema.md#execution-settings)
 for the exact behavior.
 

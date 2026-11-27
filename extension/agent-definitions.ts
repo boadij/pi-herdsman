@@ -13,7 +13,15 @@ import {
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CONFIG_DIR_NAME,
@@ -24,6 +32,21 @@ import {
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { snapshotTextFiles } from "./core.ts";
 import { herdsmanTempRoot } from "./storage.ts";
+import {
+  CHIEF_DEFINITION_NAME,
+  isAssignedLeadDefinitionName,
+  isDefinitionName,
+  reservedDefinitionCategory,
+} from "./definition-identity.ts";
+
+export {
+  CHIEF_DEFINITION_NAME,
+  FLEXIBLE_LEAD_DEFINITION_NAME,
+  isAssignedLeadDefinitionName,
+  MANAGED_LEAD_DEFINITION_NAME,
+  MANAGER_DEFINITION_NAME,
+  ORCHESTRATOR_LEAD_DEFINITION_NAME,
+} from "./definition-identity.ts";
 
 export const VALID_THINKING_LEVELS = [
   "off",
@@ -76,37 +99,34 @@ const BODY_FILE_REFERENCE =
   sep === "\\"
     ? /^[ \t]*@((?:[\\/]|~[\\/]|\.{1,2}[\\/]|[A-Za-z]:[\\/]|\\\\).+?)[ \t]*$/gmu
     : /^[ \t]*@((?:\/|~\/|\.\.?\/).+?)[ \t]*$/gmu;
-const BUILTIN_AGENT_DIR = fileURLToPath(new URL("./agents", import.meta.url));
+const BUNDLED_DEFINITION_ROOT = fileURLToPath(new URL(".", import.meta.url));
 
-const BUILTIN_ROLE_DIR = fileURLToPath(
-  new URL("./coordinators", import.meta.url),
-);
+const definitionDirectories = {
+  agent: ["agents"],
+  lead: ["coordinators", "leads"],
+  manager: ["coordinators", "managers"],
+  chief: ["coordinators"],
+} as const;
 
-export const FLEXIBLE_LEAD_DEFINITION_NAME = "flexible-lead";
-export const ORCHESTRATOR_LEAD_DEFINITION_NAME = "orchestrator-lead";
-export const MANAGED_LEAD_DEFINITION_NAME = "managed-lead";
-export const MANAGER_DEFINITION_NAME = "manager";
-export const CHIEF_DEFINITION_NAME = "chief";
-export const RESERVED_ROLE_DEFINITION_NAMES = [
-  FLEXIBLE_LEAD_DEFINITION_NAME,
-  ORCHESTRATOR_LEAD_DEFINITION_NAME,
-  MANAGED_LEAD_DEFINITION_NAME,
-  MANAGER_DEFINITION_NAME,
-  CHIEF_DEFINITION_NAME,
-] as const;
-const RESERVED_ROLE_DEFINITION_NAME_SET = new Set<string>(
-  RESERVED_ROLE_DEFINITION_NAMES,
-);
+export type DefinitionCategory = keyof typeof definitionDirectories;
 
-export function isReservedRoleDefinition(name: string): boolean {
-  return RESERVED_ROLE_DEFINITION_NAME_SET.has(name);
+function definitionDirectory(
+  root: string,
+  category: DefinitionCategory,
+): string {
+  return join(root, ...definitionDirectories[category]);
 }
 
-export function isRuntimeRoleDefinition(name: string): boolean {
+export function supportsDefinitionLaunchSettings(
+  definition: Pick<AgentDefinition, "category" | "name">,
+): boolean {
   return (
-    isReservedRoleDefinition(name) && name !== MANAGED_LEAD_DEFINITION_NAME
+    definition.category === "agent" ||
+    (definition.category === "lead" &&
+      isAssignedLeadDefinitionName(definition.name))
   );
 }
+
 const RUNTIME_LEAD_FIELDS = new Set([
   "name",
   "description",
@@ -140,6 +160,7 @@ export type Frontmatter = {
 };
 
 export type AgentDefinition = {
+  category: DefinitionCategory;
   name: string;
   path: string;
   frontmatter: Frontmatter;
@@ -174,50 +195,53 @@ function markdownFiles(root: string): string[] {
   });
 }
 
-function readAgentDefinitions(
-  root: string,
-  category?: "agent" | "role",
+function readDefinitionLayer(
+  scopeRoot: string,
+  category: DefinitionCategory,
   onWarning?: (message: string) => void,
 ): AgentDefinition[] {
-  const definitions = markdownFiles(root)
+  const root = definitionDirectory(scopeRoot, category);
+  const stats = statSync(root, { throwIfNoEntry: false });
+  if (!stats) return [];
+  if (!stats.isDirectory())
+    throw new Error(`definition directory is not a directory: ${root}`);
+  const chiefPath = join(root, "chief.md");
+  const paths =
+    category === "chief"
+      ? lstatSync(chiefPath, { throwIfNoEntry: false })
+        ? [chiefPath]
+        : []
+      : markdownFiles(root);
+  const definitions = paths
     .filter((path) => !path.endsWith(".example.md"))
     .sort()
     .flatMap((path) => {
-      const content = readFileSync(path, "utf8").replace(/^\uFEFF/u, "");
-      let parsed: ReturnType<typeof parsePiFrontmatter>;
-      try {
-        parsed = parsePiFrontmatter<Record<string, unknown>>(content);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`${path}: ${message}`, { cause: error });
-      }
-      if (!isPlainObject(parsed.frontmatter))
-        throw new Error(`${path}: frontmatter must be a YAML mapping`);
-      const name = parsed.frontmatter.name;
-      if (
-        category &&
-        typeof name === "string" &&
-        name.length > 0 &&
-        isReservedRoleDefinition(name) !== (category === "role")
-      ) {
+      const parsed = readDefinitionFile(path);
+      const frontmatter = parsed.frontmatter as Frontmatter;
+      const name = typeof frontmatter.name === "string" ? frontmatter.name : "";
+      const reserved = reservedDefinitionCategory(name);
+      if (reserved && reserved !== category) {
         const destination = join(
-          dirname(root),
-          category === "agent" ? "coordinators" : "agents",
-          relative(root, path),
+          definitionDirectory(scopeRoot, reserved),
+          `${name}.md`,
         );
-        onWarning?.(
-          `${path}: definition belongs in ${destination}; file excluded from discovery`,
-        );
+        const message = `${path}: definition belongs in ${destination}`;
+        if (category !== "agent" || scopeRoot === BUNDLED_DEFINITION_ROOT)
+          throw new Error(message);
+        onWarning?.(`${message}; file excluded from discovery`);
         return [];
       }
-      const frontmatter = parsed.frontmatter as Frontmatter;
+      if (category === "chief" && name !== CHIEF_DEFINITION_NAME)
+        throw new Error(`${path}: chief.md must define chief`);
       const definition: AgentDefinition = {
-        name: typeof frontmatter.name === "string" ? frontmatter.name : "",
+        category,
+        name,
         path,
         frontmatter,
         body: resolveBodyFileReferences(parsed.body, path),
       };
       validateDefinition(definition, { allowBodyMode: true });
+      validateDefinitionApplicability(definition);
       return [definition];
     });
   const pathsByName = new Map<string, string[]>();
@@ -229,9 +253,23 @@ function readAgentDefinitions(
   for (const [name, paths] of pathsByName)
     if (paths.length > 1)
       throw new Error(
-        `multiple definitions found for agent ${name}: ${paths.join(", ")}`,
+        `multiple definitions found for ${category} ${name}: ${paths.join(", ")}`,
       );
   return definitions;
+}
+
+function readDefinitionFile(path: string) {
+  const content = readFileSync(path, "utf8").replace(/^\uFEFF/u, "");
+  let parsed: ReturnType<typeof parsePiFrontmatter<Record<string, unknown>>>;
+  try {
+    parsed = parsePiFrontmatter<Record<string, unknown>>(content);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${path}: ${message}`, { cause: error });
+  }
+  if (!isPlainObject(parsed.frontmatter))
+    throw new Error(`${path}: frontmatter must be a YAML mapping`);
+  return parsed;
 }
 
 function resolveBodyFileReferences(
@@ -319,6 +357,7 @@ function composeFrontmatter(
   base: Frontmatter | undefined,
   override: Frontmatter,
   definitionName: string,
+  category: DefinitionCategory,
 ): Frontmatter {
   validateArrayFields(override, (field, reason) => {
     throw new Error(`agent ${definitionName} field ${field}: ${reason}`);
@@ -357,13 +396,7 @@ function composeFrontmatter(
     if (
       field === "agents" &&
       baseEntries === undefined &&
-      [
-        FLEXIBLE_LEAD_DEFINITION_NAME,
-        ORCHESTRATOR_LEAD_DEFINITION_NAME,
-        MANAGED_LEAD_DEFINITION_NAME,
-      ].includes(
-        definitionName as (typeof RESERVED_ROLE_DEFINITION_NAMES)[number],
-      ) &&
+      category === "lead" &&
       entries.every((entry) => isArrayModifier(entry as string))
     )
       throw new Error(
@@ -385,11 +418,13 @@ function composeFrontmatter(
 export function mergeFrontmatter(
   base: Frontmatter,
   override: Frontmatter,
+  category: DefinitionCategory = "agent",
 ): Frontmatter {
   return composeFrontmatter(
     base,
     override,
     String(override.name ?? base.name ?? ""),
+    category,
   );
 }
 
@@ -414,6 +449,8 @@ function validateDefinition(
     invalid("permission", "must be a mapping");
   if (typeof frontmatter.name !== "string" || !frontmatter.name)
     invalid("name", "must be a non-empty string");
+  if (definition.category !== "agent" && !isDefinitionName(name))
+    invalid("name", "must be a valid definition name");
   for (const field of BOOLEAN_CAPABILITY_FIELDS)
     if (
       frontmatter[field] !== undefined &&
@@ -584,36 +621,46 @@ export function toolPolicyAllowsName(
   );
 }
 
-function readOptionalAgentDefinitions(
-  root: string,
-  category: "agent" | "role",
-  onWarning?: (message: string) => void,
-): AgentDefinition[] {
-  const stats = statSync(root, { throwIfNoEntry: false });
-  if (!stats) return [];
-  if (!stats.isDirectory())
-    throw new Error(`agent directory is not a directory: ${root}`);
-  return readAgentDefinitions(root, category, onWarning);
-}
-
 function assertNoLegacyCoordinatorProfiles(
+  scopeRoot: string,
   legacy: string,
-  canonical: string,
 ): void {
-  const stats = statSync(legacy, { throwIfNoEntry: false });
-  if (!stats) return;
-  if (!stats.isDirectory())
+  const canonical = definitionDirectory(scopeRoot, "chief");
+  const legacyStats = statSync(legacy, { throwIfNoEntry: false });
+  if (legacyStats && !legacyStats.isDirectory())
     throw new Error(
       `legacy coordinator path is not a directory: ${legacy}; use ${canonical}`,
     );
-  const file = markdownFiles(legacy).find(
-    (path) => !path.endsWith(".example.md"),
+  const file = (legacyStats ? markdownFiles(legacy) : [])
+    .concat(
+      statSync(canonical, { throwIfNoEntry: false })?.isDirectory()
+        ? readdirSync(canonical, { withFileTypes: true })
+            .filter(
+              (entry) =>
+                (entry.isFile() || entry.isSymbolicLink()) &&
+                entry.name.endsWith(".md") &&
+                entry.name !== "chief.md",
+            )
+            .map((entry) => join(canonical, entry.name))
+        : [],
+    )
+    .find((path) => !path.endsWith(".example.md"));
+  if (!file) return;
+  let name = basename(file, ".md");
+  try {
+    const configuredName = readDefinitionFile(file).frontmatter.name;
+    if (typeof configuredName === "string") name = configuredName;
+  } catch {
+    // An obsolete file still needs a migration diagnostic when it cannot be parsed.
+  }
+  const category = reservedDefinitionCategory(name);
+  const destination = category
+    ? definitionDirectory(scopeRoot, category)
+    : `${definitionDirectory(scopeRoot, "lead")} (Lead) or ${definitionDirectory(scopeRoot, "manager")} (Manager)`;
+  throw new Error(
+    `${file}: legacy coordinator profile is no longer loaded; ` +
+      `move the profile and its relative assets to ${destination}`,
   );
-  if (file)
-    throw new Error(
-      `${file}: legacy coordinator profile is no longer loaded; ` +
-        `move profiles and their relative assets to ${canonical}`,
-    );
 }
 
 function privateRepositoryRoot(projectRoot: string): string | undefined {
@@ -716,6 +763,7 @@ function applyDefinitionLayer(
           undefined,
           definition.frontmatter,
           definition.name,
+          definition.category,
         ),
         [sourceField]: definition.path,
       };
@@ -741,12 +789,14 @@ function applyDefinitionLayer(
     const { bodyMode: _bodyMode, ...overrideFrontmatter } =
       definition.frontmatter;
     const effective: AgentDefinition = {
+      category: base.category,
       name: base.name,
       path: definition.path,
       frontmatter: composeFrontmatter(
         base.frontmatter,
         overrideFrontmatter,
         definition.name,
+        definition.category,
       ),
       body: mergeDefinitionBody(base.body, definition.body, mode),
       extensionSource: base.extensionSource,
@@ -784,16 +834,14 @@ function applyDefinitionLayer(
 export type DiscoverAgentDefinitionsOptions = {
   projectRoot?: string;
   onWarning?: (message: string) => void;
+  usage?: "assigned-lead";
 };
 
 function validateEffectiveAgentReferences(
   definitions: readonly AgentDefinition[],
 ): void {
-  const agents = definitions.filter(
-    ({ name }) => !isReservedRoleDefinition(name),
-  );
-  const names = new Set(agents.map((definition) => definition.name));
-  for (const definition of agents)
+  const names = new Set(definitions.map((definition) => definition.name));
+  for (const definition of definitions)
     for (const reference of definition.frontmatter.agents ?? [])
       if (!names.has(reference))
         throw new Error(
@@ -806,10 +854,12 @@ export function validateRoleAgentDefinitionReferences(
   definitions: readonly AgentDefinition[],
 ): void {
   const byName = new Map(
-    definitions.map((candidate) => [candidate.name, candidate]),
+    definitions
+      .filter(({ category }) => category === "agent")
+      .map((candidate) => [candidate.name, candidate]),
   );
   for (const reference of definition.frontmatter.agents ?? []) {
-    if (isReservedRoleDefinition(reference))
+    if (reservedDefinitionCategory(reference))
       throw new Error(
         `agent ${definition.name} references reserved agent definition ${reference}`,
       );
@@ -820,21 +870,20 @@ export function validateRoleAgentDefinitionReferences(
   }
 }
 
-function validateManagedLeadLayer(definition: AgentDefinition): void {
-  if (definition.name !== MANAGED_LEAD_DEFINITION_NAME) return;
-  if (definition.frontmatter.systemPromptMode === "replace")
-    throw new Error(
-      `${definition.path} managed Lead field systemPromptMode: must be append`,
-    );
-  for (const field of ["enabled", "permission"] as const)
-    if (definition.frontmatter[field] !== undefined)
+function validateDefinitionApplicability(definition: AgentDefinition): void {
+  if (definition.category === "agent") return;
+  if (supportsDefinitionLaunchSettings(definition)) {
+    if (definition.frontmatter.systemPromptMode === "replace")
       throw new Error(
-        `${definition.path} managed Lead field ${field}: is not supported`,
+        `${definition.path} managed Lead field systemPromptMode: must be append`,
       );
-}
-
-function validateRuntimeRoleLayer(definition: AgentDefinition): void {
-  if (!isRuntimeRoleDefinition(definition.name)) return;
+    for (const field of ["enabled", "permission"] as const)
+      if (definition.frontmatter[field] !== undefined)
+        throw new Error(
+          `${definition.path} managed Lead field ${field}: is not supported`,
+        );
+    return;
+  }
   for (const field of Object.keys(definition.frontmatter))
     if (!RUNTIME_LEAD_FIELDS.has(field))
       throw new Error(
@@ -843,60 +892,42 @@ function validateRuntimeRoleLayer(definition: AgentDefinition): void {
 }
 
 function discoverEffectiveDefinitions(
-  options: DiscoverAgentDefinitionsOptions = {},
-  category: "agent" | "role" = "agent",
+  options: DiscoverAgentDefinitionsOptions,
+  category: DefinitionCategory,
   validateReferences = true,
   trace?: DefinitionTraceCapture,
 ): AgentDefinition[] {
-  const role = category === "role";
-  const bundled = readAgentDefinitions(
-    role ? BUILTIN_ROLE_DIR : BUILTIN_AGENT_DIR,
-  );
-  for (const definition of bundled)
-    if (isReservedRoleDefinition(definition.name) !== role)
-      throw new Error(
-        `${definition.path}: ${role ? "non-coordinator name in coordinators directory" : "reserved coordinator name in agents directory; use coordinators"}`,
-      );
-  const directory = role ? "coordinators" : "agents";
+  const projectRoot = options.projectRoot
+    ? join(options.projectRoot, CONFIG_DIR_NAME)
+    : undefined;
   const privateRoot = options.projectRoot
     ? privateRepositoryRoot(options.projectRoot)
     : undefined;
-  if (role) {
-    const globalDirectory = join(getAgentDir(), directory);
+  const globalRoot = getAgentDir();
+  if (category !== "agent") {
     assertNoLegacyCoordinatorProfiles(
-      join(getAgentDir(), "pi-herdsman", "roles"),
-      globalDirectory,
+      globalRoot,
+      join(globalRoot, "pi-herdsman", "roles"),
     );
-    if (options.projectRoot)
+    if (projectRoot)
       assertNoLegacyCoordinatorProfiles(
-        join(options.projectRoot, CONFIG_DIR_NAME, "pi-herdsman", "roles"),
-        join(options.projectRoot, CONFIG_DIR_NAME, directory),
+        projectRoot,
+        join(projectRoot, "pi-herdsman", "roles"),
       );
     if (privateRoot)
       assertNoLegacyCoordinatorProfiles(
+        privateRoot,
         join(privateRoot, "roles"),
-        join(privateRoot, directory),
       );
   }
-  const project = options.projectRoot
-    ? readOptionalAgentDefinitions(
-        join(options.projectRoot, CONFIG_DIR_NAME, directory),
-        category,
-        options.onWarning,
-      )
+  const bundled = readDefinitionLayer(BUNDLED_DEFINITION_ROOT, category);
+  const project = projectRoot
+    ? readDefinitionLayer(projectRoot, category, options.onWarning)
     : [];
   const privateRepository = privateRoot
-    ? readOptionalAgentDefinitions(
-        join(privateRoot, directory),
-        category,
-        options.onWarning,
-      )
+    ? readDefinitionLayer(privateRoot, category, options.onWarning)
     : [];
-  const user = readOptionalAgentDefinitions(
-    join(getAgentDir(), directory),
-    category,
-    options.onWarning,
-  );
+  const user = readDefinitionLayer(globalRoot, category, options.onWarning);
   const definitions = new Map(
     bundled.map((definition) => [definition.name, definition]),
   );
@@ -918,29 +949,16 @@ function discoverEffectiveDefinitions(
         : [];
     }
   }
-  for (const definition of [
-    ...bundled,
-    ...project,
-    ...user,
-    ...privateRepository,
-  ]) {
-    validateManagedLeadLayer(definition);
-    validateRuntimeRoleLayer(definition);
+  if (category === "chief") {
+    for (const [scope, layer] of [
+      ["project", project],
+      ["private repository", privateRepository],
+    ] as const)
+      if (layer.length)
+        throw new Error(
+          `${layer[0].path} chief definition: ${scope} overrides are not supported; configure chief globally instead`,
+        );
   }
-  const projectChief = project.find(
-    ({ name }) => name === CHIEF_DEFINITION_NAME,
-  );
-  if (projectChief)
-    throw new Error(
-      `${projectChief.path} chief definition: project overrides are not supported; configure chief globally instead`,
-    );
-  const privateChief = privateRepository.find(
-    ({ name }) => name === CHIEF_DEFINITION_NAME,
-  );
-  if (privateChief)
-    throw new Error(
-      `${privateChief.path} chief definition: private repository overrides are not supported; configure chief globally instead`,
-    );
   applyDefinitionLayer(definitions, user, "overrideSource", trace);
   applyDefinitionLayer(definitions, project, "projectSource", trace);
   applyDefinitionLayer(
@@ -952,51 +970,68 @@ function discoverEffectiveDefinitions(
   const effective = [...definitions.values()].sort((left, right) =>
     left.name.localeCompare(right.name),
   );
-  if (!role && validateReferences) validateEffectiveAgentReferences(effective);
+  if (category === "agent") {
+    if (validateReferences) validateEffectiveAgentReferences(effective);
+    return effective.map(withDefaultEnabled);
+  }
   return effective;
 }
 
-export function inspectAgentDefinition(
-  name: string,
+export function discoverDefinitions(
+  category: DefinitionCategory,
   options: DiscoverAgentDefinitionsOptions = {},
-): DefinitionInspection {
-  const trace: DefinitionTraceCapture = { name, layers: [], bodyFragments: [] };
-  const definition = discoverEffectiveDefinitions(options, "agent", true, trace)
-    .filter((candidate) => !isReservedRoleDefinition(candidate.name))
-    .map(withDefaultEnabled)
-    .find((candidate) => candidate.name === name);
-  if (!definition) throw new Error(`agent ${name} not found`);
-  if (
-    trace.bodyFragments.map((fragment) => fragment.body).join("\n\n") !==
-    definition.body
-  )
-    throw new Error(
-      `Definition body trace did not reproduce effective body for ${name}`,
-    );
-  return {
-    definition,
-    layers: trace.layers,
-    bodyFragments: trace.bodyFragments,
-  };
+): AgentDefinition[] {
+  return discoverEffectiveDefinitions(options, category);
 }
 
-export function inspectRoleDefinition(
-  name: RoleDefinitionName,
-  options: DiscoverAgentDefinitionsOptions = {},
-): DefinitionInspection {
-  const trace: DefinitionTraceCapture = { name, layers: [], bodyFragments: [] };
+function findDefinition(
+  category: DefinitionCategory,
+  name: string,
+  options: DiscoverAgentDefinitionsOptions,
+  trace?: DefinitionTraceCapture,
+): AgentDefinition {
+  if (category !== "agent" && !isDefinitionName(name))
+    throw new Error(`Invalid ${category} definition name: ${name}`);
+  if (
+    options.usage === "assigned-lead" &&
+    (category !== "lead" || !isAssignedLeadDefinitionName(name))
+  )
+    throw new Error(
+      `${category} definition ${name} is not applicable to assigned Leads`,
+    );
   const definition = discoverEffectiveDefinitions(
     options,
-    "role",
+    category,
     true,
     trace,
   ).find((candidate) => candidate.name === name);
-  if (!definition) throw new Error(`role definition ${name} not found`);
-  if (definition.frontmatter.agents?.length)
+  if (!definition)
+    throw new Error(
+      `${category} ${category === "agent" ? "" : "definition "}${name} not found`,
+    );
+  if (category !== "agent" && definition.frontmatter.agents?.length)
     validateRoleAgentDefinitionReferences(
       definition,
       discoverAgentDefinitions(options),
     );
+  return definition;
+}
+
+export function resolveDefinition(
+  category: DefinitionCategory,
+  name: string,
+  options: DiscoverAgentDefinitionsOptions = {},
+): AgentDefinition {
+  return findDefinition(category, name, options);
+}
+
+export function inspectDefinition(
+  category: DefinitionCategory,
+  name: string,
+  options: DiscoverAgentDefinitionsOptions = {},
+): DefinitionInspection {
+  const trace: DefinitionTraceCapture = { name, layers: [], bodyFragments: [] };
+  const definition = findDefinition(category, name, options, trace);
   if (
     trace.bodyFragments.map((fragment) => fragment.body).join("\n\n") !==
     definition.body
@@ -1011,22 +1046,26 @@ export function inspectRoleDefinition(
   };
 }
 
+export function inspectAgentDefinition(
+  name: string,
+  options?: DiscoverAgentDefinitionsOptions,
+): DefinitionInspection {
+  return inspectDefinition("agent", name, options);
+}
+
 export function discoverAgentDefinitions(
-  options: DiscoverAgentDefinitionsOptions = {},
+  options?: DiscoverAgentDefinitionsOptions,
 ): AgentDefinition[] {
-  return discoverEffectiveDefinitions(options)
-    .filter(({ name }) => !isReservedRoleDefinition(name))
-    .map((definition) => withDefaultEnabled(definition));
+  return discoverDefinitions("agent", options);
 }
 
 export function discoverGlobalAgentDefinition(
   name: string,
 ): AgentDefinition | undefined {
   // Global references may resolve only after a trusted project overlay is applied.
-  return discoverEffectiveDefinitions({}, "agent", false)
-    .filter(({ name }) => !isReservedRoleDefinition(name))
-    .map(withDefaultEnabled)
-    .find((definition) => definition.name === name);
+  return discoverEffectiveDefinitions({}, "agent", false).find(
+    (definition) => definition.name === name,
+  );
 }
 
 function withDefaultEnabled(definition: AgentDefinition): AgentDefinition {
@@ -1076,58 +1115,26 @@ export async function contextAgentDefinitions(
   const effective = discoverAgentDefinitions(options);
   return {
     projectTrusted,
-    definitions: effective
-      .filter(({ name }) => !isReservedRoleDefinition(name))
-      .map(withDefaultEnabled),
+    definitions: effective,
     get roleDefinitions() {
       return discoverRoleDefinitions(options);
     },
   };
 }
 
-export type RoleDefinitionName =
-  | typeof FLEXIBLE_LEAD_DEFINITION_NAME
-  | typeof ORCHESTRATOR_LEAD_DEFINITION_NAME
-  | typeof MANAGED_LEAD_DEFINITION_NAME
-  | typeof MANAGER_DEFINITION_NAME
-  | typeof CHIEF_DEFINITION_NAME;
-
-export function discoverRoleDefinition(
-  name: RoleDefinitionName,
-  options: DiscoverAgentDefinitionsOptions = {},
-): AgentDefinition {
-  const definition = discoverEffectiveDefinitions(options, "role").find(
-    (candidate) => candidate.name === name,
-  );
-  if (!definition) throw new Error(`role definition ${name} not found`);
-  if (definition.frontmatter.agents?.length)
-    validateRoleAgentDefinitionReferences(
-      definition,
-      discoverAgentDefinitions(options),
-    );
-  return definition;
-}
-
 export function discoverRoleDefinitions(
   options: DiscoverAgentDefinitionsOptions = {},
 ): AgentDefinition[] {
-  const definitions = discoverEffectiveDefinitions(options, "role");
-  return [...RESERVED_ROLE_DEFINITION_NAMES].map((name) => {
-    const definition = definitions.find((candidate) => candidate.name === name);
-    if (!definition) throw new Error(`role definition ${name} not found`);
-    return definition;
-  });
+  return (["lead", "manager", "chief"] as const).flatMap((category) =>
+    discoverDefinitions(category, options),
+  );
 }
 
 export function discoverAgent(
   agentName: string,
-  options: DiscoverAgentDefinitionsOptions = {},
+  options?: DiscoverAgentDefinitionsOptions,
 ): AgentDefinition {
-  const definition = discoverAgentDefinitions(options).find(
-    (candidate) => candidate.name === agentName,
-  );
-  if (!definition) throw new Error(`agent ${agentName} not found`);
-  return definition;
+  return resolveDefinition("agent", agentName, options);
 }
 
 export function agentDefinitionEnabled(definition: AgentDefinition): boolean {
@@ -1254,10 +1261,7 @@ export type DefinitionEditSnapshot = {
 
 function globalOverridePath(definition: AgentDefinition): string {
   return join(
-    getAgentDir(),
-    ...(isReservedRoleDefinition(definition.name)
-      ? ["coordinators"]
-      : ["agents"]),
+    definitionDirectory(getAgentDir(), definition.category),
     `${encodeURIComponent(definition.name)}.md`,
   );
 }
@@ -1266,12 +1270,12 @@ export function definitionEditTargets(
   definition: AgentDefinition,
 ): DefinitionEditTarget[] {
   const targets: DefinitionEditTarget[] = [];
-  if (definition.privateRepositorySource)
+  if (definition.category !== "chief" && definition.privateRepositorySource)
     targets.push({
       scope: "private",
       path: definition.privateRepositorySource,
     });
-  if (definition.projectSource)
+  if (definition.category !== "chief" && definition.projectSource)
     targets.push({ scope: "project", path: definition.projectSource });
   if (definition.overrideSource)
     targets.push({ scope: "global", path: definition.overrideSource });
@@ -1323,6 +1327,14 @@ export function updateAgentOverride(
     expectedContent?: string | null;
   } = {},
 ): { path: string; changed: boolean; content: string } {
+  if (
+    field === "enabled"
+      ? definition.category !== "agent"
+      : !supportsDefinitionLaunchSettings(definition)
+  )
+    throw new Error(
+      `Definition ${definition.name} does not support editing ${field}`,
+    );
   const targets = definitionEditTargets(definition);
   const target = targets.find(
     (candidate) => candidate.scope === (options.scope ?? "global"),

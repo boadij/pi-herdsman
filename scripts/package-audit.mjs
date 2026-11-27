@@ -37,25 +37,40 @@ const expectedRoot = new Set([
   "skills/herdsman-guide/SKILL.md",
   "skills/machine-pairing/SKILL.md",
 ]);
-const coordinators = new Set([
-  "chief.md",
-  "manager.md",
-  "managed-lead.md",
-  "flexible-lead.md",
-  "orchestrator-lead.md",
-]);
-const expectedDefinitions = ["agents", "coordinators"].flatMap((directory) =>
-  readdirSync(resolve(root, "extension", directory))
-    .filter((name) => name.endsWith(".md"))
-    .map((name) => {
-      if (coordinators.has(name) !== (directory === "coordinators"))
-        throw new Error(`misplaced bundled definition: ${directory}/${name}`);
-      return `dist/${directory}/${name}`;
-    }),
+const definitionDirectories = [
+  ["agents", []],
+  ["coordinators", ["chief.md"]],
+  [
+    "coordinators/leads",
+    ["flexible-lead.md", "managed-lead.md", "orchestrator-lead.md"],
+  ],
+  ["coordinators/managers", ["manager.md"]],
+];
+const reservedProfiles = new Set(
+  definitionDirectories.flatMap(([, names]) => names),
 );
-for (const coordinator of coordinators)
-  if (!expectedDefinitions.includes(`dist/coordinators/${coordinator}`))
-    throw new Error(`missing bundled coordinator profile: ${coordinator}`);
+const expectedDefinitions = definitionDirectories.flatMap(
+  ([directory, required]) => {
+    const files = readdirSync(resolve(root, "extension", directory)).filter(
+      (name) => name.endsWith(".md"),
+    );
+    for (const name of required)
+      if (!files.includes(name))
+        throw new Error(
+          "missing bundled coordinator profile: " + directory + "/" + name,
+        );
+    return files.map((name) => {
+      if (
+        (reservedProfiles.has(name) || directory === "coordinators") &&
+        !required.includes(name)
+      )
+        throw new Error(
+          "misplaced bundled definition: " + directory + "/" + name,
+        );
+      return "dist/" + directory + "/" + name;
+    });
+  },
+);
 const expectedDist = new Set([
   "dist/index.js",
   "dist/index.js.map",

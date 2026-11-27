@@ -1,4 +1,9 @@
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import {
+  getAgentDir,
+  ProjectTrustStore,
+  SessionManager,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import type {
   AgentToolResult,
   ExtensionAPI,
@@ -16,16 +21,20 @@ import type {
 } from "../supervision.ts";
 import {
   projectTaskSummary,
-  migrateProjectAssignmentEvidence,
+  migrateProjectAssignmentEvidenceAfter,
   readManagerDescriptor,
   writeProjectAssignmentAfter,
   withProjectAssignmentAuthority,
   staffToolName,
   validSenderEnvironment,
   normalizeHerdrLifecycleState,
+  EXPECTED_ASSIGNED_LEAD_DEFINITION_ENV,
+  readCoordinatorDefinitionBinding,
+  verifyAssignedLeadDefinition,
 } from "../supervision.ts";
 import { OperationError } from "../errors.ts";
 import {
+  canonicalCwd,
   localRepositoryScope,
   herdrAgentAlias,
   verifiedHerdrAgent,
@@ -60,7 +69,8 @@ import {
 import {
   agentLaunchArgs,
   configuredModel,
-  discoverRoleDefinition,
+  resolveDefinition,
+  isAssignedLeadDefinitionName,
   expandAgentBodyFiles,
   MANAGED_LEAD_DEFINITION_NAME,
   notifyDefinitionWarning,
@@ -2171,6 +2181,19 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     prepareCoordinationInput,
     stopProjectLead: projectStop,
   } = host;
+  const openAssignedSession = (assignment: ProjectAssignment, path: string) => {
+    const saved = host.SessionManager.open(path);
+    if (saved.getSessionId() !== assignment.id)
+      throw new Error(
+        "Saved Lead session restoration failed: mismatched session ID",
+      );
+    verifyAssignedLeadDefinition(
+      readCoordinatorDefinitionBinding(saved.getEntries(), assignment.id),
+      assignment.definition ?? MANAGED_LEAD_DEFINITION_NAME,
+      true,
+    );
+    return saved;
+  };
   const persistLeadSessionFile = async (
     assignment: ProjectAssignment,
     piSessionFile: string,
@@ -2185,8 +2208,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           assignment.repoKey,
           assignment.branch,
         );
-        if (!current || current.id !== assignment.id)
+        if (
+          !current ||
+          current.id !== assignment.id ||
+          current.definition !== assignment.definition
+        )
           throw new Error("Project assignment changed during Lead activation");
+        if (current.definition !== undefined)
+          openAssignedSession(current, piSessionFile);
         if (current.piSessionFile) {
           if (!sameObservedSessionPath(current.piSessionFile, piSessionFile))
             throw new Error(
@@ -2224,12 +2253,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         branch: string;
         task: string;
         base?: string;
+        definition?: string;
         files?: string[];
       }
     | {
         action: "resume";
         branch: string;
         message: string;
+        definition?: string;
         files?: string[];
         retain?: boolean;
       };
@@ -2240,12 +2271,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         task: string;
         branch?: string;
         base?: string;
+        definition?: string;
         files?: string[];
       }
     | {
         action: "resume";
         branch: string;
         message: string;
+        definition?: string;
         files?: string[];
         retain?: boolean;
       }
@@ -2269,12 +2302,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           task: string;
           branch?: string;
           base?: string;
+          definition?: string;
           files?: string[];
         }
       | {
           action: "resume";
           branch: string;
           message: string;
+          definition?: string;
           files?: string[];
           retain?: boolean;
         },
@@ -2294,6 +2329,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         : params;
     if (!operation.branch.trim())
       throw new Error("Project branch must not be empty");
+    if (
+      operation.definition !== undefined &&
+      (typeof operation.definition !== "string" ||
+        !isAssignedLeadDefinitionName(operation.definition))
+    )
+      throw new Error("Expected an assigned Lead definition name");
     if (
       operation.action === "resume" &&
       (typeof operation.message !== "string" || !operation.message.trim())
@@ -3515,6 +3556,19 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     const primaryWorkspaceId = manager.workspaceId;
     const runtime = supervisionRuntime();
     const branch = operation.branch;
+    const agentDir = resolve(getAgentDir());
+    const sessionDirectory = (checkout: string) => {
+      // Use the launcher's cwd spelling before Pi encodes it into a directory name.
+      const cwd = canonicalCwd(checkout);
+      const override = process.env.PI_CODING_AGENT_SESSION_DIR;
+      // Pi's CLI selects its session directory before loading trusted project resources.
+      const configured = override
+        ? SettingsManager.inMemory({ sessionDir: override }).getSessionDir()
+        : SettingsManager.create(cwd, agentDir).getSessionDir();
+      return configured
+        ? resolve(cwd, configured)
+        : SessionManager.create(cwd).getSessionDir();
+    };
     const topology = await runHerdr(
       pi,
       ctx,
@@ -3528,22 +3582,18 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error(
         "Herdr worktree topology is not authoritative during project activation",
       );
-    if (operation.action === "resume")
-      await host.reconcileProjectAssignments(
-        ctx,
-        manager.repoKey,
-        primaryWorkspaceId,
-        typeof topology.source.source_checkout_path === "string"
-          ? topology.source.source_checkout_path
-          : "",
-        true,
-        branch,
-      );
-    const existing =
-      operation.action === "resume"
-        ? migrateProjectAssignmentEvidence(runtime, manager.repoKey, branch)
-        : readProjectAssignment(runtime, manager.repoKey, branch);
-    if (operation.action === "delegate" && existing) {
+    const existing = readProjectAssignment(runtime, manager.repoKey, branch);
+    const assertRequestedDefinition = (
+      assignment: ProjectAssignment | undefined,
+    ) => {
+      if (operation.action !== "resume" || !assignment) return;
+      const saved = assignment.definition ?? MANAGED_LEAD_DEFINITION_NAME;
+      if (operation.definition !== undefined && operation.definition !== saved)
+        throw new Error(`Assigned Lead uses definition ${saved}`);
+    };
+    assertRequestedDefinition(existing);
+    const reconcile = operation.action === "resume" || !!existing;
+    if (reconcile) {
       await host.reconcileProjectAssignments(
         ctx,
         manager.repoKey,
@@ -3555,10 +3605,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         branch,
       );
     }
-    const currentAssignment =
-      operation.action === "delegate" && existing
-        ? readProjectAssignment(runtime, manager.repoKey, branch)
-        : existing;
+    let currentAssignment = reconcile
+      ? readProjectAssignment(runtime, manager.repoKey, branch)
+      : existing;
     if (currentAssignment && currentAssignment.repoKey !== manager.repoKey)
       throw new Error("Project assignment belongs to another repository");
     if (operation.action === "delegate" && currentAssignment)
@@ -3569,6 +3618,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error(
         `No existing work was found on ${branch}; start it with delegate_work and a task.`,
       );
+    const name =
+      operation.action === "resume"
+        ? (currentAssignment!.definition ?? MANAGED_LEAD_DEFINITION_NAME)
+        : (operation.definition ?? MANAGED_LEAD_DEFINITION_NAME);
+    assertRequestedDefinition(currentAssignment);
     const presentationTask =
       operation.action === "resume"
         ? projectTaskSummary(currentAssignment!.text)
@@ -3602,6 +3656,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     let resumeEvidenceScope: Awaited<ReturnType<ManagerEvidence>> | undefined;
     const prepareResumeHandoff = async () => {
       if (operation.action !== "resume") return;
+      await withProjectAssignmentLock(
+        manager.repoKey,
+        branch,
+        assertResumePlacement,
+        signal,
+      );
       resumeSenderEnvironment = await captureSenderEnvironment(host.pi, ctx);
       resumeMessageId ??= randomUUID();
       try {
@@ -3615,6 +3675,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           undefined,
           () => {
             evidenceRetained = true;
+          },
+          (current) => {
+            if (current.definition !== currentAssignment!.definition)
+              throw new Error(
+                "Project assignment definition changed before evidence retention",
+              );
+            if (placement?.status === "matched")
+              assertResumeDefinition(current, placement.path);
           },
         );
         resumeEvidenceScope = handoff.evidenceScope;
@@ -3680,17 +3748,22 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               createdAt,
             });
         };
+        const verifyAndPublish = () =>
+          withProjectAssignmentLock(
+            manager.repoKey,
+            branch,
+            async () => {
+              await assertResumePlacement();
+              resumeEvidenceScope?.verify();
+              publish();
+            },
+            signal,
+          );
         if (resumeEvidenceScope)
-          await resumeEvidenceScope.revalidate(async () => {
-            resumeEvidenceScope!.verify();
-            await assertResumePlacement();
-            publish();
-          });
-        else {
-          await assertResumePlacement();
-          publish();
-        }
+          await resumeEvidenceScope.revalidate(verifyAndPublish);
+        else await verifyAndPublish();
       } catch (error) {
+        if (!resumeMessageQueueAttempted) throw error;
         throw new Error(
           `Resume instruction enqueue could not be confirmed for Lead ${id}; do not resend until inspecting its inbox. ${error instanceof Error ? error.message : String(error)}`,
         );
@@ -3701,22 +3774,19 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       operation.action === "resume"
         ? await liveAgent(ctx, currentAssignment!.id)
         : [];
-    if (live.length === 1 && currentAssignment!.piSessionFile)
-      await bindLeadSessionFile(currentAssignment!, live[0]);
     let savedSessionCwd: string | undefined;
     if (operation.action === "resume" && currentAssignment!.piSessionFile) {
       let saved: ReturnType<typeof host.SessionManager.open>;
       try {
-        saved = host.SessionManager.open(currentAssignment!.piSessionFile!);
+        saved = openAssignedSession(
+          currentAssignment!,
+          currentAssignment!.piSessionFile!,
+        );
       } catch (error) {
         throw new Error(
           `Saved Lead session restoration failed for ${currentAssignment!.id}: recorded session history is unavailable or unreadable; existing work was preserved. ${error instanceof Error ? error.message : String(error)}`,
         );
       }
-      if (saved.getSessionId() !== currentAssignment!.id)
-        throw new Error(
-          `Saved Lead session restoration failed for ${currentAssignment!.id}: recorded session history has a mismatched session ID; existing work was preserved.`,
-        );
       savedSessionCwd = saved.getCwd();
     }
     const placement =
@@ -3731,6 +3801,44 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error(
         `Assigned checkout could not be verified: ${placement.reason}; existing work was preserved.`,
       );
+    const resumeSessionDirectory =
+      placement?.status === "matched"
+        ? sessionDirectory(placement.path)
+        : undefined;
+    const assertResumeDefinition = (latest: ProjectAssignment, cwd: string) => {
+      const nativePath = SessionManager.findById(
+        canonicalCwd(cwd),
+        latest.id,
+        resumeSessionDirectory,
+      );
+      if (
+        latest.piSessionFile &&
+        (nativePath
+          ? !sameObservedSessionPath(latest.piSessionFile, nativePath)
+          : name !== MANAGED_LEAD_DEFINITION_NAME)
+      )
+        throw new Error(
+          "Saved Lead session conflicts with native exact-session lookup",
+        );
+      const path = latest.piSessionFile ?? nativePath;
+      if (path) openAssignedSession(latest, path);
+      if (!path && live.length && name !== MANAGED_LEAD_DEFINITION_NAME)
+        throw new Error(
+          "Named Lead session binding is not yet recoverable on disk",
+        );
+    };
+    if (placement?.status === "matched")
+      assertResumeDefinition(currentAssignment!, placement.path);
+    if (currentAssignment && operation.action === "resume") {
+      const migrated = await migrateProjectAssignmentEvidenceAfter(
+        runtime,
+        currentAssignment,
+        signal,
+      );
+      if (!migrated)
+        throw new Error("Project assignment changed during resume");
+      currentAssignment = migrated;
+    }
     const branchWorktrees =
       operation.action === "resume"
         ? [placement!.worktree]
@@ -3743,7 +3851,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       if (
         !latest ||
         latest.id !== currentAssignment!.id ||
-        latest.branch !== currentAssignment!.branch
+        latest.branch !== currentAssignment!.branch ||
+        latest.definition !== currentAssignment!.definition
       )
         throw new Error(
           "Project assignment checkout changed during resume handoff",
@@ -3773,6 +3882,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         throw new Error(
           "Assigned checkout placement changed during resume handoff",
         );
+      assertResumeDefinition(latest, currentPlacement.path);
     };
     if (branchWorktrees.length > 1)
       throw new Error(`Multiple Herdr worktrees match branch ${branch}`);
@@ -3925,7 +4035,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     };
     if (branchWorktrees[0]?.open_workspace_id)
       await assertUnoccupied(branchWorktrees[0].open_workspace_id);
-    const agentDir = resolve(getAgentDir());
     if (operation.action === "delegate" && branchWorktrees.length === 0)
       requireHerdrPiIntegration(agentDir);
     let assignment: ProjectAssignment;
@@ -3986,6 +4095,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               id,
               repoKey: manager.repoKey,
               branch,
+              definition: name,
               text: candidate,
               ...(resultBindings.length
                 ? { resultBindings: [...resultBindings] }
@@ -4004,6 +4114,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         id,
         repoKey: manager.repoKey,
         branch,
+        definition: name,
         text: prepared.text,
         ...(requiredEvidence.length ? { requiredEvidence } : {}),
         currentEvidenceIds: requiredEvidence.map((evidence) => evidence.id),
@@ -4035,6 +4146,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       let cwd: string | undefined;
       let comparisonTarget: string | undefined;
       let comparisonWarning: string | undefined;
+      let effectiveProjectTrusted: boolean | undefined;
+      let selectedDefinition: ReturnType<typeof resolveDefinition> | undefined;
       const assignedPlacement =
         operation.action === "resume"
           ? resolveAssignmentCheckout(
@@ -4283,6 +4396,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           throw new Error(
             "Herdr checkout is not the verified linked project worktree",
           );
+        // A Manager's session override does not authorize a different checkout.
+        effectiveProjectTrusted =
+          new ProjectTrustStore(agentDir).get(cwd) === true;
+        selectedDefinition = resolveDefinition("lead", name, {
+          usage: "assigned-lead",
+          ...(effectiveProjectTrusted ? { projectRoot: cwd } : {}),
+          onWarning: (message) => notifyDefinitionWarning(ctx, message),
+        });
         assignment = { ...assignment, checkoutPath: realpathSync.native(cwd!) };
         const fresh = await currentManager(ctx);
         if (!fresh || !sameManagerDescriptor(fresh, manager))
@@ -4539,7 +4660,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           })
         );
       };
-      let effectiveProjectTrusted: boolean | undefined;
       if (!lead) {
         const piAlreadyRunning =
           currentCandidates.length === 1 || (await originalPaneRunsPi());
@@ -4547,8 +4667,17 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           await assertResumePlacement();
           await assertUnoccupied(workspaceId!);
           requireHerdrPiIntegration(agentDir);
-          const projectTrusted = ctx.isProjectTrusted();
+          const projectTrusted =
+            effectiveProjectTrusted ??
+            new ProjectTrustStore(agentDir).get(cwd!) === true;
           effectiveProjectTrusted = projectTrusted;
+          const definition =
+            selectedDefinition ??
+            resolveDefinition("lead", name, {
+              usage: "assigned-lead",
+              ...(projectTrusted ? { projectRoot: cwd! } : {}),
+              onWarning: (message) => notifyDefinitionWarning(ctx, message),
+            });
           if (operation.action === "resume") {
             const fresh = await currentManager(ctx);
             const stillAssigned = readProjectAssignment(
@@ -4584,13 +4713,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               await assertUnoccupied(branchWorktrees[0].open_workspace_id);
             await queueResumeHandoff(true);
           }
-          const definition = discoverRoleDefinition(
-            MANAGED_LEAD_DEFINITION_NAME,
-            {
-              ...(projectTrusted ? { projectRoot: cwd! } : {}),
-              onWarning: (message) => notifyDefinitionWarning(ctx, message),
-            },
-          );
           const body = expandAgentBodyFiles(definition.body, [], operationName);
           const effectiveDefinition =
             body === definition.body ? definition : { ...definition, body };
@@ -4640,6 +4762,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               label,
               "--env",
               `PI_CODING_AGENT_DIR=${agentDir}`,
+              "--env",
+              `${EXPECTED_ASSIGNED_LEAD_DEFINITION_ENV}=${JSON.stringify({ sessionId: assignment.id, name, projectTrusted })}`,
               ...(expectedStartupModel
                 ? [
                     "--env",
@@ -4678,9 +4802,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               "A Lead appeared during tab creation; work was preserved",
             );
           await assertManagerCurrent();
+          const latest = readProjectAssignment(
+            runtime,
+            manager.repoKey,
+            branch,
+          );
           if (
-            readProjectAssignment(runtime, manager.repoKey, branch)?.id !==
-            assignment.id
+            latest?.id !== assignment.id ||
+            latest.definition !== assignment.definition
           )
             throw new Error(
               "Project assignment changed during Lead tab creation",
@@ -4702,7 +4831,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             label,
             runId: id,
             extensionPath: HERDSMAN_EXTENSION_PATH,
-            agentArgs: [...launchArgs, "--session-id", assignment.id],
+            agentArgs: [
+              ...launchArgs,
+              "--session-dir",
+              resumeSessionDirectory ?? sessionDirectory(cwd!),
+              "--session-id",
+              assignment.id,
+            ],
             signal,
           });
           startedLead = true;
@@ -4817,6 +4952,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         );
       }
       if (operation.action === "resume" && !resumeMessageQueued) {
+        if (name !== MANAGED_LEAD_DEFINITION_NAME) {
+          const path = supervisedSessionFile(lead, assignment.id);
+          if (!path)
+            throw new Error(
+              "Named Lead session binding is not yet recoverable on disk",
+            );
+          openAssignedSession(assignment, path);
+        }
         const fresh = await currentManager(ctx);
         const stillAssigned = readProjectAssignment(
           runtime,
@@ -4858,7 +5001,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         operationName,
         `Lead ${assignment.id}`,
       );
-      assignment = await bindLeadSessionFile(assignment, lead, signal);
+      // A fresh Pi session flushes its custom entries with its first
+      // conversation message, which itself depends on assignment delivery.
+      if (name === MANAGED_LEAD_DEFINITION_NAME)
+        assignment = await bindLeadSessionFile(assignment, lead, signal);
       if (operation.action !== "resume") {
         const senderEnvironment = await captureSenderEnvironment(host.pi, ctx);
         writeChiefMessage({
@@ -4877,6 +5023,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         });
       }
       let rediscovered: any;
+      let rediscoveredSessionFile: string | undefined;
       while (Date.now() < deadline) {
         const exact = (await liveLead(ctx, assignment.id)).filter(
           (candidate: any) =>
@@ -4889,6 +5036,24 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             "Lead identity became ambiguous during project activation",
           );
         if (exact.length === 1) {
+          if (name !== MANAGED_LEAD_DEFINITION_NAME) {
+            const path = supervisedSessionFile(exact[0], assignment.id);
+            if (
+              !path ||
+              !host.SessionManager.open(path)
+                .getEntries()
+                .some(
+                  (entry) =>
+                    entry.type === "message" &&
+                    (entry.message.role === "user" ||
+                      entry.message.role === "assistant"),
+                )
+            ) {
+              await delay(100, undefined, { signal });
+              continue;
+            }
+            rediscoveredSessionFile = path;
+          }
           rediscovered = exact[0];
           break;
         }
@@ -4926,7 +5091,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         );
       }
       await assertManagerCurrent();
-      await bindLeadSessionFile(assignment, rediscovered, signal);
+      if (rediscoveredSessionFile)
+        await persistLeadSessionFile(
+          assignment,
+          rediscoveredSessionFile,
+          signal,
+        );
+      else await bindLeadSessionFile(assignment, rediscovered, signal);
       return {
         content: [
           {
@@ -5844,6 +6015,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       remove?: string[];
       localOnly?: boolean;
       expectedAssignment?: ProjectAssignment;
+      verifyAssignment?: (assignment: ProjectAssignment) => void;
     },
     _signal: AbortSignal | undefined,
     _update: unknown,
@@ -5900,27 +6072,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         evidenceScope?.retained,
         evidenceScope?.roots,
       );
-    const additions = requiredFiles(
-      assignment.id,
-      resolved,
-      evidenceScope?.retained ?? [],
-      ctx.cwd,
-      operation,
-    );
-    const suppliedAdditions = [...additions];
-    if (params.text !== undefined) {
-      if (!params.text.trim())
-        throw new Error("Evidence text must not be empty");
-      additions.push(
-        persistRequiredEvidenceSnapshot(
-          assignment.id,
-          "assignment-note.md",
-          params.text,
-        ),
-      );
-    }
-
     const runtime = host.supervisionRuntime();
+    let suppliedAdditions: RequiredEvidence[] = [];
     const updated = await host.withProjectAssignmentLock(
       assignment.repoKey,
       assignment.branch,
@@ -5965,6 +6118,26 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           throw new Error(
             "Project assignment changed after required evidence was selected",
           );
+        params.verifyAssignment?.(current);
+        const additions = requiredFiles(
+          assignment.id,
+          resolved,
+          evidenceScope?.retained ?? [],
+          ctx.cwd,
+          operation,
+        );
+        suppliedAdditions = [...additions];
+        if (params.text !== undefined) {
+          if (!params.text.trim())
+            throw new Error("Evidence text must not be empty");
+          additions.push(
+            persistRequiredEvidenceSnapshot(
+              assignment.id,
+              "assignment-note.md",
+              params.text,
+            ),
+          );
+        }
         const resultBindings = [...(current.resultBindings ?? [])];
         for (const evidence of additions)
           if ("result" in evidence) {
@@ -6062,6 +6235,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             written,
             ctx.signal,
             () => {
+              params.verifyAssignment?.(current);
               evidenceScope?.verify();
               evidenceScope?.verifyProvenance();
               const currentLease = host.managerLease();
@@ -6122,6 +6296,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     assignment: ProjectAssignment | undefined,
     expectedAssignment?: ProjectAssignment,
     onPersisted?: () => void,
+    verifyAssignment?: (assignment: ProjectAssignment) => void,
   ) => {
     let evidenceScope = hasManagerEvidenceSelectors(files ?? [])
       ? await host.managerEvidence?.(ctx, files ?? [])
@@ -6157,6 +6332,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         evidenceScope,
         text: message,
         expectedAssignment: currentAssignment,
+        verifyAssignment,
       },
       undefined,
       undefined,

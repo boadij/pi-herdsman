@@ -5767,30 +5767,47 @@ test("native Pi tree, fork and clone keep identity exact-session-bound", () => {
   try {
     const program = `
       import assert from "node:assert/strict";
-      import {writeFileSync} from "node:fs";
+      import {existsSync, writeFileSync} from "node:fs";
       import {join} from "node:path";
       import {SessionManager} from "@earendil-works/pi-coding-agent";
-      import {readSessionKind, sessionLeadRoleState} from ${JSON.stringify(pathToFileURL(join(process.cwd(), "extension/supervision.ts")).href)};
+      import {COORDINATOR_DEFINITION_ENTRY, readCoordinatorDefinitionBinding, readSessionKind, sessionLeadRoleState, verifyAssignedLeadDefinition} from ${JSON.stringify(pathToFileURL(join(process.cwd(), "extension/supervision.ts")).href)};
       const directory = process.argv[1];
       const sessionId = "11111111-1111-4111-8111-111111111111";
       const identity = {version: 1, sessionId, kind: "managed", repoKey: "repo", branch: "feature"};
+      const binding = {version: 1, sessionId, category: "lead", name: "delivery"};
+      const buffered = SessionManager.create(directory, directory, {id: sessionId});
+      buffered.appendCustomEntry(COORDINATOR_DEFINITION_ENTRY, binding);
+      const bufferedPath = buffered.getSessionFile();
+      assert.equal(existsSync(bufferedPath), false);
+      assert.deepEqual(readCoordinatorDefinitionBinding(buffered.getEntries(), sessionId), binding);
+      buffered.appendMessage({role: "user", content: "assignment", timestamp: Date.now()});
+      assert.equal(existsSync(bufferedPath), true);
+      assert.deepEqual(readCoordinatorDefinitionBinding(SessionManager.open(bufferedPath, directory).getEntries(), sessionId), binding);
+      assert.doesNotThrow(() => verifyAssignedLeadDefinition(undefined, "managed-lead", true));
+      assert.throws(() => verifyAssignedLeadDefinition(undefined, binding.name, true), /has no binding/);
       const timestamp = new Date().toISOString();
       const path = join(directory, "source.jsonl");
       const entries = [
         {type: "session", version: 3, id: sessionId, cwd: directory, timestamp},
         {type: "message", id: "user", parentId: null, timestamp, message: {role: "user", content: "source", timestamp: Date.now()}},
         {type: "custom", id: "kind", parentId: "user", timestamp, customType: "pi-herdsman-session-kind", data: identity},
-        {type: "custom", id: "role", parentId: "kind", timestamp, customType: "pi-herdsman-role", data: {sessionId, role: "chief", leadTools: ["bash"]}},
+        {type: "custom", id: "definition", parentId: "kind", timestamp, customType: COORDINATOR_DEFINITION_ENTRY, data: binding},
+        {type: "custom", id: "role", parentId: "definition", timestamp, customType: "pi-herdsman-role", data: {sessionId, role: "chief", leadTools: ["bash"]}},
       ];
       writeFileSync(path, entries.map((entry) => JSON.stringify(entry)).join("\\n") + "\\n");
       const source = SessionManager.open(path, directory);
       assert.deepEqual(readSessionKind(source.getEntries(), source.getSessionId()), identity);
       source.branch("user");
+      assert.equal(readCoordinatorDefinitionBinding(source.getBranch(), sessionId), undefined);
+      assert.deepEqual(readCoordinatorDefinitionBinding(source.getEntries(), sessionId), binding);
+      assert.throws(() => readCoordinatorDefinitionBinding([...source.getEntries(), {type: "custom", customType: COORDINATOR_DEFINITION_ENTRY, data: {...binding, name: "other"}}], sessionId), /conflicting/);
+      assert.throws(() => readCoordinatorDefinitionBinding([{type: "custom", customType: COORDINATOR_DEFINITION_ENTRY, data: {...binding, version: 2}}], sessionId), /invalid/);
       assert.equal(readSessionKind(source.getBranch(), sessionId), undefined);
       assert.deepEqual(readSessionKind(source.getEntries(), sessionId), identity);
       const fork = SessionManager.forkFrom(path, directory, directory);
       assert.notEqual(fork.getSessionId(), sessionId);
       assert.equal(readSessionKind(fork.getEntries(), fork.getSessionId()), undefined);
+      assert.equal(readCoordinatorDefinitionBinding(fork.getEntries(), fork.getSessionId()), undefined);
       assert.equal(sessionLeadRoleState(fork.getBranch(), fork.getSessionId()), undefined);
       assert.throws(() => sessionLeadRoleState([
         ...entries,
@@ -5801,6 +5818,7 @@ test("native Pi tree, fork and clone keep identity exact-session-bound", () => {
       const clone = SessionManager.open(clonePath, directory);
       assert.notEqual(clone.getSessionId(), sessionId);
       assert.equal(readSessionKind(clone.getEntries(), clone.getSessionId()), undefined);
+      assert.equal(readCoordinatorDefinitionBinding(clone.getEntries(), clone.getSessionId()), undefined);
       assert.equal(sessionLeadRoleState(clone.getBranch(), clone.getSessionId()), undefined);
       assert.deepEqual(readSessionKind(SessionManager.open(path, directory).getEntries(), sessionId), identity);
     `;

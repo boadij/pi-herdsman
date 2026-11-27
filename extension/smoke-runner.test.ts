@@ -9096,7 +9096,7 @@ test("manager handoff faux decision waits for exact readiness after assignment",
   const prompt = {
     role: "user",
     content:
-      'Use delegate_work exactly once with branch smoke/branch and task exactly "ready"; MANAGER_HANDOFF_READY',
+      'Use delegate_work exactly once with branch smoke/branch and task exactly "ready". Set definition to exactly manager-handoff-lead.',
   };
   const call = {
     role: "assistant",
@@ -9105,7 +9105,11 @@ test("manager handoff faux decision waits for exact readiness after assignment",
         type: "toolCall",
         id: "call-1",
         name: "delegate_work",
-        arguments: { branch: "smoke/branch", task: "ready" },
+        arguments: {
+          branch: "smoke/branch",
+          task: "ready",
+          definition: "manager-handoff-lead",
+        },
       },
     ],
   };
@@ -9115,11 +9119,34 @@ test("manager handoff faux decision waits for exact readiness after assignment",
     toolCallId: "call-1",
     content: "Session: lead-session\nWorkspace: workspace",
   };
-  assert.equal(
-    firstToolCall(decide("manager-handoff", { messages: [prompt] })).type,
-    "toolCall",
+  const delegation = firstToolCall(
+    decide("manager-handoff", { messages: [prompt] }),
   );
+  assert.equal(delegation.name, "delegate_work");
+  assert.deepEqual(delegation.arguments, call.content[0]!.arguments);
   const assigned = [prompt, call, result];
+  for (const [control, tool, args] of [
+    ["MANAGER_HANDOFF_STOP", "stop_lead", { branch: "smoke/branch" }],
+    [
+      "MANAGER_HANDOFF_RESUME",
+      "resume_work",
+      {
+        branch: "smoke/branch",
+        message:
+          "MANAGER_HANDOFF_RESUME_INSTRUCTION: End the turn without calling tools.",
+      },
+    ],
+  ] as const) {
+    const messages = [
+      prompt,
+      call,
+      { ...result, content: '{"ok":true,"session":"lead-session"}' },
+      { role: "user", content: control },
+    ];
+    const controlCall = firstToolCall(decide("manager-handoff", { messages }));
+    assert.equal(controlCall.name, tool);
+    assert.deepEqual(controlCall.arguments, args);
+  }
   assert.match(
     firstTextContent(decide("manager-handoff", { messages: assigned })).text,
     /Waiting for the exact assigned Lead readiness/,

@@ -864,6 +864,8 @@ export function decide(model, context) {
       errorMessage: "503 Service Unavailable (controlled smoke failure)",
     });
   if (model === "manager-handoff-lead") {
+    if (prompt.includes("MANAGER_HANDOFF_RESUME_INSTRUCTION"))
+      return fauxAssistantMessage("MANAGER_HANDOFF_RESUMED");
     if (prompt.includes("MANAGER_HANDOFF_READY")) {
       if (
         correlatedCall(messages, "message_manager")?.call.arguments?.message ===
@@ -934,12 +936,37 @@ export function decide(model, context) {
     if (!assignment && prompt.includes("Use delegate_work exactly once")) {
       const branch = prompt.match(/branch ([^\s]+) and task exactly/)?.[1];
       const task = prompt.match(/task exactly ("(?:[^"\\]|\\.)*")/)?.[1];
-      if (!branch || !task)
+      const definition = prompt.match(
+        /Set definition to exactly ([a-z0-9-]+)\./,
+      )?.[1];
+      if (!branch || !task || !definition)
         throw new Error("Missing Manager handoff assignment details");
-      return call("delegate_work", { branch, task: JSON.parse(task) });
+      return call("delegate_work", {
+        branch,
+        task: JSON.parse(task),
+        definition,
+      });
     }
     if (!assignment) throw new Error("Unexpected manager-handoff transcript");
     const branch = assignment.call.arguments?.branch;
+    if (
+      prompt === "MANAGER_HANDOFF_STOP" ||
+      prompt === "MANAGER_HANDOFF_RESUME"
+    ) {
+      if (!branch)
+        throw new Error("Manager handoff assignment omitted its branch");
+      const stopping = prompt === "MANAGER_HANDOFF_STOP";
+      const tool = stopping ? "stop_lead" : "resume_work";
+      if (correlatedCall(currentTurn(messages), tool))
+        return fauxAssistantMessage(`${prompt}_DONE`);
+      return stopping
+        ? call(tool, { branch })
+        : call(tool, {
+            branch,
+            message:
+              "MANAGER_HANDOFF_RESUME_INSTRUCTION: End the turn without calling tools.",
+          });
+    }
     const leadSessionId = text(assignment.result).match(
       /^Session: ([^\n]+)$/m,
     )?.[1];
