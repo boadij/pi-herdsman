@@ -1,4 +1,4 @@
-name: Review upstream gh skill drift
+name: Review upstream GitHub skill drift
 
 on:
   schedule:
@@ -19,7 +19,7 @@ jobs:
         with:
           node-version-file: package.json
           package-manager-cache: false
-      - name: Compare vendored reference to upstream trunk
+      - name: Compare vendored references to upstream sources
         run: node scripts/gh-skill-drift.mjs
         env:
           GH_TOKEN: ${{ github.token }}
