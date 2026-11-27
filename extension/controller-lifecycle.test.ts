@@ -25,7 +25,7 @@ import type {
 import type { JsonValue } from "@earendil-works/pi-ai";
 import type { RequestRecord, ManagedAgentState } from "./mailbox.ts";
 
-import { claimProcessLock } from "./lock.ts";
+import { claimProcessLock, readProcessLockStatus } from "./lock.ts";
 import {
   semanticEvidenceRef,
   persistRequiredEvidenceSnapshot,
@@ -685,6 +685,8 @@ import {
   type ExecHandler,
   type FixtureIdentity,
   testTmpRoot,
+  testGate,
+  afterTestCleanup,
 } from "./support.ts";
 
 test("Lead startup requests status refresh after execution profile initialization", async () => {
@@ -850,6 +852,7 @@ test("read_evidence is added only to assigned project Lead tools", async () => {
 });
 const { claimAgentMailbox, removeAgentMailbox } = await import("./mailbox.ts");
 async function holdProjectAuthorityInChild(lockPath: string) {
+  const name = "project assignment authority";
   const lockModule = pathToFileURL(join(process.cwd(), "extension/lock.ts"));
   const child = spawn(
     process.execPath,
@@ -857,53 +860,84 @@ async function holdProjectAuthorityInChild(lockPath: string) {
       "--experimental-strip-types",
       "--input-type=module",
       "-e",
-      `import { acquireProcessLock } from ${JSON.stringify(lockModule.href)}; const lease = acquireProcessLock(process.argv[1], { name: "project assignment authority" }); console.log("LOCKED"); process.stdin.once("data", () => { lease.release(); console.log("RELEASED"); });`,
+      `import { acquireProcessLock, readProcessLockStatus, ProcessLockOccupiedError } from ${JSON.stringify(lockModule.href)};
+       const path = process.argv[1];
+       const name = ${JSON.stringify(name)};
+       try {
+         const lease = acquireProcessLock(path, { name });
+         console.log("LOCKED");
+         process.stdin.once("end", () => { lease.release(); console.log("RELEASED"); });
+         process.stdin.resume();
+       } catch (error) {
+         console.error(error.name + ": " + error.message);
+         if (error instanceof ProcessLockOccupiedError) {
+           try { console.error(JSON.stringify(readProcessLockStatus(path, name))); }
+           catch { console.error("Conflicting lock claim no longer readable"); }
+         }
+         process.exitCode = 1;
+       }`,
       lockPath,
     ],
     { stdio: ["pipe", "pipe", "pipe"] },
   );
   let output = "";
   let errors = "";
-  child.stdout.setEncoding("utf8").on("data", (chunk) => (output += chunk));
-  child.stderr.setEncoding("utf8").on("data", (chunk) => (errors += chunk));
-  await new Promise<void>((resolve, reject) => {
-    if (output.includes("LOCKED\n")) {
-      resolve();
-      return;
-    }
-    const timeout = setTimeout(
-      () => reject(new Error(`authority child did not lock: ${errors}`)),
-      5_000,
-    );
-    child.stdout.on("data", () => {
-      if (output.includes("LOCKED\n")) {
-        clearTimeout(timeout);
-        resolve();
-      }
-    });
-    child.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    child.once("exit", (code) => {
-      if (!output.includes("LOCKED\n")) {
-        clearTimeout(timeout);
-        reject(new Error(`authority child exited ${code}: ${errors}`));
-      }
-    });
+  let childError: Error | undefined;
+  const locked = testGate();
+  child.stdout.setEncoding("utf8").on("data", (chunk) => {
+    output += chunk;
+    if (/^LOCKED\r?$/m.test(output)) locked.resolve();
   });
+  child.stderr.setEncoding("utf8").on("data", (chunk) => (errors += chunk));
+  child.on("error", (error) => (childError = error));
+  child.stdin.on("error", (error) => (childError = error));
+  const closed = new Promise<{ code: number | null; signal: string | null }>(
+    (resolve) =>
+      child.once("close", (code, signal) => resolve({ code, signal })),
+  );
+  const stop = () => {
+    if (child.exitCode === null && child.signalCode === null)
+      child.kill("SIGKILL");
+  };
+  const closeFailure = (code: number | null, signal: string | null) =>
+    new Error(`authority child closed (${code ?? signal}): ${errors.trim()}`, {
+      cause: childError,
+    });
+  const timeout = setTimeout(() => {
+    errors += "\nauthority child did not acknowledge lock acquisition";
+    stop();
+  }, 5_000);
+  try {
+    await Promise.race([
+      locked.promise,
+      closed.then(({ code, signal }) => {
+        throw closeFailure(code, signal);
+      }),
+    ]);
+    const status = readProcessLockStatus(lockPath, name);
+    assert.equal(status.claim.pid, child.pid);
+    assert.equal(status.live, true);
+  } catch (error) {
+    stop();
+    await closed;
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
   return {
     release: async () => {
-      await new Promise<void>((resolve, reject) => {
-        child.once("error", reject);
-        child.once("exit", (code) =>
-          code === 0
-            ? resolve()
-            : reject(new Error(`authority child exited ${code}: ${errors}`)),
-        );
-        child.stdin.end("release\n");
-      });
-      assert.match(output, /RELEASED/);
+      const timeout = setTimeout(() => {
+        errors += "\nauthority child did not close after release";
+        stop();
+      }, 5_000);
+      try {
+        child.stdin.end();
+        const { code, signal } = await closed;
+        if (code !== 0 || childError) throw closeFailure(code, signal);
+        assert.match(output, /^RELEASED\r?$/m);
+      } finally {
+        clearTimeout(timeout);
+      }
     },
   };
 }
@@ -9458,7 +9492,6 @@ test("managed Lead prepares upgraded evidence while another process holds global
     text: "Implement the assigned project",
     requiredEvidence: [snapshot],
   };
-  writeProjectAssignment(runtime, assignment);
   let accepted = 0;
   let starts = 0;
   let published = 0;
@@ -9519,76 +9552,80 @@ test("managed Lead prepares upgraded evidence while another process holds global
   });
   let authority:
     Awaited<ReturnType<typeof holdProjectAuthorityInChild>> | undefined;
-  try {
-    for (const handler of pi.events.get("session_start") ?? [])
-      await handler(undefined, context);
-    const assignmentMessage = {
-      customType: "pi-herdsman-project_assignment",
-      details: { id: LEAD_SESSION_ID, branch },
-      timestamp: Date.now(),
-      content: `Project assignment for branch\n${assignment.text}`,
-    };
-    branchEntries.push({
-      type: "custom_message",
-      customType: assignmentMessage.customType,
-      message: assignmentMessage,
-    });
-    for (const handler of pi.events.get("message_start") ?? [])
-      await handler({ message: assignmentMessage }, context);
-    const { projectAssignmentAuthorityLockPath } =
-      await import("./supervision.ts");
-    authority = await holdProjectAuthorityInChild(
-      projectAssignmentAuthorityLockPath(),
-    );
-    const pending = registeredAgentTool(pi, "delegate").execute(
-      "global-authority-fast-path",
-      { definition: "agent", label, task: "use the current plan" },
-      undefined,
-      undefined,
-      context,
-    );
-    const reachedStartup = await Promise.race([
-      startupReached.then(() => true),
-      pending.then(() => false),
-    ]);
-    assert.equal(
-      reachedStartup,
-      true,
-      "delegation failed before Agent startup",
-    );
-    assert.equal(
-      published,
-      0,
-      "final publication still requires global authority",
-    );
-    const settledWhileOccupied = await Promise.race([
-      pending.then(
-        () => true,
-        () => true,
-      ),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 75)),
-    ]);
-    assert.equal(
-      settledWhileOccupied,
-      false,
-      "final publication should wait rather than fail while authority is briefly occupied",
-    );
-    await authority.release();
-    authority = undefined;
-    const result = await pending;
-    assert.equal(result.details.ok, true, JSON.stringify(result.details));
-    await t.waitFor(() => assert.equal(accepted, 1), { timeout: 5_000 });
-    assert.equal(starts, 1);
-    assert.equal(published, 1);
-  } finally {
-    await authority?.release();
-    pi.events.get("session_shutdown")?.[0]();
-    startup.stopMailboxConsumer();
-    resetAgentMailbox(startup.mailbox);
-    removeProjectAssignment(runtime, "repo-key", branch);
-    realFs.rmSync(snapshot.path, { force: true });
-    delete process.env.HERDR_SOCKET_PATH;
-  }
+  const abort = new AbortController();
+  let pending:
+    ReturnType<ReturnType<typeof registeredAgentTool>["execute"]> | undefined;
+  afterTestCleanup(
+    t,
+    () => abort.abort(),
+    () => authority?.release(),
+    () => pending?.catch(() => {}),
+    () => startup.stopMailboxConsumer(),
+    () => pi.events.get("session_shutdown")?.[0](undefined, context),
+    () => resetAgentMailbox(startup.mailbox),
+    () => removeProjectAssignment(runtime, assignment.repoKey, branch),
+    () => realFs.rmSync(snapshot.path, { force: true }),
+    () => {
+      delete process.env.HERDR_SOCKET_PATH;
+    },
+  );
+  writeProjectAssignment(runtime, assignment);
+  for (const handler of pi.events.get("session_start") ?? [])
+    await handler(undefined, context);
+  const assignmentMessage = {
+    customType: "pi-herdsman-project_assignment",
+    details: { id: LEAD_SESSION_ID, branch },
+    timestamp: Date.now(),
+    content: `Project assignment for branch\n${assignment.text}`,
+  };
+  branchEntries.push({
+    type: "custom_message",
+    customType: assignmentMessage.customType,
+    message: assignmentMessage,
+  });
+  for (const handler of pi.events.get("message_start") ?? [])
+    await handler({ message: assignmentMessage }, context);
+  const { projectAssignmentAuthorityLockPath } =
+    await import("./supervision.ts");
+  authority = await holdProjectAuthorityInChild(
+    projectAssignmentAuthorityLockPath(),
+  );
+  pending = registeredAgentTool(pi, "delegate").execute(
+    "global-authority-fast-path",
+    { definition: "agent", label, task: "use the current plan" },
+    abort.signal,
+    undefined,
+    context,
+  );
+  const reachedStartup = await Promise.race([
+    startupReached.then(() => true),
+    pending.then(() => false),
+  ]);
+  assert.equal(reachedStartup, true, "delegation failed before Agent startup");
+  assert.equal(
+    published,
+    0,
+    "final publication still requires global authority",
+  );
+  const settledWhileOccupied = await Promise.race([
+    pending.then(
+      () => true,
+      () => true,
+    ),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 75)),
+  ]);
+  assert.equal(
+    settledWhileOccupied,
+    false,
+    "final publication should wait rather than fail while authority is briefly occupied",
+  );
+  await authority.release();
+  authority = undefined;
+  const result = await pending;
+  assert.equal(result.details.ok, true, JSON.stringify(result.details));
+  await t.waitFor(() => assert.equal(accepted, 1), { timeout: 5_000 });
+  assert.equal(starts, 1);
+  assert.equal(published, 1);
 });
 
 test("managed Lead cancellation during final authority wait publishes and accepts nothing", async (t) => {
@@ -9614,16 +9651,17 @@ test("managed Lead cancellation during final authority wait publishes and accept
     text: "Implement the assigned project",
     requiredEvidence: [snapshot],
   };
-  writeProjectAssignment(runtime, assignment);
   let accepted = 0;
-  let agentGetCount = 0;
+  const startupIdentityObserved = testGate();
   let started!: () => void;
   const startupReached = new Promise<void>((resolve) => (started = resolve));
   const label = `cancel-${randomUUID().slice(0, 8)}`;
   const startup = startupExecutor(
     label,
     () => DEFAULT_PI_SESSION_ID,
-    (count) => (agentGetCount = count),
+    (count) => {
+      if (count >= 2) startupIdentityObserved.resolve();
+    },
     undefined,
     false,
     started,
@@ -9685,88 +9723,95 @@ test("managed Lead cancellation during final authority wait publishes and accept
   const abort = new AbortController();
   let pending:
     ReturnType<ReturnType<typeof registeredAgentTool>["execute"]> | undefined;
-  try {
-    for (const handler of pi.events.get("session_start") ?? [])
-      await handler(undefined, context);
-    const assignmentMessage = {
-      customType: "pi-herdsman-project_assignment",
-      details: { id: LEAD_SESSION_ID, branch },
-      timestamp: Date.now(),
-      content: `Project assignment for branch\n${assignment.text}`,
-    };
-    branchEntries.push({
-      type: "custom_message",
-      customType: assignmentMessage.customType,
-      message: assignmentMessage,
-    });
-    for (const handler of pi.events.get("message_start") ?? [])
-      await handler({ message: assignmentMessage }, context);
-    authority = await holdProjectAuthorityInChild(
-      projectAssignmentAuthorityLockPath(),
-    );
-    pending = registeredAgentTool(pi, "delegate").execute(
-      "cancel-final-publication",
-      { definition: "agent", label, task: "use the current plan" },
-      abort.signal,
-      undefined,
-      context,
-    );
-    void pending.catch(() => {});
-    await Promise.race([
-      startupReached,
-      pending.then(() => {
-        throw new Error("delegation ended before reaching final publication");
-      }),
-    ]);
-    await t.waitFor(() => assert.ok(agentGetCount >= 2), {
-      timeout: 5_000,
-    });
-    assert.equal(published, 0);
-    const settledWhileOccupied = await Promise.race([
-      pending.then(
-        () => true,
-        () => true,
-      ),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 75)),
-    ]);
-    assert.equal(
-      settledWhileOccupied,
-      false,
-      "final publication must not bypass the held global authority lock",
-    );
-    rollbackStopped = true;
-    abort.abort();
-    const settled = await Promise.race([
-      pending.then(
-        () => true,
-        () => true,
-      ),
-      new Promise<boolean>((resolve) =>
-        setTimeout(() => resolve(false), 5_000),
-      ),
-    ]);
-    assert.equal(
-      settled,
-      true,
-      "cancelled delegation and startup rollback must settle within a bounded interval",
-    );
-    assert.equal(
-      published,
-      0,
-      "cancelled delegation must not publish a request",
-    );
-    assert.equal(accepted, 0, "cancelled delegation must not be accepted");
-  } finally {
-    abort.abort();
-    await authority?.release();
-    if (pending) await pending.catch(() => {});
-    pi.events.get("session_shutdown")?.[0]();
-    startup.stopMailboxConsumer();
-    resetAgentMailbox(startup.mailbox);
-    removeProjectAssignment(runtime, "repo-key", branch);
-    realFs.rmSync(snapshot.path, { force: true });
-    delete process.env.HERDR_SOCKET_PATH;
-  }
+  afterTestCleanup(
+    t,
+    () => {
+      rollbackStopped = true;
+      abort.abort();
+    },
+    // Release even if the test detected that cancellation did not settle.
+    () => authority?.release(),
+    () => pending?.catch(() => {}),
+    () => startup.stopMailboxConsumer(),
+    () => pi.events.get("session_shutdown")?.[0](undefined, context),
+    () => resetAgentMailbox(startup.mailbox),
+    () => removeProjectAssignment(runtime, assignment.repoKey, branch),
+    () => realFs.rmSync(snapshot.path, { force: true }),
+    () => {
+      delete process.env.HERDR_SOCKET_PATH;
+    },
+  );
+  writeProjectAssignment(runtime, assignment);
+  for (const handler of pi.events.get("session_start") ?? [])
+    await handler(undefined, context);
+  const assignmentMessage = {
+    customType: "pi-herdsman-project_assignment",
+    details: { id: LEAD_SESSION_ID, branch },
+    timestamp: Date.now(),
+    content: `Project assignment for branch\n${assignment.text}`,
+  };
+  branchEntries.push({
+    type: "custom_message",
+    customType: assignmentMessage.customType,
+    message: assignmentMessage,
+  });
+  for (const handler of pi.events.get("message_start") ?? [])
+    await handler({ message: assignmentMessage }, context);
+  authority = await holdProjectAuthorityInChild(
+    projectAssignmentAuthorityLockPath(),
+  );
+  pending = registeredAgentTool(pi, "delegate").execute(
+    "cancel-final-publication",
+    { definition: "agent", label, task: "use the current plan" },
+    abort.signal,
+    undefined,
+    context,
+  );
+  void pending.catch(() => {});
+  await Promise.race([
+    startupReached,
+    pending.then(() => {
+      throw new Error("delegation ended before reaching final publication");
+    }),
+  ]);
+  await Promise.race([
+    startupIdentityObserved.promise,
+    pending.then(() => {
+      throw new Error("delegation ended before startup identity was observed");
+    }),
+  ]);
+  assert.equal(published, 0);
+  const settledWhileOccupied = await Promise.race([
+    pending.then(
+      () => true,
+      () => true,
+    ),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 75)),
+  ]);
+  assert.equal(
+    settledWhileOccupied,
+    false,
+    "final publication must not bypass the held global authority lock",
+  );
+  rollbackStopped = true;
+  abort.abort();
+  let settlementDeadline: ReturnType<typeof setTimeout> | undefined;
+  const settled = await Promise.race([
+    pending.then(
+      () => true,
+      () => true,
+    ),
+    new Promise<boolean>((resolve) => {
+      settlementDeadline = setTimeout(() => resolve(false), 5_000);
+    }),
+  ]).finally(() => clearTimeout(settlementDeadline));
+  assert.equal(
+    settled,
+    true,
+    "cancelled delegation and startup rollback must settle within a bounded interval",
+  );
+  assert.equal(published, 0, "cancelled delegation must not publish a request");
+  assert.equal(accepted, 0, "cancelled delegation must not be accepted");
 });
 
 test("legacy evidence migration does not overwrite a changed assignment after contention", async (t) => {
@@ -9805,8 +9850,10 @@ test("legacy evidence migration does not overwrite a changed assignment after co
           await holdProjectAuthorityInChild(
             projectAssignmentAuthorityLockPath(),
           );
+        let migrating:
+          ReturnType<typeof migrateProjectAssignmentEvidenceAfter> | undefined;
         try {
-          const migrating = migrateProjectAssignmentEvidenceAfter(
+          migrating = migrateProjectAssignmentEvidenceAfter(
             runtime,
             assignment,
           );
@@ -9841,7 +9888,11 @@ test("legacy evidence migration does not overwrite a changed assignment after co
             changed,
           );
         } finally {
-          await authority?.release();
+          try {
+            await authority?.release();
+          } finally {
+            await migrating?.catch(() => {});
+          }
         }
       });
     }
@@ -9876,10 +9927,6 @@ test("managed Lead keeps legacy evidence migration authority-locked and recovers
     text: "Implement the assigned project",
     requiredEvidence: [legacySnapshot],
   };
-  writeProjectAssignment(runtime, {
-    ...assignment,
-    requiredEvidence: [snapshot],
-  });
   let accepted = 0;
   let starts = 0;
   const label = `lg-${randomUUID().slice(0, 8)}`;
@@ -9927,90 +9974,99 @@ test("managed Lead keeps legacy evidence migration authority-locked and recovers
   registerExtension!(pi.pi as never);
   let authority:
     Awaited<ReturnType<typeof holdProjectAuthorityInChild>> | undefined;
-  try {
-    for (const handler of pi.events.get("session_start") ?? [])
-      await handler(undefined, context);
-    const assignmentMessage = {
-      customType: "pi-herdsman-project_assignment",
-      details: { id: LEAD_SESSION_ID, branch },
-      timestamp: Date.now(),
-      content: `Project assignment for branch\n${assignment.text}`,
-    };
-    branchEntries.push({
-      type: "custom_message",
-      customType: assignmentMessage.customType,
-      message: assignmentMessage,
-    });
-    for (const handler of pi.events.get("message_start") ?? [])
-      await handler({ message: assignmentMessage }, context);
-    writeFileSync(
-      projectAssignmentPath(runtime, assignment.repoKey, branch),
-      JSON.stringify(assignment),
-    );
-    const legacyEvidence = readProjectAssignment(
-      runtime,
-      assignment.repoKey,
-      branch,
-    )?.requiredEvidence?.[0];
-    assert.ok(legacyEvidence && !("result" in legacyEvidence));
-    assert.equal(
-      legacyEvidence.ref,
-      undefined,
-      "the authority-lock case starts from legacy evidence",
-    );
-    authority = await holdProjectAuthorityInChild(
-      projectAssignmentAuthorityLockPath(),
-    );
-    const delegate = () =>
-      registeredAgentTool(pi, "delegate").execute(
-        "legacy-evidence-contention",
-        { definition: "agent", label, task: "use the legacy plan" },
-        undefined,
-        undefined,
-        context,
-      );
-    const migrating = delegate();
-    void migrating.catch(() => {});
-    const settledWhileHeld = await Promise.race([
-      migrating.then(
-        (result: Awaited<typeof migrating>) => ({ settled: true, result }),
-        (error: unknown) => ({ settled: true, error: String(error) }),
-      ),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 75)),
-    ]);
-    assert.equal(
-      settledWhileHeld,
-      false,
-      `migration must remain pending while authority is held; observed ${JSON.stringify(settledWhileHeld)}`,
-    );
-    assert.equal(starts, 0);
-    assert.equal(accepted, 0);
-    await authority.release();
-    authority = undefined;
-    const recovered = await migrating;
-    assert.equal(recovered.details.ok, true, JSON.stringify(recovered.details));
-    await t.waitFor(() => assert.equal(accepted, 1), { timeout: 5_000 });
-    assert.equal(starts, 1);
-    const recoveredEvidence = readProjectAssignment(
-      runtime,
-      assignment.repoKey,
-      branch,
-    )?.requiredEvidence?.[0];
-    assert.ok(
-      recoveredEvidence &&
-        !("result" in recoveredEvidence) &&
-        recoveredEvidence.ref,
-      "recovery persists the semantic evidence reference",
-    );
-  } finally {
-    await authority?.release();
-    pi.events.get("session_shutdown")?.[0]();
-    startup.stopMailboxConsumer();
-    resetAgentMailbox(startup.mailbox);
-    removeProjectAssignment(runtime, "repo-key", branch);
-    realFs.rmSync(snapshot.path, { force: true });
-    delete process.env.HERDR_SOCKET_PATH;
-  }
+  const abort = new AbortController();
+  let migrating:
+    ReturnType<ReturnType<typeof registeredAgentTool>["execute"]> | undefined;
+  afterTestCleanup(
+    t,
+    () => abort.abort(),
+    () => authority?.release(),
+    () => migrating?.catch(() => {}),
+    () => startup.stopMailboxConsumer(),
+    () => pi.events.get("session_shutdown")?.[0](undefined, context),
+    () => resetAgentMailbox(startup.mailbox),
+    () => removeProjectAssignment(runtime, assignment.repoKey, branch),
+    () => realFs.rmSync(snapshot.path, { force: true }),
+    () => {
+      delete process.env.HERDR_SOCKET_PATH;
+    },
+  );
+  writeProjectAssignment(runtime, {
+    ...assignment,
+    requiredEvidence: [snapshot],
+  });
+  for (const handler of pi.events.get("session_start") ?? [])
+    await handler(undefined, context);
+  const assignmentMessage = {
+    customType: "pi-herdsman-project_assignment",
+    details: { id: LEAD_SESSION_ID, branch },
+    timestamp: Date.now(),
+    content: `Project assignment for branch\n${assignment.text}`,
+  };
+  branchEntries.push({
+    type: "custom_message",
+    customType: assignmentMessage.customType,
+    message: assignmentMessage,
+  });
+  for (const handler of pi.events.get("message_start") ?? [])
+    await handler({ message: assignmentMessage }, context);
+  writeFileSync(
+    projectAssignmentPath(runtime, assignment.repoKey, branch),
+    JSON.stringify(assignment),
+  );
+  const legacyEvidence = readProjectAssignment(
+    runtime,
+    assignment.repoKey,
+    branch,
+  )?.requiredEvidence?.[0];
+  assert.ok(legacyEvidence && !("result" in legacyEvidence));
+  assert.equal(
+    legacyEvidence.ref,
+    undefined,
+    "the authority-lock case starts from legacy evidence",
+  );
+  authority = await holdProjectAuthorityInChild(
+    projectAssignmentAuthorityLockPath(),
+  );
+  migrating = registeredAgentTool(pi, "delegate").execute(
+    "legacy-evidence-contention",
+    { definition: "agent", label, task: "use the legacy plan" },
+    abort.signal,
+    undefined,
+    context,
+  );
+  void migrating.catch(() => {});
+  const settledWhileHeld = await Promise.race([
+    migrating.then(
+      (result: Awaited<typeof migrating>) => ({ settled: true, result }),
+      (error: unknown) => ({ settled: true, error: String(error) }),
+    ),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 75)),
+  ]);
+  assert.equal(
+    settledWhileHeld,
+    false,
+    `migration must remain pending while authority is held; observed ${JSON.stringify(settledWhileHeld)}`,
+  );
+  assert.equal(starts, 0);
+  assert.equal(accepted, 0);
+  await authority.release();
+  authority = undefined;
+  const recovered = await migrating;
+  assert.equal(recovered.details.ok, true, JSON.stringify(recovered.details));
+  await t.waitFor(() => assert.equal(accepted, 1), { timeout: 5_000 });
+  assert.equal(starts, 1);
+  const recoveredEvidence = readProjectAssignment(
+    runtime,
+    assignment.repoKey,
+    branch,
+  )?.requiredEvidence?.[0];
+  assert.ok(
+    recoveredEvidence &&
+      !("result" in recoveredEvidence) &&
+      recoveredEvidence.ref,
+    "recovery persists the semantic evidence reference",
+  );
 });
 
 test("managed project delegation rejects cross-process replacement, removal, and same-ID evidence changes", async (t) => {
@@ -11619,62 +11675,74 @@ test("recovery cleanup keeps an idle restored herd open when failure reporting i
 test("Lead delegation holds the shared lifecycle lock through gated startup", async (t) => {
   const fixture = createStagedAssignmentFixture("agent");
   seedLeadRole(fixture.context);
+  const abort = new AbortController();
   let starting: Promise<any> | undefined;
-  try {
-    await fixture.sessionStart;
-    fixture.context.ui.notify = () => {};
-    await t.waitFor(() => assert.equal(fixture.initialStatusStarted, true));
-    starting = registeredAgentTool(fixture.pi, "delegate").execute(
-      "id",
-      { definition: "agent", task: "hold stop while startup is unresolved" },
-      undefined,
-      undefined,
-      fixture.context,
-    );
-    await t.waitFor(() =>
-      assert.ok(
-        fixture.pi.calls.some(
-          (args) => args[0] === "agent" && args[1] === "start",
-        ),
+  afterTestCleanup(
+    t,
+    () => abort.abort(),
+    fixture.releaseInitialStatus,
+    fixture.releaseStart,
+    fixture.releasePreSubmitValidation,
+    fixture.releaseAcknowledgement,
+    async () => {
+      await fixture.sessionStart.catch(() => {});
+      await starting?.catch(() => {});
+    },
+    () => fixture.startup.stopMailboxConsumer(),
+    () =>
+      fixture.pi.events.get("session_shutdown")?.[0](
+        undefined,
+        fixture.context,
       ),
-    );
-    let busy: unknown;
-    try {
-      const release = claimProcessLock(
-        delegationLockPathForTest(WORKSPACE, LEAD_SESSION_ID),
-        { name: "test delegation lifecycle" },
-      );
-      release();
-    } catch (error) {
-      busy = error;
-    }
-    assert.match(String(busy), /delegation lifecycle is in progress/i);
-    fixture.releaseInitialStatus();
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(readAgentState(fixture.mailbox), undefined);
-    fixture.widgetValue.render(160);
-    fixture.releaseStart();
-    await t.waitFor(() => assert.equal(fixture.preSubmitValidationReady, true));
-    fixture.releasePreSubmitValidation();
-    await t.waitFor(() => assert.equal(fixture.requestObserved, true));
-    fixture.releaseAcknowledgement();
-    const result = await starting;
-    assert.equal(result.details.ok, true, JSON.stringify(result.details));
-
+    () => resetAgentMailbox(fixture.mailbox),
+  );
+  await fixture.sessionStart;
+  fixture.context.ui.notify = () => {};
+  await fixture.initialStatusReached;
+  starting = registeredAgentTool(fixture.pi, "delegate").execute(
+    "id",
+    { definition: "agent", task: "hold stop while startup is unresolved" },
+    abort.signal,
+    undefined,
+    fixture.context,
+  );
+  const reached = (gate: Promise<void>, name: string) =>
+    Promise.race([
+      gate,
+      starting!.then((result) => {
+        throw new Error(
+          `delegation settled before ${name}: ${JSON.stringify(result.details)}`,
+        );
+      }),
+    ]);
+  await reached(fixture.startReached, "Agent start");
+  let busy: unknown;
+  try {
     const release = claimProcessLock(
       delegationLockPathForTest(WORKSPACE, LEAD_SESSION_ID),
       { name: "test delegation lifecycle" },
     );
     release();
-  } finally {
-    fixture.releaseInitialStatus();
-    fixture.releaseStart();
-    fixture.releasePreSubmitValidation();
-    fixture.releaseAcknowledgement();
-    await starting?.catch(() => {});
-    fixture.pi.events.get("session_shutdown")?.[0]();
-    resetAgentMailbox(fixture.mailbox);
+  } catch (error) {
+    busy = error;
   }
+  assert.match(String(busy), /delegation lifecycle is in progress/i);
+  fixture.releaseInitialStatus();
+  assert.equal(readAgentState(fixture.mailbox), undefined);
+  fixture.widgetValue.render(160);
+  fixture.releaseStart();
+  await reached(fixture.preSubmitValidationReached, "pre-submit validation");
+  fixture.releasePreSubmitValidation();
+  await reached(fixture.requestReached, "request observation");
+  fixture.releaseAcknowledgement();
+  const result = await starting;
+  assert.equal(result.details.ok, true, JSON.stringify(result.details));
+
+  const release = claimProcessLock(
+    delegationLockPathForTest(WORKSPACE, LEAD_SESSION_ID),
+    { name: "test delegation lifecycle" },
+  );
+  release();
 });
 
 test("completed and mismatched herd history does not resurrect", async () => {
