@@ -74,6 +74,20 @@ function classify(paths) {
       continue;
     }
 
+    if (
+      path === "vendor/github-cli/SKILL.md" ||
+      path === "vendor/github-cli/source.json" ||
+      path === "vendor/gh-stack/SKILL.md" ||
+      path === "vendor/gh-stack/source.json" ||
+      /^vendor\/gh-stack\/references\/(?:[a-zA-Z0-9_-][a-zA-Z0-9_.-]*\/)*[a-zA-Z0-9_-][a-zA-Z0-9_.-]*\.md$/u.test(
+        path,
+      )
+    ) {
+      format = true;
+      tests = true;
+      continue;
+    }
+
     if (/^extension\/.*\.test\.ts$/u.test(path)) {
       tests = true;
       continue;
@@ -141,6 +155,15 @@ function classify(paths) {
       path === "scripts/test-env.mjs" ||
       path === ".github/workflows/release.yml" ||
       path === ".github/workflows/preview.yml"
+    ) {
+      tests = true;
+      continue;
+    }
+
+    if (
+      path === "scripts/update-vendored-skills.mjs" ||
+      path === "scripts/verify-vendored-skills-branch.mjs" ||
+      path === ".github/workflows/gh-skill-drift.yml"
     ) {
       tests = true;
       continue;
@@ -309,6 +332,55 @@ if (process.argv[2] === "--self-test") {
   });
 
   assert.deepEqual(classify(["some-new-runtime-surface/file"]), {
+    format: true,
+    tests: true,
+    package: true,
+    container: "smoke",
+    smoke: true,
+    bootstrap: true,
+    peer: true,
+  });
+
+  for (const path of [
+    "vendor/github-cli/SKILL.md",
+    "vendor/github-cli/source.json",
+    "vendor/gh-stack/SKILL.md",
+    "vendor/gh-stack/source.json",
+    "vendor/gh-stack/references/commands.md",
+    "vendor/gh-stack/references/nested/example.md",
+  ]) {
+    assert.deepEqual(classify([path]), {
+      format: true,
+      tests: true,
+      package: false,
+      container: "none",
+      smoke: false,
+      bootstrap: false,
+      peer: false,
+    });
+  }
+
+  assert.deepEqual(classify(["vendor/gh-stack/scripts/update.mjs"]), {
+    format: true,
+    tests: true,
+    package: true,
+    container: "smoke",
+    smoke: true,
+    bootstrap: true,
+    peer: true,
+  });
+
+  assert.deepEqual(classify(["vendor/github-cli/tool.sh"]), {
+    format: true,
+    tests: true,
+    package: true,
+    container: "smoke",
+    smoke: true,
+    bootstrap: true,
+    peer: true,
+  });
+
+  assert.deepEqual(classify(["vendor/gh-stack/references/unmanaged file.md"]), {
     format: true,
     tests: true,
     package: true,
