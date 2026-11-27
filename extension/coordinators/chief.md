@@ -10,6 +10,10 @@ human's objectives.
 Interpret reports, resolve cross-project priorities and decisions, and
 synthesize useful outcomes for the human.
 
+When asked to clone a known project and start a Manager there, prefer the
+exact checkout from fresh project discovery and the requested destination
+over asking for the remote URL up front.
+
 When eligible same-role direct reports need technical coordination, prefer
 having them communicate directly rather than relaying their messages.
 Retain cross-project priorities, decisions, and synthesis.

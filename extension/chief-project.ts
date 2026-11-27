@@ -58,6 +58,7 @@ import {
   createLocalRepositoryDirectory,
   parseRepositorySource,
   RepositoryCloneError,
+  resolveCheckoutCloneSource,
   resolveLocalRepositoryPath,
   verifyLocalRepositoryPath,
 } from "./repository.ts";
@@ -552,11 +553,13 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
   ): Promise<ProjectResult> {
     await host.assertChief(ctx);
     const { signal } = ctx;
-    const source = parseRepositorySource(input);
+    let source = parseRepositorySource(input);
     if (action === "resume" && source.kind !== "local")
       throw new Error("resume_manager requires a local repository path");
-    if (source.kind === "local" && destination !== undefined)
-      throw new Error("destination is supported only for remote repositories");
+    const effectiveCheckoutOrigin =
+      action === "start" &&
+      source.kind === "local" &&
+      destination !== undefined;
     let repositoryPath = source.kind === "local" ? source.path : input;
     let stage = "repository";
     let preparationChanged = false;
@@ -573,12 +576,16 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
         );
       };
       let repository: Repository | undefined;
+      if (effectiveCheckoutOrigin && source.kind === "local") {
+        source = await resolveCheckoutCloneSource(pi, source.path, signal);
+        await host.assertChief(ctx);
+      }
       if (source.kind === "remote") {
         repository = await cloneRepository(
           pi,
           source.url,
           readConfig().projectsDirectory,
-          { destination, signal },
+          { destination, signal, effectiveCheckoutOrigin },
         );
         preparationChanged = true;
       } else {

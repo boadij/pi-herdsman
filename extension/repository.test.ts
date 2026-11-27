@@ -1,10 +1,12 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -12,12 +14,14 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 import {
   CloneDestinationExistsError,
   cloneRepository,
   createLocalRepositoryDirectory,
   parseRepositorySource,
   RepositoryCloneError,
+  resolveCheckoutCloneSource,
   resolveLocalRepositoryPath,
 } from "./repository.ts";
 
@@ -37,6 +41,237 @@ function tempDirectory(t: { after: (fn: () => void) => void }) {
 }
 
 type Exec = ExtensionAPI["exec"];
+
+function isolatedGit(root: string, overrides: NodeJS.ProcessEnv = {}) {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: join(root, "global"),
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_ALLOW_PROTOCOL: "file",
+    ...overrides,
+  };
+  return (args: string[], cwd = root) => {
+    const result = spawnSync("git", args, {
+      cwd,
+      env,
+      encoding: "utf8",
+      timeout: 5_000,
+      maxBuffer: 16 * 1024,
+    });
+    return {
+      code: result.status ?? 1,
+      killed: result.signal !== null,
+      truncated:
+        result.error !== undefined &&
+        "code" in result.error &&
+        result.error.code === "ENOBUFS",
+      stdout: result.stdout ?? "",
+      stderr: result.stderr ?? "",
+    };
+  };
+}
+
+test("checkout clone source reads only a single supported effective origin fetch URL", async (t) => {
+  const root = tempDirectory(t);
+  const git = isolatedGit(root);
+  const configure = (...args: string[]) => assert.equal(git(args).code, 0);
+  configure("init", "-q");
+  const exec: Exec = async (command, args, options) => {
+    assert.equal(command, "git");
+    assert.ok(args[0] === "rev-parse" || args[0] === "remote");
+    assert.equal(options?.maxBuffer, 16 * 1024);
+    return git(args, options?.cwd);
+  };
+  const source = (path = root) => resolveCheckoutCloneSource({ exec }, path);
+  const message =
+    /^Cannot resolve a single supported fetch URL from origin at the exact Git checkout root\. Supply an explicit HTTPS or SSH Git remote URL\.$/;
+  const rejected = (path?: string) => assert.rejects(source(path), { message });
+  configure("remote", "add", "unrelated", remote);
+  await rejected();
+  configure("remote", "add", "origin", "fixture:project.git");
+  configure(
+    "config",
+    "url.https://example.test/owner/team/.insteadOf",
+    "fixture:",
+  );
+  configure(
+    "remote",
+    "set-url",
+    "--push",
+    "origin",
+    "git@example.test:push/project.git",
+  );
+  assert.deepEqual(await source(), parseRepositorySource(remote));
+  const child = join(root, "child");
+  mkdirSync(child);
+  await rejected(child);
+
+  configure("config", "--add", "remote.origin.url", "fixture:project.git");
+  await rejected();
+  for (const invalid of [
+    root,
+    "file:///tmp/source.git",
+    "ext::unsupported",
+    "https://user:secret@example.test/owner/project.git",
+    "",
+  ]) {
+    configure("config", "--replace-all", "remote.origin.url", invalid);
+    await rejected();
+  }
+});
+
+test("checkout clone source fails closed on incomplete, cancelled or stale observations", async (t) => {
+  const root = tempDirectory(t);
+  const metadata = join(root, ".git");
+  mkdirSync(metadata);
+  for (const outcome of [
+    "killed",
+    "truncated",
+    "missing terminator",
+    "cancelled",
+    "replaced",
+  ] as const) {
+    const abort = new AbortController();
+    let observedOrigin = false;
+    const exec: Exec = async (_command, args) => {
+      if (args[0] === "rev-parse")
+        return success(args.includes("--show-toplevel") ? root : metadata);
+      assert.deepEqual(args, ["remote", "get-url", "--all", "origin"]);
+      observedOrigin = true;
+      if (outcome === "cancelled") abort.abort();
+      if (outcome === "replaced") {
+        const retired = metadata + "-retired";
+        renameSync(metadata, retired);
+        mkdirSync(metadata);
+      }
+      return {
+        ...success(outcome === "missing terminator" ? remote : remote + "\n"),
+        killed: outcome === "killed",
+        truncated: outcome === "truncated",
+      };
+    };
+    await assert.rejects(
+      resolveCheckoutCloneSource({ exec }, root, abort.signal),
+      outcome === "cancelled"
+        ? { name: "AbortError" }
+        : /explicit HTTPS or SSH/,
+      outcome,
+    );
+    assert.ok(observedOrigin, outcome);
+  }
+});
+
+test("clone of an observed origin is not rewritten again in destination Git config", async (t) => {
+  const root = tempDirectory(t);
+  const git = isolatedGit(root);
+  const destination = join(root, "clone");
+  const config = join(root, "conditional");
+  const url = "https://example.test/owner/project=fixture.git";
+  assert.equal(git(["init", "-q"]).code, 0);
+  assert.equal(
+    git([
+      "config",
+      "-f",
+      config,
+      `url.${pathToFileURL(root).href}.insteadOf`,
+      url,
+    ]).code,
+    0,
+  );
+  const gitDir = join(destination, ".git").replaceAll("\\", "/");
+  assert.equal(
+    git(["config", "--global", `includeIf.gitdir:${gitDir}.path`, config]).code,
+    0,
+  );
+  // The same configured URL is rewritten for an ordinary explicit clone.
+  await cloneRepository(
+    { exec: async (_command, args, options) => git(args, options?.cwd) },
+    url,
+    root,
+    { destination },
+  );
+  rmSync(destination, { recursive: true });
+  let cloneStderr: string | undefined;
+  await assert.rejects(
+    cloneRepository(
+      {
+        exec: async (_command, args, options) => {
+          const result = git(args, options?.cwd);
+          cloneStderr = result.stderr;
+          return result;
+        },
+      },
+      url,
+      root,
+      { destination, effectiveCheckoutOrigin: true },
+    ),
+    RepositoryCloneError,
+  );
+  // With only file transport enabled, the protected path makes no network connection.
+  assert.match(cloneStderr ?? "", /transport 'https' not allowed/);
+});
+
+test("protected clone loads URL-conditioned SSH config and verifies the persisted effective origin", async (t) => {
+  const root = tempDirectory(t);
+  const fixture = join(root, "transport");
+  const auth = join(root, "auth");
+  const url = "ssh://git@example.test/owner/project=fixture.git";
+  const git = isolatedGit(root, {
+    GIT_ALLOW_PROTOCOL: "ssh",
+    GIT_SSH_COMMAND: undefined,
+    GIT_SSH_VARIANT: "simple",
+    HERDSMAN_TEST_REPO: fixture,
+  });
+  const configure = (...args: string[]) => assert.equal(git(args).code, 0);
+  configure("init", "-q", fixture);
+  configure("config", "--global", "core.sshCommand", "false");
+  configure(
+    "config",
+    "--global",
+    `includeIf.hasconfig:remote.*.url:${url}.path`,
+    auth,
+  );
+  // Only the matching include enables the transport; it never opens a socket.
+  configure(
+    "config",
+    "-f",
+    auth,
+    "core.sshCommand",
+    `sh -c 'test "$1" = git@example.test && exec git upload-pack "$HERDSMAN_TEST_REPO"' --`,
+  );
+  const exec: Exec = async (_command, args, options) => git(args, options?.cwd);
+  const clone = (destination: string) =>
+    cloneRepository({ exec }, url, root, {
+      destination,
+      effectiveCheckoutOrigin: true,
+    });
+  const destination = join(root, "clone");
+  assert.equal((await clone(destination)).checkoutPath, destination);
+  assert.equal(git(["remote"], destination).stdout.trim(), "origin");
+  assert.equal(
+    git(["remote", "get-url", "--all", "origin"], destination).stdout.trim(),
+    url,
+  );
+
+  // The same include adds a rewrite for the validated URL. Initial transport
+  // must still succeed over SSH, but the persisted origin must fail verification.
+  const conflicting = pathToFileURL(fixture).href;
+  configure("config", "-f", auth, `url.${conflicting}.insteadOf`, url);
+  const partial = join(root, "partial");
+  await assert.rejects(clone(partial), (error) => {
+    assert.ok(error instanceof RepositoryCloneError);
+    assert.equal(error.stage, "verification");
+    assert.equal(error.destination, partial);
+    assert.ok(!error.message.includes(url));
+    assert.ok(!error.message.includes(conflicting));
+    return true;
+  });
+  assert.ok(existsSync(join(partial, ".git")));
+  assert.equal(
+    git(["remote", "get-url", "--all", "origin"], partial).stdout.trim(),
+    conflicting,
+  );
+});
 
 test("repository source accepts explicit local paths and supported Git remotes", () => {
   const home = join(tmpdir(), "home");
@@ -255,6 +490,10 @@ test("a redirected Git environment fails before filesystem mutation", async (t) 
     const exec: Exec = async () => assert.fail("Git must not run");
     await assert.rejects(
       cloneRepository({ exec }, remote, join(root, "Projects")),
+      /redirection/,
+    );
+    await assert.rejects(
+      resolveCheckoutCloneSource({ exec }, root),
       /redirection/,
     );
     assert.equal(existsSync(join(root, "Projects")), false);

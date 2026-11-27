@@ -5891,7 +5891,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       (candidate.role !== "lead" ||
         (expected.role === "lead" &&
           candidate.relationship === expected.relationship));
-    if (!lead.availableActions.includes(params.action))
+    if (
+      params.action !== "transcript" &&
+      !lead.availableActions.includes(params.action)
+    )
       throw new Error(`Lead does not currently allow ${params.action}`);
     if (params.action === "inspect") {
       const evidence = await inspectHerdrAgent(
@@ -5959,9 +5962,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       });
     }
     if (params.action === "transcript") {
-      const sessionFile = lead.role === "lead" ? lead.piSessionFile : undefined;
-      if (!sessionFile)
-        throw new Error("Lead transcript is not currently available");
+      const sessionFile = lead.piSessionFile;
+      if (!lead.availableActions.includes("transcript") || !sessionFile)
+        throw new Error("Staff transcript is not currently available");
       const transcript = readPersistedTranscript({
         piSessionId: reportSession(lead),
         piSessionFile: sessionFile,
@@ -5971,8 +5974,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           ? await currentChiefAuthority(ctx)
           : await currentManager(ctx);
       const currentLead = await revalidateTarget();
-      const currentSessionFile =
-        currentLead?.role === "lead" ? currentLead.piSessionFile : undefined;
+      const currentSessionFile = currentLead?.piSessionFile;
       const finalAuthority =
         activeRole() === "chief"
           ? await currentChiefAuthority(ctx)
@@ -5989,7 +5991,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         !currentLead.availableActions.includes("transcript") ||
         !assignmentStillCurrent()
       )
-        throw new Error("Lead changed during transcript read");
+        throw new Error("Staff changed during transcript read");
       return result({
         ok: true,
         action: "transcript",

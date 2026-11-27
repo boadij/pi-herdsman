@@ -473,6 +473,15 @@ or a remote Git repository. Review any Git initialization prompt for the exact
 directory, and handle Pi's native project trust in the target workspace. An
 untrusted target does not inherit Chief's trust.
 
+To run another Manager in a separate clone of a known project, ask Chief to
+clone the project into a specific new directory and start its Manager there.
+Chief uses the exact checkout path from project discovery and the explicit
+destination, resolving the configured `origin` fetch URL without needing you
+to provide it. The new Manager is independent of the original, and the clone
+does not include uncommitted changes or local-only branches. If there is not
+exactly one supported `origin` fetch URL, provide a supported remote URL
+explicitly.
+
 If the Manager is already running in Chief's Pi profile and Herdr socket,
 Chief uses the verified instance instead of starting another. Manager
 authority and launch serialization are shared across local Pi profiles under
