@@ -6548,6 +6548,23 @@ test("continuation completion wait tears down on abort, timeout, and filesystem 
   }
 });
 
+test("smoke observation polling acknowledges a file created after the initial check", async () => {
+  const { waitForSmokeObservation } = await import("../scripts/smoke-faux.mjs");
+  const directory = await mkdtemp(join(tmpdir(), "smoke-observation-poll-"));
+  try {
+    const observation = waitForSmokeObservation(
+      directory,
+      "continuation-first-observed",
+      undefined,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await writeFile(join(directory, "continuation-first-observed"), "seen\n");
+    await observation;
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("continuation root prompt waits for a session-backed idle or done Agent", async () => {
   const source = await readFile(
     new URL("../scripts/smoke.mjs", import.meta.url),
