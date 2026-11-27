@@ -47,7 +47,7 @@ Every managed agent has an exact Pi session. The list may expose the session
 ID and path for correlation.
 
 A semantic result reference, exact session path, or full UUID can be supplied
-to `continue_agent` to continue historical managed-agent work. A result ref
+to `resume_agent` to continue historical managed-agent work. A result ref
 selects its producing saved session only when the completed result is directly
 owned by the caller on the active Pi branch; forwarded evidence is not
 continuation authority. Continuation creates a new agent generation for
@@ -122,7 +122,7 @@ and runtime state are cleaned up. Failed assignments follow the same terminal
 cleanup path.
 
 The Pi session remains available after agent cleanup. To continue the same
-conversational context, use `continue_agent` with the semantic result ref shown
+conversational context, use `resume_agent` with the semantic result ref shown
 with the result, or its exact session ID or session path. This creates a new
 agent generation, which restores
 the saved session's model and thinking unless the current definition

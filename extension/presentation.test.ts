@@ -2093,7 +2093,7 @@ test("coordination calls use semantic collapsed and expanded presentation", () =
         presentationTheme,
       ),
     ),
-    /^continue agent\n  Apply the findings$/,
+    /^resume agent\n  Apply the findings$/,
   );
   const expandedContinue = renderedText(
     renderCoordinationCall(
@@ -2661,7 +2661,7 @@ test("coordination result definitions keep compact calls transcript-stable", asy
         context,
       ),
     ).split("\n")[0],
-    "continue agent",
+    "resume agent",
   );
   renderCoordinationResult(
     "agent",
@@ -2690,7 +2690,7 @@ test("coordination result definitions keep compact calls transcript-stable", asy
         context,
       ),
     ).split("\n")[0],
-    "continue agent  ask-owner-retry · researcher",
+    "resume agent  ask-owner-retry · researcher",
   );
   assert.equal(invalidations, 1);
 
@@ -2887,7 +2887,7 @@ test("coordination call titles use action-first natural targets", () => {
   const cases = [
     ["agent", "list", "list agents"],
     ["agent", "delegate", "delegate agent"],
-    ["agent", "continue", "continue agent"],
+    ["agent", "continue", "resume agent"],
     ["agent", "steer", "steer agent"],
     ["agent", "interrupt", "interrupt agent"],
     ["agent", "reply", "reply agent"],
@@ -4234,7 +4234,7 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
     "bash",
     "list_agents",
     "delegate_agent",
-    "continue_agent",
+    "resume_agent",
     "steer_agent",
     "interrupt_agent",
     "reply_agent",
@@ -4281,7 +4281,7 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
     });
     assert.equal(
       widget.render(160)[0],
-      "? lead → implementer:one  [read, bash, list_agents, delegate_agent, continue_agent, steer_agent, interrupt_agent, reply_agent, stop_agent, inspect_agent, …]",
+      "? lead → implementer:one  [read, bash, list_agents, delegate_agent, resume_agent, steer_agent, interrupt_agent, reply_agent, stop_agent, inspect_agent, …]",
     );
     assert.doesNotMatch(
       widget.render(160)[0]!,

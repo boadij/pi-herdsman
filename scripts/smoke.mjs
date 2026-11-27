@@ -1950,7 +1950,7 @@ export function correlatedContinuationTask(
     if (
       ancestors[index].type !== "message" ||
       message?.role !== "toolResult" ||
-      message.toolName !== "continue_agent" ||
+      message.toolName !== "resume_agent" ||
       message.isError ||
       message.details?.ok !== true ||
       message.details.action !== "continue" ||
@@ -1975,7 +1975,7 @@ export function correlatedContinuationTask(
       const call = candidate.message.content.find(
         (block) =>
           block?.type === "toolCall" &&
-          block.name === "continue_agent" &&
+          block.name === "resume_agent" &&
           typeof block.id === "string" &&
           block.id === message.toolCallId,
       );
@@ -7090,7 +7090,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
             : [],
         )
         .find(
-          (part) => part.type === "toolCall" && part.name === "continue_agent",
+          (part) => part.type === "toolCall" && part.name === "resume_agent",
         );
       const result =
         call &&
@@ -7115,7 +7115,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
   assert.equal(
     continued?.ok,
     true,
-    "continue_agent failed during crash recovery",
+    "resume_agent failed during crash recovery",
   );
   assert.ok(
     continued.session_id === ctx.crashRecovery.target.sessionId &&
@@ -7203,13 +7203,13 @@ async function runAgentCrashRecoverySmoke(ctx) {
     "original target work was delegated more than once",
   );
   const continueCalls = ownerToolCalls.filter(
-    (call) => call.name === "continue_agent",
+    (call) => call.name === "resume_agent",
   );
   assert.equal(continueCalls.length, 1);
   assert.ok(
     continueCalls[0].arguments?.session ===
       ctx.crashRecovery.target.sessionPath,
-    "continue_agent did not use the exact saved session",
+    "resume_agent did not use the exact saved session",
   );
   assert.equal(
     ownerToolCalls.filter(
@@ -12083,7 +12083,7 @@ async function runSupervisorAgentSmoke(ctx) {
     "message_staff",
     "list_agents",
     "delegate_agent",
-    "continue_agent",
+    "resume_agent",
   ])
     assert.ok(chiefTools.includes(tool), `Chief tool snapshot missing ${tool}`);
   for (const tool of [

@@ -142,7 +142,7 @@ for the UI procedure.
 Pi Herdsman has two text-file mechanisms with different purposes:
 
 - `files` supplies evidence to the coordination operations that accept it:
-  `delegate_agent`, `continue_agent`, `steer_agent`, `interrupt_agent`,
+  `delegate_agent`, `resume_agent`, `steer_agent`, `interrupt_agent`,
   `reply_agent`, `delegate_work`, `message_staff`,
   `message_manager`, `message_chief`, `message_peer`, `notify_owner`, and `await_owner`.
 - whole-line body `@file` references put definition-owned text into the agent
@@ -234,7 +234,7 @@ size; for a result reference, it carries the supplied logical result name, the
 physical path attribute, and observed byte size. File content remains raw text. This
 markup frames evidence for the model and is not a security boundary.
 
-`files` is supported by `delegate_agent`, `continue_agent`, `steer_agent`,
+`files` is supported by `delegate_agent`, `resume_agent`, `steer_agent`,
 `interrupt_agent`, `reply_agent`, `delegate_work`, `message_staff`,
 `message_manager`, `message_chief`, `message_peer`, `notify_owner`, and `await_owner`. For controller actions,
 relative paths resolve from the calling controller's cwd; for `await_owner`, they
@@ -479,7 +479,7 @@ resolution and transitive forwarding through `files`. For a
 reference-only result, the provenance is available with the body when the
 referenced artifact is read; it is not separately embedded. The context is
 informational model evidence, not authorization: an exact session ID or path
-does not authorize `continue_agent` without durable ownership ancestry. The normal
+does not authorize `resume_agent` without durable ownership ancestry. The normal
 completion shown to the owning session
 remains unchanged.
 

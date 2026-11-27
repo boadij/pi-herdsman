@@ -290,7 +290,7 @@ const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
         {
           list: "list_agents",
           delegate: "delegate_agent",
-          continue: "continue_agent",
+          continue: "resume_agent",
           steer: "steer_agent",
           interrupt: "interrupt_agent",
           reply: "reply_agent",
@@ -10130,7 +10130,7 @@ test("assignment session resolution accepts only directly owned branch result re
             type: "message",
             message: {
               role: "toolResult",
-              toolName: "continue_agent",
+              toolName: "resume_agent",
               details: {
                 ok: true,
                 owner_session_id: LEAD_SESSION_ID,
@@ -12646,7 +12646,7 @@ test("registered agent validates duplicate agents and selectors before lifecycle
   );
   assert.equal(missingAgentTask.details.error.category, "invalid_request");
   const continueTool = duplicate.tools.find(
-    (candidate) => candidate.name === "continue_agent",
+    (candidate) => candidate.name === "resume_agent",
   )!;
   const substitutedResume = await continueTool.execute(
     "id",
@@ -13076,7 +13076,7 @@ test("registered lead exposes only explicit live controls", async () => {
   assert.deepEqual(accepting.pi.getActiveTools(), [
     "list_agents",
     "delegate_agent",
-    "continue_agent",
+    "resume_agent",
     "steer_agent",
     "interrupt_agent",
     "reply_agent",

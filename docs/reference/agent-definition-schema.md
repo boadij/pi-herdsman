@@ -78,7 +78,7 @@ preserving the user's ordinary Pi tool selection.
 Code Mode does not add `bash`, `edit`, or `write` to a role's tool policy.
 Ordinary Lead profiles with explicit tools also enforce that policy during
 nested tool execution. `await_owner` remains model-only and cannot be called from
-Code Mode scripts. `delegate_agent` and `continue_agent` are direct tools when
+Code Mode scripts. `delegate_agent` and `resume_agent` are direct tools when
 active for the role; they return after acceptance, while completion arrives
 through the normal result-delivery mechanism. Other extensions may have
 different execution permissions; the bundled default applies only to
@@ -448,7 +448,7 @@ delegation-enabled. That condition is necessary but not sufficient: delegation
 is disabled when `excludeTools` contains `agent`, when `noTools: true` unless
 the explicit `tools` list contains `agent`, or when `tools` is explicitly
 empty. Otherwise, a non-empty `agents` list enables all nine coordination
-tools: `list_agents`, `delegate_agent`, `continue_agent`, `steer_agent`,
+tools: `list_agents`, `delegate_agent`, `resume_agent`, `steer_agent`,
 `interrupt_agent`, `reply_agent`, `stop_agent`, `inspect_agent`, and
 `read_agent_transcript`. Thus omitted `tools` permits delegation, and explicit
 ordinary tools permit it unless one of those opt-outs applies. An omitted or

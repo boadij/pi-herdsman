@@ -328,7 +328,7 @@ physical cleanup alone; unknown or partial ancestry remains ineligible.
 ## Historical session failure
 
 For a completed result delivered directly to this controller on its current Pi
-branch, `continue_agent` also accepts its semantic reference
+branch, `resume_agent` also accepts its semantic reference
 (`result:<agent>#<index>`). Otherwise, use the exact saved session path or full
 UUID; these exact selectors remain available for recovery and recursively owned
 descendants. A semantic reference selects the producing session's current saved

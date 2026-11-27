@@ -7,7 +7,7 @@ Managed-agent operations are exposed as distinct tools:
 ```text
 list_agents
 delegate_agent
-continue_agent
+resume_agent
 steer_agent
 interrupt_agent
 reply_agent
@@ -100,7 +100,7 @@ still apply. This is not a sandbox or a guarantee of exclusive access. The
 override changes the execution directory, not the owner or Herdr workspace.
 Relative `files` paths still resolve against the calling controller's directory.
 Successful fresh delegation reports the effective directory.
-[`continue_agent`](#continue_agent) restores the saved directory and has no
+[`resume_agent`](#resume_agent) restores the saved directory and has no
 `cwd` override. The fresh cross-directory launch's `--no-approve` flag is not
 carried forward; Pi's normal project trust behavior applies on continuation.
 
@@ -211,7 +211,7 @@ and valid state before submitting an assignment; the assignment still requires
 its own acknowledgement. Startup outcomes do not establish continuing
 liveness.
 
-## `continue_agent`
+## `resume_agent`
 
 ```json
 {
@@ -220,7 +220,7 @@ liveness.
 }
 ```
 
-Call `continue_agent` with `session`, `task`, and optional `files`. It does
+Call `resume_agent` with `session`, `task`, and optional `files`. It does
 not accept task-scoped `model` or `thinking` overrides. The session selector
 accepts a semantic result reference, exact saved session path, or full UUID.
 A semantic reference resolves only a completed result directly owned by
@@ -256,7 +256,7 @@ Concurrent or otherwise conflicting managed representations of the exact
 session fail closed. The controller's own active Pi session cannot be continued
 to itself.
 
-When `contextRetirement` is enabled, `continue_agent` is rejected for a retired
+When `contextRetirement` is enabled, `resume_agent` is rejected for a retired
 managed-agent session; delegate a fresh agent and pass the previous
 handoff/result and relevant files instead. Retired results explicitly instruct
 the controller to delegate a fresh agent when follow-up work remains, before
@@ -277,7 +277,7 @@ names. They include `agent`, `definition`, request, session, and startup
 evidence where available. All return after atomic
 recording for controller restart recovery, not completion. A terminal result
 makes the exact session identity
-prominent for a later `continue_agent` call.
+prominent for a later `resume_agent` call.
 
 ## `list_agents`
 
@@ -352,7 +352,7 @@ mutation. Active work may list `steer_agent`; a valid correlated pending
 `await_owner` may list `reply_agent`. A currently working agent may list
 `interrupt_agent`; a delegating agent blocked while waiting on children may
 still list `steer_agent` but not `interrupt_agent`.
-`available_tools` never lists `delegate_agent` or `continue_agent`: these are
+`available_tools` never lists `delegate_agent` or `resume_agent`: these are
 controller tools, not controls on an already-live agent. An agent cannot
 receive a second assignment. Directly owned live agents may expose the
 applicable live controls; directly owned live or proven `lost` records expose
@@ -541,7 +541,7 @@ not disclose storage paths.
 
 ## `files`
 
-`files` is valid on `delegate_agent`, `continue_agent`, `steer_agent`,
+`files` is valid on `delegate_agent`, `resume_agent`, `steer_agent`,
 `interrupt_agent`, and `reply_agent`; it is not valid on `list_agents`,
 `stop_agent`, `inspect_agent`, or `read_agent_transcript`. It accepts
 ordinary paths,
@@ -572,11 +572,11 @@ That received set is fixed for the accepted assignment: later parent changes do
 not silently rewrite it. For an eligible managed Agent,
 `delegate_agent` with `retain: true` adds only local requirements for its
 descendants; inherited evidence remains owned by its source assignment.
-`continue_agent` resumes the
+`resume_agent` resumes the
 exact saved managed-agent Pi history and its verified assignment evidence. It
 retains the new task for descendants while preserving earlier task snapshots as
 historical evidence.
-Files supplied explicitly on a `continue_agent` call are a separate handoff for
+Files supplied explicitly on a `resume_agent` call are a separate handoff for
 that message; they do not become required evidence for the continued
 assignment.
 The Manager's project-assignment **Required evidence** menu is limited to
@@ -698,7 +698,7 @@ Agent result · agent=<agent> · definition=<definition> · status=completed
 
 Result ref: result:<agent>#<index>
 
-To continue this session, use continue_agent with session="result:<agent>#<index>".
+To continue this session, use resume_agent with session="result:<agent>#<index>".
 ```
 
 Reusable result artifacts persist the source agent label, definition, assignment

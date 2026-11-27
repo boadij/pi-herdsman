@@ -78,7 +78,7 @@ const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
         {
           list: "list_agents",
           delegate: "delegate_agent",
-          continue: "continue_agent",
+          continue: "resume_agent",
           steer: "steer_agent",
           interrupt: "interrupt_agent",
           reply: "reply_agent",
@@ -1641,7 +1641,7 @@ test("recovery requires the official session and retries one failed delivery", a
   assert.match(
     delivered,
     new RegExp(
-      `To continue this session, use continue_agent with session="result:${label}#2"\\.`,
+      `To continue this session, use resume_agent with session="result:${label}#2"\\.`,
     ),
   );
   assert.deepEqual(

@@ -153,7 +153,7 @@ export type AgentDefinition = {
 export const AGENT_COORDINATION_TOOLS = [
   "list_agents",
   "delegate_agent",
-  "continue_agent",
+  "resume_agent",
   "steer_agent",
   "interrupt_agent",
   "reply_agent",

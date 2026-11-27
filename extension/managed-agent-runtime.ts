@@ -4064,8 +4064,7 @@ export function registerManagedAgentContextHandlers(
     if (
       !retirementEnabled(ctx) ||
       !options.hasActiveAssignment() ||
-      (event.toolName !== "delegate_agent" &&
-        event.toolName !== "continue_agent")
+      (event.toolName !== "delegate_agent" && event.toolName !== "resume_agent")
     )
       return;
     if (

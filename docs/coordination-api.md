@@ -49,7 +49,7 @@ Use [Agent tools](reference/agent.md) for:
 ```text
 list_agents
 delegate_agent
-continue_agent
+resume_agent
 steer_agent
 interrupt_agent
 reply_agent
