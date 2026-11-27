@@ -132,10 +132,12 @@ test("checkout clone source fails closed on incomplete, cancelled or stale obser
     "replaced",
   ] as const) {
     const abort = new AbortController();
+    let observedOrigin = false;
     const exec: Exec = async (_command, args) => {
       if (args[0] === "rev-parse")
         return success(args.includes("--show-toplevel") ? root : metadata);
       assert.deepEqual(args, ["remote", "get-url", "--all", "origin"]);
+      observedOrigin = true;
       if (outcome === "cancelled") abort.abort();
       if (outcome === "replaced") {
         const retired = metadata + "-retired";
@@ -155,6 +157,7 @@ test("checkout clone source fails closed on incomplete, cancelled or stale obser
         : /explicit HTTPS or SSH/,
       outcome,
     );
+    assert.ok(observedOrigin, outcome);
   }
 });
 
