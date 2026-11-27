@@ -28,8 +28,7 @@ export function chiefManagerSuccessEvidence(progress = {}) {
 
 export function ownedAgentReadinessEvidence(progress = {}) {
   return {
-    activeMailboxRequestPresent:
-      progress.activeMailboxRequestPresent === true,
+    activeMailboxRequestPresent: progress.activeMailboxRequestPresent === true,
     positiveChildPidPresent: progress.positiveChildPidPresent === true,
     expectedAwaitOwnerPresent: progress.expectedAwaitOwnerPresent === true,
   };

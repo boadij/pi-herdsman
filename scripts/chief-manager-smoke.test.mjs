@@ -78,6 +78,8 @@ test("owned Agent readiness evidence contains only prerequisite booleans", () =>
     positiveChildPidPresent: false,
     expectedAwaitOwnerPresent: true,
   });
-  assert.ok(Object.values(evidence).every((value) => typeof value === "boolean"));
+  assert.ok(
+    Object.values(evidence).every((value) => typeof value === "boolean"),
+  );
   assert.doesNotMatch(JSON.stringify(evidence), /private|421|\//u);
 });
