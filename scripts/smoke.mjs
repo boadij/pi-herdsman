@@ -11203,6 +11203,19 @@ async function runChiefManagerSmoke(ctx) {
   const repository = await realpath(await prepareManagerRepository(ctx.paths));
   // Approve only the owned fixture; do not bypass the child's native Pi trust.
   new ProjectTrustStore(ctx.paths.piAgent).set(repository, true);
+  const url = `https://smoke.invalid/${randomUUID()}/project.git`;
+  const destination = join(await realpath(ctx.paths.root), "clone-only");
+  // Route only this fixture URL through native Git, with no external service
+  // and no change to Herdsman's URL validation or Git protocol permissions.
+  const gitConfig = join(ctx.paths.xdgConfig, "git", "config");
+  await mkdir(dirname(gitConfig), { recursive: true });
+  await run("git", [
+    "config",
+    "--file",
+    gitConfig,
+    `url.${repository}.insteadOf`,
+    url,
+  ]);
   const panes = async () => (await nestedCommand(ctx, ["pane", "list"])).panes;
   const projectPanes = async () =>
     (await panes()).filter((pane) => pane.cwd === repository);
@@ -11224,8 +11237,8 @@ async function runChiefManagerSmoke(ctx) {
   const prompt = (pane, text) =>
     nestedCommand(ctx, ["agent", "prompt", pane, text]);
   let turn = 0;
-  async function lifecycle(tool, expected, stage) {
-    const request = `CHIEF_MANAGER_SMOKE ${++turn} ${tool} ${repository}`;
+  async function lifecycle(tool, expected, stage, args = { repository }) {
+    const request = `CHIEF_MANAGER_SMOKE ${++turn} ${tool} ${JSON.stringify(args)}`;
     await prompt(ctx.rootPaneId, request);
     const result = await wait(
       stage,
@@ -11249,11 +11262,11 @@ async function runChiefManagerSmoke(ctx) {
         );
         assert.ok(
           calls.length <= 1,
-          "Chief turn must not repeat a lifecycle call",
+          "Chief turn must not repeat a project call",
         );
         if (calls.length === 1) {
           assert.equal(calls[0].name, tool);
-          assert.ok(calls[0].arguments?.repository === repository);
+          assert.deepEqual(calls[0].arguments, args);
         }
         const results = messages.filter(
           (message) =>
@@ -11368,7 +11381,13 @@ async function runChiefManagerSmoke(ctx) {
       assert.equal(
         result.details?.status,
         expected,
-        `${stage} lifecycle status${failure}`,
+        `${stage} project status${failure}`,
+      );
+    } else if (tool === "list_projects") {
+      assert.equal(
+        result.isError,
+        false,
+        "project discovery returned an error",
       );
     } else {
       assert.ok(
@@ -11402,6 +11421,7 @@ async function runChiefManagerSmoke(ctx) {
       },
       15_000,
     );
+    return result.details;
   }
   async function observeManager(stage) {
     return wait(stage, async () => {
@@ -11587,6 +11607,52 @@ async function runChiefManagerSmoke(ctx) {
         agent.pane_id === ctx.rootPaneId && agent.agent_status === "idle",
     ),
   }));
+  const clone = await lifecycle("clone_repository", "cloned", "clone-only", {
+    url,
+    destination,
+  });
+  assert.equal(clone.repository, destination);
+  assert.ok(clone.workspaceId);
+  assert.notEqual(clone.workspaceId, ctx.rootWorkspaceId);
+  const head = async (cwd) =>
+    (await run("git", ["rev-parse", "HEAD"], { cwd })).stdout;
+  assert.equal(await head(destination), await head(repository));
+
+  const clonePanes = (await panes()).filter(
+    (pane) => pane.workspace_id === clone.workspaceId,
+  );
+  assert.equal(clonePanes.length, 1, "clone should have only its initial pane");
+  assert.equal(clonePanes[0].cwd, destination);
+  assert.ok(
+    !(await agents()).some((agent) => agent.workspace_id === clone.workspaceId),
+    "clone-only workspace registered a Pi agent",
+  );
+  const cloneProcessInfo = await paneProcessInfo(clonePanes[0].pane_id);
+  const foreground = cloneProcessInfo.process_info?.foreground_processes;
+  assert.ok(Array.isArray(foreground), "missing clone pane process evidence");
+  assert.ok(
+    !foreground.some((proc) => proc.name === "pi") &&
+      candidateProcess(
+        cloneProcessInfo,
+        ctx.candidateExtension,
+        ctx.herdrStateExtension,
+      ).length === 0,
+    "clone-only workspace launched Pi",
+  );
+
+  const discovery = await lifecycle("list_projects", null, "list-projects", {});
+  const matches = discovery.projects.filter(
+    (project) => project.primaryCheckoutPath === destination,
+  );
+  assert.equal(matches.length, 1, "expected exactly one discovered clone");
+  assert.deepEqual(matches[0].workspaces, [
+    {
+      workspaceId: clone.workspaceId,
+      checkoutPath: destination,
+      isPrimary: true,
+    },
+  ]);
+  assert.equal(matches[0].managerStatus, "none");
   await lifecycle("start_manager", "started", "start");
   const first = await observeManager("first-manager");
   assert.notEqual(first.pane.workspace_id, ctx.rootWorkspaceId);

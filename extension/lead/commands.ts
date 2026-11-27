@@ -1529,6 +1529,13 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               help: "Control whether Manager can merge accepted local branches, using fast-forward only or conflict-free divergent merges.",
             },
             {
+              value: "projects-directory",
+              category: "manager",
+              label: "Projects directory",
+              description: config.projectsDirectory,
+              help: "Set the global projects root for this Pi profile. Enter an absolute or ~/ path. Changing this setting does not move or create repositories.",
+            },
+            {
               value: "status-widget-rows",
               category: "interface",
               label: "Status widget lines",
@@ -1942,6 +1949,21 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               ? "contextRetirement"
               : "autoActivateManager",
           );
+        } else if (selected === "projects-directory") {
+          const defaultPath = DEFAULT_CONFIG.projectsDirectory;
+          const input = await host.input(
+            ctx,
+            `Projects directory (default: ${defaultPath})`,
+          );
+          if (input === undefined || ctx.signal?.aborted) continue;
+          try {
+            host.updateConfig(
+              "projectsDirectory",
+              input === defaultPath ? undefined : input,
+            );
+          } catch (error) {
+            ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
+          }
         } else if (selected === "manager-merge") {
           await this.openMergeSetting(ctx);
         } else if (selected === "removal-confirmation") {

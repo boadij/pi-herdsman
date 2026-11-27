@@ -24,6 +24,7 @@ import { createChiefProjectRuntime } from "./chief-project.ts";
 import { fakeContext, PI_AGENT_ROOT } from "./support.ts";
 import {
   claimManagerLease,
+  claimManagerStartupLock,
   getManagerStartIntent,
   managerDescriptorPath,
   readManagerDescriptorStatus,
@@ -32,6 +33,183 @@ import {
   writeLeadCoordinationState,
   writeManagerRecoveryReference,
 } from "./supervision.ts";
+
+test("Chief clone provisions only a verified primary workspace", async (t) => {
+  for (const scenario of [
+    "create",
+    "reuse",
+    "incomplete membership",
+    "checkout replaced",
+    "authority lost",
+    "startup locked",
+    "lost acknowledgement",
+    "unverified placement",
+  ]) {
+    await t.test(scenario, async (t) => {
+      const root = realpathSync.native(
+        mkdtempSync(join(tmpdir(), "chief-clone-")),
+      );
+      t.after(() => rmSync(root, { recursive: true, force: true }));
+      const repository = join(root, "project");
+      const canonicalRepoKey = join(repository, ".git");
+      const runtime = supervisionRuntime(join(root, "socket"));
+      const url = "https://example.test/owner/project.git";
+      const workspaceId = "project-workspace";
+      const retired = join(root, "retired");
+      let workspaceExists =
+        scenario === "reuse" || scenario === "incomplete membership";
+      let checkoutReplaced = false;
+      let snapshotObserved = false;
+      let gitCheckedAfterSnapshot = false;
+      let authorityChecks = 0;
+      const mutations: string[] = [];
+      if (scenario === "startup locked") {
+        const lock = claimManagerStartupLock(runtime, canonicalRepoKey);
+        t.after(() => lock.release());
+      }
+      const chief = createChiefProjectRuntime(
+        {
+          exec: async (command: string, args: string[]) => {
+            const ok = (stdout: string) => ({ code: 0, stdout, stderr: "" });
+            const response = (result: unknown) =>
+              ok(JSON.stringify({ id: 1, result }));
+            if (command === "git") {
+              if (args[0] === "clone") {
+                assert.deepEqual(args, ["clone", "--", url, repository]);
+                mutations.push("git clone");
+                mkdirSync(canonicalRepoKey);
+                return ok("");
+              }
+              assert.equal(args[0], "rev-parse");
+              if (snapshotObserved) gitCheckedAfterSnapshot = true;
+              if (checkoutReplaced)
+                return {
+                  code: 128,
+                  stdout: "",
+                  stderr: "not a git repository",
+                };
+              return ok(
+                args.at(-1) === "--show-toplevel"
+                  ? repository
+                  : canonicalRepoKey,
+              );
+            }
+            switch (args.slice(0, 2).join(" ")) {
+              case "api snapshot":
+                snapshotObserved = true;
+                if (scenario === "checkout replaced" && !checkoutReplaced) {
+                  renameSync(repository, retired);
+                  mkdirSync(repository);
+                  checkoutReplaced = true;
+                }
+                return response({
+                  snapshot: {
+                    workspaces: workspaceExists
+                      ? [
+                          {
+                            workspace_id: workspaceId,
+                            worktree:
+                              scenario === "incomplete membership" ? {} : null,
+                          },
+                        ]
+                      : [],
+                    panes: workspaceExists
+                      ? [{ workspace_id: workspaceId, cwd: repository }]
+                      : [],
+                    agents: [],
+                  },
+                });
+              case "workspace create":
+                assert.deepEqual(args.slice(2), [
+                  "--cwd",
+                  repository,
+                  "--no-focus",
+                ]);
+                mutations.push("workspace create");
+                workspaceExists = true;
+                if (scenario === "lost acknowledgement")
+                  throw new Error("lost workspace acknowledgement");
+                return response({ workspace: { workspace_id: workspaceId } });
+              case "worktree list":
+                assert.deepEqual(args.slice(2), ["--workspace", workspaceId]);
+                return response({
+                  source: {
+                    repo_key: canonicalRepoKey,
+                    repo_name: "project",
+                    source_workspace_id: workspaceId,
+                    source_checkout_path:
+                      scenario === "unverified placement" ? root : repository,
+                  },
+                  worktrees: [],
+                });
+              default:
+                assert.fail(`Unexpected command: ${command} ${args.join(" ")}`);
+            }
+          },
+        } as unknown as ExtensionAPI,
+        {
+          assertChief: async () => {
+            if (++authorityChecks === 3 && scenario === "authority lost") {
+              assert.ok(gitCheckedAfterSnapshot);
+              throw new Error("Chief authority lost");
+            }
+          },
+          remoteIdentity: async () => undefined,
+          runtime: () => runtime,
+          build: { version: "test", sha256: "a".repeat(64) },
+          extensionPath: "/extension.ts",
+        },
+      );
+      const result = await chief.clone(url, repository, fakeContext());
+      assert.equal(result.repository, repository);
+      assert.ok(
+        statSync(
+          checkoutReplaced ? join(retired, ".git") : canonicalRepoKey,
+        ).isDirectory(),
+      );
+      assert.deepEqual(
+        mutations,
+        ["create", "lost acknowledgement", "unverified placement"].includes(
+          scenario,
+        )
+          ? ["git clone", "workspace create"]
+          : ["git clone"],
+      );
+      switch (scenario) {
+        case "create":
+        case "reuse":
+          assert.deepEqual(result, {
+            status: "cloned",
+            repository,
+            workspaceId,
+          });
+          break;
+        default:
+          assert.equal(result.status, "partial_failure");
+          if (scenario === "unverified placement") {
+            assert.equal(result.stage, "workspace_verify");
+            assert.deepEqual(result.placement, { workspaceId });
+          } else if (scenario === "lost acknowledgement") {
+            assert.equal(result.stage, "workspace_create");
+            assert.match(result.reason, /lost workspace acknowledgement/);
+            assert.equal(result.placement?.workspaceId, undefined);
+          } else if (scenario === "incomplete membership") {
+            assert.match(result.reason, /conflicting repository identity/);
+          } else if (scenario === "checkout replaced") {
+            assert.match(
+              result.reason,
+              /Git local repository identity is unavailable/,
+            );
+          } else {
+            assert.match(
+              result.reason,
+              /authority lost|startup lock is in progress/i,
+            );
+          }
+      }
+    });
+  }
+});
 
 test("Chief Git approval cannot transfer to a replacement directory", async (t) => {
   for (const change of [

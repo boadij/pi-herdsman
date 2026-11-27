@@ -57,6 +57,7 @@ mock.module("node:fs", {
         directoryFsyncFds.add(fd);
       return fd;
     },
+    opendirSync: realFs.opendirSync,
     readFileSync: realFs.readFileSync,
     readSync: realFs.readSync,
     realpathSync: realFs.realpathSync,

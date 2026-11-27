@@ -9,6 +9,7 @@ import {
   realpathSync,
   mkdirSync,
   openSync,
+  opendirSync,
   readFileSync,
   readSync,
   statSync,
@@ -2569,6 +2570,20 @@ function managerRecoveryPath(
   return managerIdentityPath(runtime.managerRecovery, canonicalRepoKey);
 }
 
+function checkManagerRecoveryDirectory(directory: string): boolean {
+  // The profile base is canonical in supervisionRuntime; check each
+  // component of its private pi-herdsman/runtime/.../manager-recovery tree.
+  const authority = dirname(directory);
+  const runtime = dirname(authority);
+  for (const path of [dirname(runtime), runtime, authority, directory]) {
+    const info = lstatSync(path, { throwIfNoEntry: false });
+    if (!info) return false;
+    if (!info.isDirectory())
+      throw new Error("Unsafe Manager recovery directory");
+  }
+  return true;
+}
+
 function validManagerRecoveryReference(
   value: unknown,
 ): value is ManagerRecoveryReference {
@@ -2588,9 +2603,9 @@ export function readManagerRecoveryReference(
   runtime: SupervisionRuntime,
   canonicalRepoKey: string,
 ): ManagerRecoveryReference | undefined {
-  const value = readManagerLifecycleRecord(
-    managerRecoveryPath(runtime, canonicalRepoKey),
-  );
+  const path = managerRecoveryPath(runtime, canonicalRepoKey);
+  if (!checkManagerRecoveryDirectory(runtime.managerRecovery)) return undefined;
+  const value = readManagerLifecycleRecord(path);
   if (value === undefined) return undefined;
   if (
     !validManagerRecoveryReference(value) ||
@@ -2598,6 +2613,53 @@ export function readManagerRecoveryReference(
   )
     throw new Error("Invalid Manager recovery reference");
   return value;
+}
+
+/** Observe this profile's record names without following symlinks or repairing state. */
+export function listManagerRecoveryReferences(
+  runtime: SupervisionRuntime,
+  signal?: AbortSignal,
+): { references: ManagerRecoveryReference[]; complete: boolean } {
+  const references: ManagerRecoveryReference[] = [];
+  let complete = true;
+  try {
+    signal?.throwIfAborted();
+    if (!checkManagerRecoveryDirectory(runtime.managerRecovery))
+      return { references, complete };
+    const directory = opendirSync(runtime.managerRecovery);
+    try {
+      for (let count = 0; ; count++) {
+        signal?.throwIfAborted();
+        const entry = directory.readSync();
+        if (!entry) break;
+        if (count === 2_000) {
+          complete = false;
+          break;
+        }
+        if (!/^[0-9a-f]{64}\.json$/.test(entry.name)) continue;
+        const path = join(runtime.managerRecovery, entry.name);
+        try {
+          if (!entry.isFile())
+            throw new Error("Unsafe Manager recovery record");
+          const value = readManagerLifecycleRecord(path);
+          if (
+            !validManagerRecoveryReference(value) ||
+            managerRecoveryPath(runtime, value.canonicalRepoKey) !== path
+          )
+            throw new Error("Invalid Manager recovery reference");
+          references.push(value);
+        } catch {
+          complete = false;
+        }
+      }
+    } finally {
+      directory.closeSync();
+    }
+  } catch {
+    signal?.throwIfAborted();
+    complete = false;
+  }
+  return { references, complete };
 }
 
 export function writeManagerRecoveryReference(

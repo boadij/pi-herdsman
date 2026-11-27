@@ -35,7 +35,29 @@ function runPowerShell(script: string): Promise<string> {
           if (code === "ETIMEDOUT") reject(new Error("PowerShell timed out"));
           else if (code === "ENOENT")
             reject(new Error("PowerShell executable unavailable"));
-          else reject(new Error("PowerShell execution failed"));
+          else {
+            const failure = error as ExecFileException;
+            const metadata: string[] = [];
+            if (
+              typeof code === "string" &&
+              code.length <= 32 &&
+              /^[A-Z0-9_]+$/.test(code)
+            )
+              metadata.push(`code=${code}`);
+            if (
+              failure.signal === null ||
+              (typeof failure.signal === "string" &&
+                /^SIG[A-Z0-9]{1,12}$/.test(failure.signal))
+            )
+              metadata.push(`signal=${failure.signal ?? "none"}`);
+            if (typeof failure.killed === "boolean")
+              metadata.push(`killed=${failure.killed}`);
+            reject(
+              new Error(
+                `PowerShell execution failed${metadata.length ? ` (${metadata.join(", ")})` : ""}`,
+              ),
+            );
+          }
         } else resolvePromise(stdout.trim());
       },
     );

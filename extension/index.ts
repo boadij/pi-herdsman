@@ -18,6 +18,7 @@ import {
   chiefSystemPrompt as buildChiefSystemPrompt,
 } from "./chief-prompt.ts";
 import { createChiefProjectRuntime } from "./chief-project.ts";
+import { discoverProjects } from "./project-discovery.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import packageMetadata from "../package.json" with { type: "json" };
@@ -86,6 +87,7 @@ import {
   stopHerdrAgentPreservingPane,
   type ExpectedSession,
   type HerdrRecord,
+  type HerdrSessionSnapshot,
 } from "./herdr.ts";
 import { reportLeadMetadata } from "./herdr.ts";
 import {
@@ -287,6 +289,7 @@ const LEAD_COORDINATION_TOOLS = [
 ] as const;
 const CHIEF_TOOLS = [
   ...STAFF_TOOLS,
+  "list_projects",
   "clone_repository",
   "start_manager",
   "resume_manager",
@@ -354,7 +357,8 @@ function formatMessageLimit(bytes: number): string {
 }
 const CHIEF_ROLE_CONTRACT = `## Chief role
 You are the verified workspace-neutral Chief for this Pi session. Supervise only verified direct-report Managers and eligible unassigned top-level Leads; never bypass a Manager to control assigned Leads or their Agents. Role configuration does not establish authority. Supervision snapshots are non-authoritative coordination data. Do not perform local implementation work or assume this Pi process's working directory is the supervised scope.
-Use the project tools for authorized local provisioning or to start a project's Manager. If start_manager reports resume_required, use resume_manager only when asked to recover the saved Manager. Use list_staff to obtain a verified staff target.
+Use list_projects for fresh read-only discovery. The automatic project overview is bounded observation data, not authority for mutation or proof of absence. Repository paths select project lifecycle operations; verified workspace selectors select workspace operations, not staff targets. Use list_staff to obtain a verified staff target.
+Use the project tools for authorized local provisioning or to start a project's Manager. If start_manager reports resume_required, use resume_manager only when asked to recover the saved Manager.
 ${AUTHORITY_GUIDANCE}
 ${INTERNAL_MESSAGE_PROVENANCE_GUIDANCE}
 ${AGENT_EXECUTION_OWNERSHIP_GUIDANCE}
@@ -1279,6 +1283,7 @@ function registerExtensionImpl(
     leadRuntimes?.supervisionUiRuntime?.reset();
   let prepareSupervisionMessage: (
     ctx: ExtensionContext,
+    inventory?: HerdrSessionSnapshot,
   ) => Promise<
     { customType: string; content: string; display: boolean } | undefined
   > = async () => undefined;
@@ -1543,8 +1548,49 @@ function registerExtensionImpl(
           },
         ),
     };
-    prepareSupervisionMessage = (ctx) =>
-      leadRuntimes.supervisionUiRuntime!.prepareMessage(ctx);
+    prepareSupervisionMessage = (ctx, inventory) =>
+      leadRuntimes.supervisionUiRuntime!.prepareMessage(ctx, inventory);
+    const assertChiefProjectAuthority = async (ctx: ExtensionContext) => {
+      if (
+        !isCurrentChief(ctx) ||
+        leadRuntime.roleSuspended ||
+        !(await roleTransitions.currentChiefAuthority(ctx, true))
+      )
+        throw new Error(
+          "Chief project tools require verified active Chief authority",
+        );
+    };
+    const chiefProject = createChiefProjectRuntime(pi, {
+      build: HERDSMAN_BUILD,
+      extensionPath: HERDSMAN_EXTENSION_PATH,
+      runtime: supervisionRuntime,
+      remoteIdentity: remoteChiefAgent,
+      assertChief: assertChiefProjectAuthority,
+    });
+    const discoverChiefProjects = async (
+      ctx: ExtensionContext,
+      includeProjectsDirectory: boolean,
+      signal?: AbortSignal,
+      inventory?: HerdrSessionSnapshot | null,
+    ) => {
+      await assertChiefProjectAuthority(ctx);
+      const runtime = supervisionRuntime();
+      const result = await discoverProjects(pi, ctx, {
+        runtime,
+        includeProjectsDirectory,
+        signal,
+        inventory,
+        verifyRunningManager: (repository, descriptor, signal) =>
+          chiefProject.verifyActive(
+            { ...ctx, signal },
+            runtime,
+            repository,
+            descriptor,
+          ),
+      });
+      await assertChiefProjectAuthority(ctx);
+      return result;
+    };
     const leadAgentEventOptions = {
       drainRetirementNotices: (ctx: ExtensionContext, preflight: boolean) =>
         leadRuntimes.coordinationRuntime!.drainRetirementNotices(
@@ -1555,6 +1601,12 @@ function registerExtensionImpl(
       chiefTools: CHIEF_TOOLS,
       setActiveTools: (tools: string[]) => pi.setActiveTools(tools),
       prepareSupervisionMessage,
+      observeChiefTopology: (ctx: ExtensionContext) =>
+        herdrSessionSnapshot(pi, ctx, ctx.signal),
+      discoverChiefOverview: (
+        ctx: ExtensionContext,
+        inventory: HerdrSessionSnapshot | null,
+      ) => discoverChiefProjects(ctx, false, ctx.signal, inventory),
       sendMessage: (message: any) =>
         pi.sendMessage(message, { triggerTurn: false }),
       chiefSystemPrompt,
@@ -2159,30 +2211,12 @@ function registerExtensionImpl(
             activeRole: activeRole(),
           }),
       };
-      const chiefProject = createChiefProjectRuntime(pi, {
-        build: HERDSMAN_BUILD,
-        extensionPath: HERDSMAN_EXTENSION_PATH,
-        runtime: supervisionRuntime,
-        remoteIdentity: remoteChiefAgent,
-        assertChief: async (ctx) => {
-          if (
-            !isCurrentChief(ctx) ||
-            leadRuntime.roleSuspended ||
-            !(await roleTransitions.currentChiefAuthority(ctx, true))
-          )
-            throw new Error(
-              "Project lifecycle tools require verified active Chief authority",
-            );
-        },
-      });
       const chiefProjectTool = {
         defaultActive: false,
         exposure: "direct" as const,
         executionMode: "sequential" as const,
       };
-      const projectResult = (
-        details: Awaited<ReturnType<typeof chiefProject.start>>,
-      ) => ({
+      const projectResult = <T>(details: T) => ({
         content: [{ type: "text" as const, text: JSON.stringify(details) }],
         details,
       });
@@ -2190,10 +2224,28 @@ function registerExtensionImpl(
       const projectDestination = Type.Optional(Type.String({ minLength: 1 }));
       pi.registerTool({
         ...chiefProjectTool,
+        name: "list_projects",
+        label: "list projects",
+        description:
+          "Discover verified Git projects, Herdr workspaces and Manager status, including a bounded scan of the configured projects directory. Read-only.",
+        parameters: emptyParameters,
+        execute: async (_id, _params, signal, _update, ctx) =>
+          projectResult(
+            await discoverChiefProjects(
+              ctx,
+              true,
+              signal && ctx.signal && signal !== ctx.signal
+                ? AbortSignal.any([signal, ctx.signal])
+                : (signal ?? ctx.signal),
+            ),
+          ),
+      });
+      pi.registerTool({
+        ...chiefProjectTool,
         name: "clone_repository",
         label: "clone repository",
         description:
-          "Clone and verify an HTTPS or SSH Git repository without starting Manager.",
+          "Clone and verify an HTTPS or SSH Git repository and provision or reuse its primary Herdr workspace without launching Pi.",
         parameters: Type.Object(
           { url: projectLocation, destination: projectDestination },
           { additionalProperties: false },

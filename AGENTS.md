@@ -131,6 +131,8 @@ Group routine tests by area rather than enumerating every test file.
 
 - `extension/index.ts`: Pi extension composition, shared registration (including Chief project tools), and runtime selection.
 - `extension/chief-project.ts`: Chief project provisioning and exact Manager start/resume orchestration, including unsettled launch reservations.
+- `extension/project-discovery.ts`: Read-only Chief project discovery, verified workspace associations, and Manager status observations.
+- `extension/manager-recovery.ts`: Shared read-only validation of saved Manager Pi sessions for exact recovery and discovery.
 - `extension/agent-controller.ts`: Shared owner-side Agent delegation, control, recovery, and result lifecycle.
 - `extension/managed-agent-runtime.ts`: Managed-Agent request, result, context, metadata, and nested-delegation runtime.
 - `extension/lead-runtime.ts`: Lead lifecycle, role composition, supervision, project integration wiring, and Manager activation and persisted-role restoration.

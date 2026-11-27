@@ -7440,24 +7440,54 @@ test("Lead keeps the startup model catalog when the live Pi scope changes", asyn
   }
 });
 
-test("Chief appends only the stable model catalog to its restricted prompt", async () => {
+test("Chief composes a bounded project overview and the stable model catalog", async () => {
   const { createLeadAgentEventRuntime } = await import("./lead-runtime.ts");
   const { chiefSystemPrompt } = await import("./chief-prompt.ts");
   const catalog = '[{"model":"test/start","thinking":["off"]}]';
   let allowed = ["delegate_agent"];
   let role: "chief" | "manager" = "chief";
+  const inventory = { workspaces: [], agents: [], panes: [] };
+  let observations = 0;
+  let unavailable = false;
+  let topologyUnavailable = false;
   const events = createLeadAgentEventRuntime({
     isCurrentChief: () => role === "chief",
     setActiveTools: () => {},
     chiefTools: [],
     leadInboxRuntime: { holdStartPreflight: () => {} },
-    prepareSupervisionMessage: async () => undefined,
+    prepareSupervisionMessage: async (_ctx: unknown, supplied: unknown) => {
+      assert.equal(
+        supplied,
+        role === "chief" && !topologyUnavailable ? inventory : undefined,
+      );
+      return undefined;
+    },
+    observeChiefTopology: async () => {
+      if (topologyUnavailable) throw new Error("Topology unavailable");
+      return inventory;
+    },
+    discoverChiefOverview: async (_ctx: unknown, supplied: unknown) => {
+      assert.equal(supplied, topologyUnavailable ? null : inventory);
+      observations++;
+      if (unavailable) throw new Error("Discovery unavailable");
+      return {
+        complete: false,
+        projects: Array.from({ length: 21 }, (_, index) => ({
+          canonicalRepoKey: `/repos/project-${index}/.git`,
+          primaryCheckoutPath: `/repos/project-${index}`,
+          workspaces: [],
+          managerStatus: topologyUnavailable ? "unknown" : "recoverable",
+        })),
+        diagnostics: [],
+      };
+    },
     drainRetirementNotices: async () => 0,
     chiefSystemPrompt: (options: BuildSystemPromptOptions, body: string) =>
       chiefSystemPrompt(options, body, "Chief contract", "/global"),
     currentChiefAllowedTools: () => allowed,
     supervisoryProfileBody: () => "Chief profile",
     isActiveManager: () => role === "manager",
+    isRoleSuspended: () => false,
     roleCharter: () => "Manager contract",
     modelCatalog: () => catalog,
   } as any);
@@ -7471,16 +7501,39 @@ test("Chief appends only the stable model catalog to its restricted prompt", asy
   };
   const ctx = fakeContext();
   const start = () => events.beforeAgentStart(event, ctx);
-  const prompt = `Chief contract\n\nChief profile\n\n## agent_models\n\n${catalog}`;
-  assert.equal((await start())?.systemPrompt, prompt);
+  const prompt = (await start())?.systemPrompt;
+  assert.ok(prompt);
+  assert.match(
+    prompt,
+    /^Chief contract\n\nChief profile\n\n## Project overview/u,
+  );
+  assert.match(prompt, /21 projects observed; 1 omitted/u);
+  assert.match(prompt, /Incomplete project observation/u);
+  assert.match(prompt, /project-19" — Manager: recoverable/u);
+  assert.doesNotMatch(
+    prompt,
+    /project-20|ordinary Pi prompt|project instructions/u,
+  );
+  assert.ok(prompt.endsWith(`\n\n## agent_models\n\n${catalog}`));
   assert.equal((await start())?.systemPrompt, prompt);
   allowed = [];
   assert.equal(
     (await start())?.systemPrompt,
-    "Chief contract\n\nChief profile",
+    prompt.split("\n\n## agent_models")[0],
+  );
+  topologyUnavailable = true;
+  assert.match(
+    (await start())!.systemPrompt,
+    /project-19" — Manager: unknown/u,
+  );
+  unavailable = true;
+  assert.match(
+    (await start())!.systemPrompt,
+    /Incomplete: project observation unavailable/u,
   );
   role = "manager";
   assert.equal(await start(), undefined);
+  assert.equal(observations, 5);
   assert.equal(event.systemPromptOptions.sections.agent_models, catalog);
 });
 
