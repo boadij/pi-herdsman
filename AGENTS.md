@@ -180,6 +180,20 @@ the exact outgoing content under the public disclosure policy above.
 - Before merging, required CI checks must pass and the branch must be up
   to date with upstream `main`.
 
+For explicitly authorized native GitHub stacks rooted at upstream `main`,
+the PR target and freshness rules above apply to each layer's actual parent
+branch, with the bottom layer targeting `main`. Required checks and reviews
+must cover the exact material being merged. The Manager coordinates stack
+topology and worktree ownership. The Ship Agent performs only separately
+authorized delivery operations.
+
+Upstream skill examples do not override these safeguards. Do not install
+extensions, change Git configuration, force-push, rewrite another Lead's
+branch, or combine unauthorized writes. Inspect the complete affected stack
+and command side effects before any mutation. Stop if the stack operation
+cannot preserve worktree ownership, separate authorization, matching-head
+merge guards, required CI, or squash-merge policy.
+
 ## Development loop
 
 Follow the documented development workflow by default. An explicit human

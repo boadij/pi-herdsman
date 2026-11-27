@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { checkGhSkill } from "./gh-skill-drift.mjs";
+import { checkGhSkill, checkGhStackSkill } from "./gh-skill-drift.mjs";
 
 const path = "skills/gh/SKILL.md";
 const commit = "a".repeat(40);
@@ -94,4 +94,74 @@ test("gh skill checker distinguishes lookup, missing, and invalid responses", as
       message,
     );
   }
+});
+
+const stackVendor = new URL("../vendor/gh-stack/", import.meta.url);
+const stackPrefix = "skills/gh-stack/";
+const stackFiles = [
+  "SKILL.md",
+  "references/commands.md",
+  "references/stack-design.md",
+  "references/troubleshooting.md",
+].map((name) => ({
+  path: stackPrefix + name,
+  mode: "100644",
+  type: "blob",
+  sha: execFileSync(
+    "git",
+    ["hash-object", "--no-filters", fileURLToPath(new URL(name, stackVendor))],
+    { encoding: "utf8" },
+  ).trim(),
+}));
+
+function stackRequest(tree, truncated = false) {
+  const paths = ["/git/ref/heads/main", `/git/trees/${commit}?recursive=1`];
+  const responses = [
+    Response.json({ ...ref, ref: "refs/heads/main" }),
+    Response.json({ tree, truncated }),
+  ];
+  return async (url) => {
+    assert.equal(
+      url,
+      `https://api.github.com/repos/github/gh-stack${paths.shift()}`,
+    );
+    return responses.shift();
+  };
+}
+
+test("gh-stack checker monitors the skill and all reference files", async () => {
+  assert.equal(
+    await checkGhStackSkill({ request: stackRequest(stackFiles) }),
+    null,
+  );
+  const changed = stackFiles.map((entry) =>
+    entry.path.endsWith("commands.md")
+      ? { ...entry, sha: "b".repeat(40) }
+      : entry,
+  );
+  const added = {
+    ...stackFiles[0],
+    path: stackPrefix + "references/new.md",
+  };
+  const result = await checkGhStackSkill({
+    request: stackRequest(
+      [...changed, added].filter(
+        (entry) => !entry.path.endsWith("troubleshooting.md"),
+      ),
+    ),
+  });
+  assert.match(result, /references\/commands\.md/);
+  assert.match(result, /references\/new\.md/);
+  assert.match(result, /references\/troubleshooting\.md/);
+  assert.match(result, /Removed upstream/);
+  assert.match(result, /Not vendored/);
+  assert.ok(result.includes(`github/gh-stack/blob/${commit}/`));
+  await assert.rejects(
+    checkGhStackSkill({ request: stackRequest(stackFiles, true) }),
+    /expected complete gh-stack tree/,
+  );
+  await assert.rejects(
+    checkGhStackSkill({ request: stackRequest([]) }),
+    /Missing upstream file/,
+  );
 });
