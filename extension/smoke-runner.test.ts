@@ -1417,7 +1417,7 @@ test("parent Herdr environment retains nesting context and clears caller routing
   assert.equal(base.HERDR_SOCKET_PATH, "/wrong/server.sock");
 });
 
-test("root delegation diagnostics correlate results and exclude private data", () => {
+test("root delegation diagnostics correlate results and exclude private data", async () => {
   const call = {
     role: "assistant",
     stopReason: "toolUse",
@@ -1658,6 +1658,52 @@ test("root delegation diagnostics correlate results and exclude private data", (
   );
   assert.equal(unknownDiagnostic.error?.diagnosticOutcome, undefined);
   assert.equal(JSON.stringify(unknownDiagnostic).includes("PRIVATE"), false);
+
+  const serializedDiagnostics = sanitizedFailureEvidence(
+    { scenario: "continuation" },
+    { error: { smoke: { stage: "continuation-first-generation" } } },
+    "SCENARIO_FAIL",
+    "PASS",
+    {
+      stage: "continuation-first-generation",
+      rootDelegation: failedDiagnostics,
+    },
+  );
+  const artifact = await preserveFailureEvidence(serializedDiagnostics);
+  try {
+    const persisted = JSON.parse(await readFile(artifact, "utf8"));
+    assert.deepEqual(persisted.diagnostics.rootDelegation.requestShape, {
+      type: "object",
+      fields: {
+        definition: { present: true, type: "string" },
+        task: { present: true, type: "string" },
+        label: { present: true, type: "string" },
+        files: { present: true, type: "array" },
+        model: { present: false, type: "absent" },
+        thinking: { present: false, type: "absent" },
+        cwd: { present: false, type: "absent" },
+      },
+      definitionNonempty: true,
+      taskNonempty: true,
+      expectedLabel: true,
+      labelPattern: true,
+      filesArray: true,
+      anyExtraProperty: true,
+    });
+    assert.deepEqual(persisted.diagnostics.rootDelegation.error, {
+      category: "invalid_request",
+      operation: "delegate_agent",
+      rollbackOccurred: false,
+      retryAttempted: true,
+    });
+    assert.doesNotMatch(
+      JSON.stringify(persisted),
+      /PRIVATE|expected-agent|PRIVATE_ID/,
+    );
+  } finally {
+    await rm(dirname(artifact), { recursive: true, force: true });
+  }
+
   assert.throws(
     () =>
       assertNoFailedAgentDelegation(
