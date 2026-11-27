@@ -4908,6 +4908,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             throw new Error(
               "Assigned Lead launch is missing its Coordinator admission identity",
             );
+          const agentArgs = [
+            ...launchArgs,
+            "--session-dir",
+            resumeSessionDirectory ?? sessionDirectory(cwd),
+            "--session-id",
+            assignment.id,
+          ];
           const intent: CoordinatorStartIntent = {
             version: 1,
             sessionId: assignment.id,
@@ -4954,13 +4961,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 await assertAssignedGitCheckout(cwd);
               else await assertResumePlacement();
             },
-            agentArgs: [
-              ...launchArgs,
-              "--session-dir",
-              resumeSessionDirectory ?? sessionDirectory(cwd!),
-              "--session-id",
-              assignment.id,
-            ],
+            agentArgs,
             signal,
           }).catch((error: unknown) => {
             if (

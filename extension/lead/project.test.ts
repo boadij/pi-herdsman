@@ -40,7 +40,7 @@ const {
 } = await import("../supervision.ts");
 const { claimManagerLease, supervisionRuntime } =
   await import("../supervision.ts");
-const { getAgentDir, ProjectTrustStore, SessionManager } =
+const { getAgentDir, ProjectTrustStore, SessionManager, SettingsManager } =
   await import("@earendil-works/pi-coding-agent");
 const {
   HerdrStartFailure,
@@ -1291,6 +1291,27 @@ test("fresh delegation launches in the profile-aware worktree tab", async () => 
   });
   await assert.rejects(lifecycle.activate(), /launch observed/);
   assert.ok(lifecycle.published);
+});
+
+test("fresh assigned Lead launch does not reserve startup if session directory preparation throws", async (t) => {
+  t.mock.method(SettingsManager.prototype, "getSessionDir", () => undefined);
+  const launch = t.mock.fn(() => {
+    throw new Error("unexpected launch");
+  });
+  const lifecycle = projectLifecycle({ launch });
+  const preparationError = new Error("cannot create Pi session directory");
+  const create = t.mock.method(SessionManager, "create", () => {
+    throw preparationError;
+  });
+
+  await assert.rejects(lifecycle.activate(), preparationError);
+  assert.equal(create.mock.callCount(), 1);
+  assert.equal(launch.mock.callCount(), 0);
+  assert.ok(lifecycle.published);
+  assert.deepEqual(
+    listCoordinatorStartIntents(lifecycle.supervision).intents,
+    [],
+  );
 });
 
 test("fresh delegation initializes comparison metadata from an unambiguous creation base", async () => {
