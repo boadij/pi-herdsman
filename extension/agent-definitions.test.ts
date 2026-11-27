@@ -2265,6 +2265,16 @@ test("private repository definitions overlay trusted linked worktrees without cr
       privateRole,
       "---\nname: managed-lead\nagents: [private-only]\nbodyMode: append\n---\nPrivate role",
     );
+    const privateTestLead = join(
+      privateRoot,
+      "coordinators",
+      "leads",
+      "private-test-lead.md",
+    );
+    write(
+      privateTestLead,
+      "---\nname: private-test-lead\nthinking: high\n---\nPRIVATE_TEST_LEAD_BODY",
+    );
 
     const worktreeDefinitions = (projectRoot: string) =>
       withPiAgentDir(global, () => discoverAgent("reviewer", { projectRoot }));
@@ -2300,6 +2310,11 @@ test("private repository definitions overlay trusted linked worktrees without cr
       );
       assert.deepEqual(role.frontmatter.agents, ["private-only"]);
       assert.match(role.body, /Private role/u);
+      const privateLead = withPiAgentDir(global, () =>
+        discoverRoleDefinition("private-test-lead", { projectRoot: worktree }),
+      );
+      assert.equal(privateLead.privateRepositorySource, privateTestLead);
+      assert.equal(privateLead.body, "PRIVATE_TEST_LEAD_BODY");
     }
     const cloneGlobal = join(root, "clone-global");
     mkdirSync(join(cloneGlobal, "agents"), { recursive: true });
@@ -2308,6 +2323,20 @@ test("private repository definitions overlay trusted linked worktrees without cr
         discoverAgent("reviewer", { projectRoot: clone }),
       ).privateRepositorySource,
       undefined,
+    );
+    assert.throws(
+      () =>
+        withPiAgentDir(global, () =>
+          discoverRoleDefinition("private-test-lead", { projectRoot: clone }),
+        ),
+      /lead definition .* not found/u,
+    );
+    assert.throws(
+      () =>
+        withPiAgentDir(global, () =>
+          discoverRoleDefinition("private-test-lead"),
+        ),
+      /lead definition .* not found/u,
     );
     assert.equal(
       worktreeDefinitions(primary).extensionSource,

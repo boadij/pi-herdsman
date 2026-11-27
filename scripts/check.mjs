@@ -18,6 +18,10 @@ const testRunnerArgs = [
   "--experimental-test-module-mocks",
   "--import=./scripts/test-env.mjs",
   "--test",
+  `--test-reporter=${process.stdout.isTTY ? "spec" : "tap"}`,
+  "--test-reporter-destination=stdout",
+  "--test-reporter=./scripts/check-progress.mjs",
+  "--test-reporter-destination=stderr",
 ];
 
 function processTreeExists(pid) {

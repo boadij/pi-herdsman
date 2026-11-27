@@ -151,6 +151,7 @@ function classify(paths) {
 
     if (
       path === "scripts/check.mjs" ||
+      path === "scripts/check-progress.mjs" ||
       path === "scripts/check-hang.mjs" ||
       path === "scripts/test-env.mjs" ||
       path === ".github/workflows/release.yml" ||
@@ -420,16 +421,6 @@ if (process.argv[2] === "--self-test") {
     peer: true,
   });
 
-  assert.deepEqual(classify(["scripts/check.mjs"]), {
-    format: true,
-    tests: true,
-    package: false,
-    container: "none",
-    smoke: false,
-    bootstrap: false,
-    peer: false,
-  });
-
   assert.deepEqual(classify(["extension/core.test.ts", "docs/README.md"]), {
     format: true,
     tests: true,
@@ -554,6 +545,8 @@ if (process.argv[2] === "--self-test") {
   expectOnly("install.sh", { tests: true });
   expectOnly(".githooks/post-checkout", { tests: true });
   for (const path of [
+    "scripts/check.mjs",
+    "scripts/check-progress.mjs",
     "scripts/worktree-hook.test.mjs",
     ".github/workflows/preview.yml",
   ])

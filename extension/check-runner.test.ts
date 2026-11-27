@@ -6,11 +6,12 @@ import {
   type ExecFileException,
 } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import {
   CHECK_TIMEOUT_MS,
   WORKER_SNAPSHOT_AT_MS,
@@ -89,6 +90,78 @@ function childIsRunning(pid: number): boolean {
 
 test("check suite deadline is six minutes on every platform", () => {
   assert.equal(CHECK_TIMEOUT_MS, 360_000);
+});
+
+test("check progress ignores a forwarded completion matching the file event shape", async () => {
+  const reporter = new URL("../scripts/check-progress.mjs", import.meta.url);
+  const { default: checkProgress } = await import(reporter.href);
+  const name = "extension/check-runner.test.ts";
+  const file = resolve(name);
+  const location = { name, file, nesting: 0, line: 1, column: 1 };
+  const events = [
+    { type: "test:dequeue", data: { __proto__: null, ...location } },
+    {
+      type: "test:complete",
+      data: { ...location, details: { duration_ms: 999 } },
+    },
+    {
+      type: "test:complete",
+      data: { __proto__: null, ...location, details: { duration_ms: 12 } },
+    },
+  ];
+  const progress = [];
+  for await (const line of checkProgress(events)) progress.push(line);
+  assert.deepEqual(progress, [
+    `check: start ${name}\n`,
+    `check: complete ${name} elapsed=12ms\n`,
+  ]);
+});
+
+test("check progress pairs native file events without misreporting worker tests or outside paths", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "check-progress-"));
+  try {
+    const cwd = join(dir, "checkout");
+    await mkdir(cwd);
+    const inside = "inside.test.mjs";
+    const outside = join(dir, "outside.test.mjs");
+    await writeFile(
+      join(cwd, inside),
+      "test(process.argv[1], () => {});\nimport test from 'node:test';\n",
+    );
+    await writeFile(
+      outside,
+      "import test from 'node:test'; test('outside case', () => {});\n",
+    );
+    const env = { ...process.env };
+    delete env.NODE_TEST_CONTEXT;
+    const reporter = new URL("../scripts/check-progress.mjs", import.meta.url);
+    const { stdout, stderr } = await promisify(execFile)(
+      process.execPath,
+      [
+        "--test",
+        "--test-reporter=tap",
+        "--test-reporter-destination=stdout",
+        `--test-reporter=${reporter.href}`,
+        "--test-reporter-destination=stderr",
+        inside,
+        outside,
+      ],
+      { cwd, env, timeout: 10_000 },
+    );
+    assert.match(stdout, /TAP version 13/);
+    assert.match(stdout, /^# pass 2$/m);
+    const progress = stderr
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("check:"));
+    assert.equal(progress.length, 2);
+    assert.equal(progress[0], "check: start inside.test.mjs");
+    assert.match(
+      progress[1]!,
+      /^check: complete inside\.test\.mjs elapsed=\d+ms$/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("worker snapshot is scheduled 25 seconds before the suite deadline", () => {

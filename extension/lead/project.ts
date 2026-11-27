@@ -1,6 +1,5 @@
 import {
   getAgentDir,
-  ProjectTrustStore,
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -4502,9 +4501,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           throw new Error(
             "Herdr checkout is not the verified linked project worktree",
           );
-        // A Manager's session override does not authorize a different checkout.
-        effectiveProjectTrusted =
-          new ProjectTrustStore(agentDir).get(cwd) === true;
+        effectiveProjectTrusted = ctx.isProjectTrusted();
         selectedDefinition = resolveDefinition("lead", name, {
           usage: "assigned-lead",
           ...(effectiveProjectTrusted ? { projectRoot: cwd } : {}),
@@ -4774,8 +4771,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           await assertUnoccupied(workspaceId!);
           requireHerdrPiIntegration(agentDir);
           const projectTrusted =
-            effectiveProjectTrusted ??
-            new ProjectTrustStore(agentDir).get(cwd!) === true;
+            effectiveProjectTrusted ?? ctx.isProjectTrusted();
           effectiveProjectTrusted = projectTrusted;
           const definition =
             selectedDefinition ??

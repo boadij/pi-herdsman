@@ -72,7 +72,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseBinding(data: unknown, ownerSessionId: string): TargetBinding {
+function parseBinding(data: unknown): TargetBinding {
   if (!isRecord(data)) throw new Error("Malformed coordinator target binding");
   const keys = Object.keys(data).sort();
   if (
@@ -90,7 +90,6 @@ function parseBinding(data: unknown, ownerSessionId: string): TargetBinding {
   assertSessionId(data.sessionId);
   const target = normalizeTarget(data.target);
   if (
-    data.ownerSessionId !== ownerSessionId ||
     target !== data.target ||
     target !== coordinatorTarget(data.role, data.sessionId)
   )
@@ -120,7 +119,10 @@ function readBindings(
     if (entry.type !== "custom")
       throw new Error("Malformed coordinator target entry");
 
-    const binding = parseBinding(entry.data, ownerSessionId);
+    const binding = parseBinding(entry.data);
+    // Native Pi forks retain custom entries from their source session.
+    if (binding.ownerSessionId !== ownerSessionId) continue;
+
     const identity = `${binding.role}\0${binding.sessionId}`;
     const targetBinding = byTarget.get(binding.target);
     const identityBinding = byIdentity.get(identity);
