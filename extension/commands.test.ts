@@ -12985,7 +12985,10 @@ test("staff transcripts stay within verified Chief and Manager supervision", asy
     entries: [],
   });
   const managerSessionPath = join(PI_AGENT_ROOT, "staff-manager.jsonl");
-  const replacementSessionPath = join(PI_AGENT_ROOT, "staff-manager-copy.jsonl");
+  const replacementSessionPath = join(
+    PI_AGENT_ROOT,
+    "staff-manager-copy.jsonl",
+  );
   const managerTranscript = realFs
     .readFileSync(ordinarySessionPath, "utf8")
     .replace(ordinaryLeadSession, LEAD_SESSION_ID)
@@ -13498,8 +13501,13 @@ test("staff transcripts stay within verified Chief and Manager supervision", asy
         listed.details.reports[0].available_tools.includes("message_staff"),
       );
       const managerReport = listed.details.reports[0];
-      assert.ok(managerReport.available_tools.includes("read_staff_transcript"));
-      assert.doesNotMatch(JSON.stringify(managerReport), /staff-manager\.jsonl/);
+      assert.ok(
+        managerReport.available_tools.includes("read_staff_transcript"),
+      );
+      assert.doesNotMatch(
+        JSON.stringify(managerReport),
+        /staff-manager\.jsonl/,
+      );
       const readStaffTranscript = chief.tools.find(
         (tool) => tool.name === "read_staff_transcript",
       )!;
@@ -13548,7 +13556,8 @@ test("staff transcripts stay within verified Chief and Manager supervision", asy
         } finally {
           support.fileReadHook = undefined;
           managerSession.path = managerSessionPath;
-          if (!liveAgents.includes(managerAgent)) liveAgents.unshift(managerAgent);
+          if (!liveAgents.includes(managerAgent))
+            liveAgents.unshift(managerAgent);
           writeLeadCoordinationState(supervisionRuntime(), originalState);
         }
       }
