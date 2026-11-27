@@ -2606,6 +2606,10 @@ export function rootDelegationDiagnostics(contents, expectedLabel) {
       : undefined;
   return {
     delegationCallObserved: Boolean(call),
+    expectedLabelMatched:
+      expectedLabel === undefined
+        ? false
+        : Boolean(call && args?.label === expectedLabel),
     matchingResult: !call
       ? "absent"
       : !result
@@ -13345,7 +13349,12 @@ export async function collectDiagnostics(
   ctx,
   owned,
   failure,
-  { execute = run, observe = tryHerdr, snapshot = rootSessionSnapshot } = {},
+  {
+    execute = run,
+    observe = tryHerdr,
+    snapshot = rootSessionSnapshot,
+    expectedLabel,
+  } = {},
 ) {
   const diagnostics = {};
   const env = nestedControlEnv(process.env, ctx.paths, ctx.sessionName);
@@ -13766,7 +13775,10 @@ export async function collectDiagnostics(
       ? {
           rootDelegation:
             rootSession.status === "fulfilled" && rootSession.value
-              ? rootDelegationDiagnostics(rootSession.value.contents)
+              ? rootDelegationDiagnostics(
+                  rootSession.value.contents,
+                  expectedLabel,
+                )
               : null,
         }
       : {}),
@@ -14418,6 +14430,10 @@ function sanitizedFailureDiagnostics(value) {
             delegationCallObserved:
               typeof root.delegationCallObserved === "boolean"
                 ? root.delegationCallObserved
+                : false,
+            expectedLabelMatched:
+              typeof root.expectedLabelMatched === "boolean"
+                ? root.expectedLabelMatched
                 : false,
             matchingResult: [
               "absent",
@@ -15645,7 +15661,12 @@ async function main() {
     try {
       const diagnosticProjection = ctx.sessionName
         ? await bestEffortDiagnostics(ctx, () =>
-            collectDiagnostics(ctx, owned, failure),
+            collectDiagnostics(ctx, owned, failure, {
+              expectedLabel:
+                ctx.scenario === "chief-manager"
+                  ? "smoke-chief-agent"
+                  : undefined,
+            }),
           )
         : null;
       const markerPath = join(
