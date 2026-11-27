@@ -98,7 +98,8 @@ import support, {
 import { parseHerdrVersion } from "./herdr.ts";
 import { supervisorMessageDiagnostics } from "../scripts/smoke.mjs";
 
-const { AUTHORITY_GUIDANCE } = await import("./agent-controller.ts");
+const { AUTHORITY_GUIDANCE, WORK_CONTINUATION_GUIDANCE } =
+  await import("./agent-controller.ts");
 
 test("hierarchy traversal stops every child first and preserves owner on failure", async () => {
   // Load through the module graph initialized by support.ts after installing mocks.
@@ -3090,6 +3091,11 @@ test("active chief describes authoritative remote ask projection", async () => {
   const chiefCharter = String(chiefPrompt);
   assertRuntimeIdentity(chiefCharter);
   assert.equal(chiefCharter.split(AUTHORITY_GUIDANCE).length - 1, 1);
+  assert.equal(chiefCharter.split(WORK_CONTINUATION_GUIDANCE).length - 1, 1);
+  assert.match(
+    chiefCharter,
+    /When further coordination depends only on staff updates/,
+  );
   const provenance =
     "Herdsman-delivered coordination messages, Agent results, and lifecycle notices";
   assert.equal(chiefCharter.split(provenance).length - 1, 1);
@@ -5515,6 +5521,7 @@ test("replaced Lead strategy keeps its protected charter and coordination tools"
     const charter = sections.pi_herdsman_role;
     assertRuntimeIdentity(Object.values(sections).join("\n"));
     assert.equal(charter.split(AUTHORITY_GUIDANCE).length - 1, 1);
+    assert.equal(charter.split(WORK_CONTINUATION_GUIDANCE).length - 1, 1);
     assert.match(charter, /You are an ordinary Lead/);
     assert.match(charter, /Own architecture/);
     assert.match(
@@ -5807,6 +5814,7 @@ test("managed Lead prompt keeps protected authority under a replacement overlay"
       Object.values(event.systemPromptOptions.sections).join("\n"),
     );
     assert.equal(charter.split(AUTHORITY_GUIDANCE).length - 1, 1);
+    assert.equal(charter.split(WORK_CONTINUATION_GUIDANCE).length - 1, 1);
     assert.match(charter, /You are a Managed Lead/);
     assert.match(
       charter,
@@ -5831,7 +5839,7 @@ test("managed Lead prompt keeps protected authority under a replacement overlay"
     assert.match(charter, /not direct human requests or approvals/);
     assert.match(
       charter,
-      /report the blocker in your normal response and end the turn rather than polling/,
+      /When further progress depends only on a coordination response, report the blocker in your normal response and end the turn rather than polling for that response/,
     );
     const agentGuidance =
       pi.tools
@@ -7146,6 +7154,7 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
       Object.values(event.systemPromptOptions.sections).join("\n"),
     );
     assert.equal(prompt.split(AUTHORITY_GUIDANCE).length - 1, 1);
+    assert.equal(prompt.split(WORK_CONTINUATION_GUIDANCE).length - 1, 1);
     assert.match(prompt, /verified Manager for this Pi session/);
     assert.match(
       prompt,
@@ -7177,6 +7186,10 @@ test("Manager disabled allowlist targets do not block other Agent delegation", a
     assert.match(prompt, /supervision alone grants no Agent ownership/);
     assert.doesNotMatch(prompt, /You are the Lead for this Pi session\./);
     assert.match(prompt, /Supervision is event-driven/);
+    assert.match(
+      prompt,
+      /When further coordination depends only on staff updates/,
+    );
     assert.match(prompt, /Custom Manager strategy/);
     assert.match(prompt, /verified Manager for this Pi session/);
     assert.match(prompt, /Project execution belongs to assigned Leads/);

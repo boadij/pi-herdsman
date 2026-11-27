@@ -66,7 +66,15 @@ blocker, or normal completion, rather than further coordination by default.
 
 An overlapping assignment or unanswered message does not itself create an
 execution dependency. Continue independently safe work, defer only genuinely
-dependent steps, and end idle turns rather than polling for responses.
+dependent steps, and end idle turns rather than polling for internal
+coordination responses that Herdsman delivers.
+
+Distinguish internal coordination dependencies from external execution
+dependencies. Rely on automatic continuation only when an appropriate
+delivery mechanism exists. Required external outcomes remain the
+responsibility of the authorized executor, using suitable available
+monitoring or delegated execution. Avoid redundant model-driven status
+checks without prohibiting legitimate waiting mechanisms.
 
 Resolve questions at the lowest appropriate ownership level. Supervisors
 settle decisions within their authority without taking over technical

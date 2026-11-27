@@ -1287,7 +1287,7 @@ test("parent delegates two same-definition children with exact ownership", async
     for (const phrase of [
       "Each unresolved unit of work has one executor.",
       "end the turn without concluding",
-      "Do not poll with status requests",
+      "Do not poll or actively wait solely for those Agent results.",
     ])
       assert.ok(content.includes(phrase), phrase);
     assert.doesNotMatch(content, /Stale health attention/u);
@@ -13196,6 +13196,7 @@ test("session assignment reports a pane mismatch from the agent state producer",
 });
 
 test("fresh assignment transports automatic prompt snapshots and cleans them up", async () => {
+  const { WORK_CONTINUATION_GUIDANCE } = await import("./agent-controller.ts");
   setLeadEnvironment();
   const name = `prompt-fresh-${randomUUID().slice(0, 8)}`;
   const label = name;
@@ -13244,6 +13245,10 @@ test("fresh assignment transports automatic prompt snapshots and cleans them up"
     assert.match(launched[0].contents[0]!, /definition body/);
     assert.match(launched[0].contents[0]!, /automatic prompt snapshot/);
     assert.match(launched[0].contents[1]!, /await_owner/);
+    assert.equal(
+      launched[0].contents[1]!.split(WORK_CONTINUATION_GUIDANCE).length - 1,
+      1,
+    );
     assert.match(
       launched[0].contents[1]!.replaceAll(/\s+/g, " ").trim(),
       /canonical result:<request-id> refs already supplied as file evidence exactly\s+when forwarding them/,
