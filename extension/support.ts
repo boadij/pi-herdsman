@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import os, { tmpdir } from "node:os";
-import { mock } from "node:test";
+import { mock, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { clampThinkingLevel } from "@earendil-works/pi-ai";
@@ -2461,14 +2461,33 @@ export function testGate<T = void>(): {
   return { promise, resolve };
 }
 
+export function afterTestCleanup(
+  t: TestContext,
+  ...steps: (() => unknown)[]
+): void {
+  t.after(async () => {
+    const errors: unknown[] = [];
+    for (const step of steps) {
+      try {
+        await step();
+      } catch (error) {
+        errors.push(error);
+        t.diagnostic(`Fixture cleanup failed: ${String(error)}`);
+      }
+    }
+    if (errors.length)
+      throw new AggregateError(errors, "Fixture cleanup failed");
+  });
+}
+
 export function consumeMailboxRequest(
   mailbox: string,
   onRequest: (request: RequestRecord) => void | Promise<void>,
-): () => void {
+): () => Promise<void> | undefined {
   let seen: string | undefined;
   let stopped = false;
   let mailboxInitialized = false;
-  let processing = false;
+  let processing: Promise<void> | undefined;
   const poll = () => {
     if (stopped || processing) return;
     try {
@@ -2480,15 +2499,14 @@ export function consumeMailboxRequest(
       }
       const request = readUnacknowledgedRequest(mailbox);
       if (!request || request.requestId === seen) return;
-      processing = true;
-      Promise.resolve()
+      processing = Promise.resolve()
         .then(() => onRequest(request))
         .then(() => {
           seen = request.requestId;
         })
         .catch(() => {})
         .finally(() => {
-          processing = false;
+          processing = undefined;
         });
     } catch {
       // Controller tests retain malformed requests just like a live child.
@@ -2499,6 +2517,7 @@ export function consumeMailboxRequest(
   return () => {
     stopped = true;
     clearInterval(timer);
+    return processing;
   };
 }
 
@@ -2530,6 +2549,10 @@ export function createStagedAssignmentFixture(
   const start = testGate<void>();
   const preSubmitValidation = testGate<void>();
   const handoff = testGate<void>();
+  const initialStatusReached = testGate();
+  const startReached = testGate();
+  const preSubmitValidationReached = testGate();
+  const requestReached = testGate();
   let holdInitialStatus = true;
   let holdStart = true;
   let holdPreSubmitValidation = true;
@@ -2551,6 +2574,7 @@ export function createStagedAssignmentFixture(
     undefined,
     async (_text, request) => {
       requestId = request?.requestId;
+      requestReached.resolve();
       if (holdHandoff) {
         holdHandoff = false;
         await handoff.promise;
@@ -2628,6 +2652,7 @@ export function createStagedAssignmentFixture(
       if (command === "herdr" && isApiSnapshot(args)) {
         if (holdInitialStatus) {
           holdInitialStatus = false;
+          initialStatusReached.resolve();
           return initialStatus.promise;
         }
         if (!started)
@@ -2659,6 +2684,7 @@ export function createStagedAssignmentFixture(
         if (holdPreSubmitValidation && args[2] === "startup-pane") {
           holdPreSubmitValidation = false;
           preSubmitValidationReady = true;
+          preSubmitValidationReached.resolve();
           await preSubmitValidation.promise;
         }
         return startup.exec(command, args, options);
@@ -2666,6 +2692,7 @@ export function createStagedAssignmentFixture(
       if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
         if (holdStart) {
           holdStart = false;
+          startReached.resolve();
           await start.promise;
         }
         const result = await startup.exec(command, args, options);
@@ -2710,7 +2737,9 @@ export function createStagedAssignmentFixture(
   };
 
   registerExtension!(pi.pi as never);
-  const sessionStart = pi.events.get("session_start")![0](undefined, context);
+  const sessionStart = Promise.resolve(
+    pi.events.get("session_start")![0](undefined, context),
+  );
   const emptyStatus = (): ExecResult => ({
     stdout: JSON.stringify({
       id: 1,
@@ -2724,6 +2753,10 @@ export function createStagedAssignmentFixture(
     context,
     startup,
     sessionStart,
+    initialStatusReached: initialStatusReached.promise,
+    startReached: startReached.promise,
+    preSubmitValidationReached: preSubmitValidationReached.promise,
+    requestReached: requestReached.promise,
     mailbox: startup.mailbox,
     get widgetValue(): InstanceType<typeof StatusWidget> {
       assert.ok(widget, "staged fixture did not create a status widget");
@@ -2859,7 +2892,7 @@ export function startupExecutor(
   ) => ExecResult;
   mailbox: string;
   getCount: () => number;
-  stopMailboxConsumer: () => void;
+  stopMailboxConsumer: () => Promise<void> | undefined;
 } {
   const mailbox = agentMailboxPath(WORKSPACE, label);
   let getCount = 0;

@@ -71,6 +71,11 @@ Test only behavior the contract actually promises. Do not invent retries, fallba
 
 Avoid sleeps as synchronization. Wait on observable conditions or use deterministic native test facilities where practical.
 
+On failure, abort owned operations and release their test gates, then await
+settlement and shut down owned processes or runtimes before removing fixtures
+or restoring environment. Report cleanup failures without masking the test
+failure or skipping remaining cleanup.
+
 ## Keep the suite smaller
 
 A new test should increase confidence more than maintenance cost.
