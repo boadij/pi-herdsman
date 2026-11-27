@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { randomUUID } from "node:crypto";
 import { lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, parse } from "node:path";
@@ -228,22 +229,7 @@ function cloneDestination(
   return join(path, ...segments, repository);
 }
 
-/** Clone without changing Git trust or accepting an occupied destination. */
-export async function cloneRepository(
-  pi: Pick<ExtensionAPI, "exec">,
-  remote: string,
-  projectsDirectory: string,
-  options: {
-    destination?: string;
-    homeDirectory?: string;
-    signal?: AbortSignal;
-  } = {},
-): Promise<Awaited<ReturnType<typeof gitRepositoryScope>>> {
-  const source = parseRepositorySource(remote, options.homeDirectory);
-  if (source.kind !== "remote")
-    throw new Error("Only supported HTTPS and SSH Git remotes can be cloned");
-  const target = cloneDestination(source, projectsDirectory, options);
-  options.signal?.throwIfAborted();
+function assertNoGitRedirection(): void {
   if (
     [
       "GIT_DIR",
@@ -257,6 +243,89 @@ export async function cloneRepository(
     throw new Error(
       "Cannot clone while Git repository redirection variables are set",
     );
+}
+
+/** Read one supported effective origin without trusting source project config. */
+export async function resolveCheckoutCloneSource(
+  pi: Pick<ExtensionAPI, "exec">,
+  path: string,
+  signal?: AbortSignal,
+): Promise<RemoteSource> {
+  signal?.throwIfAborted();
+  assertNoGitRedirection();
+  const select = (path: string) => {
+    const selected = resolveLocalRepositoryPath(path);
+    if (!selected.exists) throw new Error("Checkout directory is missing");
+    return selected;
+  };
+  const bounded: Pick<ExtensionAPI, "exec"> = {
+    async exec(command, args, options) {
+      signal?.throwIfAborted();
+      const result = await pi.exec(command, args, {
+        ...options,
+        signal,
+        timeout: 10_000,
+        maxBuffer: 16 * 1024,
+      });
+      signal?.throwIfAborted();
+      if (result.code !== 0 || result.killed || result.truncated || result.stderr)
+        throw new Error("Git observation failed");
+      return result;
+    },
+  };
+  try {
+    const selected = select(path);
+    const before = await gitRepositoryScope(bounded, selected.path, signal);
+    if (!sameDirectory(before.checkoutPath, selected.path))
+      throw new Error("Selected directory is not the checkout root");
+    const metadata = select(before.canonicalRepoKey);
+    verifyLocalRepositoryPath(selected);
+    const { stdout } = await bounded.exec(
+      "git",
+      ["remote", "get-url", "--all", "origin"],
+      { cwd: selected.path },
+    );
+    // Remove exactly Git's line terminator; embedded or extra lines are invalid.
+    if (!stdout.endsWith("\n")) throw new Error("Incomplete Git output");
+    const source = parseRepositorySource(stdout.replace(/\r?\n$/, ""));
+    if (source.kind !== "remote") throw new Error("Origin is not a remote");
+    const after = await gitRepositoryScope(bounded, selected.path, signal);
+    verifyLocalRepositoryPath(selected);
+    verifyLocalRepositoryPath(metadata);
+    if (
+      !sameDirectory(before.checkoutPath, after.checkoutPath) ||
+      !sameDirectory(before.canonicalRepoKey, after.canonicalRepoKey) ||
+      before.isPrimary !== after.isPrimary
+    )
+      throw new Error("Checkout identity changed");
+    signal?.throwIfAborted();
+    return source;
+  } catch {
+    signal?.throwIfAborted();
+    throw new Error(
+      "Cannot resolve a single supported fetch URL from origin at the exact Git checkout root. Supply an explicit HTTPS or SSH Git remote URL.",
+    );
+  }
+}
+
+/** Clone without changing Git trust or accepting an occupied destination. */
+export async function cloneRepository(
+  pi: Pick<ExtensionAPI, "exec">,
+  remote: string,
+  projectsDirectory: string,
+  options: {
+    destination?: string;
+    homeDirectory?: string;
+    signal?: AbortSignal;
+    effectiveCheckoutOrigin?: boolean;
+  } = {},
+): Promise<Awaited<ReturnType<typeof gitRepositoryScope>>> {
+  const source = parseRepositorySource(remote, options.homeDirectory);
+  if (source.kind !== "remote")
+    throw new Error("Only supported HTTPS and SSH Git remotes can be cloned");
+  const target = cloneDestination(source, projectsDirectory, options);
+  options.signal?.throwIfAborted();
+  assertNoGitRedirection();
 
   let cwd: string;
   let destination: string;
@@ -299,15 +368,38 @@ export async function cloneRepository(
         throw new Error("Clone destination changed after reservation");
     };
     assertReservation();
-    const result = await pi.exec(
-      "git",
-      ["clone", "--", source.url, destination],
-      {
-        cwd,
-        signal: options.signal,
-        timeout: 30 * 60 * 1000,
-      },
-    );
+    let args = ["clone", "--", source.url, destination];
+    if (options.effectiveCheckoutOrigin) {
+      // Clone reads its own rewrite configuration, including destination-specific
+      // includes. Give Git a fresh alias so its single rewrite yields exactly
+      // the already validated URL, not another configured target.
+      const nonce = randomUUID();
+      const alias = `https://${nonce}.invalid/`;
+      // Git splits -c key=value at the first '='. Keep any '=' in the URL
+      // outside the config key and let Git append that suffix to the rewrite.
+      const equals = source.url.indexOf("=");
+      const prefix = equals === -1 ? source.url : source.url.slice(0, equals);
+      const suffix = equals === -1 ? "" : source.url.slice(equals);
+      args = [
+        // Let URL-conditioned includes see the real URL without using it as
+        // the transport selector or persisting this auxiliary remote.
+        "-c",
+        `remote.herdsman-${nonce}.url=${source.url}`,
+        "-c",
+        `url.${prefix}.insteadOf=${alias}`,
+        "clone",
+        "--origin",
+        "origin",
+        "--",
+        alias + suffix,
+        destination,
+      ];
+    }
+    const result = await pi.exec("git", args, {
+      cwd,
+      signal: options.signal,
+      timeout: 30 * 60 * 1000,
+    });
     if (result.code !== 0 || result.killed || options.signal?.aborted)
       throw new Error("Git clone did not complete");
 
@@ -318,18 +410,57 @@ export async function cloneRepository(
     if (!gitDir?.isDirectory() || gitDir.isSymbolicLink())
       throw new Error("Clone metadata is not a primary repository directory");
     const scope = await gitRepositoryScope(pi, destination, options.signal);
-    assertReservation();
-    const verifiedGitDir = directoryEntry(metadata);
+    const assertMetadata = () => {
+      assertReservation();
+      const verifiedGitDir = directoryEntry(metadata);
+      if (
+        !verifiedGitDir?.isDirectory() ||
+        verifiedGitDir.isSymbolicLink() ||
+        verifiedGitDir.dev !== gitDir.dev ||
+        verifiedGitDir.ino !== gitDir.ino
+      )
+        throw new Error("Clone metadata changed during verification");
+    };
+    assertMetadata();
     if (
-      !verifiedGitDir?.isDirectory() ||
-      verifiedGitDir.isSymbolicLink() ||
-      verifiedGitDir.dev !== gitDir.dev ||
-      verifiedGitDir.ino !== gitDir.ino ||
       !scope.isPrimary ||
       !sameDirectory(scope.checkoutPath, destination) ||
       !sameDirectory(scope.canonicalRepoKey, metadata)
     )
       throw new Error("Git did not verify the expected primary checkout");
+    if (options.effectiveCheckoutOrigin) {
+      options.signal?.throwIfAborted();
+      const verificationOptions = {
+        cwd: destination,
+        signal: options.signal,
+        timeout: 10_000,
+        maxBuffer: 16 * 1024,
+      };
+      const restored = await pi.exec(
+        "git",
+        ["remote", "set-url", "--", "origin", source.url],
+        verificationOptions,
+      );
+      if (restored.code !== 0 || restored.killed || restored.truncated)
+        throw new Error("Could not record the validated origin in the clone");
+      assertMetadata();
+      options.signal?.throwIfAborted();
+      const effective = await pi.exec(
+        "git",
+        ["remote", "get-url", "--all", "origin"],
+        verificationOptions,
+      );
+      if (
+        effective.code !== 0 ||
+        effective.killed ||
+        effective.truncated ||
+        effective.stderr ||
+        (effective.stdout !== source.url + "\n" &&
+          effective.stdout !== source.url + "\r\n")
+      )
+        throw new Error("Could not verify the effective origin in the clone");
+      assertMetadata();
+    }
     options.signal?.throwIfAborted();
     return scope;
   } catch {

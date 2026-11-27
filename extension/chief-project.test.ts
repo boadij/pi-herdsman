@@ -296,6 +296,8 @@ test("Chief Git approval cannot transfer to a replacement directory", async (t) 
 test("Chief lifecycle uses one exact Pi conversation and preserves uncertain startup", async (t) => {
   for (const scenario of [
     "lifecycle",
+    "clone from running project",
+    "clone origin mismatch",
     "uncertain",
     "uncertain resume",
     "safe refusal",
@@ -339,14 +341,21 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         mkdirSync(dirname(namedDefinition), { recursive: true });
         writeNamedDefinition("tools: [codemode]\nagents: [scout]");
       }
+      const originMismatch = scenario === "clone origin mismatch";
+      const cloneFromCheckout =
+        scenario === "clone from running project" || originMismatch;
+      const sourceCheckout = join(root, "source");
+      const sourceKey = join(sourceCheckout, ".git");
+      const origin = "https://example.test/owner/project.git";
       const gitDirectory = join(root, "project", ".git");
-      mkdirSync(gitDirectory, { recursive: true });
-      const repository = realpathSync.native(dirname(gitDirectory));
-      const canonicalRepoKey = realpathSync.native(gitDirectory);
+      if (!cloneFromCheckout) mkdirSync(gitDirectory, { recursive: true });
+      const repository = dirname(gitDirectory);
+      const canonicalRepoKey = gitDirectory;
       const runtime = supervisionRuntime(join(root, "socket"));
       let currentRuntime = runtime;
       const build = { version: "test", sha256: "a".repeat(64) };
       let manager: ManagerLease | undefined;
+      let sourceManager: ManagerLease | undefined;
       t.after(() => {
         if (
           manager &&
@@ -355,6 +364,7 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         )
           renameSync(delayedDescriptor, descriptorPath);
         manager?.release();
+        sourceManager?.release();
         rmSync(guardPath, { force: true });
         if (prior === undefined) delete process.env.PI_CODING_AGENT_DIR;
         else process.env.PI_CODING_AGENT_DIR = prior;
@@ -362,6 +372,8 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
       });
       let tabCreated = false;
       let launchConfiguration: string | undefined;
+      let workspaceCreated = !cloneFromCheckout;
+      const cloneCalls: string[] = [];
       const placementCalls: string[] = [];
       let denyChief = false;
       let observedPid = process.pid;
@@ -439,16 +451,66 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         stderr: "",
       });
       const pi = {
-        exec: async (command: string, args: string[]) => {
-          if (command === "git")
+        exec: async (
+          command: string,
+          args: string[],
+          options?: { cwd?: string },
+        ) => {
+          if (command === "git") {
+            const cwd = options?.cwd;
+            let stdout = "";
+            if (args[0] === "rev-parse") {
+              assert.ok(
+                cwd === repository || (cloneFromCheckout && cwd === sourceCheckout),
+              );
+              stdout =
+                args.at(-1) === "--show-toplevel" ? cwd : join(cwd, ".git");
+            } else {
+              assert.ok(cloneFromCheckout);
+              if (args[0] === "remote" && args[1] === "get-url") {
+                assert.deepEqual(args, ["remote", "get-url", "--all", "origin"]);
+                assert.ok(cwd === sourceCheckout || cwd === repository);
+                cloneCalls.push(
+                  cwd === sourceCheckout ? "read origin" : "verify origin",
+                );
+                stdout =
+                  cwd === repository && originMismatch
+                    ? "https://different.test/repo.git\n"
+                    : origin + "\n";
+              } else if (args.includes("clone")) {
+                const alias = args[8];
+                const nonce = new URL(alias).hostname.replace(/\.invalid$/, "");
+                assert.equal(cwd, root);
+                assert.deepEqual(args, [
+                  "-c",
+                  `remote.herdsman-${nonce}.url=${origin}`,
+                  "-c",
+                  `url.${origin}.insteadOf=${alias}`,
+                  "clone",
+                  "--origin",
+                  "origin",
+                  "--",
+                  alias,
+                  repository,
+                ]);
+                assert.notEqual(alias, origin);
+                assert.ok(statSync(repository).isDirectory());
+                cloneCalls.push("git clone");
+                mkdirSync(canonicalRepoKey);
+              } else {
+                assert.equal(cwd, repository);
+                assert.deepEqual(args, [
+                  "remote", "set-url", "--", "origin", origin,
+                ]);
+                cloneCalls.push("record origin");
+              }
+            }
             return {
               code: 0,
-              stdout:
-                args.at(-1) === "--show-toplevel"
-                  ? repository
-                  : canonicalRepoKey,
+              stdout,
               stderr: "",
             };
+          }
           const operation = args.slice(0, 2).join(" ");
           if (
             ["workspace create", "tab create", "agent start"].includes(
@@ -463,9 +525,17 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
                   agents: [],
                   panes: [],
                   workspaces:
-                    scenario === "missing integration" ? [] : [workspace],
+                    scenario === "missing integration" || !workspaceCreated
+                      ? []
+                      : [workspace],
                 },
               });
+            case "workspace create":
+              assert.ok(cloneFromCheckout && !workspaceCreated);
+              assert.deepEqual(args.slice(2), ["--cwd", repository, "--no-focus"]);
+              assert.ok(statSync(canonicalRepoKey).isDirectory());
+              workspaceCreated = true;
+              return response({ workspace });
             case "workspace get":
               return response({ workspace });
             case "worktree list":
@@ -694,7 +764,76 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
       const start = () =>
         scenario === "named"
           ? chief.startNamed(repository, undefined, "custom-manager", ctx)
-          : chief.start(repository, undefined, ctx);
+          : cloneFromCheckout
+            ? chief.start(sourceCheckout, repository, ctx)
+            : chief.start(repository, undefined, ctx);
+      if (cloneFromCheckout) {
+        mkdirSync(sourceKey, { recursive: true });
+        const sourceFile = join(sourceCheckout, "uncommitted.txt");
+        writeFileSync(sourceFile, "source-only changes");
+        const sourceStat = statSync(sourceCheckout);
+        sourceManager = claimManagerLease(
+          {
+            build,
+            canonicalRepoKey: sourceKey,
+            repoKey: sourceKey,
+            workspaceId: "source-workspace",
+            tabId: "source-tab",
+            paneId: "source-pane",
+            piSessionId: randomUUID(),
+          },
+          runtime,
+        );
+        const result = await start();
+        assert.deepEqual(cloneCalls, [
+          "read origin",
+          "git clone",
+          "record origin",
+          "verify origin",
+        ]);
+        if (originMismatch) {
+          assert.equal(result.status, "partial_failure");
+          assert.ok("stage" in result && result.stage === "verification");
+          assert.equal(result.repository, repository);
+          assert.ok(!result.reason.includes("different.test"));
+          assert.ok(statSync(canonicalRepoKey).isDirectory());
+          assert.deepEqual(placementCalls, []);
+          return;
+        }
+        assert.deepEqual(result, {
+          status: "started",
+          repository,
+          definition: "manager",
+        });
+        const expectedPlacement = ["workspace create", "tab create", "agent start"];
+        assert.deepEqual(placementCalls, expectedPlacement);
+        assert.equal(launches, 1);
+        const destination = readManagerDescriptorStatus(runtime, canonicalRepoKey);
+        assert.ok(destination?.live);
+        assert.equal(destination.descriptor.canonicalRepoKey, canonicalRepoKey);
+        assert.equal(destination.descriptor.workspaceId, workspace.workspace_id);
+        assert.equal(destination.descriptor.piSessionId, id);
+        assert.notEqual(
+          destination.descriptor.piSessionId,
+          sourceManager.descriptor.piSessionId,
+        );
+
+        const destinationFile = join(repository, "keep.txt");
+        writeFileSync(destinationFile, "existing destination");
+        await assert.rejects(start(), /Clone destination already exists/);
+        assert.deepEqual(cloneCalls, [
+          "read origin", "git clone", "record origin", "verify origin", "read origin",
+        ]);
+        assert.deepEqual(placementCalls, expectedPlacement);
+        assert.equal(readFileSync(destinationFile, "utf8"), "existing destination");
+        assert.equal(statSync(sourceCheckout).ino, sourceStat.ino);
+        assert.equal(readFileSync(sourceFile, "utf8"), "source-only changes");
+        assert.ok(!existsSync(join(repository, "uncommitted.txt")));
+        const source = readManagerDescriptorStatus(runtime, sourceKey);
+        assert.ok(source?.live);
+        assert.deepEqual(source.descriptor, sourceManager.descriptor);
+        return;
+      }
       if (scenario === "missing integration") {
         await assert.rejects(
           start(),

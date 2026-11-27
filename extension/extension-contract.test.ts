@@ -3598,7 +3598,7 @@ test("read staff transcript advertises persisted candidates and revalidates the 
         undefined,
         context,
       ),
-      /Lead changed during transcript read/,
+      /Staff changed during transcript read/,
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();

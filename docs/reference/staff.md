@@ -31,14 +31,25 @@ labels are not targets.
 
 These sequential tools require current, verified Chief authority when called.
 
-| Tool               | Parameters                                                                       | Behavior                                                                                                                                                |
-| ------------------ | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list_projects`    | None                                                                             | Discover verified projects, workspace placement, and observed Manager status without changing them.                                                     |
-| `clone_repository` | `url`, optional `destination`                                                    | Clone and verify an HTTPS or SSH Git remote and prepare its primary Herdr workspace without launching Pi.                                               |
-| `start_manager`    | `repository`, optional `destination` for a remote, optional Manager `definition` | Prepare a local project or clone a remote. Reuse the verified primary Herdr workspace or create one if absent, then start a Manager in a dedicated tab. |
-| `resume_manager`   | `repository` (local primary checkout)                                            | Verify and reopen the exact saved Manager Pi session in a dedicated tab. Does not initialize Git.                                                       |
-| `start_lead`       | exact `workspace`, optional `definition` and `message`                           | Start an ordinary Lead in a verified current Herdr workspace without creating a project assignment or starting a Manager.                               |
-| `stop_hierarchy`   | explicit `scope`; `target` only for `manager`                                    | Stop one verified Manager subtree, all Chief-supervised staff, or that staff scope followed by a graceful Chief shutdown request.                       |
+| Tool               | Parameters                                                          | Behavior                                                                                                                                                |
+| ------------------ | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_projects`    | None                                                                | Discover verified projects, workspace placement, and observed Manager status without changing them.                                                     |
+| `clone_repository` | `url`, optional `destination`                                       | Clone and verify an HTTPS or SSH Git remote and prepare its primary Herdr workspace without launching Pi.                                               |
+| `start_manager`    | `repository`, optional `destination`, optional Manager `definition` | Prepare a local project or create a clone. Reuse the verified primary Herdr workspace or create one if absent, then start a Manager in a dedicated tab. |
+| `resume_manager`   | `repository` (local primary checkout)                               | Verify and reopen the exact saved Manager Pi session in a dedicated tab. Does not initialize Git.                                                       |
+| `start_lead`       | exact `workspace`, optional `definition` and `message`              | Start an ordinary Lead in a verified current Herdr workspace without creating a project assignment or starting a Manager.                               |
+| `stop_hierarchy`   | explicit `scope`; `target` only for `manager`                       | Stop one verified Manager subtree, all Chief-supervised staff, or that staff scope followed by a graceful Chief shutdown request.                       |
+
+To start a Manager in an existing local project, omit `destination`. To create
+an independent clone of a discovered project and start its Manager, pass an
+exact checkout path from `list_projects` as `repository` and an explicit new
+clone path as `destination`. Chief resolves the checkout's configured `origin`
+fetch URL internally; the source checkout and its Manager are left untouched.
+The clone comes from the remote, not from uncommitted changes, local-only
+branches, or worktrees. If `origin` does not resolve to exactly one supported
+fetch URL, supply an explicit supported remote URL instead. A remote URL can
+be used with or without `destination`; `clone_repository` takes a remote URL,
+and `resume_manager` takes only a local checkout.
 
 `start_manager` defaults to the `manager` definition. Named Manager
 definitions use the `coordinators/managers/` category. The selected definition
@@ -240,7 +251,9 @@ terminal/process evidence materially matters.
 { "target": "lead:7k3mp9qd2f" }
 ```
 
-For an assigned Lead, Manager uses `{ "branch": "feat/example" }` instead.
+Chief can use the verified staff target of a direct-report Manager when that
+report advertises transcript availability. For an assigned Lead, Manager uses
+`{ "branch": "feat/example" }` instead.
 Supply exactly one of `target` or `branch`. Read-only. Requires a current
 eligible direct report and revalidates its persisted Pi session before
 returning bounded visible conversation and tool evidence. Reasoning, system

@@ -2309,7 +2309,7 @@ function registerExtensionImpl(
         name: "start_manager",
         label: "start Manager",
         description:
-          "Prepare a local Git project or clone a remote project and start its Manager. Destination is only for remote clones. Does not replace a saved Manager session.",
+          "Start a Manager for a local project or a new clone of a supported remote. To clone a known project, pass the exact checkout path from list_projects as repository and an explicit destination for the independent clone; the clone uses the checkout's configured origin fetch URL. Omit destination to start in the selected local project itself. Does not replace a saved Manager session.",
         parameters: Type.Object(
           {
             repository: projectLocation,
