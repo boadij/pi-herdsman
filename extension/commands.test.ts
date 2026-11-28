@@ -592,6 +592,7 @@ import support, {
   readAgentState,
   readResult,
   realFs,
+  testTmpRoot,
   recoveryIdentity,
   registerExtension,
   registerExtensionForTest,
@@ -2026,32 +2027,36 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
     code: 0,
   });
   const baseline = ["read", "bash"];
-  const pi = fakeRepositoryChiefPi({
-    activeTools: baseline,
-    allTools: [{ name: "history" }, { name: "notes" }],
-    exec: (_command, args) =>
-      args[0] === "workspace" && args[1] === "get"
-        ? respond({ workspace: { worktree: { repo_key: "/tmp" } } })
-        : args[0] === "worktree" && args[1] === "list"
-          ? respond({
-              source: {
-                source_workspace_id: WORKSPACE,
-                repo_key: "/tmp",
-                repo_name: "project",
-              },
-              worktrees: [],
-            })
-          : isAgentList(args)
-            ? respond({ agents: [managerAgentIdentity()] })
-            : args[0] === "agent" && args[1] === "get"
-              ? respond({ agent: managerAgentIdentity() })
-              : isApiSnapshot(args)
-                ? respond({
-                    snapshot: { agents: [], panes: [], workspaces: [] },
-                  })
-                : respond({}),
-  });
+  const pi = fakeRepositoryChiefPi(
+    {
+      activeTools: baseline,
+      allTools: [{ name: "history" }, { name: "notes" }],
+      exec: (_command, args) =>
+        args[0] === "workspace" && args[1] === "get"
+          ? respond({ workspace: { worktree: { repo_key: testTmpRoot } } })
+          : args[0] === "worktree" && args[1] === "list"
+            ? respond({
+                source: {
+                  source_workspace_id: WORKSPACE,
+                  repo_key: testTmpRoot,
+                  repo_name: "project",
+                },
+                worktrees: [],
+              })
+            : isAgentList(args)
+              ? respond({ agents: [managerAgentIdentity()] })
+              : args[0] === "agent" && args[1] === "get"
+                ? respond({ agent: managerAgentIdentity() })
+                : isApiSnapshot(args)
+                  ? respond({
+                      snapshot: { agents: [], panes: [], workspaces: [] },
+                    })
+                  : respond({}),
+    },
+    testTmpRoot,
+  );
   const context = fakeContext(pi.entries) as any;
+  context.cwd = testTmpRoot;
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, context);
@@ -2187,32 +2192,36 @@ test("registered Manager turn_end adapter reconciles late tools in the live poli
     stderr: "",
     code: 0,
   });
-  const pi = fakeRepositoryChiefPi({
-    activeTools: ["read", "bash"],
-    autoActivateRegisteredTools: true,
-    exec: (_command, args) =>
-      args[0] === "workspace" && args[1] === "get"
-        ? respond({ workspace: { worktree: { repo_key: "/tmp" } } })
-        : args[0] === "worktree" && args[1] === "list"
-          ? respond({
-              source: {
-                source_workspace_id: WORKSPACE,
-                repo_key: "/tmp",
-                repo_name: "project",
-              },
-              worktrees: [],
-            })
-          : isAgentList(args)
-            ? respond({ agents: [managerAgentIdentity()] })
-            : args[0] === "agent" && args[1] === "get"
-              ? respond({ agent: managerAgentIdentity() })
-              : isApiSnapshot(args)
-                ? respond({
-                    snapshot: { agents: [], panes: [], workspaces: [] },
-                  })
-                : respond({}),
-  });
+  const pi = fakeRepositoryChiefPi(
+    {
+      activeTools: ["read", "bash"],
+      autoActivateRegisteredTools: true,
+      exec: (_command, args) =>
+        args[0] === "workspace" && args[1] === "get"
+          ? respond({ workspace: { worktree: { repo_key: testTmpRoot } } })
+          : args[0] === "worktree" && args[1] === "list"
+            ? respond({
+                source: {
+                  source_workspace_id: WORKSPACE,
+                  repo_key: testTmpRoot,
+                  repo_name: "project",
+                },
+                worktrees: [],
+              })
+            : isAgentList(args)
+              ? respond({ agents: [managerAgentIdentity()] })
+              : args[0] === "agent" && args[1] === "get"
+                ? respond({ agent: managerAgentIdentity() })
+                : isApiSnapshot(args)
+                  ? respond({
+                      snapshot: { agents: [], panes: [], workspaces: [] },
+                    })
+                  : respond({}),
+    },
+    testTmpRoot,
+  );
   const context = fakeContext(pi.entries) as any;
+  context.cwd = testTmpRoot;
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, context);
@@ -3376,12 +3385,12 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
   });
   const exec = (_command: string, args: string[]) => {
     if (args[0] === "workspace" && args[1] === "get")
-      return respond({ workspace: { worktree: { repo_key: "/tmp" } } });
+      return respond({ workspace: { worktree: { repo_key: testTmpRoot } } });
     if (args[0] === "worktree" && args[1] === "list")
       return respond({
         source: {
           source_workspace_id: WORKSPACE,
-          repo_key: "/tmp",
+          repo_key: testTmpRoot,
           repo_name: "project",
         },
         worktrees: [],
@@ -3400,7 +3409,7 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
     totalTokens: amount,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   });
-  const manager = fakeRepositoryChiefPi({ activeTools: ["read"], exec });
+  const manager = fakeRepositoryChiefPi({ activeTools: ["read"], exec }, testTmpRoot);
   const context = fakeContext([
     {
       type: "usage",
@@ -3409,10 +3418,11 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
       usage: currentUsage(2),
     },
   ]) as any;
+  context.cwd = testTmpRoot;
   context.hasUI = true;
   const notices: string[] = [];
   context.ui.notify = (message: string) => notices.push(message);
-  const dir = realFs.mkdtempSync(join("/tmp", "herdsman-manager-usage-"));
+  const dir = realFs.mkdtempSync(join(tmpdir(), "herdsman-manager-usage-"));
   let restoreListAll: (() => void) | undefined;
   const leadA = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
   const leadB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -3507,13 +3517,13 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
       writeProjectAssignment(supervisionRuntime(), {
         version: 2,
         id,
-        repoKey: "/tmp",
+        repoKey: testTmpRoot,
         branch,
         text: branch,
         ...(branch !== "branch-a-alias" ? { piSessionFile: paths[id]! } : {}),
       });
     assert.deepEqual(
-      listProjectAssignments(supervisionRuntime(), "/tmp").map(({ id, piSessionFile }) => [
+      listProjectAssignments(supervisionRuntime(), testTmpRoot).map(({ id, piSessionFile }) => [
         id,
         piSessionFile,
       ]),
@@ -3554,7 +3564,7 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
     writeProjectAssignment(supervisionRuntime(), {
       version: 2,
       id: leadA,
-      repoKey: "/tmp",
+      repoKey: testTmpRoot,
       branch: "branch-a-alias",
       text: "branch-a-alias",
       piSessionFile: conflictPath,
@@ -3566,7 +3576,7 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
     writeProjectAssignment(supervisionRuntime(), {
       version: 2,
       id: leadA,
-      repoKey: "/tmp",
+      repoKey: testTmpRoot,
       branch: "branch-a-alias",
       text: "branch-a-alias",
       piSessionFile: paths[leadA]!,
@@ -3575,7 +3585,7 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
     writeProjectAssignment(supervisionRuntime(), {
       version: 2,
       id: leadB,
-      repoKey: "/tmp",
+      repoKey: testTmpRoot,
       branch: "branch-b",
       text: "branch-b",
     });
@@ -3591,7 +3601,7 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
     writeProjectAssignment(supervisionRuntime(), {
       version: 2,
       id: leadB,
-      repoKey: "/tmp",
+      repoKey: testTmpRoot,
       branch: "branch-b",
       text: "branch-b",
       piSessionFile: paths[leadB]!,
@@ -3754,42 +3764,46 @@ test("active Manager supervision refreshes serialize and coalesce concurrent req
   let maxActive = 0;
   let gateRefresh = false;
   let refreshSnapshotBase = 0;
-  const pi = fakeRepositoryChiefPi({
-    activeTools: ["read"],
-    exec: async (_command, args) => {
-      if (args[0] === "workspace" && args[1] === "get")
-        return respond({
-          workspace: {
-            worktree: { repo_key: "/tmp", is_linked_worktree: false },
-          },
-        });
-      if (args[0] === "worktree" && args[1] === "list")
-        return respond({
-          source: {
-            source_workspace_id: WORKSPACE,
-            repo_key: "/tmp",
-            repo_name: "project",
-          },
-          worktrees: [],
-        });
-      if (isAgentList(args)) return respond({ agents: [managerAgentIdentity()] });
-      if (args[0] === "agent" && args[1] === "get")
-        return respond({ agent: managerAgentIdentity() });
-      if (isApiSnapshot(args)) {
-        snapshots++;
-        active++;
-        maxActive = Math.max(maxActive, active);
-        if (gateRefresh && snapshots === refreshSnapshotBase + 1) {
-          resolveGatedSnapshotStarted();
-          await release;
+  const pi = fakeRepositoryChiefPi(
+    {
+      activeTools: ["read"],
+      exec: async (_command, args) => {
+        if (args[0] === "workspace" && args[1] === "get")
+          return respond({
+            workspace: {
+              worktree: { repo_key: testTmpRoot, is_linked_worktree: false },
+            },
+          });
+        if (args[0] === "worktree" && args[1] === "list")
+          return respond({
+            source: {
+              source_workspace_id: WORKSPACE,
+              repo_key: testTmpRoot,
+              repo_name: "project",
+            },
+            worktrees: [],
+          });
+        if (isAgentList(args)) return respond({ agents: [managerAgentIdentity()] });
+        if (args[0] === "agent" && args[1] === "get")
+          return respond({ agent: managerAgentIdentity() });
+        if (isApiSnapshot(args)) {
+          snapshots++;
+          active++;
+          maxActive = Math.max(maxActive, active);
+          if (gateRefresh && snapshots === refreshSnapshotBase + 1) {
+            resolveGatedSnapshotStarted();
+            await release;
+          }
+          active--;
+          return respond({ snapshot: { agents: [], panes: [], workspaces: [] } });
         }
-        active--;
-        return respond({ snapshot: { agents: [], panes: [], workspaces: [] } });
-      }
-      return respond({});
+        return respond({});
+      },
     },
-  });
+    testTmpRoot,
+  );
   const context = fakeContext() as any;
+  context.cwd = testTmpRoot;
   context.mode = "rpc";
   registerExtension!(pi.pi as never);
   t.after(async () => {
