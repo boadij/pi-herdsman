@@ -253,8 +253,10 @@ defer only steps with actual prerequisites.
 
 Technical conflicts remain with the responsible Leads. The Manager resolves
 cross-assignment scope, priority, and sequencing decisions when needed.
-When no independent work remains, ordinary reporting and event-driven
-continuation replace repeated messages or polling.
+When further progress depends only on internal coordination, ordinary
+reporting and event-driven continuation replace repeated messages or
+polling. This does not restrict monitoring external operations required
+by independently owned work.
 
 A supervisor may observe bounded descendant state without gaining descendant
 control. Questions and messages are not implicitly forwarded through

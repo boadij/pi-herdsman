@@ -470,6 +470,19 @@ Also verify a controller with two already-known independent delegated objectives
 may delegate A and B before ending its turn. It must not create a third
 assignment merely to increase concurrency.
 
+For real-model acceptance, use a controlled, non-mutating external operation
+with observable pending and terminal states. Verify that a capable,
+non-delegating Agent assigned to obtain the outcome monitors it and reports
+observed evidence. Repeat the concurrency check with external monitoring as
+B: it should proceed while A is active without polling A or repeating its
+scope. With a tool-restricted Coordinator, verify monitoring is routed to an
+eligible authorized executor rather than using unavailable tools or reporting
+completion early.
+
+Inspect actual tool calls, results, and handoffs. Distinguish an observed
+terminal outcome from timeout or interruption. Simulated delivery and prompt
+assertions do not establish real-model interpretation.
+
 ## Lead command menus
 
 In a lead session with UI:

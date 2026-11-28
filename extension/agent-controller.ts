@@ -840,10 +840,20 @@ Authority flows through the responsible direct supervisor or owner. Higher rank 
 
 When unable to follow an instruction, identify the specific applicable constraint. Never invent restrictions or elevate conventions, recommendations, or personal judgment into binding requirements.`;
 
+export const WORK_CONTINUATION_GUIDANCE =
+  "For external outcomes required by your authorized work, use an appropriate " +
+  "available monitoring or waiting mechanism, or delegate that responsibility " +
+  "when authorized. Prefer efficient native mechanisms over repeated model-driven " +
+  "status checks. Rely on automatic continuation only when an appropriate " +
+  "delivery mechanism exists. If no permitted execution or continuation path " +
+  "exists, report the specific blocker without claiming completion.";
+
 export const SHARED_AGENT_INSTRUCTIONS = `${AUTHORITY_GUIDANCE}
 
 Work only on the assigned objective and preserve its stated scope, constraints,
 authority, and acceptance criteria.
+
+${WORK_CONTINUATION_GUIDANCE}
 
 Treat supplied files as message evidence. Explicit Agent attachments must contain
 complete supported UTF-8 text within configured limits, or the handoff is
@@ -1188,7 +1198,11 @@ export const AGENT_DEFINITION_ENTRY = "pi-herdsman-agent-definition";
 export const AGENT_EXECUTION_OWNERSHIP_GUIDANCE =
   "Each unresolved unit of work has one executor. Using delegate_agent transfers that assignment's execution ownership to the Agent until it resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own.";
 const AGENT_UNRESOLVED_NAVIGATION_GUIDANCE =
-  "When Agent work is unresolved, handle required control, then continue only necessary work you still own or end the turn without concluding; results or attention resume the session automatically. Do not poll with status requests, sleep, or other waiting mechanisms.";
+  "When Agent work is unresolved, handle required control and continue " +
+  "necessary work you still own. When further progress depends only on " +
+  "unresolved Agent work, end the turn without concluding; Herdsman " +
+  "delivers results and attention automatically. Do not poll or actively " +
+  "wait solely for those Agent results.";
 export const AGENT_UNRESOLVED_GUIDANCE =
   "Use list_agents when fresh Agent state or ownership is materially needed for a control or recovery decision, or to refresh the definition roster; do not use it for progress polling. " +
   "Follow current available_tools and revalidation: steer_agent queues a cooperative correction for Pi to deliver after the current assistant turn and its tool calls reach a steering boundary; it does not preempt the current operation. interrupt_agent cancels the current operation and replaces its direction. " +

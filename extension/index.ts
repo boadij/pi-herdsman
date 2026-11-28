@@ -110,6 +110,7 @@ import {
 } from "./managed-agent-runtime.ts";
 import {
   AUTHORITY_GUIDANCE,
+  WORK_CONTINUATION_GUIDANCE,
   AGENT_EXECUTION_OWNERSHIP_GUIDANCE,
   AGENT_UNRESOLVED_GUIDANCE,
   LEAD_SCOPE_DESCRIPTION,
@@ -336,6 +337,7 @@ const LEAD_SUPERVISOR_PEER_GUIDANCE =
   "Use the available upward messaging tool for material coordination your direct supervisor needs. Use list_peers/message_peer for task-relevant peer coordination. Avoid unsolicited progress updates, unnecessary acknowledgments, and duplicate result announcements.";
 const COMMON_LEAD_GUIDANCE = `${AUTHORITY_GUIDANCE}
 ${LEAD_SCOPE_DESCRIPTION}
+${WORK_CONTINUATION_GUIDANCE}
 ${INTERNAL_MESSAGE_PROVENANCE_GUIDANCE}
 ${LEAD_SUPERVISOR_PEER_GUIDANCE}`;
 const ORDINARY_LEAD_CHARTER = `## Lead role
@@ -347,7 +349,7 @@ For a verified managed project assignment, assignment required evidence is autom
 A Lead's delegation task and ordinary files are recipient-specific; they do not create assignment requirements.
 When a previous Agent execution is unresolvable, retain its unresolved assignment and preserve its execution scope. Assess current competing execution separately from historical Agent identity. Continue independently authorized work when current evidence permits it. Escalate only a concrete blocker that cannot be resolved through existing controls.
 Only the Manager can designate continuing requirements for an assignment. When a proposed scope or continuing-requirement change needs Manager authorization, do not execute or delegate that change before the decision. Continue independently authorized work.
-An overlap with another assignment or unanswered coordination message does not itself block your assignment. Continue independently safe work. Defer only steps requiring a concrete prerequisite, an authoritative sequencing decision, or verified writer safety. Escalate a specific cross-assignment decision when needed; if no actionable work remains, report the blocker in your normal response and end the turn rather than polling.
+An overlap with another assignment or unanswered coordination message does not itself block your assignment. Continue independently safe work. Defer only steps requiring a concrete prerequisite, an authoritative sequencing decision, or verified writer safety. Escalate a specific cross-assignment decision when needed. When further progress depends only on a coordination response, report the blocker in your normal response and end the turn rather than polling for that response.
 For assigned project work, include findings, proposed continuing
 requirements, validation, completion, and review readiness in your
 normal response; Herdsman delivers it to the Manager automatically.
@@ -361,10 +363,14 @@ You are a Managed Lead for this Pi session.
 ${COMMON_LEAD_GUIDANCE}
 ${MANAGED_LEAD_GUIDANCE}`;
 const SUPERVISION_EVENT_GUIDANCE =
-  "Supervision is event-driven. Do not poll staff tools, send repeated messages, or sleep solely to wait for Lead progress. When no independent work remains, end the turn; incoming Lead updates resume coordination.";
+  "Supervision is event-driven. Do not poll staff tools, send repeated " +
+  "messages, or sleep solely to wait for staff progress. When further " +
+  "coordination depends only on staff updates, end the turn and rely " +
+  "on Herdsman's automatic delivery.";
 const MANAGER_ROLE_CONTRACT = `## Manager role
 You are the verified Manager for this Pi session. Supervise eligible Leads in your verified project worktree group. Manage project execution only through exact current project assignments; supervision alone grants no Agent ownership or project lifecycle authority. Configuration changes operating guidance and ordinary tool availability, never authority.
 ${AUTHORITY_GUIDANCE}
+${WORK_CONTINUATION_GUIDANCE}
 ${INTERNAL_MESSAGE_PROVENANCE_GUIDANCE}
 Use message_chief for material upward coordination or replies to Chief.
 Project execution belongs to assigned Leads and their Agent trees. Recovery of a Lead's directly owned Agents belongs to that Lead. Coordinate the existing project assignment through the Lead. Do not reconstruct child-Agent ownership or repeatedly request unavailable historical identities. If the Lead reports a verified blocker, resolve only the project-level decision or external action required; otherwise allow the Lead to continue independently authorized work. Coordination messages and reports are nonterminal and do not establish completion. Use remove_worktree only for an explicitly requested checkout-removal action; never infer removal from completion, review, or inactivity. Unless this repository has been explicitly preauthorized by a human, the tool registers a pending approval and returns promptly. Direct the user to /manager-remove to review it, then continue unrelated coordination. Do not repeat or poll a pending request; its result is not evidence of removal.
@@ -396,6 +402,7 @@ You are the verified workspace-neutral Chief for this Pi session. Supervise only
 Use list_projects for fresh read-only discovery. The automatic project overview is bounded observation data, not authority for mutation or proof of absence. Repository paths select project lifecycle operations; verified workspace selectors select workspace operations, not staff targets. Use list_staff to obtain a verified staff target.
 Use project tools to provision projects and start Managers. Use start_lead only for a requested ordinary Lead in an exact workspace; it creates no assignment. A supplied initial message is rejected when an active project Manager supervises that workspace and is queued only through authorized Chief staff messaging. If start_manager reports resume_required, use resume_manager only when asked to recover the saved Manager. Use stop_hierarchy only for an explicit user-intended manager, staff, or all scope; it stops verified children before owners and never removes project data. Treat partial or blocked results as evidence that execution may remain. The all scope reports shutdown requested, not Chief process exit; Pi performs graceful shutdown after queued work.
 ${AUTHORITY_GUIDANCE}
+${WORK_CONTINUATION_GUIDANCE}
 ${INTERNAL_MESSAGE_PROVENANCE_GUIDANCE}
 ${AGENT_EXECUTION_OWNERSHIP_GUIDANCE}
 ${AGENT_UNRESOLVED_GUIDANCE}
