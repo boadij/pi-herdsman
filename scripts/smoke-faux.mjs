@@ -1564,6 +1564,10 @@ export function waitForContinuationObservation(directory, signal) {
   return waitForSmokeObservation(directory, "continuation-first-observed", signal);
 }
 
+export function waitForContinuationSecondObservation(directory, signal) {
+  return waitForSmokeObservation(directory, "continuation-second-observed", signal);
+}
+
 export default function install(pi) {
   let terminalErrorRequests = 0;
   let sessionId;
@@ -1827,6 +1831,17 @@ export default function install(pi) {
         _options?.signal,
       ).then(() => answer);
     }
+    if (
+      model.id === "continuation" &&
+      answer.stopReason === "stop" &&
+      text(answer).includes("PI_HERDSMAN_CONTINUATION_SECOND") &&
+      text(lastUser(context.messages)).includes("SMOKE_CONTINUATION_SECOND:")
+    )
+      return waitForSmokeObservation(
+        join(process.env.PI_CODING_AGENT_DIR, "pi-herdsman", "runtime"),
+        "continuation-second-observed",
+        _options?.signal,
+      ).then(() => answer);
     if (
       model.id === "agent-crash-target" &&
       !text(lastUser(context.messages)).includes("SMOKE_CRASH_CONTINUE:")
