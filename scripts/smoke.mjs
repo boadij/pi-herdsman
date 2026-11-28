@@ -27,6 +27,7 @@ import {
   chiefManagerSuccessEvidence,
   matchesChiefManagerHandoff,
   ownedAgentReadinessEvidence,
+  readOwnedAgentSnapshots,
 } from "./chief-manager-smoke.mjs";
 
 export { matchesProjectMessageContent };
@@ -3683,45 +3684,49 @@ export function assertContinuationFauxEvidence(sessionStarts, provenance, sessio
   }
 }
 
-export function continuationExecutionEvidence(
-  sessionStarts,
-  provenance,
+export async function continuationExecutionEvidence({
+  readJsonl,
+  inspectPane,
   sessionId,
   paneId,
-  foregroundProcesses,
   expectedPiVersion,
-) {
-  if (sessionStarts.length > 1)
-    throw Object.assign(new Error("continuation session-start generation is ambiguous"), {
-      code: "SMOKE_EVIDENCE",
-    });
-  const start = sessionStarts[0];
-  if (!start) return { startObserved: false, providerObserved: false };
-  if (!Number.isSafeInteger(start.pid) || start.pid < 1)
-    throw Object.assign(new Error("continuation session-start PID is invalid"), {
-      code: "SMOKE_EVIDENCE",
-    });
-  const rows = provenance.filter(
-    (record) => record.sessionId === sessionId && record.pid === start.pid,
-  );
-  if (rows.length > 1)
-    throw Object.assign(new Error("continuation provider generation is ambiguous"), {
-      code: "SMOKE_EVIDENCE",
-    });
-  if (!rows.length) return { startObserved: true, providerObserved: false, start };
-  if (foregroundProcesses.length !== 1 || foregroundProcesses[0]?.pid !== start.pid)
-    throw Object.assign(new Error("continuation pane contains conflicting Pi processes"), {
-      code: "SMOKE_EVIDENCE",
-    });
+  baselineStarts = 0,
+  baselineProvenance = 0,
+}) {
+  // Pi writes its session start before provider execution. Observe in reverse
+  // causal order, then inspect the pane only for a resolved generation.
+  const scope = (records, baseline) =>
+    records.slice(baseline).filter((record) => record.sessionId === sessionId);
+  const rows = scope(await readJsonl("smoke-faux-provenance.jsonl"), baselineProvenance);
+  const starts = scope(await readJsonl("smoke-faux-session-start.jsonl"), baselineStarts);
+  const fail = (message) => {
+    throw Object.assign(new Error(message), { code: "SMOKE_EVIDENCE" });
+  };
+  if (starts.length > 1) fail("continuation session-start generation is ambiguous");
+  if (rows.length > 1) fail("continuation provider generation is ambiguous");
+  const [start] = starts;
+  const [provider] = rows;
+  const evidence = { startObserved: !!start, providerObserved: !!provider };
+  for (const record of [start, provider])
+    if (record && (!Number.isSafeInteger(record.pid) || record.pid < 1))
+      fail("continuation generation PID is invalid");
+  if (!start || !provider) return evidence;
+  if (start.pid !== provider.pid)
+    fail("continuation provider and session-start identities conflict");
+  const pane = await inspectPane();
+  const { candidates } = pane;
+  if (!candidates?.length) return { ...evidence, ...pane };
+  if (candidates.length > 1) fail("continuation pane contains conflicting Pi processes");
+  if (candidates[0].pid == null) return { ...evidence, ...pane };
+  if (candidates[0].pid !== start.pid) fail("continuation pane contains conflicting Pi processes");
   return {
-    startObserved: true,
-    providerObserved: true,
-    start,
+    ...evidence,
+    candidates,
     execution: matchPiProvenance(
       rows,
       sessionId,
       paneId,
-      foregroundProcesses,
+      candidates,
       "continuation",
       true,
       expectedPiVersion,
@@ -5887,8 +5892,30 @@ async function readSmokeMailboxRecord(directory, filename, maxBytes, description
   }
 }
 
+async function readSmokeMailboxRequest(directory, requestId) {
+  if (typeof requestId !== "string" || requestId.length !== 36 || !SMOKE_MAILBOX_ID.test(requestId))
+    throw new Error("smoke mailbox assignment request identity is invalid");
+  return readSmokeMailboxRecord(directory, `request-${requestId}.json`, 4 * 1024 * 1024, "request");
+}
+
+export async function verifyCrashRecoveryRequest({ directory, state }) {
+  const request = await readSmokeMailboxRequest(directory, state.activeRequestId);
+  if (request === undefined) return null;
+  assert.ok(
+    request?.requestId === state.activeRequestId &&
+      request.runId === state.runId &&
+      request.ownerSessionId === state.ownerSessionId,
+    "accepted target request identity mismatch",
+  );
+  return {
+    requestId: request.requestId,
+    runId: request.runId,
+    ownerSessionId: request.ownerSessionId,
+  };
+}
+
 async function smokeMailbox(ctx, identity) {
-  if (!SMOKE_MAILBOX_ID.test(identity.requestId))
+  if (typeof identity.requestId !== "string" || !SMOKE_MAILBOX_ID.test(identity.requestId))
     throw new Error("smoke mailbox assignment request identity is invalid");
   const matches = (await readSmokeMailboxStates(ctx)).filter(({ state }) =>
     smokeMailboxMatchesIdentity(state, identity),
@@ -5896,12 +5923,7 @@ async function smokeMailbox(ctx, identity) {
   if (matches.length > 1) throw new Error("smoke mailbox assignment identity is ambiguous");
   if (!matches.length) return undefined;
   const { directory, state } = matches[0];
-  const request = await readSmokeMailboxRecord(
-    directory,
-    `request-${identity.requestId}.json`,
-    4 * 1024 * 1024,
-    "request",
-  );
+  const request = await readSmokeMailboxRequest(directory, identity.requestId);
   const ask = state.pendingAskId
     ? await readSmokeMailboxRecord(directory, "ask.json", 4 * 1024 * 1024, "ask")
     : undefined;
@@ -6037,13 +6059,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
           workspaceId: target.workspace_id,
           ownerSessionId: targetMailbox.state.ownerSessionId,
           mailboxDirectory: targetMailbox.directory,
-          request: targetMailbox.request
-            ? {
-                requestId: targetMailbox.request.requestId,
-                runId: targetMailbox.request.runId,
-                ownerSessionId: targetMailbox.request.ownerSessionId,
-              }
-            : null,
+          request: await verifyCrashRecoveryRequest(targetMailbox),
         },
         parent: {
           sessionId: parentSession.id,
@@ -6070,13 +6086,6 @@ async function runAgentCrashRecoverySmoke(ctx) {
     ctx.crashRecovery.ownerSessionId,
     "captured target mailbox owner identity mismatch",
   );
-  if (ctx.crashRecovery.target.request)
-    assert.ok(
-      ctx.crashRecovery.target.request.requestId === ctx.crashRecovery.target.requestId &&
-        ctx.crashRecovery.target.request.runId === ctx.crashRecovery.target.runId &&
-        ctx.crashRecovery.target.request.ownerSessionId === ctx.crashRecovery.ownerSessionId,
-      "accepted target request identity mismatch",
-    );
   await restartNestedHerdr(ctx);
   const created = await nestedCommand(ctx, [
     "tab",
@@ -7186,42 +7195,32 @@ async function runContinuationSmoke(ctx) {
       .filter(Boolean)
       .map((line) => JSON.parse(line));
   };
-  const observeGeneration = async (session, paneId, expectedPid) => {
-    const observed = await tryNestedCommand(ctx, ["pane", "process-info", "--pane", paneId]);
-    if (!observed.ok) return { observationError: observed.error };
-    const candidates = candidateProcess(
-      observed.value,
-      ctx.candidateExtension,
-      ctx.herdrStateExtension,
-    );
-    if (!ctx.simulated) {
-      const processes = candidates.filter((process) =>
-        expectedPid === undefined ? process.pid != null : process.pid === expectedPid,
-      );
-      if (processes.length !== 1) return { candidates };
-      return { execution: { sessionId: session.id, paneId, pid: processes[0].pid }, candidates };
-    }
-    const starts = (await readJsonl("smoke-faux-session-start.jsonl")).filter(
-      (record) =>
-        record.sessionId === session.id &&
-        (expectedPid === undefined || record.pid === expectedPid),
-    );
-    const provenance = await readJsonl("smoke-faux-provenance.jsonl");
-    const observedGeneration = continuationExecutionEvidence(
-      starts,
-      provenance,
-      session.id,
-      paneId,
-      candidates,
-      ctx.expectedPiVersion,
-    );
-    if (!observedGeneration.execution) return { candidates, ...observedGeneration };
-    const { execution } = observedGeneration;
-    if (candidates.length !== 1 || candidates[0].pid !== execution.pid)
-      throw Object.assign(new Error("continuation generation has conflicting Pi processes"), {
-        code: "SMOKE_EVIDENCE",
+  const observeGeneration = async (session, paneId, baselines) => {
+    const inspectPane = async () => {
+      const observed = await tryNestedCommand(ctx, ["pane", "process-info", "--pane", paneId]);
+      if (!observed.ok) return { observationError: observed.error };
+      return {
+        candidates: candidateProcess(
+          observed.value,
+          ctx.candidateExtension,
+          ctx.herdrStateExtension,
+        ),
+      };
+    };
+    if (ctx.simulated)
+      return continuationExecutionEvidence({
+        readJsonl,
+        inspectPane,
+        sessionId: session.id,
+        paneId,
+        expectedPiVersion: ctx.expectedPiVersion,
+        ...baselines,
       });
-    return { ...observedGeneration, candidates };
+    const pane = await inspectPane();
+    if (pane.observationError) return pane;
+    const processes = pane.candidates.filter((process) => process.pid != null);
+    if (processes.length !== 1) return pane;
+    return { ...pane, execution: { sessionId: session.id, paneId, pid: processes[0].pid } };
   };
 
   const childAgents = async () => {
@@ -7284,8 +7283,8 @@ async function runContinuationSmoke(ctx) {
           sessionId: session?.id ?? null,
           sessionBytes: session ? Buffer.byteLength(session.contents) : 0,
           executionObserved: !!firstGeneration,
-          sessionStartObserved: observation.startObserved ?? !!observation.start,
-          providerRequestObserved: !!observation.execution,
+          sessionStartObserved: !!observation.startObserved,
+          providerRequestObserved: !!observation.providerObserved,
           processCount: observation.candidates?.length ?? 0,
         },
         evidence: {
@@ -7361,8 +7360,12 @@ async function runContinuationSmoke(ctx) {
       "continuation-session-identity: first cleanup changed the persisted Pi session ID",
     );
 
-  const baselineStarts = ctx.simulated ? await readJsonl("smoke-faux-session-start.jsonl") : [];
-  const baselineProvenance = ctx.simulated ? await readJsonl("smoke-faux-provenance.jsonl") : [];
+  const baselineStarts = ctx.simulated
+    ? (await readJsonl("smoke-faux-session-start.jsonl")).length
+    : 0;
+  const baselineProvenance = ctx.simulated
+    ? (await readJsonl("smoke-faux-provenance.jsonl")).length
+    : 0;
   const followup = `Continue the exact saved Pi session at ${firstSession.path}. This is the same implementer you delegated previously. Without rereading package.json, return the package name you were asked to remember, followed by exactly ${secondMarker}. The final answer to me must include that marker.`;
   await promptRoot(followup);
   secondGeneration = await waitForEvidence(
@@ -7383,29 +7386,13 @@ async function runContinuationSmoke(ctx) {
         throw Object.assign(new Error("continuation resumed session is ambiguous"), {
           code: "SMOKE_EVIDENCE",
         });
-      let startRecords = [];
-      if (ctx.simulated) {
-        const currentStarts = await readJsonl("smoke-faux-session-start.jsonl");
-        startRecords = currentStarts
-          .slice(baselineStarts.length)
-          .filter((record) => record.sessionId === firstSession.id);
-        if (startRecords.length > 1)
-          throw Object.assign(
-            new Error("continuation resumed session-start evidence is ambiguous"),
-            {
-              code: "SMOKE_EVIDENCE",
-            },
-          );
-      }
       let observation = {};
       const matching = matchingSessions[0];
-      if (matching && (!ctx.simulated || startRecords.length === 1)) {
-        const expectedPid = ctx.simulated ? startRecords[0].pid : undefined;
-        observation = await observeGeneration(
-          matching.session,
-          matching.agent.pane_id,
-          expectedPid,
-        );
+      if (matching) {
+        observation = await observeGeneration(matching.session, matching.agent.pane_id, {
+          baselineStarts,
+          baselineProvenance,
+        });
         if (observation.observationError)
           return { done: false, observationError: observation.observationError };
         if (
@@ -7421,23 +7408,6 @@ async function runContinuationSmoke(ctx) {
           ctx.continuationSecondPaneId = matching.agent.pane_id;
         }
       }
-      if (matching && ctx.simulated) {
-        const currentProvenance = await readJsonl("smoke-faux-provenance.jsonl");
-        const newRows = currentProvenance
-          .slice(baselineProvenance.length)
-          .filter((record) => record.sessionId === firstSession.id);
-        if (newRows.length > 1)
-          throw Object.assign(new Error("continuation resumed provider generation is ambiguous"), {
-            code: "SMOKE_EVIDENCE",
-          });
-        if (newRows.length === 1 && newRows[0].pid !== startRecords[0]?.pid)
-          throw Object.assign(
-            new Error("continuation provider and session-start identities conflict"),
-            {
-              code: "SMOKE_EVIDENCE",
-            },
-          );
-      }
       if (secondGeneration && ctx.simulated)
         await writeFile(join(runtimeEvidence, "continuation-second-observed"), "observed\n", {
           flag: "wx",
@@ -7448,8 +7418,8 @@ async function runContinuationSmoke(ctx) {
         value: secondGeneration,
         progress: {
           matchingSessionSeen: !!matching,
-          sessionStartObserved: startRecords.length === 1,
-          providerRequestObserved: !!observation.execution,
+          sessionStartObserved: !!observation.startObserved,
+          providerRequestObserved: !!observation.providerObserved,
           exactProcessObserved: !!secondGeneration,
         },
         evidence: { childCount: agents.length },
@@ -10624,9 +10594,27 @@ async function runChiefManagerSmoke(ctx) {
           "owned Agent assignment settled before required readiness",
           ownerReceipt.details.status === "failed" ? "failed" : "completed",
         );
-      const mailbox = await smokeMailbox(ctx, assignment);
+      const { session, mailbox } = await readOwnedAgentSnapshots(
+        () => exactIsolatedSession(ctx, assignment.piSessionId),
+        () => smokeMailbox(ctx, assignment),
+      );
+      if (!session) return pending();
+      evidence.childSessionObserved = true;
+      const question =
+        mode === "parent"
+          ? { status: "not_applicable" }
+          : correlatedOwnedAgentQuestion(
+              sessionEntries(session.contents),
+              assignment,
+              mailbox?.state,
+              mailbox?.ask,
+            );
+      evidence.waitingToolResult = question.status;
+      evidence.questionMismatch = question.reason ?? "not_observed";
+      if (question.status === "rejected")
+        fail("owned Agent await_owner call was rejected", "failed");
       if (!mailbox) return pending();
-      const { state, request, ask } = mailbox;
+      const { state, request } = mailbox;
       evidence.exactMailboxObserved = true;
       projected();
       if (state.completedRequestId === assignment.requestId)
@@ -10681,10 +10669,10 @@ async function runChiefManagerSmoke(ctx) {
       }
       assignment.runId = state.runId;
       evidence.activeRequestMatched = true;
-      const session = await exactIsolatedSession(ctx, assignment.piSessionId);
-      if (!session) return pending();
-      evidence.childSessionObserved = true;
       projected();
+      if (question.status === "conflict" || question.status === "mismatch")
+        fail(`owned Agent pending question conflicts (${question.reason ?? question.status})`);
+      evidence.pendingQuestionMatched = question.status === "success";
       const reports = await agents();
       const registrations = [];
       for (const report of reports)
@@ -10747,17 +10735,6 @@ async function runChiefManagerSmoke(ctx) {
         }
       }
       evidence.exactProcessObserved = true;
-      const question =
-        mode === "parent"
-          ? { status: "not_applicable" }
-          : correlatedOwnedAgentQuestion(sessionEntries(session.contents), assignment, state, ask);
-      evidence.waitingToolResult = question.status;
-      evidence.questionMismatch = question.reason ?? "not_observed";
-      evidence.pendingQuestionMatched = question.status === "success";
-      if (question.status === "rejected")
-        fail("owned Agent await_owner call was rejected", "failed");
-      if (question.status === "conflict" || question.status === "mismatch")
-        fail(`owned Agent pending question conflicts (${question.reason ?? question.status})`);
       const done =
         evidence.exactProcessObserved && (mode === "parent" || question.status === "success");
       return {

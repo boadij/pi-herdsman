@@ -5,6 +5,7 @@ import {
   chiefManagerSuccessEvidence,
   matchesChiefManagerHandoff,
   ownedAgentReadinessEvidence,
+  readOwnedAgentSnapshots,
 } from "./chief-manager-smoke.mjs";
 
 test("Manager smoke accepts only the completed correlated persisted handoff", () => {
@@ -97,7 +98,7 @@ test("non-leaf Agent readiness evidence projects nested assignment state", () =>
   assert.doesNotMatch(JSON.stringify(evidence), /private|421|\//u);
 });
 
-test("owned Agent waiting requires correlated successful question, state, and ask evidence", () => {
+test("owned Agent waiting requires correlated successful question, state, and ask evidence", async () => {
   const identity = {
     ownerSessionId: "owner",
     piSessionId: "child",
@@ -187,6 +188,34 @@ test("owned Agent waiting requires correlated successful question, state, and as
     correlatedOwnedAgentQuestion([call, result], identity, state, ask).status,
     "success",
   );
+  let persisted = false;
+  const reads = [];
+  const observe = async () => {
+    const snapshots = await readOwnedAgentSnapshots(
+      async () => {
+        reads.push("transcript");
+        return { entries: persisted ? [call, result] : [call] };
+      },
+      async () => {
+        reads.push("mailbox");
+        const snapshot = persisted
+          ? { state, ask }
+          : { state: { ...state, pendingAskId: undefined }, ask: undefined };
+        persisted = true;
+        return snapshot;
+      },
+    );
+    return correlatedOwnedAgentQuestion(
+      snapshots.session.entries,
+      identity,
+      snapshots.mailbox.state,
+      snapshots.mailbox.ask,
+    ).status;
+  };
+  assert.equal(await observe(), "pending");
+  assert.equal(await observe(), "success");
+  assert.deepEqual(reads, ["transcript", "mailbox", "transcript", "mailbox"]);
+
   const historical = [
     call,
     result,

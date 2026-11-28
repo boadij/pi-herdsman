@@ -65,6 +65,13 @@ export function ownedAgentReadinessEvidence(progress = {}) {
   };
 }
 
+export async function readOwnedAgentSnapshots(readSession, readMailbox) {
+  // await_owner persists the question before returning the transcript result.
+  const session = await readSession();
+  const mailbox = session ? await readMailbox() : undefined;
+  return { session, mailbox };
+}
+
 export function correlatedOwnedAgentQuestion(entries, identity, state, ask) {
   const calls = entries.flatMap((entry) =>
     entry.type === "message" && entry.message?.role === "assistant"

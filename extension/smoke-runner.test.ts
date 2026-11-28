@@ -138,6 +138,7 @@ import {
   matchPiProvenance,
   assertContinuationFauxEvidence,
   continuationExecutionEvidence,
+  verifyCrashRecoveryRequest,
   managerHandoffLeadProcessProof,
   prepareManagerRepository,
   assertManagerFreshPrimary,
@@ -6558,7 +6559,7 @@ test("continuation requires configured faux extension and provider evidence for 
   );
 });
 
-test("continuation selects the provenance-backed new generation, never a launcher candidate", () => {
+test("resumed continuation observes scoped provider, session start, then the exact pane", async () => {
   const sessionId = "saved-session";
   const makeRecord = (pid: number) => ({
     sessionId,
@@ -6568,72 +6569,97 @@ test("continuation selects the provenance-backed new generation, never a launche
     model: "continuation",
     hasAgentDefinitions: true,
   });
-  const starts = [
-    { sessionId, pid: 101 },
-    { sessionId, pid: 202 },
-  ];
-  const provenance = [makeRecord(101), makeRecord(202)];
-  const observed = continuationExecutionEvidence(
-    starts.slice(1),
-    provenance,
-    sessionId,
-    "resumed-pane",
-    [{ pid: 202 }],
-    "1.7.0",
-  );
-  assert.deepEqual(observed.execution, {
+  const old = makeRecord(101);
+  const resumed = makeRecord(202);
+  const reads: string[] = [];
+  let publishOnRead = true;
+  let provider = [old];
+  let starts = [old];
+  let candidates: { pid: number }[] = [];
+  const observe = () =>
+    continuationExecutionEvidence({
+      sessionId,
+      paneId: "resumed-pane",
+      expectedPiVersion: "1.7.0",
+      baselineStarts: 1,
+      baselineProvenance: 1,
+      readJsonl: async (name) => {
+        const kind = name.includes("provenance") ? "provider" : "starts";
+        reads.push(kind);
+        const snapshot = kind === "provider" ? provider : starts;
+        if (publishOnRead) {
+          publishOnRead = false;
+          starts = [old, resumed];
+          provider = [old, resumed];
+        }
+        return snapshot;
+      },
+      inspectPane: async () => {
+        reads.push("pane");
+        return { candidates };
+      },
+    });
+
+  assert.deepEqual(await observe(), { startObserved: true, providerObserved: false });
+  assert.deepEqual(reads.splice(0), ["provider", "starts"]);
+  assert.deepEqual(await observe(), {
+    startObserved: true,
+    providerObserved: true,
+    candidates: [],
+  });
+  assert.deepEqual(reads.splice(0), ["provider", "starts", "pane"]);
+  starts = [old];
+  assert.deepEqual(await observe(), { startObserved: false, providerObserved: true });
+  assert.deepEqual(reads.splice(0), ["provider", "starts"]);
+
+  starts = [old, resumed];
+  candidates = [{ pid: 202 }];
+  assert.deepEqual((await observe()).execution, {
     paneId: "resumed-pane",
     pid: 202,
     sessionId,
     piVersion: "1.7.0",
   });
-  assert.equal(
-    continuationExecutionEvidence(
-      [starts[1]],
-      [],
-      sessionId,
-      "resumed-pane",
-      [{ pid: 202 }],
-      "1.7.0",
-    ).providerObserved,
-    false,
-  );
-  assert.throws(
-    () =>
-      continuationExecutionEvidence(
-        starts,
-        provenance,
-        sessionId,
-        "resumed-pane",
-        [{ pid: 101 }, { pid: 202 }],
-        "1.7.0",
-      ),
-    /ambiguous/,
-  );
-  assert.throws(
-    () =>
-      continuationExecutionEvidence(
-        [starts[1]],
-        [makeRecord(202), makeRecord(202)],
-        sessionId,
-        "resumed-pane",
-        [{ pid: 202 }],
-        "1.7.0",
-      ),
-    /ambiguous/,
-  );
-  assert.throws(
-    () =>
-      continuationExecutionEvidence(
-        [starts[1]],
-        provenance,
-        sessionId,
-        "resumed-pane",
-        [{ pid: 202 }, { pid: 303 }],
-        "1.7.0",
-      ),
-    /conflicting Pi processes/,
-  );
+  assert.deepEqual(reads.splice(0), ["provider", "starts", "pane"]);
+  candidates = [{ pid: 303 }];
+  await assert.rejects(observe(), { code: "SMOKE_EVIDENCE", message: /conflicting Pi processes/ });
+  candidates = [{ pid: 202 }, { pid: 303 }];
+  await assert.rejects(observe(), { code: "SMOKE_EVIDENCE", message: /conflicting Pi processes/ });
+  starts = [old, makeRecord(303)];
+  await assert.rejects(observe(), { code: "SMOKE_EVIDENCE", message: /identities conflict/ });
+  starts = [old, resumed, resumed];
+  await assert.rejects(observe(), { code: "SMOKE_EVIDENCE", message: /session-start.*ambiguous/ });
+  starts = [old];
+  provider = [old, resumed, resumed];
+  await assert.rejects(observe(), { code: "SMOKE_EVIDENCE", message: /provider.*ambiguous/ });
+});
+
+test("crash recovery verifies the bounded active request in the matched mailbox", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "smoke-crash-mailbox-"));
+  const requestId = "11223344-5566-4788-89ab-aabbccddeeff";
+  const request = { requestId, runId: "run", ownerSessionId: "owner" };
+  const state = { activeRequestId: requestId, runId: "run", ownerSessionId: "owner" };
+  const requestPath = join(directory, `request-${requestId}.json`);
+  try {
+    await writeFile(join(directory, "request-unrelated.json"), "invalid JSON");
+    assert.equal(await verifyCrashRecoveryRequest({ directory, state }), null);
+    await writeFile(requestPath, JSON.stringify({ ...request, prompt: "not projected" }));
+    assert.deepEqual(await verifyCrashRecoveryRequest({ directory, state }), request);
+    for (const field of ["requestId", "runId", "ownerSessionId"] as const) {
+      await writeFile(requestPath, JSON.stringify({ ...request, [field]: "contradiction" }));
+      await assert.rejects(verifyCrashRecoveryRequest({ directory, state }), /identity mismatch/);
+    }
+    await writeFile(requestPath, " ".repeat(4 * 1024 * 1024 + 1));
+    await assert.rejects(verifyCrashRecoveryRequest({ directory, state }), /bounded regular file/);
+    for (const activeRequestId of ["../invalid", [requestId], requestId + "\n"]) {
+      await assert.rejects(
+        verifyCrashRecoveryRequest({ directory, state: { ...state, activeRequestId } }),
+        /request identity is invalid/,
+      );
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("continuation provider evidence wait polls until the second-generation request is recorded", async () => {
