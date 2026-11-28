@@ -81,9 +81,6 @@ jobs:
             shard: "1/2"
           - os: windows-latest
             shard: "2/2"
-          # Temporary required baseline for the same-revision benchmark.
-          - os: windows-latest
-            shard: ""
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
