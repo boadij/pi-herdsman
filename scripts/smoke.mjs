@@ -5622,7 +5622,11 @@ function supportedPiInvocation(proc) {
     if (typeof argv[0] !== "string") return false;
     const executable = argv[0].replaceAll("\\", "/").split("/").at(-1);
     if (executable === "pi") return true;
-    return executable === "node" && argv[1] === worktreePi && argv[0] === process.execPath;
+    return (
+      ["node", "node.exe"].includes(executable) &&
+      argv[1] === worktreePi &&
+      argv[0] === process.execPath
+    );
   }
   if (typeof proc.cmdline !== "string") return false;
   // Herdr reports a command representation, not a shell program. Tokenize only
@@ -5636,7 +5640,11 @@ function supportedPiInvocation(proc) {
   if (typeof tokens[0] !== "string") return false;
   const executable = tokens[0].replaceAll("\\", "/").split("/").at(-1);
   if (executable === "pi") return true;
-  return executable === "node" && tokens[0] === process.execPath && tokens[1] === worktreePi;
+  return (
+    ["node", "node.exe"].includes(executable) &&
+    tokens[0] === process.execPath &&
+    tokens[1] === worktreePi
+  );
 }
 
 function candidateProcessMatch(proc, extension, integration) {
