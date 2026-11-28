@@ -974,6 +974,98 @@ function herdrStatusResult(): ExecResult {
   return { stdout: HERDR_STATUS_RESPONSE, stderr: "", code: 0 };
 }
 
+export function nonGitWorkspaceResponse() {
+  return {
+    stdout: JSON.stringify({
+      id: AGENT_ID,
+      error: {
+        code: "not_git_worktree",
+        message: "Workspace is not a Git worktree",
+      },
+    }),
+    stderr: "",
+    code: 1,
+  };
+}
+
+export function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
+  let fixture: ReturnType<typeof fakePi>;
+  const initialTools = Array.isArray(options.activeTools) ? options.activeTools : [];
+  fixture = fakePi({
+    ...options,
+    exec: async (command: string, args: string[], extra: any) => {
+      const provided = await options.exec?.(command, args, extra);
+      if (
+        command === "herdr" &&
+        args[0] === "worktree" &&
+        args[1] === "list" &&
+        (!provided || provided.stdout === "{}")
+      )
+        return nonGitWorkspaceResponse();
+      if (
+        provided &&
+        !(
+          command === "herdr" &&
+          args[0] === "workspace" &&
+          args[1] === "get" &&
+          provided.stdout === "{}"
+        )
+      )
+        return provided;
+      return {
+        stdout:
+          command === "herdr" && args[0] === "workspace" && args[1] === "get"
+            ? JSON.stringify({ id: AGENT_ID, result: { workspace: {} } })
+            : command === "herdr" && isAgentList(args)
+              ? JSON.stringify({ id: AGENT_ID, result: { agents: [] } })
+              : command === "herdr" && isApiSnapshot(args)
+                ? JSON.stringify({
+                    id: AGENT_ID,
+                    result: {
+                      snapshot: { agents: [], panes: [], workspaces: [] },
+                    },
+                  })
+                : "{}",
+        stderr: "",
+        code: 0,
+      };
+    },
+    allTools: () =>
+      [
+        ...new Set([
+          ...initialTools,
+          ...(Array.isArray(options.allTools)
+            ? options.allTools.map((tool: any) => tool.name)
+            : []),
+          "read",
+          "bash",
+          "ls",
+          "find",
+          "grep",
+          "foreign_tool",
+          "list_agents",
+          "delegate_agent",
+          "resume_agent",
+          "steer_agent",
+          "interrupt_agent",
+          "reply_agent",
+          "stop_agent",
+          "inspect_agent",
+          "read_agent_transcript",
+          "message_manager",
+          "list_peers",
+          "message_peer",
+          "list_staff",
+          "inspect_staff",
+          "read_staff_transcript",
+          "message_staff",
+          ...fixture.tools.map((tool) => tool.name),
+        ]),
+      ].map((name) => ({ name })),
+  });
+  return fixture;
+}
+
 export function fakePi(
   options: {
     exec?: ExecHandler;

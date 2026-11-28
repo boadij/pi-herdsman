@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { createServer, type Socket } from "node:net";
@@ -5447,24 +5447,27 @@ test("native managed-Agent restore quarantines malformed and conflicting exact-s
   }
 });
 
-test("managed Lead prompt keeps the managed charter with an assigned session", async () => {
+test("managed Lead prompt keeps the managed charter with an assigned session", async (t) => {
+  t.after(setLeadEnvironment);
   setLeadEnvironment();
   const roleDirectory = join(PI_AGENT_ROOT, "coordinators", "leads");
-  realFs.mkdirSync(roleDirectory, { recursive: true });
   const role = join(roleDirectory, "managed-lead.md");
+  t.after(() => realFs.rmSync(role, { force: true }));
+  realFs.mkdirSync(roleDirectory, { recursive: true });
   writeFileSync(role, "---\nname: managed-lead\nagents: [agent]\nbodyMode: append\n---\n");
   process.env.HERDR_SOCKET_PATH = join(tmpdir(), `managed-prompt-${randomUUID()}.sock`);
   const sessionId = randomUUID();
   const repoKey = `managed-prompt-${randomUUID()}`;
   const branch = `managed-prompt-${randomUUID()}`;
   const runtime = supervisionRuntime();
+  t.after(() => removeProjectAssignment(runtime, repoKey, branch));
   writeProjectAssignment(runtime, {
     version: 2,
     id: sessionId,
     repoKey,
     branch,
     text: "managed prompt assigned fixture",
-    checkoutPath: resolve("/tmp"),
+    checkoutPath: testTmpRoot,
   });
   const pi = fakePi({
     activeTools: ["bash"],
@@ -5497,13 +5500,13 @@ test("managed Lead prompt keeps the managed charter with an assigned session", a
             }
           : { stdout: "{}", stderr: "", code: 0 },
   });
-  registerExtension!(pi.pi as never);
-  const context = fakeContext(pi.entries) as any;
+  const context = { ...fakeContext(pi.entries), cwd: testTmpRoot } as any;
   context.sessionManager = {
     ...context.sessionManager,
     getSessionId: () => sessionId,
   };
   try {
+    registerExtension!(pi.pi as never);
     await pi.events.get("session_start")![0](undefined, context);
     assert.equal(pi.pi.getSessionName(), `Lead · ${branch}`);
     assert.ok(pi.pi.getActiveTools().includes("codemode"));
@@ -5560,10 +5563,6 @@ test("managed Lead prompt keeps the managed charter with an assigned session", a
     assert.doesNotMatch(charter, /No active Herdsman role is verified/);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
-    removeProjectAssignment(runtime, repoKey, branch);
-    realFs.rmSync(role, { force: true });
-    delete process.env.HERDR_SOCKET_PATH;
-    setLeadEnvironment();
   }
 });
 
@@ -8273,10 +8272,15 @@ test("periodic health loss reminders do not open transcripts for missing mailbox
   assert.equal(openCalls, 0);
 });
 
-test("registered inspect agent exposes process and recent activity evidence", async () => {
+test("registered inspect agent exposes process and recent activity evidence", async (t) => {
+  t.after(setLeadEnvironment);
   setLeadEnvironment();
   const label = "inspect-agent";
-  const identity = recoveryIdentity(label);
+  const identity = {
+    ...recoveryIdentity(label),
+    piSessionFile: join(testTmpRoot, `${label}-agent.jsonl`),
+  };
+  t.after(() => realFs.rmSync(identity.piSessionFile, { force: true }));
   realFs.writeFileSync(
     identity.piSessionFile,
     [
@@ -8285,7 +8289,7 @@ test("registered inspect agent exposes process and recent activity evidence", as
         version: 3,
         id: identity.piSessionId,
         timestamp: new Date().toISOString(),
-        cwd: "/tmp",
+        cwd: testTmpRoot,
       }),
       JSON.stringify({
         type: "custom",
@@ -8296,7 +8300,8 @@ test("registered inspect agent exposes process and recent activity evidence", as
     "utf8",
   );
   const mailbox = agentMailboxPath(WORKSPACE, label);
-  const state = managedState(label, undefined, identity);
+  const state = { ...managedState(label, undefined, identity), cwd: testTmpRoot };
+  t.after(() => resetAgentMailbox(mailbox));
   writeAgentState(mailbox, state);
   const baseExec = agentControllerExecutor(state);
   const pi = fakePi({
@@ -8335,11 +8340,11 @@ test("registered inspect agent exposes process and recent activity evidence", as
       return baseExec(command, args, options);
     },
   });
-  registerExtension!(pi.pi as never);
-  const context = fakeContext() as any;
-  const tool = pi.tools.find((candidate) => candidate.name === "inspect_agent");
-  assert.ok(tool);
+  const context = { ...fakeContext(), cwd: testTmpRoot };
   try {
+    registerExtension!(pi.pi as never);
+    const tool = pi.tools.find((candidate) => candidate.name === "inspect_agent");
+    assert.ok(tool);
     const result = await tool.execute(
       "inspect-fixture",
       { agent: label },
@@ -8366,9 +8371,6 @@ test("registered inspect agent exposes process and recent activity evidence", as
     assert.match(expanded.text, /unique-inspect-marker/);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
-    resetAgentMailbox(mailbox);
-    realFs.rmSync(identity.piSessionFile, { force: true });
-    setLeadEnvironment();
   }
 });
 
