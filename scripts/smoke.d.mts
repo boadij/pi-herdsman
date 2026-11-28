@@ -684,6 +684,23 @@ export function assertContinuationFauxEvidence(
   sessionId: string,
   pids: readonly number[],
 ): void;
+export function continuationExecutionEvidence(
+  sessionStarts: readonly OpenRecord[],
+  provenance: readonly OpenRecord[],
+  sessionId: string,
+  paneId: string,
+  foregroundProcesses: readonly OpenRecord[],
+  expectedPiVersion: string,
+): {
+  startObserved: boolean;
+  providerObserved: boolean;
+  start?: OpenRecord;
+  execution?: { paneId: string; pid: number; sessionId: string; piVersion: string };
+};
+export function smokeMailboxMatchesIdentity(
+  state: OpenRecord,
+  identity: { ownerSessionId: string; piSessionId: string; requestId: string },
+): boolean;
 export function rootFailureProvenance(
   contents: string,
   sessionId: string,
@@ -894,6 +911,8 @@ export function sanitizedFailureEvidence(
   outcome: string;
   stage: unknown;
   errorCode: string | undefined;
+  ownedAgentReadiness?: OpenRecord;
+  continuationGenerationReadiness?: OpenRecord;
   lastVerified: unknown;
   processesVerified: boolean;
   sessionStartObserved: boolean;

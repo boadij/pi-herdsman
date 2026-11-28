@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  correlatedOwnedAgentQuestion,
   chiefManagerSuccessEvidence,
   matchesChiefManagerHandoff,
   ownedAgentReadinessEvidence,
@@ -55,11 +56,12 @@ test("Manager success evidence is bounded and excludes correlation identifiers",
   );
 });
 
-test("owned Agent readiness evidence contains only prerequisite booleans", () => {
+test("owned Agent readiness evidence is bounded and omits private identity", () => {
   const evidence = ownedAgentReadinessEvidence({
-    activeMailboxRequestPresent: true,
-    positiveChildPidPresent: false,
-    expectedAwaitOwnerPresent: true,
+    assignmentAccepted: true,
+    exactMailboxObserved: true,
+    waitingToolResult: "rejected",
+    terminalOutcome: "failed",
     pid: 421,
     mailboxId: "private-mailbox-id",
     sessionId: "private-session-id",
@@ -67,19 +69,22 @@ test("owned Agent readiness evidence contains only prerequisite booleans", () =>
     path: "/private/session/path",
   });
 
-  assert.deepEqual(evidence, {
-    activeMailboxRequestPresent: true,
-    positiveChildPidPresent: false,
-    expectedAwaitOwnerPresent: true,
-  });
-  assert.ok(Object.values(evidence).every((value) => typeof value === "boolean"));
+  assert.equal(evidence.assignmentAccepted, true);
+  assert.equal(evidence.exactMailboxObserved, true);
+  assert.equal(evidence.waitingToolResult, "rejected");
+  assert.equal(evidence.terminalOutcome, "failed");
+  assert.ok(
+    Object.values(evidence).every(
+      (value) => typeof value === "boolean" || typeof value === "string",
+    ),
+  );
   assert.doesNotMatch(JSON.stringify(evidence), /private|421|\//u);
 });
 
-test("non-leaf Agent readiness evidence contains only its two prerequisites", () => {
+test("non-leaf Agent readiness evidence projects nested assignment state", () => {
   const evidence = ownedAgentReadinessEvidence({
-    activeMailboxRequestPresent: true,
-    positiveChildPidPresent: false,
+    assignmentAccepted: true,
+    nestedAssignment: "accepted",
     pid: 421,
     mailboxId: "private-mailbox-id",
     sessionId: "private-session-id",
@@ -87,10 +92,113 @@ test("non-leaf Agent readiness evidence contains only its two prerequisites", ()
     path: "/private/session/path",
   });
 
-  assert.deepEqual(evidence, {
-    activeMailboxRequestPresent: true,
-    positiveChildPidPresent: false,
-  });
-  assert.ok(Object.values(evidence).every((value) => typeof value === "boolean"));
+  assert.equal(evidence.assignmentAccepted, true);
+  assert.equal(evidence.nestedAssignment, "accepted");
   assert.doesNotMatch(JSON.stringify(evidence), /private|421|\//u);
+});
+
+test("owned Agent waiting requires correlated successful question, state, and ask evidence", () => {
+  const identity = {
+    ownerSessionId: "owner",
+    piSessionId: "child",
+    requestId: "request-current",
+  };
+  const state = {
+    runId: "run",
+    pendingAskId: "ask-current",
+    workspaceId: "workspace",
+    agentLabel: "smoke-chief-agent",
+    paneId: "pane",
+  };
+  const ask = {
+    version: 5,
+    askId: "ask-current",
+    requestId: "request-current",
+    runId: "run",
+    ownerSessionId: "owner",
+    piSessionId: "child",
+    workspaceId: "workspace",
+    agentLabel: "smoke-chief-agent",
+    paneId: "pane",
+    question: "CHIEF_MANAGER_SMOKE_AGENT_PENDING",
+  };
+  const call = {
+    type: "message",
+    message: {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call-1",
+          name: "await_owner",
+          arguments: { question: ask.question },
+        },
+      ],
+    },
+  };
+  const result = {
+    type: "message",
+    message: {
+      role: "toolResult",
+      toolName: "await_owner",
+      toolCallId: "call-1",
+      isError: false,
+      details: { askId: "ask-current", assignmentRequestId: "request-current" },
+    },
+  };
+  assert.equal(correlatedOwnedAgentQuestion([call], identity, state, ask).status, "pending");
+  assert.equal(
+    correlatedOwnedAgentQuestion(
+      [call, { ...result, message: { ...result.message, isError: true } }],
+      identity,
+      state,
+      ask,
+    ).status,
+    "rejected",
+  );
+  assert.equal(
+    correlatedOwnedAgentQuestion(
+      [call, result],
+      identity,
+      { ...state, pendingAskId: undefined },
+      ask,
+    ).status,
+    "mismatch",
+  );
+  assert.equal(
+    correlatedOwnedAgentQuestion(
+      [
+        call,
+        {
+          ...result,
+          message: {
+            ...result.message,
+            details: { ...result.message.details, assignmentRequestId: "old" },
+          },
+        },
+      ],
+      identity,
+      state,
+      ask,
+    ).status,
+    "mismatch",
+  );
+  assert.equal(
+    correlatedOwnedAgentQuestion([call, result], identity, state, ask).status,
+    "success",
+  );
+  const historical = [
+    call,
+    result,
+    { type: "message", message: { role: "assistant", stopReason: "stop" } },
+  ];
+  assert.equal(
+    correlatedOwnedAgentQuestion(
+      historical,
+      identity,
+      { ...state, activeRequestId: undefined, pendingAskId: undefined },
+      ask,
+    ).status,
+    "mismatch",
+  );
 });

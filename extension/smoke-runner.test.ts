@@ -72,6 +72,7 @@ import {
   managerChildSessionEvidence,
   initialPromptForScenario,
   inspectPaneProcesses,
+  smokeMailboxMatchesIdentity,
   isolatedEnv,
   isPackageReadPath,
   listedPanes,
@@ -136,6 +137,7 @@ import {
   terminalFailureEvidence,
   matchPiProvenance,
   assertContinuationFauxEvidence,
+  continuationExecutionEvidence,
   managerHandoffLeadProcessProof,
   prepareManagerRepository,
   assertManagerFreshPrimary,
@@ -6027,17 +6029,22 @@ test("continuation first-generation stalls if completed child retires before obs
     120_000,
   );
   await assert.rejects(
-    run({ repoRoot: ".", rootPaneId: "fixture-root", initialPrompt: prompt }),
+    run({
+      repoRoot: ".",
+      rootPaneId: "fixture-root",
+      initialPrompt: prompt,
+      paths: { piAgent: "." },
+    }),
     (error) => {
-      assertSmokeError(error);
-      assert.equal(error.code, "SMOKE_STALLED");
-      assert.equal(error.smoke.stage, "continuation-first-generation");
-      assert.deepEqual(error.smoke.lastProgress, {
-        childCount: 0,
-        sessionId: null,
-        sessionBytes: 0,
-        candidatePids: [],
-      });
+      const smokeError = error as {
+        code?: string;
+        stack?: string;
+        smoke?: { stage?: string; lastProgress?: Record<string, unknown> };
+      };
+      assert.equal(smokeError.code, "SMOKE_STALLED", String(smokeError.stack ?? error));
+      assert.equal(smokeError.smoke?.stage, "continuation-first-generation");
+      assert.equal(smokeError.smoke?.lastProgress?.childCount, 0);
+      assert.equal(smokeError.smoke?.lastProgress?.executionObserved, false);
       return true;
     },
   );
@@ -6080,11 +6087,20 @@ test("simulated continuation releases completion only after full live evidence",
       "tryNestedCommand",
       "isolatedSessionDetails",
       "candidateProcess",
+      "matchPiProvenance",
+      "continuationExecutionEvidence",
       "writeFile",
       "MODEL_STALL_MS",
       `return (${exactFunction});`,
     )(
-      async () => '{"name":"pi-herdsman"}',
+      async (path: string) => {
+        if (path.endsWith("package.json")) return '{"name":"pi-herdsman"}';
+        if (path.endsWith("smoke-faux-session-start.jsonl") && inspection === 2)
+          return '{"sessionId":"fixture","pid":123}\n';
+        if (path.endsWith("smoke-faux-provenance.jsonl") && inspection === 2)
+          return '{"sessionId":"fixture","pid":123,"packageName":"@earendil-works/pi-coding-agent","piVersion":"1.2.0","model":"continuation","hasAgentDefinitions":true}\n';
+        return "";
+      },
       join,
       async (
         _ctx: unknown,
@@ -6114,7 +6130,9 @@ test("simulated continuation releases completion only after full live evidence",
         value: args[0] === "agent" ? { agents: [{ pane_id: "child" }] } : {},
       }),
       async () => (inspection === 0 ? undefined : { id: "fixture", contents: "saved" }),
-      () => (inspection === 2 ? [{ pid: 123 }] : []),
+      () => [{ pid: 123 }],
+      matchPiProvenance,
+      continuationExecutionEvidence,
       writeFile,
       120_000,
     );
@@ -6124,6 +6142,7 @@ test("simulated continuation releases completion only after full live evidence",
         simulated: true,
         paths: { piAgent: directory },
         rootPaneId: "root",
+        expectedPiVersion: "1.2.0",
       }),
       (error) => error === stop,
     );
@@ -6135,7 +6154,8 @@ test("simulated continuation releases completion only after full live evidence",
 });
 
 test("continuation completion wait tears down on abort, timeout, and filesystem failure", async (t) => {
-  const { waitForContinuationObservation } = await import("../scripts/smoke-faux.mjs");
+  const { waitForContinuationObservation, waitForContinuationSecondObservation } =
+    await import("../scripts/smoke-faux.mjs");
   const directory = await mkdtemp(join(tmpdir(), "smoke-continuation-abort-"));
   try {
     const controller = new AbortController();
@@ -6160,6 +6180,20 @@ test("continuation completion wait tears down on abort, timeout, and filesystem 
     t.mock.timers.reset();
     await writeFile(join(directory, "continuation-first-observed"), "observed\n");
     await waitForContinuationObservation(directory);
+    const secondAborted = assert.rejects(
+      waitForContinuationSecondObservation(directory, controller.signal),
+      { name: "AbortError" },
+    );
+    controller.abort();
+    await secondAborted;
+    await writeFile(join(directory, "continuation-second-observed"), "observed\n");
+    await waitForContinuationSecondObservation(directory);
+    const source = await readFile(new URL("../scripts/smoke-faux.mjs", import.meta.url), "utf8");
+    assert.match(
+      source,
+      /text\(lastUser\(context\.messages\)\)\.includes\("SMOKE_CONTINUATION_SECOND:"\)/,
+    );
+    assert.match(source, /"continuation-second-observed"/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -6524,6 +6558,84 @@ test("continuation requires configured faux extension and provider evidence for 
   );
 });
 
+test("continuation selects the provenance-backed new generation, never a launcher candidate", () => {
+  const sessionId = "saved-session";
+  const makeRecord = (pid: number) => ({
+    sessionId,
+    pid,
+    packageName: "@earendil-works/pi-coding-agent",
+    piVersion: "1.7.0",
+    model: "continuation",
+    hasAgentDefinitions: true,
+  });
+  const starts = [
+    { sessionId, pid: 101 },
+    { sessionId, pid: 202 },
+  ];
+  const provenance = [makeRecord(101), makeRecord(202)];
+  const observed = continuationExecutionEvidence(
+    starts.slice(1),
+    provenance,
+    sessionId,
+    "resumed-pane",
+    [{ pid: 202 }],
+    "1.7.0",
+  );
+  assert.deepEqual(observed.execution, {
+    paneId: "resumed-pane",
+    pid: 202,
+    sessionId,
+    piVersion: "1.7.0",
+  });
+  assert.equal(
+    continuationExecutionEvidence(
+      [starts[1]],
+      [],
+      sessionId,
+      "resumed-pane",
+      [{ pid: 202 }],
+      "1.7.0",
+    ).providerObserved,
+    false,
+  );
+  assert.throws(
+    () =>
+      continuationExecutionEvidence(
+        starts,
+        provenance,
+        sessionId,
+        "resumed-pane",
+        [{ pid: 101 }, { pid: 202 }],
+        "1.7.0",
+      ),
+    /ambiguous/,
+  );
+  assert.throws(
+    () =>
+      continuationExecutionEvidence(
+        [starts[1]],
+        [makeRecord(202), makeRecord(202)],
+        sessionId,
+        "resumed-pane",
+        [{ pid: 202 }],
+        "1.7.0",
+      ),
+    /ambiguous/,
+  );
+  assert.throws(
+    () =>
+      continuationExecutionEvidence(
+        [starts[1]],
+        provenance,
+        sessionId,
+        "resumed-pane",
+        [{ pid: 202 }, { pid: 303 }],
+        "1.7.0",
+      ),
+    /conflicting Pi processes/,
+  );
+});
+
 test("continuation provider evidence wait polls until the second-generation request is recorded", async () => {
   const ctx: { stage?: string } = {};
   const sessionId = "saved-session";
@@ -6569,7 +6681,7 @@ test("active-stop preflights startup and verifies interactive stop cleanup", asy
   const source = await readFile(new URL("../scripts/smoke.mjs", import.meta.url), "utf8");
   const manager = source.indexOf("async function runManagerRecoverySmoke");
   const active = source.indexOf("async function runActiveStopSmoke");
-  const next = source.indexOf("async function runChiefTreeSmoke");
+  const next = source.indexOf("async function runChiefManagerSmoke");
   assert.ok(
     manager >= 0 && manager < active && active < next,
     "active-stop must preserve manager continuation source-extraction boundary",
@@ -6941,6 +7053,107 @@ test("core failure retains only unique root-session provenance", () => {
   );
   assert.deepEqual(evidence.rootProvenance, proof);
   assert.doesNotMatch(JSON.stringify(evidence), /PRIVATE_TOKEN/u);
+});
+
+test("owned-Agent and continuation failures retain sanitized readiness at each stage", () => {
+  const privateReadiness = {
+    assignmentAccepted: true,
+    childSessionObserved: true,
+    exactMailboxObserved: false,
+    activeRequestMatched: false,
+    sessionStartObserved: true,
+    providerRequestObserved: false,
+    exactProcessObserved: false,
+    waitingToolResult: "rejected",
+    pendingQuestionMatched: false,
+    nestedAssignment: "pending",
+    terminalOutcome: "not_observed",
+    sessionId: "private-session-id",
+    requestId: "private-request-id",
+    path: "/private/session/path",
+    error: "arbitrary private tool error",
+  };
+  for (const stage of [
+    "chief-manager-smoke-chief-agent",
+    "chief-manager-smoke-first-agent",
+    "chief-manager-smoke-nested-agent",
+    "chief-manager-smoke-second-agent",
+  ]) {
+    const evidence = sanitizedFailureEvidence(
+      { scenario: "chief-manager", ownedAgentReadiness: privateReadiness },
+      { error: { smoke: { stage, lastEvidence: privateReadiness } } },
+      "EVIDENCE_FAIL",
+      "PASS",
+    );
+    assert.ok(evidence.ownedAgentReadiness);
+    assert.equal(evidence.ownedAgentReadiness.exactMailboxObserved, false);
+    assert.equal(evidence.ownedAgentReadiness.waitingToolResult, "rejected");
+    assert.equal(evidence.ownedAgentReadiness.nestedAssignment, "pending");
+    assert.doesNotMatch(
+      JSON.stringify(evidence),
+      /private-session|private-request|private\/session|arbitrary private/,
+    );
+  }
+  const missingOwnedSmoke = sanitizedFailureEvidence(
+    { scenario: "chief-manager", stage: "chief-manager-smoke-second-agent" },
+    { error: { code: "SMOKE_STALLED" } },
+    "STALLED",
+    "PASS",
+  );
+  assert.deepEqual(missingOwnedSmoke.ownedAgentReadiness, {
+    assignmentAccepted: false,
+    childSessionObserved: false,
+    exactMailboxObserved: false,
+    activeRequestMatched: false,
+    herdrRegistrationObserved: false,
+    sessionStartObserved: false,
+    providerRequestObserved: false,
+    exactProcessObserved: false,
+    waitingToolResult: "not_observed",
+    questionMismatch: "not_observed",
+    pendingQuestionMatched: false,
+    nestedAssignment: "not_observed",
+    terminalOutcome: "not_observed",
+  });
+  const continuation = sanitizedFailureEvidence(
+    { scenario: "continuation" },
+    {
+      error: {
+        smoke: {
+          stage: "continuation-second-generation",
+          lastProgress: {
+            matchingSessionSeen: true,
+            sessionStartObserved: true,
+            providerRequestObserved: false,
+            exactProcessObserved: false,
+            pid: 421,
+            path: "/private/session/path",
+          },
+        },
+      },
+    },
+    "STALLED",
+    "PASS",
+  );
+  assert.deepEqual(continuation.continuationGenerationReadiness, {
+    sessionObserved: true,
+    sessionStartObserved: true,
+    providerRequestObserved: false,
+    exactProcessObserved: false,
+  });
+  assert.doesNotMatch(JSON.stringify(continuation), /421|private\/session/);
+  const missingSmoke = sanitizedFailureEvidence(
+    { scenario: "continuation", stage: "continuation-second-generation" },
+    { error: { code: "SMOKE_STALLED" } },
+    "STALLED",
+    "PASS",
+  );
+  assert.deepEqual(missingSmoke.continuationGenerationReadiness, {
+    sessionObserved: false,
+    sessionStartObserved: false,
+    providerRequestObserved: false,
+    exactProcessObserved: false,
+  });
 });
 
 test("Pi provenance requires the exact pinned version and reports the observed version", () => {
@@ -7319,7 +7532,7 @@ test("provenance uses retained foreground PID evidence when a pane later disappe
           foreground_processes: [
             {
               pid: 52,
-              argv: ["node", "--extension", "/candidate.js", "--extension", "/herdr.js"],
+              argv: worktreePiCommand(["--extension", "/candidate.js", "--extension", "/herdr.js"]),
             },
           ],
         },
@@ -8893,7 +9106,7 @@ test("terminal-failure retains the assigned Lead PID while its pane is live", as
           foreground_processes: [
             {
               pid: 91,
-              argv: ["node", "--extension", "/candidate.js", "--extension", "/herdr.js"],
+              argv: worktreePiCommand(["--extension", "/candidate.js", "--extension", "/herdr.js"]),
             },
           ],
         },
@@ -9971,6 +10184,116 @@ test("core counts distinct non-root pane/PID processes with both extension paths
   assert.equal(result.verified[0].parentPid, 7);
   assert.ok(
     result.verified.every((record) => !("identity" in record) && !("definition" in record)),
+  );
+});
+
+test("process matching rejects Herdr launchers and arbitrary Node scripts", async () => {
+  const candidate = "/candidate/dist/index.js";
+  const integration = "/isolated/herdr-agent-state.ts";
+  const nodePi = worktreePiCommand(["--extension", candidate, "--extension", integration]);
+  const result = await inspectPaneProcesses(
+    ["child"],
+    "root",
+    async () => ({
+      process_info: {
+        foreground_processes: [
+          {
+            pid: 101,
+            name: "pi",
+            argv: ["pi", "--extension", candidate, "--extension", integration],
+          },
+          {
+            pid: 102,
+            name: "herdr",
+            argv: [
+              "herdr",
+              "agent",
+              "start",
+              "--",
+              "pi",
+              "--extension",
+              candidate,
+              "--extension",
+              integration,
+            ],
+          },
+          {
+            pid: 103,
+            name: "node",
+            argv: [
+              process.execPath,
+              "/tmp/arbitrary.js",
+              "--extension",
+              candidate,
+              "--extension",
+              integration,
+            ],
+          },
+          { pid: 104, name: "node", argv: nodePi },
+          {
+            pid: 105,
+            name: "herdr",
+            cmdline: `herdr agent start -- pi --extension ${candidate} --extension ${integration}`,
+          },
+          {
+            pid: 108,
+            name: "herdr",
+            argv: ["pi", "--extension", candidate, "--extension", integration],
+          },
+          {
+            pid: 106,
+            name: "node",
+            cmdline: `${process.execPath} ${nodePi[1]} --extension ${candidate} --extension ${integration}`,
+          },
+          {
+            pid: 107,
+            name: "node",
+            cmdline: `${process.execPath} /tmp/not-pi.js --extension ${candidate} --extension ${integration}`,
+          },
+        ],
+      },
+    }),
+    candidate,
+    integration,
+  );
+
+  assert.deepEqual(
+    result.verified.map(({ pid }) => pid),
+    [101, 104, 106],
+  );
+});
+
+test("mailbox identity matches exact owner, child session, and assignment, not label", () => {
+  const identity = {
+    ownerSessionId: "owner-current",
+    piSessionId: "child-current",
+    requestId: "00000000-0000-4000-8000-000000000001",
+  };
+  const exact = {
+    ownerSessionId: "owner-current",
+    piSessionId: "child-current",
+    activeRequestId: identity.requestId,
+    agentLabel: "same-label",
+  };
+  assert.equal(smokeMailboxMatchesIdentity(exact, identity), true);
+  assert.equal(
+    smokeMailboxMatchesIdentity({ ...exact, piSessionId: "other-child" }, identity),
+    false,
+  );
+  assert.equal(
+    smokeMailboxMatchesIdentity({ ...exact, ownerSessionId: "other-owner" }, identity),
+    false,
+  );
+  assert.equal(
+    smokeMailboxMatchesIdentity({ ...exact, activeRequestId: "other-request" }, identity),
+    false,
+  );
+  assert.equal(
+    [exact, { ...exact, agentLabel: "same-label" }].filter((state) =>
+      smokeMailboxMatchesIdentity(state, identity),
+    ).length,
+    2,
+    "ambiguous exact mailbox matches must remain visible for rejection",
   );
 });
 
