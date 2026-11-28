@@ -646,19 +646,26 @@ export async function runTestRunner(
   clearTimeout(timeoutId);
 }
 
-export async function runCheck(mode = "check") {
-  if (mode !== "check")
-    return {
-      ok: false,
-      kind: "usage",
-      diagnostic: `check: unknown mode ${mode}`,
-    };
+export async function runCheck(args = []) {
+  if (args.length > 0) {
+    const match =
+      args.length === 1 && /^--test-shard=([1-9]\d*)\/([1-9]\d*)(?![\s\S])/.exec(args[0]);
+    const index = Number(match ? match[1] : NaN);
+    const total = Number(match ? match[2] : NaN);
+    if (!Number.isSafeInteger(index) || !Number.isSafeInteger(total) || index > total) {
+      return {
+        ok: false,
+        kind: "usage",
+        diagnostic: "check: expected optional --test-shard=index/total",
+      };
+    }
+  }
   const deadline = Date.now() + CHECK_TIMEOUT_MS;
-  return runTestRunner(testRunnerArgs, deadline);
+  return runTestRunner([...testRunnerArgs, ...args], deadline);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
-  const result = await runCheck();
+  const result = await runCheck(process.argv.slice(2));
   if (!result.ok) {
     if (result.workerDiagnostic) console.error(result.workerDiagnostic);
     console.error(result.diagnostic);

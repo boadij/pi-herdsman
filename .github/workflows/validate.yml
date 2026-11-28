@@ -66,12 +66,24 @@ jobs:
       - run: npm run format:check
 
   validate:
+    name: validate (${{ matrix.os }}${{ matrix.shard && format(', shard {0}', matrix.shard) || '' }})
     needs: scope
     if: ${{ needs.scope.outputs.tests == 'true' }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            shard: ""
+          - os: macos-latest
+            shard: ""
+          - os: windows-latest
+            shard: "1/2"
+          - os: windows-latest
+            shard: "2/2"
+          # Temporary required baseline for the same-revision benchmark.
+          - os: windows-latest
+            shard: ""
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -81,9 +93,12 @@ jobs:
           package-manager-cache: false
       - run: npm ci
       - name: Isolated Windows check-runner tests (temporary)
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-latest' && matrix.shard == '1/2'
         run: npm test -- --test-timeout=20000 --test-name-pattern="^(Windows PowerShell classifier distinguishes sanitized worker path reasons|Windows targeted CIM query identifies and cleans its exact test child)$" extension/check-runner.test.ts
-      - run: npm run check
+      - if: matrix.shard == ''
+        run: npm run check
+      - if: matrix.shard != ''
+        run: npm run check -- --test-shard=${{ matrix.shard }}
 
   windows-bootstrap:
     name: Windows bootstrap acceptance

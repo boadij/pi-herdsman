@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 import {
   CHECK_TIMEOUT_MS,
   WORKER_SNAPSHOT_AT_MS,
+  runCheck,
   runTestRunner,
   snapshotWindowsTestWorkers,
   windowsTestFileClassifierScript,
@@ -77,6 +78,27 @@ function childIsRunning(pid: number): boolean {
 
 test("check suite deadline is six minutes on every platform", () => {
   assert.equal(CHECK_TIMEOUT_MS, 360_000);
+});
+
+test("bounded check rejects invalid shard selection and test filtering", async () => {
+  for (const args of [
+    ["--test-shard=0/2"],
+    ["--test-shard=3/2"],
+    ["--test-shard=1/0"],
+    ["--test-shard=01/2"],
+    ["--test-shard=invalid"],
+    ["--test-shard=1/2\n"],
+    ["--test-shard=9007199254740992/9007199254740992"],
+    ["--test-shard=1/9007199254740992"],
+    ["--test-shard=1/2", "--test-shard=2/2"],
+    ["--test-name-pattern=example"],
+    ["extension/core.test.ts"],
+    ["--test-shard=1/2", "--test-name-pattern=example"],
+  ]) {
+    const result = await runCheck(args);
+    assert.equal(result.ok, false, JSON.stringify(args));
+    assert.equal(result.kind, "usage", JSON.stringify(args));
+  }
 });
 
 test("check progress ignores a forwarded completion matching the file event shape", async () => {
