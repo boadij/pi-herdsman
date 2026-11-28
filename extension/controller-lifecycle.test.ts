@@ -1588,24 +1588,25 @@ test("delegation only forces offline mode without an explicit npm extension", as
     setLeadEnvironment();
     const parent = {
       ...managedState(`extension-launch-parent-${definition}`),
+      cwd: testTmpRoot,
       paneId: `extension-launch-parent-${definition}-pane`,
     };
     const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
-    resetAgentMailbox(parentMailbox);
-    writeAgentState(parentMailbox, parent);
-    registerNativeAgentSession(parent);
-    process.env.HERDR_PANE_ID = parent.paneId;
-    const lifecycle = delegatedLifecycleExecutor(parent, [], "/tmp", {
+    const lifecycle = delegatedLifecycleExecutor(parent, [], testTmpRoot, {
       paneId: parent.paneId,
       tabId: "delegated-tab",
     });
     const pi = fakePi({ exec: lifecycle.exec });
-    registerExtension!(pi.pi as never);
-    const context = fakeContext();
+    const context = { ...fakeContext(), cwd: testTmpRoot };
     const label = `extension-launch-${definition}`;
     const childMailbox = agentMailboxPath(WORKSPACE, label);
-    resetAgentMailbox(childMailbox);
     try {
+      resetAgentMailbox(parentMailbox);
+      writeAgentState(parentMailbox, parent);
+      registerNativeAgentSession(parent);
+      process.env.HERDR_PANE_ID = parent.paneId;
+      resetAgentMailbox(childMailbox);
+      registerExtension!(pi.pi as never);
       await pi.events.get("session_start")![0](undefined, context);
       const result = await registeredAgentTool(pi, "delegate").execute(
         `start-${label}`,
@@ -2287,8 +2288,9 @@ test("ordinary Lead task ancestry presents only the direct owner and isolates si
   assert.doesNotMatch(largeChild.text, /large owner task/);
 });
 
-test("nested managed-Agent delegation publishes inherited and local evidence as child requirements", async () => {
+test("nested managed-Agent delegation publishes inherited and local evidence as child requirements", async (t) => {
   const label = `evidence-parent-${randomUUID().slice(0, 8)}`;
+  t.after(setLeadEnvironment);
   setAgentEnvironment(label, ["agent"]);
   const projectAssignmentId = LEAD_SESSION_ID;
   const socket = join(tmpdir(), `nested-project-authority-${randomUUID()}.sock`);
@@ -2300,6 +2302,10 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
     "later-project.md",
     "project requirement not accepted by parent",
   );
+  t.after(() => {
+    removeProjectAssignment(projectRuntime, "repo-key", projectBranch);
+    realFs.rmSync(laterProjectRequirement.path, { force: true });
+  });
   writeProjectAssignment(projectRuntime, {
     version: 2,
     id: projectAssignmentId,
@@ -2314,23 +2320,29 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
     "plan.md",
     "parent plan body",
   );
+  t.after(() => realFs.rmSync(inherited.path, { force: true }));
   const local = persistRequiredEvidenceSnapshot(
     projectAssignmentId,
     "review.md",
     "parent review body",
   );
-  // Session startup cleans testTmpRoot; keep this source outside it.
-  const retainedFile = join("/tmp", `agent-local-${randomUUID()}.md`);
+  t.after(() => realFs.rmSync(local.path, { force: true }));
+  // Session startup cleans testTmpRoot; keep the retained sources outside it.
+  const retainedDir = realFs.mkdtempSync(join(PI_AGENT_ROOT, "retained-evidence-"));
+  t.after(() => realFs.rmSync(retainedDir, { recursive: true, force: true }));
+  const retainedFile = join(retainedDir, `agent-local-${randomUUID()}.md`);
   realFs.writeFileSync(retainedFile, "agent-local reviewer note");
-  const retainedFileAfterResult = join("/tmp", `agent-local-after-result-${randomUUID()}.md`);
+  const retainedFileAfterResult = join(retainedDir, `agent-local-after-result-${randomUUID()}.md`);
   realFs.writeFileSync(retainedFileAfterResult, "agent-local note after result");
   const resultCanonicalRef = resultRef(randomUUID());
   const resultSemanticRef = "result:reviewer#2";
   const resultArtifact = resultPath(resultCanonicalRef.slice("result:".length));
+  t.after(() => realFs.rmSync(resultArtifact, { force: true }));
   realFs.mkdirSync(resolve(resultArtifact, ".."), { recursive: true });
   realFs.writeFileSync(resultArtifact, "interleaved result content");
   const acceptedResultCanonicalRef = resultRef(randomUUID());
   const acceptedResultArtifact = resultPath(acceptedResultCanonicalRef.slice("result:".length));
+  t.after(() => realFs.rmSync(acceptedResultArtifact, { force: true }));
   realFs.mkdirSync(resolve(acceptedResultArtifact, ".."), { recursive: true });
   realFs.writeFileSync(acceptedResultArtifact, "already accepted result");
   const acceptedResult = {
@@ -2343,14 +2355,18 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
   } as const;
   const parent = {
     ...managedState(label, parentRequestId),
+    cwd: testTmpRoot,
     projectAssignmentId,
   };
-  realFs.writeFileSync(
-    join(PI_AGENTS_DIR, "parent.md"),
-    '---\nname: parent\nagents: ["agent"]\n---\nparent\n',
-  );
+  const parentDefinition = join(PI_AGENTS_DIR, "parent.md");
+  t.after(() => realFs.rmSync(parentDefinition, { force: true }));
+  realFs.writeFileSync(parentDefinition, '---\nname: parent\nagents: ["agent"]\n---\nparent\n');
   const parentMailbox = agentMailboxPath(WORKSPACE, label);
   let childMailbox = agentMailboxPath(WORKSPACE, "agent");
+  t.after(() => {
+    resetAgentMailbox(parentMailbox);
+    resetAgentMailbox(childMailbox);
+  });
   resetAgentMailbox(parentMailbox);
   resetAgentMailbox(childMailbox);
   writeAgentState(parentMailbox, parent);
@@ -2365,7 +2381,7 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
     PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS: JSON.stringify(["agent"]),
     HERDR_PANE_ID: parent.paneId,
   });
-  const lifecycle = delegatedLifecycleExecutor(parent);
+  const lifecycle = delegatedLifecycleExecutor(parent, [], testTmpRoot);
   const captured: {
     published: RequestRecord | undefined;
     stopConsumer: ReturnType<typeof consumeMailboxRequest> | undefined;
@@ -2457,14 +2473,14 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
       },
     },
   ];
-  const context = fakeAgentContext(contextEntries);
+  const context = { ...fakeAgentContext(contextEntries), cwd: testTmpRoot };
   const appendEntry = pi.pi.appendEntry.bind(pi.pi);
   pi.pi.appendEntry = ((customType: string, data: unknown) => {
     appendEntry(customType, data);
     contextEntries.push({ type: "custom", customType, data });
   }) as typeof pi.pi.appendEntry;
-  registerExtension!(pi.pi as never);
   try {
+    registerExtension!(pi.pi as never);
     for (const handler of pi.events.get("session_start") ?? []) await handler(undefined, context);
     const nestedDelegate = pi.tools.find((tool) => tool.name === "delegate_agent")!;
     assert.ok(nestedDelegate.parameters.properties.retain);
@@ -2570,11 +2586,11 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
     realFs.rmSync(resultArtifact, { force: true });
 
     const retainedBeforeAcceptedResult = join(
-      "/tmp",
+      retainedDir,
       `agent-local-before-existing-result-${randomUUID()}.md`,
     );
     const retainedAfterAcceptedResult = join(
-      "/tmp",
+      retainedDir,
       `agent-local-after-existing-result-${randomUUID()}.md`,
     );
     realFs.writeFileSync(retainedBeforeAcceptedResult, "text before accepted result");
@@ -2706,15 +2722,6 @@ test("nested managed-Agent delegation publishes inherited and local evidence as 
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     getStopConsumer()?.();
-    resetAgentMailbox(parentMailbox);
-    resetAgentMailbox(childMailbox);
-    realFs.rmSync(inherited.path, { force: true });
-    realFs.rmSync(local.path, { force: true });
-    realFs.rmSync(laterProjectRequirement.path, { force: true });
-    realFs.rmSync(retainedFile, { force: true });
-    realFs.rmSync(join(PI_AGENTS_DIR, "parent.md"), { force: true });
-    removeProjectAssignment(projectRuntime, "repo-key", projectBranch);
-    delete process.env.HERDR_SOCKET_PATH;
   }
 });
 
