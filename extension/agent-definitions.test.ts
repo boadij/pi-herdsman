@@ -71,10 +71,7 @@ import {
 } from "./agent-definitions.ts";
 import { registerSkillLoader } from "./skill-loader.ts";
 
-function discoverRoleDefinition(
-  name: string,
-  options?: Parameters<typeof resolveDefinition>[2],
-) {
+function discoverRoleDefinition(name: string, options?: Parameters<typeof resolveDefinition>[2]) {
   return resolveDefinition(
     name === "manager" ? "manager" : name === "chief" ? "chief" : "lead",
     name,
@@ -131,8 +128,7 @@ test("bundled definition bodies do not prescribe coordination APIs", () => {
   const contractPattern = new RegExp(
     `\\b(?:${contractToolNames.join("|")})\\b|\\.files\\b|retain:\\s*(?:true|false)`,
   );
-  for (const { name, body } of definitions)
-    assert.doesNotMatch(body, contractPattern, name);
+  for (const { name, body } of definitions) assert.doesNotMatch(body, contractPattern, name);
 });
 
 test("parses scalar frontmatter fields and applies defaults", () => {
@@ -146,32 +142,23 @@ test("parses scalar frontmatter fields and applies defaults", () => {
   });
   assert.equal(definition.body, "Prompt");
   assert.deepEqual(
-    discoverAgentDefinitionsWithContents(
-      "---\nname: custom\nenabled: false\n---\nPrompt",
-    ).find(({ name }) => name === "custom")?.frontmatter,
+    discoverAgentDefinitionsWithContents("---\nname: custom\nenabled: false\n---\nPrompt").find(
+      ({ name }) => name === "custom",
+    )?.frontmatter,
     { name: "custom", enabled: false },
   );
   assert.throws(
-    () =>
-      discoverAgentDefinitionsWithContents(
-        "---\nname: custom\ninheritSkills: yes\n---",
-      ),
+    () => discoverAgentDefinitionsWithContents("---\nname: custom\ninheritSkills: yes\n---"),
     /custom\.md agent custom field inheritSkills: must be a boolean/,
   );
   for (const value of ["yes", '"false"', "1", "null", "[]", "{}"]) {
     assert.throws(
-      () =>
-        discoverAgentDefinitionsWithContents(
-          `---\nname: custom\nenabled: ${value}\n---`,
-        ),
+      () => discoverAgentDefinitionsWithContents(`---\nname: custom\nenabled: ${value}\n---`),
       /must be a boolean/,
     );
   }
   assert.throws(
-    () =>
-      discoverAgentDefinitionsWithContents(
-        "---\nname: custom\nenabled: yes\n---\n",
-      ),
+    () => discoverAgentDefinitionsWithContents("---\nname: custom\nenabled: yes\n---\n"),
     /custom\.md agent custom field enabled: must be a boolean/,
   );
 
@@ -213,10 +200,7 @@ Prompt`).find(({ name }) => name === "custom")!;
     enabled: true,
   });
   assert.throws(
-    () =>
-      discoverAgentDefinitionsWithContents(
-        '---\nname: custom\nsubagents: ["scout"]\n---',
-      ),
+    () => discoverAgentDefinitionsWithContents('---\nname: custom\nsubagents: ["scout"]\n---'),
     /is not a supported agent-definition field/,
   );
 });
@@ -267,8 +251,7 @@ Prompt`).find(({ name }) => name === "custom")!;
 
 test("reports malformed YAML with the source definition path", () => {
   assert.throws(
-    () =>
-      discoverAgentDefinitionsWithContents("---\nname: custom\nskills: [\n---"),
+    () => discoverAgentDefinitionsWithContents("---\nname: custom\nskills: [\n---"),
     /custom\.md:/,
   );
 });
@@ -350,14 +333,8 @@ test("normalizes home-relative references in project and global definitions", ()
   const globalAgents = join(global, "agents");
   mkdirSync(projectAgentDir, { recursive: true });
   mkdirSync(globalAgents);
-  writeFileSync(
-    join(projectAgentDir, "project.md"),
-    "---\nname: project\n---\n@~/project.md",
-  );
-  writeFileSync(
-    join(globalAgents, "global.md"),
-    "---\nname: global\n---\n@~/global.md",
-  );
+  writeFileSync(join(projectAgentDir, "project.md"), "---\nname: project\n---\n@~/project.md");
+  writeFileSync(join(globalAgents, "global.md"), "---\nname: global\n---\n@~/global.md");
 
   const definitions = withPiAgentDir(global, () =>
     discoverAgentDefinitions({ projectRoot: project }),
@@ -421,17 +398,11 @@ test("array modifiers compose in order, preserve replacement, and retain relativ
     ["replacement", "extra"],
   );
   assert.deepEqual(
-    mergeFrontmatter(
-      { name: "sample" },
-      { name: "sample", tools: ["read", "+write"] },
-    ).tools,
+    mergeFrontmatter({ name: "sample" }, { name: "sample", tools: ["read", "+write"] }).tools,
     ["read", "write"],
   );
   assert.deepEqual(
-    mergeFrontmatter(
-      { name: "sample" },
-      { name: "sample", tools: ["read,+bash"] },
-    ).tools,
+    mergeFrontmatter({ name: "sample" }, { name: "sample", tools: ["read,+bash"] }).tools,
     ["read", "bash"],
   );
   assert.deepEqual(
@@ -494,9 +465,7 @@ agents: ["+scout", "+scout"]
 ---
 `).find(({ name }) => name === "standalone-modifiers")!;
   assert.deepEqual(definition.frontmatter.skills, ["/skills/review/SKILL.md"]);
-  assert.deepEqual(definition.frontmatter.extensions, [
-    "/extensions/review.ts",
-  ]);
+  assert.deepEqual(definition.frontmatter.extensions, ["/extensions/review.ts"]);
   assert.deepEqual(definition.frontmatter.agents, ["scout"]);
 });
 
@@ -533,20 +502,12 @@ test("rejects malformed capability fields", () => {
     ["tools", '"read"', /must be an array/],
     ["skills", '["ok", 1]', /must be an array/],
     ["extensions", '[""]', /must be an array/],
-    [
-      "systemPromptFiles",
-      '["prompt.md"]',
-      /is not a supported agent-definition field/,
-    ],
+    ["systemPromptFiles", '["prompt.md"]', /is not a supported agent-definition field/],
     ["tools", '["   "]', /must be an array/],
     ["agents", '"scout"', /must be an array/],
     ["agents", '["scout", 1]', /must be an array/],
     ["agents", '["   "]', /must be an array/],
-    [
-      "agents",
-      '["scout", "scout"]',
-      /must be an array with unique explicit names/,
-    ],
+    ["agents", '["scout", "scout"]', /must be an array with unique explicit names/],
     ["noTools", '"true"', /must be a boolean/],
     ["noBuiltinTools", "yes", /must be a boolean/],
     ["noSkills", "1", /must be a boolean/],
@@ -564,33 +525,19 @@ test("rejects malformed capability fields", () => {
     ["inheritAncestorContext", "yes", /must be a boolean/],
   ] as const)
     assert.throws(
-      () =>
-        discoverAgentDefinitionsWithContents(
-          `---\nname: custom\n${field}: ${value}\n---`,
-        ),
+      () => discoverAgentDefinitionsWithContents(`---\nname: custom\n${field}: ${value}\n---`),
       message,
     );
   for (const [field, value, message] of [
     ["model", "[]", /model.*must be a non-empty string/],
     ["model", "false", /model.*must be a non-empty string/],
     ["thinking", "1", /thinking.*must be one of/],
-    [
-      "systemPromptMode",
-      "false",
-      /systemPromptMode.*must be append or replace/,
-    ],
+    ["systemPromptMode", "false", /systemPromptMode.*must be append or replace/],
     ["bodyMode", "merge", /bodyMode.*must be append or replace/],
-    [
-      "agents",
-      "[\n  scout,\n  scout,\n]",
-      /must be an array with unique explicit names/,
-    ],
+    ["agents", "[\n  scout,\n  scout,\n]", /must be an array with unique explicit names/],
   ] as const)
     assert.throws(
-      () =>
-        discoverAgentDefinitionsWithContents(
-          `---\nname: custom\n${field}: ${value}\n---\n`,
-        ),
+      () => discoverAgentDefinitionsWithContents(`---\nname: custom\n${field}: ${value}\n---\n`),
       message,
     );
 });
@@ -622,10 +569,7 @@ test("selects global, ancestor, and worktree context independently in native ord
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = agentDir;
   try {
-    const launch = (
-      name: string,
-      frontmatter: Record<string, string | boolean>,
-    ) =>
+    const launch = (name: string, frontmatter: Record<string, string | boolean>) =>
       agentLaunchArgs(
         {
           category: "agent",
@@ -727,11 +671,7 @@ test("selects global, ancestor, and worktree context independently in native ord
       }).filter((arg) => arg === "--append-system-prompt").length,
       1,
     );
-    assert.deepEqual(launch("delegate", {}), [
-      "--append-system-prompt",
-      "/prompt",
-      ...noSkills,
-    ]);
+    assert.deepEqual(launch("delegate", {}), ["--append-system-prompt", "/prompt", ...noSkills]);
     assert.deepEqual(
       launch("agent", {
         inheritGlobalContext: false,
@@ -842,22 +782,12 @@ test("classifies linked-worktree and non-Git context boundaries", () => {
   const linkedContext = join(linked, "AGENTS.md");
   const nestedContext = join(cwd, "AGENTS.md");
   const globalContext = join(global, "AGENTS.md");
-  for (const path of [
-    ancestor,
-    primaryContext,
-    linkedContext,
-    nestedContext,
-    globalContext,
-  ])
+  for (const path of [ancestor, primaryContext, linkedContext, nestedContext, globalContext])
     writeFileSync(path, path);
 
-  const discovered = [
-    globalContext,
-    ancestor,
-    primaryContext,
-    linkedContext,
-    nestedContext,
-  ].map((path) => ({ path, content: path }));
+  const discovered = [globalContext, ancestor, primaryContext, linkedContext, nestedContext].map(
+    (path) => ({ path, content: path }),
+  );
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = global;
   try {
@@ -869,11 +799,9 @@ test("classifies linked-worktree and non-Git context boundaries", () => {
       body: "",
     });
     const load = (frontmatter: Frontmatter) =>
-      selectedAgentContextFiles(
-        definition(frontmatter),
-        cwd,
-        () => discovered,
-      ).map(({ path }) => path);
+      selectedAgentContextFiles(definition(frontmatter), cwd, () => discovered).map(
+        ({ path }) => path,
+      );
     assert.deepEqual(
       load({
         inheritGlobalContext: false,
@@ -904,9 +832,7 @@ test("classifies linked-worktree and non-Git context boundaries", () => {
     );
     assert.deepEqual(
       linkedLaunchArgs.flatMap((argument, index) =>
-        argument === "--append-system-prompt"
-          ? [linkedLaunchArgs[index + 1]]
-          : [],
+        argument === "--append-system-prompt" ? [linkedLaunchArgs[index + 1]] : [],
       ),
       [linkedContext, nestedContext],
     );
@@ -928,11 +854,9 @@ test("classifies linked-worktree and non-Git context boundaries", () => {
       { path: localContext, content: "local" },
     ];
     assert.deepEqual(
-      selectedAgentContextFiles(
-        projectOnly,
-        nonGitCwd,
-        () => nonGitContexts,
-      ).map(({ path }) => path),
+      selectedAgentContextFiles(projectOnly, nonGitCwd, () => nonGitContexts).map(
+        ({ path }) => path,
+      ),
       [localContext],
     );
 
@@ -963,18 +887,13 @@ test(
   "surfaces unexpected Git worktree lookup failures",
   { skip: process.platform === "win32" },
   () => {
-    const root = mkdtempSync(
-      join(tmpdir(), "pi-herdsman-context-git-failure-"),
-    );
+    const root = mkdtempSync(join(tmpdir(), "pi-herdsman-context-git-failure-"));
     const repo = join(root, "repo");
     const fakeBin = join(root, "bin");
     mkdirSync(repo);
     mkdirSync(fakeBin);
     const fakeGit = join(fakeBin, "git");
-    writeFileSync(
-      fakeGit,
-      "#!/bin/sh\nprintf 'simulated git failure\\n' >&2\nexit 23\n",
-    );
+    writeFileSync(fakeGit, "#!/bin/sh\nprintf 'simulated git failure\\n' >&2\nexit 23\n");
     chmodSync(fakeGit, 0o755);
     execFileSync("git", ["init", "-q", repo]);
     const context = join(repo, "AGENTS.md");
@@ -1074,29 +993,15 @@ test("managed launches retain the generic active-agent interoperability marker",
 test("discovers the seven portable bundled definitions without a user agents directory", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-agents-"));
   assert.deepEqual(
-    withPiAgentDir(root, () =>
-      discoverAgentDefinitions().map((definition) => definition.name),
-    ),
-    [
-      "generalist",
-      "implementer",
-      "researcher",
-      "reviewer",
-      "scout",
-      "ship",
-      "validator",
-    ],
+    withPiAgentDir(root, () => discoverAgentDefinitions().map((definition) => definition.name)),
+    ["generalist", "implementer", "researcher", "reviewer", "scout", "ship", "validator"],
   );
 });
 
 test("reserves the layered managed Lead definition outside the Agent roster", () => {
-  const project = mkdtempSync(
-    join(tmpdir(), "pi-herdsman-managed-lead-project-"),
-  );
+  const project = mkdtempSync(join(tmpdir(), "pi-herdsman-managed-lead-project-"));
   const projectAgents = join(project, ".pi", "coordinators", "leads");
-  const global = mkdtempSync(
-    join(tmpdir(), "pi-herdsman-managed-lead-global-"),
-  );
+  const global = mkdtempSync(join(tmpdir(), "pi-herdsman-managed-lead-global-"));
   const globalAgents = join(global, "coordinators", "leads");
   mkdirSync(projectAgents, { recursive: true });
   mkdirSync(globalAgents, { recursive: true });
@@ -1127,10 +1032,7 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   ]);
   assert.equal(launchArgs[launchArgs.indexOf("--exclude-tools") + 1], "mcp__");
   assert.deepEqual(bundled.frontmatter.extensions, ["builtin:codemode"]);
-  assert.equal(
-    launchArgs[launchArgs.indexOf("--extension") + 1],
-    "builtin:codemode",
-  );
+  assert.equal(launchArgs[launchArgs.indexOf("--extension") + 1], "builtin:codemode");
   assert.equal(bundled.frontmatter.systemPromptMode, "append");
   assert.equal(bundled.frontmatter.inheritProjectContext, true);
   assert.equal(bundled.frontmatter.inheritGlobalContext, false);
@@ -1166,21 +1068,12 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   );
   assert.deepEqual(effective.frontmatter.tools, ["read", "grep"]);
   assert.equal(effective.frontmatter.thinking, "high");
-  assert.equal(
-    effective.body,
-    `${bundled.body}\n\nGlobal policy\n\nProject policy`,
-  );
+  assert.equal(effective.body, `${bundled.body}\n\nGlobal policy\n\nProject policy`);
   assert.equal(effective.projectSource, projectPath);
   assert.equal(effective.overrideSource, globalPath);
 
-  writeFileSync(
-    globalPath,
-    "---\nname: managed-lead\nbodyMode: replace\n---\nCustom strategy",
-  );
-  writeFileSync(
-    projectPath,
-    "---\nname: managed-lead\nbodyMode: replace\n---\nProject strategy",
-  );
+  writeFileSync(globalPath, "---\nname: managed-lead\nbodyMode: replace\n---\nCustom strategy");
+  writeFileSync(projectPath, "---\nname: managed-lead\nbodyMode: replace\n---\nProject strategy");
   const replaced = withPiAgentDir(global, () =>
     discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME, {
       projectRoot: project,
@@ -1202,10 +1095,7 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   );
 
   mkdirSync(join(global, "agents"), { recursive: true });
-  writeFileSync(
-    join(global, "agents", "bad.md"),
-    '---\nname: bad\nagents: ["managed-lead"]\n---',
-  );
+  writeFileSync(join(global, "agents", "bad.md"), '---\nname: bad\nagents: ["managed-lead"]\n---');
   assert.throws(
     () => withPiAgentDir(global, () => discoverAgentDefinitions()),
     /agent bad references missing agent definition managed-lead/,
@@ -1216,27 +1106,15 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
     ["enabled", "false"],
     ["permission", '{ "*": "deny" }'],
   ] as const) {
-    writeFileSync(
-      globalPath,
-      `---\nname: managed-lead\n${field}: ${value}\n---`,
-    );
+    writeFileSync(globalPath, `---\nname: managed-lead\n${field}: ${value}\n---`);
     assert.throws(
-      () =>
-        withPiAgentDir(global, () =>
-          discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME),
-        ),
+      () => withPiAgentDir(global, () => discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME)),
       new RegExp(`managed Lead field ${field}: is not supported`),
     );
   }
-  writeFileSync(
-    globalPath,
-    "---\nname: managed-lead\nsystemPromptMode: replace\n---",
-  );
+  writeFileSync(globalPath, "---\nname: managed-lead\nsystemPromptMode: replace\n---");
   assert.throws(
-    () =>
-      withPiAgentDir(global, () =>
-        discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME),
-      ),
+    () => withPiAgentDir(global, () => discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME)),
     new RegExp(
       `${globalPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} managed Lead field systemPromptMode: must be append`,
     ),
@@ -1247,9 +1125,7 @@ test("reserves independent runtime role profiles with narrow fields", () => {
   const global = mkdtempSync(join(tmpdir(), "pi-herdsman-lead-profiles-"));
   const agents = join(global, "coordinators", "leads");
   mkdirSync(agents, { recursive: true });
-  const names = withPiAgentDir(global, () =>
-    discoverRoleDefinitions().map(({ name }) => name),
-  );
+  const names = withPiAgentDir(global, () => discoverRoleDefinitions().map(({ name }) => name));
   assert.deepEqual(names, [
     FLEXIBLE_LEAD_DEFINITION_NAME,
     MANAGED_LEAD_DEFINITION_NAME,
@@ -1264,15 +1140,11 @@ test("reserves independent runtime role profiles with narrow fields", () => {
     );
   assert.equal(
     withPiAgentDir(global, () =>
-      discoverAgentDefinitions().some(({ name }) =>
-        names.includes(name as any),
-      ),
+      discoverAgentDefinitions().some(({ name }) => names.includes(name as any)),
     ),
     false,
   );
-  const [flexible, , orchestrator] = withPiAgentDir(global, () =>
-    discoverRoleDefinitions(),
-  );
+  const [flexible, , orchestrator] = withPiAgentDir(global, () => discoverRoleDefinitions());
   assert.deepEqual(flexible!.frontmatter.tools, ["+codemode"]);
   assert.deepEqual(orchestrator!.frontmatter.tools, ["codemode"]);
   writeFileSync(
@@ -1285,17 +1157,11 @@ test("reserves independent runtime role profiles with narrow fields", () => {
   assert.equal(replaced.body, "Custom strategy");
   assert.deepEqual(replaced.frontmatter.tools, orchestrator!.frontmatter.tools);
   assert.deepEqual(
-    withPiAgentDir(
-      global,
-      () => discoverRoleDefinition("manager").frontmatter.tools,
-    ),
+    withPiAgentDir(global, () => discoverRoleDefinition("manager").frontmatter.tools),
     ["codemode"],
   );
   assert.deepEqual(
-    withPiAgentDir(
-      global,
-      () => discoverRoleDefinition("chief").frontmatter.tools,
-    ),
+    withPiAgentDir(global, () => discoverRoleDefinition("chief").frontmatter.tools),
     ["codemode"],
   );
   const managerBody = withPiAgentDir(global, () =>
@@ -1305,10 +1171,7 @@ test("reserves independent runtime role profiles with narrow fields", () => {
     managerBody,
     /required outcome and let the Lead use its effective tools and eligible Agents/,
   );
-  assert.match(
-    managerBody,
-    /An explicit human restriction on delegation takes precedence/,
-  );
+  assert.match(managerBody, /An explicit human restriction on delegation takes precedence/);
   assert.match(
     managerBody,
     /requested deliverable from final acceptance of remaining requirements/,
@@ -1321,22 +1184,13 @@ test("reserves independent runtime role profiles with narrow fields", () => {
     managed.body,
     /Treat review findings as evidence, not automatic implementation requests/,
   );
-  assert.match(
-    managed.body,
-    /Preserve required\s+security and correctness verification/,
-  );
+  assert.match(managed.body, /Preserve required\s+security and correctness verification/);
   assert.match(managed.body, /a clean review may end the cycle/);
-  assert.match(
-    managed.body,
-    /Repeat review when remaining risks or changes justify it/,
-  );
+  assert.match(managed.body, /Repeat review when remaining risks or changes justify it/);
   for (const definition of [orchestrator!, managed]) {
     assert.match(definition.body, /non-overlapping execution scopes/);
     assert.match(definition.body, /independent assignments in parallel/);
-    assert.match(
-      definition.body,
-      /dependent\s+assignments only after their prerequisites resolve/,
-    );
+    assert.match(definition.body, /dependent\s+assignments only after their prerequisites resolve/);
   }
   for (const [field, value] of [
     ["model", '"provider/model"'],
@@ -1376,10 +1230,7 @@ test("Manager and Chief overlays use reserved runtime-profile scope", () => {
     managerGlobal,
     "---\nname: manager\nbodyMode: append\n---\nGlobal manager guidance",
   );
-  writeFileSync(
-    chiefGlobal,
-    "---\nname: chief\nbodyMode: append\n---\nGlobal chief guidance",
-  );
+  writeFileSync(chiefGlobal, "---\nname: chief\nbodyMode: append\n---\nGlobal chief guidance");
   const manager = withPiAgentDir(global, () =>
     discoverRoleDefinition("manager", { projectRoot: project }),
   );
@@ -1393,45 +1244,28 @@ test("Manager and Chief overlays use reserved runtime-profile scope", () => {
     "---\nname: manager\nbodyMode: replace\n---\nCustom Manager strategy",
   );
   unlinkSync(managerGlobal);
-  writeFileSync(
-    chiefGlobal,
-    "---\nname: chief\nbodyMode: replace\n---\nCustom Chief strategy",
-  );
+  writeFileSync(chiefGlobal, "---\nname: chief\nbodyMode: replace\n---\nCustom Chief strategy");
   const replacedManager = withPiAgentDir(global, () =>
     discoverRoleDefinition("manager", { projectRoot: project }),
   );
-  const replacedChief = withPiAgentDir(global, () =>
-    discoverRoleDefinition("chief"),
-  );
+  const replacedChief = withPiAgentDir(global, () => discoverRoleDefinition("chief"));
   assert.equal(replacedManager.body, "Custom Manager strategy");
   assert.equal(replacedChief.body, "Custom Chief strategy");
   assert.deepEqual(replacedManager.frontmatter.tools, ["codemode"]);
   assert.deepEqual(replacedChief.frontmatter.tools, ["codemode"]);
-  writeFileSync(
-    join(projectAgents, "chief.md"),
-    "---\nname: chief\n---\nProject chief guidance",
-  );
+  writeFileSync(join(projectAgents, "chief.md"), "---\nname: chief\n---\nProject chief guidance");
   assert.throws(
-    () =>
-      withPiAgentDir(global, () =>
-        discoverRoleDefinition("chief", { projectRoot: project }),
-      ),
+    () => withPiAgentDir(global, () => discoverRoleDefinition("chief", { projectRoot: project })),
     /chief definition: project overrides are not supported; configure chief globally instead/,
   );
   for (const name of ["manager", "chief"] as const)
     for (const field of ["model", "thinking", "systemPromptMode", "skills"]) {
       writeFileSync(
-        join(
-          globalAgents,
-          ...(name === "manager" ? ["managers"] : []),
-          `${name}.md`,
-        ),
+        join(globalAgents, ...(name === "manager" ? ["managers"] : []), `${name}.md`),
         `---\nname: ${name}\n${field}: ${field === "skills" || field === "agents" ? '["scout"]' : field === "systemPromptMode" ? '"append"' : '"low"'}\n---\n`,
       );
       if (name === "manager")
-        assert.doesNotThrow(() =>
-          withPiAgentDir(global, () => discoverRoleDefinition(name)),
-        );
+        assert.doesNotThrow(() => withPiAgentDir(global, () => discoverRoleDefinition(name)));
       else
         assert.throws(
           () => withPiAgentDir(global, () => discoverRoleDefinition(name)),
@@ -1448,10 +1282,7 @@ test("role agent allowlists validate effective targets", () => {
     join(agents, "managers", "manager.md"),
     "---\nname: manager\nagents: [scout, disabled-helper]\n---\n",
   );
-  writeFileSync(
-    join(agents, "chief.md"),
-    "---\nname: chief\nagents: [reviewer]\n---\n",
-  );
+  writeFileSync(join(agents, "chief.md"), "---\nname: chief\nagents: [reviewer]\n---\n");
   mkdirSync(join(global, "agents"), { recursive: true });
   writeFileSync(
     join(global, "agents", "disabled-helper.md"),
@@ -1459,11 +1290,7 @@ test("role agent allowlists validate effective targets", () => {
   );
 
   withPiAgentDir(global, () => {
-    for (const name of [
-      "flexible-lead",
-      "orchestrator-lead",
-      "managed-lead",
-    ] as const) {
+    for (const name of ["flexible-lead", "orchestrator-lead", "managed-lead"] as const) {
       mkdirSync(join(agents, "leads"), { recursive: true });
       const path = join(agents, "leads", `${name}.md`);
       for (const targets of ["[]", "[scout]"]) {
@@ -1478,18 +1305,14 @@ test("role agent allowlists validate effective targets", () => {
         () => discoverRoleDefinition(name),
         /references missing agent definition missing/,
       );
-      assert.deepEqual(discoverRoleDefinition("chief").frontmatter.agents, [
-        "reviewer",
-      ]);
+      assert.deepEqual(discoverRoleDefinition("chief").frontmatter.agents, ["reviewer"]);
       unlinkSync(path);
     }
     assert.deepEqual(discoverRoleDefinition("manager").frontmatter.agents, [
       "scout",
       "disabled-helper",
     ]);
-    assert.deepEqual(discoverRoleDefinition("chief").frontmatter.agents, [
-      "reviewer",
-    ]);
+    assert.deepEqual(discoverRoleDefinition("chief").frontmatter.agents, ["reviewer"]);
 
     writeFileSync(
       join(agents, "managers", "manager.md"),
@@ -1511,14 +1334,8 @@ test("role agent allowlists validate effective targets", () => {
       join(agents, "leads", "orchestrator-lead.md"),
       "---\nname: orchestrator-lead\nagents: [scout]\n---\n",
     );
-    assert.deepEqual(
-      discoverRoleDefinition("orchestrator-lead").frontmatter.agents,
-      ["scout"],
-    );
-    assert.throws(
-      () => discoverRoleDefinition("manager"),
-      /reserved agent definition chief/,
-    );
+    assert.deepEqual(discoverRoleDefinition("orchestrator-lead").frontmatter.agents, ["scout"]);
+    assert.throws(() => discoverRoleDefinition("manager"), /reserved agent definition chief/);
   });
 });
 
@@ -1526,10 +1343,7 @@ test("execution-only Coordinator resolution defers only Agent references", () =>
   const global = mkdtempSync(join(tmpdir(), "pi-herdsman-deferred-refs-"));
   const path = join(global, "coordinators", "leads", "flexible-lead.md");
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(
-    path,
-    "---\nname: flexible-lead\ntools: [read]\nagents: [missing]\n---\n",
-  );
+  writeFileSync(path, "---\nname: flexible-lead\ntools: [read]\nagents: [missing]\n---\n");
   withPiAgentDir(global, () => {
     assert.throws(
       () => resolveDefinition("lead", "flexible-lead"),
@@ -1541,10 +1355,7 @@ test("execution-only Coordinator resolution defers only Agent references", () =>
     assert.deepEqual(execution.frontmatter.tools, ["read"]);
     assert.deepEqual(execution.frontmatter.agents, ["missing"]);
 
-    writeFileSync(
-      path,
-      "---\nname: flexible-lead\ntools: [read]\nagents: [42]\n---\n",
-    );
+    writeFileSync(path, "---\nname: flexible-lead\ntools: [read]\nagents: [42]\n---\n");
     assert.throws(
       () =>
         resolveDefinition("lead", "flexible-lead", {
@@ -1558,19 +1369,14 @@ test("execution-only Coordinator resolution defers only Agent references", () =>
 });
 
 test("supervisor allowlists use effective overlays and layered Agent targets", () => {
-  const project = mkdtempSync(
-    join(tmpdir(), "pi-herdsman-supervisor-project-"),
-  );
+  const project = mkdtempSync(join(tmpdir(), "pi-herdsman-supervisor-project-"));
   const projectAgents = join(project, ".pi", "coordinators");
   const global = mkdtempSync(join(tmpdir(), "pi-herdsman-supervisor-global-"));
   const globalAgents = join(global, "coordinators");
   mkdirSync(join(projectAgents, "managers"), { recursive: true });
   mkdirSync(join(globalAgents, "managers"), { recursive: true });
   const projectManagerPath = join(projectAgents, "managers", "manager.md");
-  writeFileSync(
-    projectManagerPath,
-    "---\nname: manager\nagents: [missing-project-target]\n---\n",
-  );
+  writeFileSync(projectManagerPath, "---\nname: manager\nagents: [missing-project-target]\n---\n");
   writeFileSync(
     join(globalAgents, "managers", "manager.md"),
     "---\nname: manager\nagents: [project-helper]\n---\n",
@@ -1581,20 +1387,14 @@ test("supervisor allowlists use effective overlays and layered Agent targets", (
   );
   const projectHelperPath = join(project, ".pi", "agents", "project-helper.md");
   mkdirSync(join(project, ".pi", "agents"), { recursive: true });
-  writeFileSync(
-    projectHelperPath,
-    "---\nname: project-helper\n---\nProject helper",
-  );
+  writeFileSync(projectHelperPath, "---\nname: project-helper\n---\nProject helper");
 
   withPiAgentDir(global, () => {
     assert.throws(
       () => discoverRoleDefinition("manager", { projectRoot: project }),
       /references missing agent definition missing-project-target/,
     );
-    writeFileSync(
-      projectManagerPath,
-      "---\nname: manager\nagents: [project-helper]\n---\n",
-    );
+    writeFileSync(projectManagerPath, "---\nname: manager\nagents: [project-helper]\n---\n");
     const manager = discoverRoleDefinition("manager", { projectRoot: project });
     const chief = discoverRoleDefinition("chief", { projectRoot: project });
     assert.deepEqual(manager.frontmatter.agents, ["project-helper"]);
@@ -1610,10 +1410,7 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
   const root = mkdtempSync(join(tmpdir(), "herdr-bundled-prompts-"));
   const definitions = withPiAgentDir(root, () => discoverAgentDefinitions());
   const expectedTools = new Map([
-    [
-      "implementer",
-      ["read", "bash", "powershell", "edit", "write", "codemode"],
-    ],
+    ["implementer", ["read", "bash", "powershell", "edit", "write", "codemode"]],
     [
       "researcher",
       [
@@ -1669,17 +1466,8 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     root,
     () =>
       new Map(
-        [
-          "generalist",
-          "implementer",
-          "researcher",
-          "reviewer",
-          "scout",
-          "ship",
-          "validator",
-        ].map(
-          (name) =>
-            [name, discoverAgent(name).body.replaceAll(/\s+/g, " ")] as const,
+        ["generalist", "implementer", "researcher", "reviewer", "scout", "ship", "validator"].map(
+          (name) => [name, discoverAgent(name).body.replaceAll(/\s+/g, " ")] as const,
         ),
       ),
   );
@@ -1695,18 +1483,12 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     });
     assert.ok(launchArgs.includes("--append-system-prompt"));
     assert.equal(launchArgs.includes("--system-prompt"), false);
-    assert.equal(
-      definition.frontmatter.description,
-      expectedDescriptions.get(definition.name),
-    );
+    assert.equal(definition.frontmatter.description, expectedDescriptions.get(definition.name));
     assert.equal(
       agentDefinitionMetadata(definition).description,
       expectedDescriptions.get(definition.name),
     );
-    assert.deepEqual(
-      definition.frontmatter.tools,
-      expectedTools.get(definition.name),
-    );
+    assert.deepEqual(definition.frontmatter.tools, expectedTools.get(definition.name));
     assert.deepEqual(definition.frontmatter.skills, []);
     if (definition.name === "researcher") {
       assert.equal(definition.frontmatter.noExtensions, true);
@@ -1726,14 +1508,8 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
       /(?:\/(?:Users|home)\/|[A-Za-z]:\\Users\\)[^/\\\s]+/,
     );
     if (definition.frontmatter.agents?.length)
-      assert.doesNotMatch(
-        readFileSync(definition.path, "utf8"),
-        /tools:.*agent/,
-      );
-    assert.doesNotMatch(
-      definition.body,
-      /\b(exec|wait|mcp)\b|tools\.|Ponytail|Code Mode/i,
-    );
+      assert.doesNotMatch(readFileSync(definition.path, "utf8"), /tools:.*agent/);
+    assert.doesNotMatch(definition.body, /\b(exec|wait|mcp)\b|tools\.|Ponytail|Code Mode/i);
   }
   assert.match(required.get("implementer")!, /scoped edits and validation/);
   assert.match(required.get("generalist")!, /smallest complete action/);
@@ -1749,34 +1525,22 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
   assert.match(required.get("researcher")!, /Do not mutate files/);
   for (const name of ["generalist", "implementer", "reviewer", "validator"])
     assert.doesNotMatch(required.get(name)!, /delegate|orchestrat/i);
-  assert.equal(
-    definitions.filter((definition) => required.has(definition.name)).length,
-    7,
-  );
+  assert.equal(definitions.filter((definition) => required.has(definition.name)).length, 7);
 });
 
 test("project release-drafter opts into native Code Mode without discovery", () => {
   const global = mkdtempSync(join(tmpdir(), "herdr-release-drafter-global-"));
-  const projectRoot = mkdtempSync(
-    join(tmpdir(), "herdr-release-drafter-project-"),
-  );
+  const projectRoot = mkdtempSync(join(tmpdir(), "herdr-release-drafter-project-"));
   try {
     const path = join(projectRoot, ".pi", "agents", "release-drafter.md");
     mkdirSync(join(projectRoot, ".pi", "agents"), { recursive: true });
-    const tracked = resolve(
-      import.meta.dirname,
-      "../.pi/agents/release-drafter.md",
-    );
+    const tracked = resolve(import.meta.dirname, "../.pi/agents/release-drafter.md");
     writeFileSync(path, readFileSync(tracked));
     const definition = withPiAgentDir(global, () =>
       discoverAgent("release-drafter", { projectRoot }),
     );
     assert.equal(definition.projectSource, path);
-    assert.deepEqual(definition.frontmatter.tools, [
-      "read",
-      "bash",
-      "codemode",
-    ]);
+    assert.deepEqual(definition.frontmatter.tools, ["read", "bash", "codemode"]);
     assert.deepEqual(definition.frontmatter.extensions, ["builtin:codemode"]);
     assert.equal(definition.frontmatter.noExtensions, true);
     assert.deepEqual(definition.frontmatter.agents, []);
@@ -1842,10 +1606,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
 
   withPiAgentDir(root, () => {
     for (const [name, tools] of expected) {
-      const definition = projectAgentDefinition(
-        discoverAgent(name),
-        "delegating",
-      );
+      const definition = projectAgentDefinition(discoverAgent(name), "delegating");
       const args = agentLaunchArgs(definition, {
         bodyPromptPath: "/tmp/prompt.txt",
         cwd: process.cwd(),
@@ -1853,22 +1614,13 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
       });
       const toolsIndex = args.indexOf("--tools");
       assert.notEqual(toolsIndex, -1);
-      assert.deepEqual(args[toolsIndex + 1].split(","), [
-        ...tools,
-        "load_skill",
-        "mcp__",
-      ]);
+      assert.deepEqual(args[toolsIndex + 1].split(","), [...tools, "load_skill", "mcp__"]);
       const launchedTools = args.flatMap((arg) => arg.split(","));
-      for (const tool of forbidden)
-        assert.equal(launchedTools.includes(tool), false);
+      for (const tool of forbidden) assert.equal(launchedTools.includes(tool), false);
       assert.equal(args.includes("--no-extensions"), true);
       assert.deepEqual(
-        args.flatMap((arg, index) =>
-          arg === "--extension" ? [args[index + 1]] : [],
-        ),
-        name === "researcher"
-          ? ["builtin:codemode", "npm:pi-web-access"]
-          : ["builtin:codemode"],
+        args.flatMap((arg, index) => (arg === "--extension" ? [args[index + 1]] : [])),
+        name === "researcher" ? ["builtin:codemode", "npm:pi-web-access"] : ["builtin:codemode"],
       );
     }
 
@@ -1892,10 +1644,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
       "load_skill",
       "mcp__",
     ]);
-    assert.equal(
-      args.flatMap((arg) => arg.split(",")).includes("agent"),
-      false,
-    );
+    assert.equal(args.flatMap((arg) => arg.split(",")).includes("agent"), false);
   });
 });
 
@@ -1934,10 +1683,7 @@ test("captures definition layer provenance and surviving body fragments", () => 
   assert.equal(appended.layers[1]?.before?.thinking, undefined);
   assert.equal(appended.layers[1]?.after.thinking, "high");
 
-  writeFileSync(
-    join(agents, "scout.md"),
-    "---\nname: scout\nbodyMode: replace\n---\nReplacement.",
-  );
+  writeFileSync(join(agents, "scout.md"), "---\nname: scout\nbodyMode: replace\n---\nReplacement.");
   const replaced = withPiAgentDir(root, () => inspectAgentDefinition("scout"));
   assert.deepEqual(
     replaced.bodyFragments.map(({ body }) => body),
@@ -1949,17 +1695,10 @@ test("captures definition layer provenance and surviving body fragments", () => 
     replaced.definition.body,
   );
 
-  const standaloneRoot = mkdtempSync(
-    join(tmpdir(), "pi-herdsman-inspection-standalone-"),
-  );
+  const standaloneRoot = mkdtempSync(join(tmpdir(), "pi-herdsman-inspection-standalone-"));
   mkdirSync(join(standaloneRoot, "agents"));
-  writeFileSync(
-    join(standaloneRoot, "agents", "local.md"),
-    "---\nname: local\n---\nLocal.",
-  );
-  const standalone = withPiAgentDir(standaloneRoot, () =>
-    inspectAgentDefinition("local"),
-  );
+  writeFileSync(join(standaloneRoot, "agents", "local.md"), "---\nname: local\n---\nLocal.");
+  const standalone = withPiAgentDir(standaloneRoot, () => inspectAgentDefinition("local"));
   assert.deepEqual(
     standalone.layers.map(({ scope }) => scope),
     ["global"],
@@ -1973,19 +1712,13 @@ test("composes matching bundled bodies with bodyMode", () => {
   mkdirSync(agents);
   const base = withPiAgentDir(root, () => discoverAgent("scout").body);
 
-  writeFileSync(
-    join(agents, "scout.md"),
-    "---\nname: scout\n---\nCustom scout instructions.",
-  );
+  writeFileSync(join(agents, "scout.md"), "---\nname: scout\n---\nCustom scout instructions.");
   assert.equal(
     withPiAgentDir(root, () => discoverAgent("scout").body),
     "Custom scout instructions.",
   );
 
-  writeFileSync(
-    join(agents, "scout.md"),
-    "---\nname: scout\nbodyMode: replace\n---\nReplacement.",
-  );
+  writeFileSync(join(agents, "scout.md"), "---\nname: scout\nbodyMode: replace\n---\nReplacement.");
   assert.equal(
     withPiAgentDir(root, () => discoverAgent("scout").body),
     "Replacement.",
@@ -1999,25 +1732,17 @@ test("composes matching bundled bodies with bodyMode", () => {
   assert.equal(appended.body, `${base}\n\nAdditional instructions.`);
   assert.equal(appended.frontmatter.bodyMode, undefined);
 
-  writeFileSync(
-    join(agents, "scout.md"),
-    "---\nname: scout\nbodyMode: append\n---\n",
-  );
+  writeFileSync(join(agents, "scout.md"), "---\nname: scout\nbodyMode: append\n---\n");
   assert.equal(
     withPiAgentDir(root, () => discoverAgent("scout").body),
     base,
   );
-  writeFileSync(
-    join(agents, "scout.md"),
-    "---\nname: scout\nbodyMode: replace\n---\n",
-  );
+  writeFileSync(join(agents, "scout.md"), "---\nname: scout\nbodyMode: replace\n---\n");
   assert.equal(
     withPiAgentDir(root, () => discoverAgent("scout").body),
     base,
   );
-  const promptRoot = mkdtempSync(
-    join(tmpdir(), "pi-herdsman-body-mode-prompt-"),
-  );
+  const promptRoot = mkdtempSync(join(tmpdir(), "pi-herdsman-body-mode-prompt-"));
   const promptAgents = join(promptRoot, "agents");
   mkdirSync(promptAgents);
   writeFileSync(
@@ -2028,9 +1753,7 @@ test("composes matching bundled bodies with bodyMode", () => {
   assert.equal(definition.frontmatter.bodyMode, undefined);
   assert.equal(definition.frontmatter.systemPromptMode, "append");
   assert.match(definition.body, /\n\nExtra\.$/);
-  const invalidRoot = mkdtempSync(
-    join(tmpdir(), "pi-herdsman-body-mode-invalid-"),
-  );
+  const invalidRoot = mkdtempSync(join(tmpdir(), "pi-herdsman-body-mode-invalid-"));
   const invalidAgents = join(invalidRoot, "agents");
   mkdirSync(invalidAgents);
   const overridePath = join(invalidAgents, "scout.md");
@@ -2042,10 +1765,7 @@ test("composes matching bundled bodies with bodyMode", () => {
     ),
   );
   assert.throws(
-    () =>
-      discoverAgentDefinitionsWithContents(
-        "---\nname: custom\nbodyMode: append\n---\nCustom",
-      ),
+    () => discoverAgentDefinitionsWithContents("---\nname: custom\nbodyMode: append\n---\nCustom"),
     /custom\.md agent custom field bodyMode: only valid when overlaying an existing agent/,
   );
 });
@@ -2094,9 +1814,7 @@ test("project discovery tolerates a missing directory and rejects a file", () =>
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-project-root-"));
   withPiAgentDir(root, () => {
     assert.deepEqual(
-      discoverAgentDefinitions({ projectRoot: root }).some(
-        (d) => d.projectSource,
-      ),
+      discoverAgentDefinitions({ projectRoot: root }).some((d) => d.projectSource),
       false,
     );
     mkdirSync(join(root, ".pi"), { recursive: true });
@@ -2119,14 +1837,8 @@ test("project trust launch flags preserve approval, denial, and omission", () =>
   const trustFlags = (args: string[]) =>
     args.filter((arg) => arg === "--approve" || arg === "--no-approve");
   assert.deepEqual(trustFlags(agentLaunchArgs(agent, {})), []);
-  assert.deepEqual(
-    trustFlags(agentLaunchArgs(agent, { approveProject: true })),
-    ["--approve"],
-  );
-  assert.deepEqual(
-    trustFlags(agentLaunchArgs(agent, { approveProject: false })),
-    ["--no-approve"],
-  );
+  assert.deepEqual(trustFlags(agentLaunchArgs(agent, { approveProject: true })), ["--approve"]);
+  assert.deepEqual(trustFlags(agentLaunchArgs(agent, { approveProject: false })), ["--no-approve"]);
 });
 
 test("preserves role-required tools through native allowlists and exclusions", () => {
@@ -2192,10 +1904,7 @@ test("composes all definition layers with provenance and whole-array replacement
   assert.deepEqual(effective.frontmatter.tools, ["read", "grep"]);
   assert.equal(effective.frontmatter.enabled, true);
   assert.deepEqual(effective.frontmatter.permission, { project: "allow" });
-  assert.equal(
-    effective.body,
-    `${bundled.body}\n\nGlobal policy\n\nProject policy`,
-  );
+  assert.equal(effective.body, `${bundled.body}\n\nGlobal policy\n\nProject policy`);
   assert.equal(effective.extensionSource, bundled.path);
   assert.equal(effective.projectSource, projectPath);
   assert.equal(effective.overrideSource, globalPath);
@@ -2255,22 +1964,12 @@ test("private repository definitions overlay trusted linked worktrees without cr
     const privateOnly = join(privateRoot, "agents", "private-only.md");
     write(privateOnly, "---\nname: private-only\n---\n@./prompt.txt");
     write(join(privateRoot, "agents", "prompt.txt"), "private prompt");
-    const privateRole = join(
-      privateRoot,
-      "coordinators",
-      "leads",
-      "managed-lead.md",
-    );
+    const privateRole = join(privateRoot, "coordinators", "leads", "managed-lead.md");
     write(
       privateRole,
       "---\nname: managed-lead\nagents: [private-only]\nbodyMode: append\n---\nPrivate role",
     );
-    const privateTestLead = join(
-      privateRoot,
-      "coordinators",
-      "leads",
-      "private-test-lead.md",
-    );
+    const privateTestLead = join(privateRoot, "coordinators", "leads", "private-test-lead.md");
     write(
       privateTestLead,
       "---\nname: private-test-lead\nthinking: high\n---\nPRIVATE_TEST_LEAD_BODY",
@@ -2284,10 +1983,7 @@ test("private repository definitions overlay trusted linked worktrees without cr
       assert.equal(effective.frontmatter.enabled, true);
       assert.deepEqual(effective.frontmatter.tools, []);
       assert.deepEqual(effective.frontmatter.agents, ["private-only"]);
-      assert.match(
-        effective.body,
-        /Global body\n\nProject body\n\nPrivate body/u,
-      );
+      assert.match(effective.body, /Global body\n\nProject body\n\nPrivate body/u);
       assert.equal(effective.privateRepositorySource, privateReviewer);
       const inspection = withPiAgentDir(global, () =>
         inspectAgentDefinition("reviewer", { projectRoot: worktree }),
@@ -2319,9 +2015,8 @@ test("private repository definitions overlay trusted linked worktrees without cr
     const cloneGlobal = join(root, "clone-global");
     mkdirSync(join(cloneGlobal, "agents"), { recursive: true });
     assert.equal(
-      withPiAgentDir(cloneGlobal, () =>
-        discoverAgent("reviewer", { projectRoot: clone }),
-      ).privateRepositorySource,
+      withPiAgentDir(cloneGlobal, () => discoverAgent("reviewer", { projectRoot: clone }))
+        .privateRepositorySource,
       undefined,
     );
     assert.throws(
@@ -2332,25 +2027,16 @@ test("private repository definitions overlay trusted linked worktrees without cr
       /lead definition .* not found/u,
     );
     assert.throws(
-      () =>
-        withPiAgentDir(global, () =>
-          discoverRoleDefinition("private-test-lead"),
-        ),
+      () => withPiAgentDir(global, () => discoverRoleDefinition("private-test-lead")),
       /lead definition .* not found/u,
     );
     assert.equal(
       worktreeDefinitions(primary).extensionSource,
-      withPiAgentDir(cloneGlobal, () => discoverAgent("reviewer"))
-        .extensionSource,
+      withPiAgentDir(cloneGlobal, () => discoverAgent("reviewer")).extensionSource,
     );
     assert.throws(() => {
-      write(
-        join(privateRoot, "coordinators", "chief.md"),
-        "---\nname: chief\n---\n",
-      );
-      withPiAgentDir(global, () =>
-        discoverRoleDefinitions({ projectRoot: linked }),
-      );
+      write(join(privateRoot, "coordinators", "chief.md"), "---\nname: chief\n---\n");
+      withPiAgentDir(global, () => discoverRoleDefinitions({ projectRoot: linked }));
     }, /chief definition: private repository overrides are not supported/u);
 
     const nonGit = mkdtempSync(join(root, "non-git-"));
@@ -2368,9 +2054,7 @@ test("private repository definitions overlay trusted linked worktrees without cr
 });
 
 test("project body modes, duplicate names, body-file provenance, and child validation use the shared engine", () => {
-  const project = mkdtempSync(
-    join(tmpdir(), "pi-herdsman-project-validation-"),
-  );
+  const project = mkdtempSync(join(tmpdir(), "pi-herdsman-project-validation-"));
   const projectAgentDir = join(project, ".pi", "agents");
   const global = mkdtempSync(join(tmpdir(), "pi-herdsman-global-validation-"));
   const globalAgents = join(global, "agents");
@@ -2378,47 +2062,25 @@ test("project body modes, duplicate names, body-file provenance, and child valid
   mkdirSync(globalAgents);
 
   const standalone = join(projectAgentDir, "standalone.md");
-  writeFileSync(
-    standalone,
-    "---\nname: standalone\nbodyMode: append\n---\nbody",
-  );
+  writeFileSync(standalone, "---\nname: standalone\nbodyMode: append\n---\nbody");
   assert.throws(
-    () =>
-      withPiAgentDir(global, () =>
-        discoverAgentDefinitions({ projectRoot: project }),
-      ),
-    new RegExp(
-      `${standalone.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*bodyMode`,
-    ),
+    () => withPiAgentDir(global, () => discoverAgentDefinitions({ projectRoot: project })),
+    new RegExp(`${standalone.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*bodyMode`),
   );
   unlinkSync(standalone);
 
   const projectStandalone = join(projectAgentDir, "global-standalone.md");
   const globalStandalone = join(globalAgents, "global-standalone.md");
-  writeFileSync(
-    projectStandalone,
-    "---\nname: global-standalone\n---\nproject",
-  );
-  writeFileSync(
-    globalStandalone,
-    "---\nname: global-standalone\nbodyMode: append\n---\nglobal",
-  );
+  writeFileSync(projectStandalone, "---\nname: global-standalone\n---\nproject");
+  writeFileSync(globalStandalone, "---\nname: global-standalone\nbodyMode: append\n---\nglobal");
   assert.throws(
-    () =>
-      withPiAgentDir(global, () =>
-        discoverAgentDefinitions({ projectRoot: project }),
-      ),
-    new RegExp(
-      `${globalStandalone.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*bodyMode`,
-    ),
+    () => withPiAgentDir(global, () => discoverAgentDefinitions({ projectRoot: project })),
+    new RegExp(`${globalStandalone.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*bodyMode`),
   );
   unlinkSync(projectStandalone);
   unlinkSync(globalStandalone);
 
-  writeFileSync(
-    join(projectAgentDir, "child.md"),
-    "---\nname: child\n---\nchild",
-  );
+  writeFileSync(join(projectAgentDir, "child.md"), "---\nname: child\n---\nchild");
   writeFileSync(
     join(projectAgentDir, "parent.md"),
     '---\nname: parent\nagents: ["child"]\n---\nparent',
@@ -2439,35 +2101,24 @@ test("project body modes, duplicate names, body-file provenance, and child valid
   const body = definitions.find((definition) => definition.name === "scout")!;
   assert.match(
     body.body,
-    new RegExp(
-      join(projectAgentDir, "policy.txt").replace(
-        /[.*+?^${}()|[\]\\]/g,
-        "\\$&",
-      ),
-    ),
+    new RegExp(join(projectAgentDir, "policy.txt").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
   );
   assert.match(
     body.body,
-    new RegExp(
-      join(globalAgents, "policy.txt").replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-    ),
+    new RegExp(join(globalAgents, "policy.txt").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
   );
   validateAgentDefinitionReferences(
     definitions.find((definition) => definition.name === "parent")!,
     definitions,
   );
   assert.equal(
-    definitions.find((definition) => definition.name === "parent")!
-      .projectSource,
+    definitions.find((definition) => definition.name === "parent")!.projectSource,
     join(projectAgentDir, "parent.md"),
   );
 
   const duplicate = join(projectAgentDir, "nested");
   mkdirSync(duplicate);
-  writeFileSync(
-    join(duplicate, "child.md"),
-    "---\nname: child\n---\nduplicate",
-  );
+  writeFileSync(join(duplicate, "child.md"), "---\nname: child\n---\nduplicate");
   assert.throws(
     () => discoverAgentDefinitions({ projectRoot: project }),
     /multiple definitions found for agent child/,
@@ -2521,14 +2172,8 @@ test("merges enabled overrides and validates disabled children without hiding th
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-enabled-override-"));
   const agents = join(root, "agents");
   mkdirSync(agents);
-  writeFileSync(
-    join(agents, "reviewer.md"),
-    "---\nname: reviewer\nenabled: false\n---\n",
-  );
-  writeFileSync(
-    join(agents, "parent.md"),
-    '---\nname: parent\nagents: ["reviewer"]\n---\nParent',
-  );
+  writeFileSync(join(agents, "reviewer.md"), "---\nname: reviewer\nenabled: false\n---\n");
+  writeFileSync(join(agents, "parent.md"), '---\nname: parent\nagents: ["reviewer"]\n---\nParent');
 
   withPiAgentDir(root, () => {
     const definitions = discoverAgentDefinitions();
@@ -2552,18 +2197,9 @@ test("validates user duplicates and merged agent references", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-"));
   const agents = join(root, "agents");
   mkdirSync(join(agents, "nested"), { recursive: true });
-  writeFileSync(
-    join(agents, "parent.md"),
-    '---\nname: parent\nagents: ["child"]\n---\nParent',
-  );
-  writeFileSync(
-    join(agents, "child.md"),
-    '---\nname: child\nagents: ["parent"]\n---\nChild',
-  );
-  writeFileSync(
-    join(agents, "nested", "parent.md"),
-    "---\nname: parent\n---\nDuplicate",
-  );
+  writeFileSync(join(agents, "parent.md"), '---\nname: parent\nagents: ["child"]\n---\nParent');
+  writeFileSync(join(agents, "child.md"), '---\nname: child\nagents: ["parent"]\n---\nChild');
+  writeFileSync(join(agents, "nested", "parent.md"), "---\nname: parent\n---\nDuplicate");
   assert.throws(
     () => withPiAgentDir(root, () => discoverAgentDefinitions()),
     /multiple definitions found for agent parent/,
@@ -2581,10 +2217,7 @@ test("validates user duplicates and merged agent references", () => {
     ["child", "parent"],
   );
 
-  writeFileSync(
-    join(agents, "parent.md"),
-    '---\nname: parent\nagents: ["missing"]\n---\nParent',
-  );
+  writeFileSync(join(agents, "parent.md"), '---\nname: parent\nagents: ["missing"]\n---\nParent');
   assert.throws(
     () => withPiAgentDir(root, () => discoverAgentDefinitions()),
     /agent parent references missing agent definition missing/,
@@ -2600,10 +2233,7 @@ test("keeps a bundled parent valid when its child is overridden", () => {
     "---\nname: scout\ndescription: Overridden scout\n---\nScout",
   );
   assert.equal(
-    withPiAgentDir(
-      root,
-      () => discoverAgent("reviewer").frontmatter.agents,
-    )?.includes("scout"),
+    withPiAgentDir(root, () => discoverAgent("reviewer").frontmatter.agents)?.includes("scout"),
     true,
   );
 });
@@ -2614,10 +2244,7 @@ test("transports complex prompts through a private temporary file", () => {
   try {
     assert.equal(readFileSync(promptPath, "utf8"), body);
     assertPosixMode(promptPath, 0o600);
-    const tempRoot = join(
-      tmpdir(),
-      `pi-herdsman-${process.getuid?.() ?? "user"}`,
-    );
+    const tempRoot = join(tmpdir(), `pi-herdsman-${process.getuid?.() ?? "user"}`);
     assertPosixMode(tempRoot, 0o700);
     assertPosixMode(join(tempRoot, "prompts"), 0o700);
     const launch = agentLaunchArgs(
@@ -2630,11 +2257,7 @@ test("transports complex prompts through a private temporary file", () => {
       },
       { bodyPromptPath: promptPath },
     );
-    assert.deepEqual(launch, [
-      "--append-system-prompt",
-      promptPath,
-      "--no-skills",
-    ]);
+    assert.deepEqual(launch, ["--append-system-prompt", promptPath, "--no-skills"]);
   } finally {
     unlinkSync(promptPath);
   }
@@ -2724,9 +2347,7 @@ test("model selection cannot change extension discovery policy", () => {
       );
       assert.equal(args.includes("--no-extensions"), noExtensions === true);
       assert.deepEqual(
-        args.flatMap((arg, index) =>
-          arg === "--extension" ? [args[index + 1]] : [],
-        ),
+        args.flatMap((arg, index) => (arg === "--extension" ? [args[index + 1]] : [])),
         extensions,
       );
     }
@@ -2753,10 +2374,7 @@ test("resolves model and thinking fallbacks independently at launch", () => {
   for (const [frontmatter, settings] of [
     [{}, ["--model", "inherited/model", "--thinking", "high"]],
     [{ model: "   " }, ["--model", "inherited/model", "--thinking", "high"]],
-    [
-      { model: "explicit/model" },
-      ["--model", "explicit/model", "--thinking", "high"],
-    ],
+    [{ model: "explicit/model" }, ["--model", "explicit/model", "--thinking", "high"]],
     [{ thinking: "low" }, ["--model", "inherited/model", "--thinking", "low"]],
     [{ thinking: false }, ["--model", "inherited/model", "--thinking", "off"]],
   ] as const)
@@ -2919,17 +2537,12 @@ test("ship loads native Code Mode without exposing unselected ordinary tools", (
     });
     assert.equal(args.includes("--no-extensions"), true);
     assert.ok(
-      args.some(
-        (arg, index) =>
-          arg === "--extension" && args[index + 1] === "builtin:codemode",
-      ),
+      args.some((arg, index) => arg === "--extension" && args[index + 1] === "builtin:codemode"),
     );
     const output = execFileSync(
       process.execPath,
       [
-        resolve(
-          "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
-        ),
+        resolve("node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"),
         ...args,
         "--extension",
         provider,
@@ -2968,10 +2581,7 @@ test("noTools relative launch filters MCP tools unless an MCP tool is selected",
       { bodyPromptPath: "/prompt", cwd: process.cwd() },
     );
   const restricted = launch(["+codemode"]);
-  assert.equal(
-    restricted[restricted.indexOf("--tools") + 1],
-    "+codemode,+load_skill,+mcp__",
-  );
+  assert.equal(restricted[restricted.indexOf("--tools") + 1], "+codemode,+load_skill,+mcp__");
   assert.equal(restricted[restricted.indexOf("--exclude-tools") + 1], "mcp__");
   const explicitlySelected = launch(["+codemode", "+mcp__probe__secret"]);
   assert.equal(
@@ -3024,9 +2634,7 @@ test("native Code Mode cannot discover or call unselected registered MCP tools",
   try {
     const runProbe = async (tools: string[]) => {
       const explicitlySelected = tools.includes("+mcp__probe__secret");
-      const providerName = explicitlySelected
-        ? "mcp-codemode-allowed"
-        : "mcp-codemode-restricted";
+      const providerName = explicitlySelected ? "mcp-codemode-allowed" : "mcp-codemode-restricted";
       const faux = fauxProvider({
         provider: providerName,
         models: [{ id: "test", reasoning: false, input: ["text"] }],
@@ -3072,9 +2680,7 @@ test("native Code Mode cannot discover or call unselected registered MCP tools",
                   };
                 },
               );
-              void mcpServer
-                .connect(asSdkMcpServerTransport(server))
-                .then(() => mcpServerReady++);
+              void mcpServer.connect(asSdkMcpServerTransport(server)).then(() => mcpServerReady++);
               return client;
             },
           }),
@@ -3101,9 +2707,7 @@ test("native Code Mode cannot discover or call unselected registered MCP tools",
       const selectedTools = configured[toolArgs + 1].split(",");
       const selectedExclusions =
         excludeArgs < 0 ? undefined : configured[excludeArgs + 1].split(",");
-      const expectedOutput = explicitlySelected
-        ? "MCP_TOOL_ALLOWED"
-        : "MCP_TOOL_BLOCKED";
+      const expectedOutput = explicitlySelected ? "MCP_TOOL_ALLOWED" : "MCP_TOOL_BLOCKED";
       const code = explicitlySelected
         ? 'const matches = await searchTools("restricted probe tool"); if (!matches.some((tool) => tool.name === "mcp__probe__secret")) throw new Error("explicitly selected MCP tool was not discoverable"); const result = await tools.mcp__probe__secret({}); if (!result.content.some((part) => part.text === "MCP_SECRET_TOOL_CALLED")) throw new Error("explicitly selected MCP tool did not execute"); text("MCP_TOOL_ALLOWED");'
         : 'const matches = await searchTools("restricted probe tool"); if (matches.some((tool) => tool.name === "mcp__probe__secret")) throw new Error("unselected MCP tool was discoverable"); let blocked = false; try { await tools.mcp__probe__secret({}); } catch { blocked = true; } if (!blocked) throw new Error("unselected MCP tool was callable"); text("MCP_TOOL_BLOCKED");';
@@ -3111,11 +2715,7 @@ test("native Code Mode cannot discover or call unselected registered MCP tools",
       faux.setResponses([
         (context) => {
           requests.push(context.messages as any[]);
-          assert.ok(
-            getCurrentTools(context.messages).some(
-              (tool) => tool.name === "codemode",
-            ),
-          );
+          assert.ok(getCurrentTools(context.messages).some((tool) => tool.name === "codemode"));
           return fauxAssistantMessage([fauxToolCall("codemode", { code })], {
             stopReason: "toolUse",
           });
@@ -3142,8 +2742,7 @@ test("native Code Mode cannot discover or call unselected registered MCP tools",
         assert.ok(session.getActiveToolNames().includes("codemode"));
         await session.prompt("Probe registered MCP access through Code Mode.");
         const toolResult = requests[1]?.find(
-          (message) =>
-            message.role === "toolResult" && message.toolName === "codemode",
+          (message) => message.role === "toolResult" && message.toolName === "codemode",
         );
         assert.ok(toolResult, JSON.stringify(requests));
         assert.equal(toolResult.isError, false, JSON.stringify(toolResult));
@@ -3236,9 +2835,7 @@ test("managed launch policy always includes await_owner and attach_handoff", () 
       assert.deepEqual(args.slice(start, start + expected.length), expected);
     }
     assert.equal(
-      args
-        .flatMap((arg) => arg.split(","))
-        .filter((arg) => arg === "await_owner").length,
+      args.flatMap((arg) => arg.split(",")).filter((arg) => arg === "await_owner").length,
       expected.some((arg) => arg.split(",").includes("await_owner")) ? 1 : 0,
     );
   }
@@ -3310,17 +2907,12 @@ test("applies explicit noSkills before inheritSkills defaults", () => {
     );
   assert.deepEqual(launch({}), ["--no-context-files", "--no-skills"]);
   assert.deepEqual(launch({ inheritSkills: true }), ["--no-context-files"]);
-  assert.deepEqual(launch({ inheritSkills: "true" }), [
-    "--no-context-files",
-    "--no-skills",
-  ]);
+  assert.deepEqual(launch({ inheritSkills: "true" }), ["--no-context-files", "--no-skills"]);
   assert.deepEqual(launch({ inheritSkills: true, noSkills: true }), [
     "--no-context-files",
     "--no-skills",
   ]);
-  assert.deepEqual(launch({ inheritSkills: false, noSkills: false }), [
-    "--no-context-files",
-  ]);
+  assert.deepEqual(launch({ inheritSkills: false, noSkills: false }), ["--no-context-files"]);
 });
 
 test("passes native capability combinations through to Pi", () => {
@@ -3415,13 +3007,7 @@ test("Coordinator launch excludes only global context when configured", () => {
         },
       ),
     ),
-    [
-      "--no-context-files",
-      "--append-system-prompt",
-      ancestor,
-      "--append-system-prompt",
-      project,
-    ],
+    ["--no-context-files", "--append-system-prompt", ancestor, "--append-system-prompt", project],
   );
 });
 
@@ -3547,17 +3133,10 @@ test("expands body references with caller precedence and no recursion", () => {
   writeFileSync(nested, "@./ignored.md");
   writeFileSync(included, "included\n@./nested.md");
   assert.equal(
-    expandAgentBodyFiles(
-      `before\n@${included}\n@${included}\nafter`,
-      [],
-      "assign",
-    ),
+    expandAgentBodyFiles(`before\n@${included}\n@${included}\nafter`, [], "assign"),
     "before\nincluded\n@./nested.md\n\nafter",
   );
-  assert.equal(
-    expandAgentBodyFiles(`@${included}`, [realpathSync(included)], "assign"),
-    "",
-  );
+  assert.equal(expandAgentBodyFiles(`@${included}`, [realpathSync(included)], "assign"), "");
 });
 
 test("expands traced body fragments in one globally deduplicated reference pass", () => {
@@ -3570,26 +3149,19 @@ test("expands traced body fragments in one globally deduplicated reference pass"
   ];
   const expanded = expandDefinitionBodyFragments(fragments, [], "inspect");
   assert.deepEqual(expanded, ["included text", ""]);
-  assert.deepEqual(
-    expandDefinitionBodyFragmentsWithSources(fragments, [], "inspect"),
-    [[{ text: "included text", filePath: included }], []],
-  );
+  assert.deepEqual(expandDefinitionBodyFragmentsWithSources(fragments, [], "inspect"), [
+    [{ text: "included text", filePath: included }],
+    [],
+  ]);
   assert.equal(
     expanded.join("\n\n"),
-    expandAgentBodyFiles(
-      fragments.map(({ body }) => body).join("\n\n"),
-      [],
-      "inspect",
-    ),
+    expandAgentBodyFiles(fragments.map(({ body }) => body).join("\n\n"), [], "inspect"),
   );
 });
 
 test("delegation preserves legacy tool-policy authorization", () => {
   assert.throws(
-    () =>
-      discoverAgentDefinitionsWithContents(
-        '---\nname: custom\nworkers: ["scout"]\n---',
-      ),
+    () => discoverAgentDefinitionsWithContents('---\nname: custom\nworkers: ["scout"]\n---'),
     /is not a supported agent-definition field/,
   );
   for (const { frontmatter, enabled } of [
@@ -3640,9 +3212,7 @@ test("delegation preserves legacy tool-policy authorization", () => {
 test("keeps ordinary tool metadata separate from managed role tools", () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-tool-inference-"));
   const definitions = withPiAgentDir(root, () => discoverAgentDefinitions());
-  const effective = new Map(
-    definitions.map((definition) => [definition.name, definition]),
-  );
+  const effective = new Map(definitions.map((definition) => [definition.name, definition]));
   assert.deepEqual(effective.get("implementer")?.frontmatter.tools, [
     "read",
     "bash",
@@ -3679,12 +3249,7 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
     "read_evidence",
     "attach_handoff",
   ];
-  const leafTools = [
-    "await_owner",
-    "notify_owner",
-    "read_evidence",
-    "attach_handoff",
-  ];
+  const leafTools = ["await_owner", "notify_owner", "read_evidence", "attach_handoff"];
   const toolArgs = (frontmatter: Frontmatter) => {
     const args = make(frontmatter);
     const index = args.indexOf("--tools");
@@ -3694,14 +3259,12 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
     "--tools",
     ["read", ...roleTools, "load_skill", "mcp__"].join(","),
   ]);
-  assert.deepEqual(
-    toolArgs({ agents: ["child"], noTools: true, tools: ["read"] }),
-    ["--tools", ["read", ...leafTools, "load_skill", "mcp__"].join(",")],
-  );
+  assert.deepEqual(toolArgs({ agents: ["child"], noTools: true, tools: ["read"] }), [
+    "--tools",
+    ["read", ...leafTools, "load_skill", "mcp__"].join(","),
+  ]);
   assert.equal(
-    make({ agents: ["child"], noTools: true, tools: ["read"] }).includes(
-      "--no-tools",
-    ),
+    make({ agents: ["child"], noTools: true, tools: ["read"] }).includes("--no-tools"),
     true,
   );
   assert.equal(make({ agents: ["child"] }).includes("--tools"), false);
@@ -3712,10 +3275,7 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
   });
   const toolsIndex = exclusions.indexOf("--tools");
   assert.notEqual(toolsIndex, -1);
-  assert.equal(
-    exclusions[toolsIndex + 1],
-    ["read", ...roleTools, "load_skill", "mcp__"].join(","),
-  );
+  assert.equal(exclusions[toolsIndex + 1], ["read", ...roleTools, "load_skill", "mcp__"].join(","));
   const exclusionsIndex = exclusions.indexOf("--exclude-tools");
   assert.notEqual(exclusionsIndex, -1);
   assert.deepEqual(exclusions.slice(exclusionsIndex, exclusionsIndex + 2), [
@@ -3726,26 +3286,18 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
     "--tools",
     [...leafTools, "load_skill", "mcp__"].join(","),
   ]);
-  assert.equal(
-    make({ agents: ["child"], noTools: true }).includes("--no-tools"),
-    true,
-  );
+  assert.equal(make({ agents: ["child"], noTools: true }).includes("--no-tools"), true);
   assert.deepEqual(toolArgs({ agents: ["child"], tools: [] }), [
     "--tools",
     [...leafTools, "load_skill", "mcp__"].join(","),
   ]);
-  assert.equal(
-    make({ agents: ["child"], tools: [] }).includes("--no-tools"),
-    true,
-  );
+  assert.equal(make({ agents: ["child"], tools: [] }).includes("--no-tools"), true);
   assert.deepEqual(toolArgs({ agents: ["child"], tools: ["agent"] }), [
     "--tools",
     [...roleTools, "load_skill", "mcp__"].join(","),
   ]);
   assert.equal(
-    /(?:^|,)agent(?:,|$)/u.test(
-      toolArgs({ agents: ["child"], tools: ["agent"] })[1],
-    ),
+    /(?:^|,)agent(?:,|$)/u.test(toolArgs({ agents: ["child"], tools: ["agent"] })[1]),
     false,
   );
 });
@@ -3778,10 +3330,7 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
     agentLaunchArgs(leaf, { managedAgent: true }).filter(
       (value) => value === "--tools" || value.includes("await_owner"),
     ),
-    [
-      "--tools",
-      "read,bash,await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
-    ],
+    ["--tools", "read,bash,await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__"],
   );
   const empty = projectAgentDefinition(
     {
@@ -3812,8 +3361,7 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
       (value) =>
         value === "--no-tools" ||
         value === "--tools" ||
-        value ===
-          "await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
+        value === "await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
     ),
     [
       "--no-tools",
@@ -3847,20 +3395,17 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
     },
     "leaf",
   );
-  assert.deepEqual(
-    agentLaunchArgs(delegationOnlyLeaf, { managedAgent: true }),
-    [
-      "--no-context-files",
-      "--no-tools",
-      "--tools",
-      "await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
-      "--exclude-tools",
-      "mcp__",
-      "--no-skills",
-      "--append-system-prompt",
-      '<active_agent name="parent"/>',
-    ],
-  );
+  assert.deepEqual(agentLaunchArgs(delegationOnlyLeaf, { managedAgent: true }), [
+    "--no-context-files",
+    "--no-tools",
+    "--tools",
+    "await_owner,notify_owner,read_evidence,attach_handoff,load_skill,mcp__",
+    "--exclude-tools",
+    "mcp__",
+    "--no-skills",
+    "--append-system-prompt",
+    '<active_agent name="parent"/>',
+  ]);
   const omittedToolsLeaf = projectAgentDefinition(
     {
       category: "agent" as const,
@@ -3920,17 +3465,12 @@ test("merges effective frontmatter and preserves narrow override mutations", () 
     ),
   );
   assert.equal(reset.changed, true);
-  assert.equal(
-    readFileSync(path, "utf8"),
-    original.replace("model: old/model\r\n", ""),
-  );
+  assert.equal(readFileSync(path, "utf8"), original.replace("model: old/model\r\n", ""));
   const multilineOriginal = "---\nname: reviewer\nthinking: >-\n  high\n---\n";
   writeFileSync(path, multilineOriginal);
   assert.throws(
     () =>
-      withPiAgentDir(root, () =>
-        updateAgentOverride(overrideDefinition, "thinking", undefined),
-      ),
+      withPiAgentDir(root, () => updateAgentOverride(overrideDefinition, "thinking", undefined)),
     /cannot safely remove multiline thinking/u,
   );
   assert.equal(readFileSync(path, "utf8"), multilineOriginal);
@@ -3974,9 +3514,7 @@ test("merges effective frontmatter and preserves narrow override mutations", () 
     );
     assert.equal(readFileSync(unsafePath, "utf8"), unsafeOriginal);
   }
-  const createRoot = mkdtempSync(
-    join(tmpdir(), "pi-herdsman-override-create-"),
-  );
+  const createRoot = mkdtempSync(join(tmpdir(), "pi-herdsman-override-create-"));
   const createDefinition = {
     category: "agent" as const,
     name: "custom/name",
@@ -3990,10 +3528,7 @@ test("merges effective frontmatter and preserves narrow override mutations", () 
   );
   assert.equal(result.changed, true);
   assert.match(result.path, /custom%2Fname\.md$/);
-  assert.equal(
-    readFileSync(result.path, "utf8"),
-    '---\nname: "custom/name"\nthinking: off\n---\n',
-  );
+  assert.equal(readFileSync(result.path, "utf8"), '---\nname: "custom/name"\nthinking: off\n---\n');
   const coordinator = withPiAgentDir(createRoot, () =>
     updateAgentOverride(
       {
@@ -4008,25 +3543,16 @@ test("merges effective frontmatter and preserves narrow override mutations", () 
       "off",
     ),
   );
-  assert.equal(
-    coordinator.path,
-    join(createRoot, "coordinators", "leads", "managed-lead.md"),
-  );
+  assert.equal(coordinator.path, join(createRoot, "coordinators", "leads", "managed-lead.md"));
   assert.equal(
     readFileSync(coordinator.path, "utf8"),
     '---\nname: "managed-lead"\nthinking: off\n---\n',
   );
   const noop = withPiAgentDir(createRoot, () =>
-    updateAgentOverride(
-      { ...createDefinition, overrideSource: result.path },
-      "model",
-      undefined,
-    ),
+    updateAgentOverride({ ...createDefinition, overrideSource: result.path }, "model", undefined),
   );
   assert.equal(noop.changed, false);
-  const enabledRoot = mkdtempSync(
-    join(tmpdir(), "pi-herdsman-enabled-persist-"),
-  );
+  const enabledRoot = mkdtempSync(join(tmpdir(), "pi-herdsman-enabled-persist-"));
   const enabledDefinition = {
     category: "agent" as const,
     name: "reviewer",
@@ -4039,10 +3565,7 @@ test("merges effective frontmatter and preserves narrow override mutations", () 
     updateAgentOverride(enabledDefinition, "enabled", false),
   );
   assert.equal(disabled.changed, true);
-  assert.equal(
-    readFileSync(disabled.path, "utf8"),
-    '---\nname: "reviewer"\nenabled: false\n---\n',
-  );
+  assert.equal(readFileSync(disabled.path, "utf8"), '---\nname: "reviewer"\nenabled: false\n---\n');
   const enabledReset = withPiAgentDir(enabledRoot, () =>
     updateAgentOverride(
       { ...enabledDefinition, overrideSource: disabled.path },
@@ -4062,10 +3585,7 @@ test("definition edits target existing sources and reject stale or linked files"
   const projectText = "---\nname: actual-name\nthinking: high\n---\nproject\n";
   writeFileSync(projectPath, projectText);
   writeFileSync(privatePath, "---\nname: actual-name\n---\nprivate\n");
-  writeFileSync(
-    globalPath,
-    "---\nname: actual-name\nmodel: global/model\n---\nglobal\n",
-  );
+  writeFileSync(globalPath, "---\nname: actual-name\nmodel: global/model\n---\nglobal\n");
   const definition = {
     category: "agent" as const,
     name: "actual-name",
@@ -4142,10 +3662,7 @@ test("assignment thinking takes precedence or defers to Pi for a model-only over
   });
   const modelRuntime = {
     // A longer provider prefix must not redirect Pi away from the exact pair.
-    getModels: () => [
-      selected,
-      { provider: "extension/provider/model", id: "other" },
-    ],
+    getModels: () => [selected, { provider: "extension/provider/model", id: "other" }],
     hasConfiguredAuth: () => true,
   } as unknown as Parameters<typeof resolveCliModel>[0]["modelRuntime"];
   const cases = [
@@ -4160,10 +3677,7 @@ test("assignment thinking takes precedence or defers to Pi for a model-only over
       assignmentThinking: thinking,
       modelDecision: model ? modelDecision : undefined,
     });
-    assert.equal(
-      args[args.indexOf("--model") + 1],
-      model ? overrideModel : "vendor/default",
-    );
+    assert.equal(args[args.indexOf("--model") + 1], model ? overrideModel : "vendor/default");
     if (model) {
       const result = resolveCliModel({
         cliProvider: args[args.indexOf("--provider") + 1],
@@ -4209,10 +3723,7 @@ test("a configured project model outranks inheritance without changing extension
     );
     const effective = discoverAgent("scout", { projectRoot: root });
     assert.equal(effective.frontmatter.noExtensions, true);
-    assert.equal(
-      effective.frontmatter.model,
-      "mistral-native/zai-glm-5-3-flash",
-    );
+    assert.equal(effective.frontmatter.model, "mistral-native/zai-glm-5-3-flash");
 
     const decision = resolveChildModel({
       configured: configuredModel(effective.frontmatter),
@@ -4222,10 +3733,10 @@ test("a configured project model outranks inheritance without changing extension
       bodyPromptPath: "/tmp/scout-prompt",
       modelDecision: decision,
     });
-    assert.deepEqual(
-      args.slice(args.indexOf("--model"), args.indexOf("--model") + 2),
-      ["--model", "mistral-native/zai-glm-5-3-flash"],
-    );
+    assert.deepEqual(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2), [
+      "--model",
+      "mistral-native/zai-glm-5-3-flash",
+    ]);
     assert.equal(args.includes("--no-extensions"), true);
     assert.equal(args.includes("npm:pi-mistral-native"), true);
   } finally {
@@ -4245,12 +3756,7 @@ test("the inherited provider is Pi's resolved provider, not the token's first se
 });
 
 test("closed policies preserve native selectors and protect mandatory tools", () => {
-  const cases: [
-    Frontmatter,
-    string | undefined,
-    string | undefined,
-    boolean,
-  ][] = [
+  const cases: [Frontmatter, string | undefined, string | undefined, boolean][] = [
     [{}, undefined, undefined, false],
     [{ noBuiltinTools: true }, undefined, undefined, false],
     [
@@ -4327,10 +3833,7 @@ test("closed policies preserve native selectors and protect mandatory tools", ()
     );
     const value = (flag: string) => {
       const index = args.indexOf(flag);
-      assert.equal(
-        args.filter((arg) => arg === flag).length,
-        index < 0 ? 0 : 1,
-      );
+      assert.equal(args.filter((arg) => arg === flag).length, index < 0 ? 0 : 1);
       return index < 0 ? undefined : args[index + 1];
     };
     assert.equal(value("--tools"), tools);
@@ -4386,13 +3889,8 @@ test("definition layers and effective policies cannot exclude intrinsic skill lo
       /agent policy field .* intrinsic tool "load_skill"/,
     );
   }
-  assert.deepEqual(mergeFrontmatter(base, { tools: ["codemode"] }).tools, [
-    "codemode",
-  ]);
-  assert.deepEqual(
-    mergeFrontmatter(base, { excludeTools: ["-load_skill"] }).excludeTools,
-    [],
-  );
+  assert.deepEqual(mergeFrontmatter(base, { tools: ["codemode"] }).tools, ["codemode"]);
+  assert.deepEqual(mergeFrontmatter(base, { excludeTools: ["-load_skill"] }).excludeTools, []);
 });
 
 test("installed Pi honors managed launch selection and external restrictions", async (t) => {
@@ -4405,21 +3903,11 @@ test("installed Pi honors managed launch selection and external restrictions", a
   for (const [frontmatter, externalTools, externalExclusions, expected] of [
     [{ noTools: true }, undefined, undefined, ["load_skill"]],
     [{ tools: [] }, undefined, undefined, ["load_skill"]],
-    [
-      { noTools: true, tools: ["+grep"] },
-      undefined,
-      undefined,
-      ["grep", "load_skill"],
-    ],
+    [{ noTools: true, tools: ["+grep"] }, undefined, undefined, ["grep", "load_skill"]],
     [{ tools: ["grep"] }, undefined, undefined, ["grep", "load_skill"]],
     [{}, ["grep"], undefined, ["grep"]],
     [{}, ["load_skill", "grep"], ["load_*"], ["grep"]],
-  ] satisfies [
-    Frontmatter,
-    string[] | undefined,
-    string[] | undefined,
-    string[],
-  ][]) {
+  ] satisfies [Frontmatter, string[] | undefined, string[] | undefined, string[]][]) {
     const args = agentLaunchArgs(
       {
         category: "agent" as const,
@@ -4531,10 +4019,7 @@ test("wildcard exclusions reject mandatory overlap and escape regex syntax", () 
     },
     { managedAgent: true },
   );
-  assert.equal(
-    args[args.indexOf("--exclude-tools") + 1],
-    "ask.?*,agent,xask_*",
-  );
+  assert.equal(args[args.indexOf("--exclude-tools") + 1], "ask.?*,agent,xask_*");
 });
 
 test("relative tool policy preserves Pi selection while terminal removals remain denied", () => {
@@ -4561,17 +4046,16 @@ test("relative tool policy preserves Pi selection while terminal removals remain
   const args = agentLaunchArgs(definition, {
     requiredTools: ["message_manager"],
   });
-  assert.deepEqual(
-    args.slice(args.indexOf("--tools"), args.indexOf("--tools") + 2),
-    ["--tools", "-bash,+codemode,-write,+write,+message_manager,+load_skill"],
-  );
+  assert.deepEqual(args.slice(args.indexOf("--tools"), args.indexOf("--tools") + 2), [
+    "--tools",
+    "-bash,+codemode,-write,+write,+message_manager,+load_skill",
+  ]);
   assert.equal(args[args.indexOf("--exclude-tools") + 1], "bash");
   assert.throws(
     () =>
-      configuredToolPolicy(
-        { ...definition, frontmatter: { tools: ["-message_manager"] } },
-        ["message_manager"],
-      ),
+      configuredToolPolicy({ ...definition, frontmatter: { tools: ["-message_manager"] } }, [
+        "message_manager",
+      ]),
     /cannot remove required tool/,
   );
 });
@@ -4591,10 +4075,7 @@ test("tool policy name predicate applies allow and exclude patterns with require
   assert.equal(toolPolicyAllowsName(policy, required, "write"), true);
   assert.equal(toolPolicyAllowsName(policy, required, "bash"), false);
   assert.equal(toolPolicyAllowsName(policy, required, "read_required"), true);
-  const inherited = configuredToolPolicy(
-    { ...definition, frontmatter: {} },
-    [],
-  );
+  const inherited = configuredToolPolicy({ ...definition, frontmatter: {} }, []);
   assert.equal(toolPolicyAllowsName(inherited, new Set(), "bash"), true);
 });
 
@@ -4605,22 +4086,13 @@ test("Agent and Coordinator namespaces isolate misplaced user definitions", () =
   mkdirSync(agents, { recursive: true });
   mkdirSync(roles, { recursive: true });
   withPiAgentDir(root, () => {
-    writeFileSync(
-      join(roles, "bad.md"),
-      "---\nname: custom\nunsupported: true\n---\n",
-    );
+    writeFileSync(join(roles, "bad.md"), "---\nname: custom\nunsupported: true\n---\n");
     assert.ok(discoverAgentDefinitions().length);
-    assert.ok(
-      discoverRoleDefinitions().length,
-      "flat Coordinator files are ignored",
-    );
+    assert.ok(discoverRoleDefinitions().length, "flat Coordinator files are ignored");
     unlinkSync(join(roles, "bad.md"));
     writeFileSync(join(agents, "bad.md"), "---\nname: manager\n---\n");
     mkdirSync(join(agents, "nested"));
-    writeFileSync(
-      join(agents, "nested", "duplicate.md"),
-      "---\nname: manager\n---\n",
-    );
+    writeFileSync(join(agents, "nested", "duplicate.md"), "---\nname: manager\n---\n");
     writeFileSync(join(agents, "valid.md"), "---\nname: valid\n---\n");
     assert.ok(discoverRoleDefinitions().length);
     const agentWarnings: string[] = [];
@@ -4639,10 +4111,7 @@ test("Agent and Coordinator namespaces isolate misplaced user definitions", () =
       /nested.*duplicate\.md: definition belongs in .*coordinators.*managers.*manager\.md; file excluded/u,
     );
     writeFileSync(join(agents, "malformed.md"), "---\nname: [manager\n---\n");
-    assert.throws(
-      () => discoverAgentDefinitions({ onWarning: () => undefined }),
-      /malformed\.md/u,
-    );
+    assert.throws(() => discoverAgentDefinitions({ onWarning: () => undefined }), /malformed\.md/u);
   });
 });
 
@@ -4650,10 +4119,7 @@ test("contextual definition warnings are reported once per session", async () =>
   const root = mkdtempSync(join(tmpdir(), "herdsman-definition-warning-"));
   mkdirSync(join(root, "agents"));
   mkdirSync(join(root, "coordinators"));
-  writeFileSync(
-    join(root, "agents", "manager.md"),
-    "---\nname: manager\n---\n",
-  );
+  writeFileSync(join(root, "agents", "manager.md"), "---\nname: manager\n---\n");
   const notices: string[] = [];
   let sessionId = "session-one";
   const manager = { getSessionId: () => sessionId };
@@ -4702,20 +4168,15 @@ test("Coordinator discovery ignores unsupported legacy locations in every scope"
   const git = join(root, "git");
   mkdirSync(git);
   execFileSync("git", ["init", "-b", "main"], { cwd: git, stdio: "ignore" });
-  const common = execFileSync(
-    "git",
-    ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    { cwd: git, encoding: "utf8" },
-  ).trim();
+  const common = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+    cwd: git,
+    encoding: "utf8",
+  }).trim();
   const legacyPrivate = join(common, "pi-herdsman", "roles");
   put(join(legacyPrivate, "manager.md"), valid);
   put(join(legacyPrivate, "flexible-lead.md"), malformed);
   withPiAgentDir(global, () => {
-    for (const options of [
-      {},
-      { projectRoot: project },
-      { projectRoot: git },
-    ]) {
+    for (const options of [{}, { projectRoot: project }, { projectRoot: git }]) {
       const manager = discoverRoleDefinition("manager", options);
       const flexible = discoverRoleDefinition("flexible-lead", options);
       assert.notEqual(manager.path, join(legacyGlobal, "manager.md"));
@@ -4742,23 +4203,14 @@ test("targeted Coordinator resolution isolates unrelated definition failures", (
   const manager = join(managers, "manager.md");
 
   put(flexible, "---\nname: flexible-lead\ntools: [read]\n---\n");
-  put(
-    unrelated,
-    "---\nname: unrelated\nunsupported: true\n---\n@./missing-prompt.md\n",
-  );
+  put(unrelated, "---\nname: unrelated\nunsupported: true\n---\n@./missing-prompt.md\n");
   put(manager, "---\nname: manager\nunsupported: true\n---\n");
   withPiAgentDir(global, () => {
-    assert.equal(
-      resolveDefinition("lead", "flexible-lead").frontmatter.tools?.[0],
-      "read",
-    );
+    assert.equal(resolveDefinition("lead", "flexible-lead").frontmatter.tools?.[0], "read");
     assert.throws(() => discoverRoleDefinitions(), /unsupported/u);
 
     put(flexible, "---\nname: flexible-lead\nunsupported: true\n---\n");
-    assert.throws(
-      () => resolveDefinition("lead", "flexible-lead"),
-      /unsupported/u,
-    );
+    assert.throws(() => resolveDefinition("lead", "flexible-lead"), /unsupported/u);
 
     put(flexible, "---\nname: flexible-lead\n---\n");
     put(join(leads, "duplicate.md"), "---\nname: flexible-lead\n---\n");
@@ -4778,10 +4230,7 @@ test("targeted Coordinator resolution isolates unrelated definition failures", (
   });
 
   const project = join(root, "project");
-  put(
-    join(project, ".pi", "coordinators", "chief.md"),
-    "---\nname: chief\n---\n",
-  );
+  put(join(project, ".pi", "coordinators", "chief.md"), "---\nname: chief\n---\n");
   withPiAgentDir(global, () =>
     assert.throws(
       () => resolveDefinition("chief", "chief", { projectRoot: project }),
@@ -4818,10 +4267,7 @@ test("named Coordinator definitions layer only within their category", (t) => {
       [lead, projectLead],
     );
     assert.equal(inspected.definition.category, "lead");
-    assert.equal(
-      inspected.definition.body,
-      "Lead strategy\n\nProject strategy",
-    );
+    assert.equal(inspected.definition.body, "Lead strategy\n\nProject strategy");
     assert.equal(inspected.definition.frontmatter.model, "global/model");
     assert.equal(inspected.definition.frontmatter.thinking, "high");
     assert.equal(inspected.definition.frontmatter.tools, undefined);
@@ -4830,9 +4276,7 @@ test("named Coordinator definitions layer only within their category", (t) => {
       resolveDefinition("manager", "review", { projectRoot: project }).body,
       "Manager strategy",
     );
-    assert.ok(
-      !discoverAgentDefinitions().some(({ name }) => name === "review"),
-    );
+    assert.ok(!discoverAgentDefinitions().some(({ name }) => name === "review"));
     assert.throws(
       () => resolveDefinition("lead", "flexible-lead", options),
       /not applicable to assigned Leads/u,
@@ -4845,19 +4289,13 @@ test("named Coordinator definitions layer only within their category", (t) => {
       scope: "project",
     });
     assert.equal(edit.path, projectLead);
-    assert.equal(
-      resolveDefinition("lead", "review", options).frontmatter.thinking,
-      "low",
-    );
+    assert.equal(resolveDefinition("lead", "review", options).frontmatter.thinking, "low");
     put(join(global, "coordinators", "leads", "duplicate"), "---\nDuplicate");
     assert.throws(
       () => resolveDefinition("lead", "review"),
       /multiple definitions found for lead review/u,
     );
-    assert.equal(
-      resolveDefinition("manager", "review").body,
-      "Manager strategy",
-    );
+    assert.equal(resolveDefinition("manager", "review").body, "Manager strategy");
     assert.equal(resolveDefinition("chief", "chief").category, "chief");
   });
 });

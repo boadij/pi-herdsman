@@ -50,14 +50,7 @@ export interface ManagedAgentState {
   lastAck?: {
     requestId: string;
     accepted: boolean;
-    code?:
-      | "busy"
-      | "idle"
-      | "invalid"
-      | "identity"
-      | "delivery"
-      | "ambiguous"
-      | "incompatible";
+    code?: "busy" | "idle" | "invalid" | "identity" | "delivery" | "ambiguous" | "incompatible";
     message?: string;
     acknowledgedAt: number;
   };
@@ -162,12 +155,7 @@ export interface ResultRecord {
   status: "completed" | "failed";
   text?: string;
   error?: {
-    code:
-      | "empty_result"
-      | "execution_error"
-      | "result_too_large"
-      | "write_failure"
-      | "aborted";
+    code: "empty_result" | "execution_error" | "result_too_large" | "write_failure" | "aborted";
     message: string;
   };
   resultBindings?: ResultBinding[];
@@ -192,14 +180,11 @@ export interface ManagedAgentBootstrapRecord {
 export const MANAGED_AGENT_BOOTSTRAP_LIMIT_BYTES = 64 * 1024;
 const BOOTSTRAP_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PREFIX = "__PI_HERDSMAN_AGENT_V5__:";
 /** Fixed protocol safety ceiling; configuration only limits new submissions. */
 export const MAILBOX_PROTOCOL_LIMIT_BYTES = 1024 * 1024;
-export function mailboxRecordBytes(
-  record: RequestRecord | AskRecord | OwnerMessageRecord,
-): number {
+export function mailboxRecordBytes(record: RequestRecord | AskRecord | OwnerMessageRecord): number {
   return Buffer.byteLength(JSON.stringify(record), "utf8");
 }
 export class MailboxClaimOccupiedError extends Error {
@@ -243,14 +228,10 @@ export function observeMailbox(
   const attach = () => {
     if (stopped || watcher) return;
     try {
-      const next = watch(
-        directory,
-        { persistent: false },
-        (_event, filename) => {
-          const name = filename?.toString();
-          if (!name || relevant(name)) schedule();
-        },
-      );
+      const next = watch(directory, { persistent: false }, (_event, filename) => {
+        const name = filename?.toString();
+        if (!name || relevant(name)) schedule();
+      });
       next.on("error", (error) => {
         next.close();
         if (watcher === next) watcher = undefined;
@@ -309,10 +290,7 @@ export function observeNewAgentStates(
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
     for (const name of names)
-      if (
-        MAILBOX_DIRECTORY.test(name) &&
-        existsSync(file(join(root, name), "state.json"))
-      )
+      if (MAILBOX_DIRECTORY.test(name) && existsSync(file(join(root, name), "state.json")))
         present.add(name);
     return present;
   };
@@ -336,16 +314,10 @@ export function observeNewAgentStates(
   );
 }
 
-export function agentMailboxPath(
-  workspaceId: string,
-  agentLabel: string,
-): string {
+export function agentMailboxPath(workspaceId: string, agentLabel: string): string {
   return join(
     root,
-    createHash("sha256")
-      .update(`${workspaceId}\0${agentLabel}`)
-      .digest("hex")
-      .slice(0, 32),
+    createHash("sha256").update(`${workspaceId}\0${agentLabel}`).digest("hex").slice(0, 32),
   );
 }
 export type ManagedAgentStateIssue = {
@@ -359,9 +331,7 @@ const ISSUE_LIMIT = 64;
 
 function boundedDiagnostic(error: unknown): string {
   const text = String(error).replace(/\s+/g, " ").trim();
-  return text.length > DIAGNOSTIC_LIMIT
-    ? `${text.slice(0, DIAGNOSTIC_LIMIT - 1)}…`
-    : text;
+  return text.length > DIAGNOSTIC_LIMIT ? `${text.slice(0, DIAGNOSTIC_LIMIT - 1)}…` : text;
 }
 
 export function scanAgentStates(): {
@@ -438,11 +408,7 @@ function validate(
   value: unknown,
   kind: keyof typeof LIMITS,
 ): asserts value is Record<string, unknown> {
-  if (
-    !value ||
-    typeof value !== "object" ||
-    (value as { version?: unknown }).version !== 5
-  )
+  if (!value || typeof value !== "object" || (value as { version?: unknown }).version !== 5)
     throw new Error("Invalid mailbox protocol version or record");
   const text = JSON.stringify(value);
   if (Buffer.byteLength(text, "utf8") > LIMITS[kind])
@@ -463,15 +429,8 @@ function validate(
     ];
     if (Object.keys(v).some((key) => !allowed.includes(key)))
       throw new Error("Unknown mailbox field");
-    if (!isRuntimeBuild(v.build))
-      throw new Error("Invalid runtime build identity");
-    for (const field of [
-      "runId",
-      "ownerSessionId",
-      "workspaceId",
-      "agentLabel",
-      "paneId",
-    ])
+    if (!isRuntimeBuild(v.build)) throw new Error("Invalid runtime build identity");
+    for (const field of ["runId", "ownerSessionId", "workspaceId", "agentLabel", "paneId"])
       if (typeof v[field] !== "string" || !v[field].trim())
         throw new Error(`Invalid mailbox field: ${field}`);
     if (!UUID.test(v.runId)) throw new Error("Invalid mailbox UUID");
@@ -509,14 +468,8 @@ function validate(
     ];
     if (Object.keys(v).some((key) => !allowed.includes(key)))
       throw new Error("Unknown mailbox field");
-    if (!isRuntimeBuild(v.build))
-      throw new Error("Invalid runtime build identity");
-    for (const field of [
-      "runId",
-      "ownerSessionId",
-      "workspaceId",
-      "agentLabel",
-    ])
+    if (!isRuntimeBuild(v.build)) throw new Error("Invalid runtime build identity");
+    for (const field of ["runId", "ownerSessionId", "workspaceId", "agentLabel"])
       if (typeof v[field] !== "string" || !(v[field] as string).trim())
         throw new Error(`Invalid mailbox field: ${field}`);
     if (!UUID.test(v.runId as string)) throw new Error("Invalid mailbox UUID");
@@ -529,9 +482,7 @@ function validate(
       if (
         !participant ||
         typeof participant !== "object" ||
-        Object.keys(participant).some(
-          (key) => !["id", "payload"].includes(key),
-        ) ||
+        Object.keys(participant).some((key) => !["id", "payload"].includes(key)) ||
         typeof participant.id !== "string" ||
         !BOOTSTRAP_ID.test(participant.id) ||
         ids.has(participant.id) ||
@@ -639,23 +590,11 @@ function validate(
               ];
   if (Object.keys(v).some((key) => !allowed.includes(key)))
     throw new Error("Unknown mailbox field");
-  if (
-    (kind === "state" || kind === "request") &&
-    v.build !== undefined &&
-    !isRuntimeBuild(v.build)
-  )
+  if ((kind === "state" || kind === "request") && v.build !== undefined && !isRuntimeBuild(v.build))
     throw new Error("Invalid runtime build identity");
   const required =
     kind === "state"
-      ? [
-          "runId",
-          "ownerSessionId",
-          "workspaceId",
-          "agentLabel",
-          "paneId",
-          "piSessionId",
-          "cwd",
-        ]
+      ? ["runId", "ownerSessionId", "workspaceId", "agentLabel", "paneId", "piSessionId", "cwd"]
       : kind === "ownerMessage"
         ? [
             "messageId",
@@ -678,14 +617,7 @@ function validate(
               "paneId",
               "piSessionId",
             ]
-          : [
-              "runId",
-              "requestId",
-              "ownerSessionId",
-              "workspaceId",
-              "agentLabel",
-              "paneId",
-            ];
+          : ["runId", "requestId", "ownerSessionId", "workspaceId", "agentLabel", "paneId"];
   for (const field of required)
     if (typeof v[field] !== "string" || !(v[field] as string).trim())
       throw new Error(`Invalid mailbox field: ${field}`);
@@ -697,11 +629,7 @@ function validate(
   )
     throw new Error("Invalid mailbox UUID");
   const finite = (field: string) => {
-    if (
-      typeof v[field] !== "number" ||
-      !Number.isFinite(v[field]) ||
-      v[field] < 0
-    )
+    if (typeof v[field] !== "number" || !Number.isFinite(v[field]) || v[field] < 0)
       throw new Error(`Invalid mailbox timestamp: ${field}`);
   };
   if (kind === "state") {
@@ -710,9 +638,7 @@ function validate(
       throw new Error("Launch terminal identity fields must be paired");
     if (
       v.terminalId !== undefined &&
-      (typeof v.terminalId !== "string" ||
-        !v.terminalId.trim() ||
-        v.terminalId.length > 512)
+      (typeof v.terminalId !== "string" || !v.terminalId.trim() || v.terminalId.length > 512)
     )
       throw new Error("Invalid mailbox terminal identity");
     if (
@@ -739,10 +665,7 @@ function validate(
     )
       throw new Error("Invalid mailbox timestamp: lastActivityAt");
     for (const field of ["activeRequestId", "completedRequestId"])
-      if (
-        v[field] !== undefined &&
-        (!UUID.test(v[field]) || typeof v[field] !== "string")
-      )
+      if (v[field] !== undefined && (!UUID.test(v[field]) || typeof v[field] !== "string"))
         throw new Error(`Invalid ${field}`);
     if (v.pendingAskId !== undefined && !UUID.test(v.pendingAskId as string))
       throw new Error("Invalid pendingAskId");
@@ -750,17 +673,11 @@ function validate(
       throw new Error("pendingAskId requires activeRequestId");
     if (v.pendingAskId !== undefined && v.completedRequestId !== undefined)
       throw new Error("pendingAskId cannot coexist with completedRequestId");
-    if (
-      v.activeRequestId &&
-      v.completedRequestId &&
-      v.activeRequestId === v.completedRequestId
-    )
+    if (v.activeRequestId && v.completedRequestId && v.activeRequestId === v.completedRequestId)
       throw new Error("Active and completed request IDs must differ");
     if (v.resultError !== undefined) {
       if (v.activeRequestId !== undefined || v.completedRequestId !== undefined)
-        throw new Error(
-          "Result persistence error cannot coexist with an assignment",
-        );
+        throw new Error("Result persistence error cannot coexist with an assignment");
       const error = v.resultError as Record<string, unknown>;
       const errorKeys = [
         "code",
@@ -789,8 +706,7 @@ function validate(
         error.workspaceId !== v.workspaceId ||
         error.agentLabel !== v.agentLabel ||
         error.paneId !== v.paneId ||
-        (error.originalStatus !== "completed" &&
-          error.originalStatus !== "failed") ||
+        (error.originalStatus !== "completed" && error.originalStatus !== "failed") ||
         typeof error.attempts !== "number" ||
         !Number.isInteger(error.attempts) ||
         error.attempts < 1 ||
@@ -819,13 +735,7 @@ function validate(
       throw new Error("Invalid agentDefinition");
     if (v.lastAck !== undefined) {
       const ack = v.lastAck as Record<string, unknown>;
-      const ackKeys = [
-        "requestId",
-        "accepted",
-        "code",
-        "message",
-        "acknowledgedAt",
-      ];
+      const ackKeys = ["requestId", "accepted", "code", "message", "acknowledgedAt"];
       if (
         Object.keys(ack).some((key) => !ackKeys.includes(key)) ||
         !UUID.test(ack.requestId as string) ||
@@ -848,32 +758,21 @@ function validate(
         throw new Error("Accepted acknowledgement cannot have an error code");
       if (!ack.accepted && !codes.includes(ack.code as string))
         throw new Error("Rejected acknowledgement requires an error code");
-      if (
-        ack.message !== undefined &&
-        (typeof ack.message !== "string" || !ack.message.trim())
-      )
+      if (ack.message !== undefined && (typeof ack.message !== "string" || !ack.message.trim()))
         throw new Error("Invalid acknowledgement message");
     }
   } else if (kind === "request") {
-    if (
-      v.kind !== "task" &&
-      v.kind !== "steer" &&
-      v.kind !== "interrupt" &&
-      v.kind !== "reply"
-    )
+    if (v.kind !== "task" && v.kind !== "steer" && v.kind !== "interrupt" && v.kind !== "reply")
       throw new Error("Invalid request kind");
     if (
-      (v.kind === "reply" &&
-        (typeof v.askId !== "string" || !UUID.test(v.askId))) ||
+      (v.kind === "reply" && (typeof v.askId !== "string" || !UUID.test(v.askId))) ||
       (v.kind !== "reply" && v.askId !== undefined)
     )
       throw new Error("Invalid reply ask ID");
-    if (typeof v.text !== "string" || !v.text.trim())
-      throw new Error("Invalid request text");
+    if (typeof v.text !== "string" || !v.text.trim()) throw new Error("Invalid request text");
     if (
       v.resultBindings !== undefined &&
-      (!Array.isArray(v.resultBindings) ||
-        !v.resultBindings.every(isResultBinding))
+      (!Array.isArray(v.resultBindings) || !v.resultBindings.every(isResultBinding))
     )
       throw new Error("Invalid request result bindings");
     if (
@@ -881,8 +780,8 @@ function validate(
       (v.kind !== "task" ||
         !Array.isArray(v.requiredEvidence) ||
         !v.requiredEvidence.every(isRequiredEvidence) ||
-        new Set(v.requiredEvidence.map((entry: RequiredEvidence) => entry.id))
-          .size !== v.requiredEvidence.length)
+        new Set(v.requiredEvidence.map((entry: RequiredEvidence) => entry.id)).size !==
+          v.requiredEvidence.length)
     )
       throw new Error("Invalid request required evidence");
     if (v.inheritedEvidence !== undefined || v.localEvidence !== undefined) {
@@ -924,8 +823,7 @@ function validate(
     const hasEvidenceAssignmentId = v.evidenceAssignmentId !== undefined;
     if (
       (hasProjectAssignmentId || hasEvidenceAssignmentId) &&
-      (v.kind !== "task" ||
-        (hasProjectAssignmentId && !hasEvidenceAssignmentId))
+      (v.kind !== "task" || (hasProjectAssignmentId && !hasEvidenceAssignmentId))
     )
       throw new Error("Invalid request evidence assignment identity");
     if (v.taskEvidenceId !== undefined) {
@@ -944,21 +842,17 @@ function validate(
     }
     if (
       (hasProjectAssignmentId &&
-        (typeof v.projectAssignmentId !== "string" ||
-          !UUID.test(v.projectAssignmentId))) ||
+        (typeof v.projectAssignmentId !== "string" || !UUID.test(v.projectAssignmentId))) ||
       (hasEvidenceAssignmentId &&
-        (typeof v.evidenceAssignmentId !== "string" ||
-          !UUID.test(v.evidenceAssignmentId)))
+        (typeof v.evidenceAssignmentId !== "string" || !UUID.test(v.evidenceAssignmentId)))
     )
       throw new Error("Invalid request evidence assignment identity");
     finite("createdAt");
   } else if (kind === "ownerMessage") {
-    if (typeof v.text !== "string" || !v.text.trim())
-      throw new Error("Invalid owner message text");
+    if (typeof v.text !== "string" || !v.text.trim()) throw new Error("Invalid owner message text");
     if (
       v.resultBindings !== undefined &&
-      (!Array.isArray(v.resultBindings) ||
-        !v.resultBindings.every(isResultBinding))
+      (!Array.isArray(v.resultBindings) || !v.resultBindings.every(isResultBinding))
     )
       throw new Error("Invalid owner message result bindings");
     finite("createdAt");
@@ -967,8 +861,7 @@ function validate(
       throw new Error("Invalid ask question");
     if (
       v.resultBindings !== undefined &&
-      (!Array.isArray(v.resultBindings) ||
-        !v.resultBindings.every(isResultBinding))
+      (!Array.isArray(v.resultBindings) || !v.resultBindings.every(isResultBinding))
     )
       throw new Error("Invalid ask result bindings");
     finite("createdAt");
@@ -980,15 +873,14 @@ function validate(
         v.rootSessionId.length > 512)
     )
       throw new Error("Invalid mailbox root session identity");
-    if (v.status !== "completed" && v.status !== "failed")
-      throw new Error("Invalid result status");
+    if (v.status !== "completed" && v.status !== "failed") throw new Error("Invalid result status");
     finite("completedAt");
     if (
       v.resultBindings !== undefined &&
       (!Array.isArray(v.resultBindings) ||
         !v.resultBindings.every(isResultBinding) ||
-        new Set(v.resultBindings.map((binding: ResultBinding) => binding.ref))
-          .size !== v.resultBindings.length)
+        new Set(v.resultBindings.map((binding: ResultBinding) => binding.ref)).size !==
+          v.resultBindings.length)
     )
       throw new Error("Invalid or conflicting result bindings");
     if (
@@ -1013,8 +905,7 @@ function validate(
         !error.message.trim()
       )
         throw new Error("Invalid failed result");
-      if (v.text !== undefined)
-        throw new Error("Failed result cannot contain text");
+      if (v.text !== undefined) throw new Error("Failed result cannot contain text");
       if (v.resultBindings !== undefined)
         throw new Error("Failed result cannot contain result bindings");
     }
@@ -1022,9 +913,7 @@ function validate(
       const usage = v.contextUsage as Record<string, unknown>;
       if (
         Object.keys(usage).length !== 3 ||
-        Object.keys(usage).some(
-          (key) => !["tokens", "contextWindow", "percent"].includes(key),
-        ) ||
+        Object.keys(usage).some((key) => !["tokens", "contextWindow", "percent"].includes(key)) ||
         (usage.tokens !== null &&
           (typeof usage.tokens !== "number" ||
             !Number.isFinite(usage.tokens) ||
@@ -1049,20 +938,15 @@ function atomic(
   createDirectory = true,
 ): void {
   validate(value, kind);
-  if (createDirectory)
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  if (createDirectory) mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   chmodSync(dirname(path), 0o700);
-  const temporary = join(
-    dirname(path),
-    `.${basename(path)}.${randomUUID()}.tmp`,
-  );
+  const temporary = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
   let fd: number | undefined;
   try {
     fd = openSync(temporary, "wx", 0o600);
     const bytes = Buffer.from(JSON.stringify(value), "utf8");
     let offset = 0;
-    while (offset < bytes.length)
-      offset += writeSync(fd, bytes, offset, bytes.length - offset);
+    while (offset < bytes.length) offset += writeSync(fd, bytes, offset, bytes.length - offset);
     closeSync(fd);
     fd = undefined;
     renameSync(temporary, path);
@@ -1073,8 +957,7 @@ function atomic(
 }
 function read<T>(path: string, kind: keyof typeof LIMITS): T | undefined {
   try {
-    if (statSync(path).size > LIMITS[kind])
-      throw new Error("Mailbox record is too large");
+    if (statSync(path).size > LIMITS[kind]) throw new Error("Mailbox record is too large");
     return JSON.parse(readFileSync(path, "utf8")) as T;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
@@ -1085,8 +968,7 @@ function file(path: string, name: string): string {
   return join(path, name);
 }
 function assertFileId(requestId: string): void {
-  if (!UUID.test(requestId) || requestId.length !== 36)
-    throw new Error("Invalid request ID");
+  if (!UUID.test(requestId) || requestId.length !== 36) throw new Error("Invalid request ID");
 }
 export function claimAgentMailbox(
   path: string,
@@ -1114,9 +996,7 @@ export function resetAgentMailbox(path: string): void {
     "startup.json",
     "ask.json",
     "bootstrap.json",
-    ...readdirSync(path).filter((x: string) =>
-      /^(request|result|owner-message)-.*\.json$/.test(x),
-    ),
+    ...readdirSync(path).filter((x: string) => /^(request|result|owner-message)-.*\.json$/.test(x)),
   ]) {
     try {
       unlinkSync(file(path, name));
@@ -1125,35 +1005,19 @@ export function resetAgentMailbox(path: string): void {
     }
   }
 }
-export function writeAgentStartupOutcome(
-  path: string,
-  outcome: ManagedAgentStartupOutcome,
-): void {
+export function writeAgentStartupOutcome(path: string, outcome: ManagedAgentStartupOutcome): void {
   atomic(file(path, "startup.json"), outcome, "startup", false);
 }
-export function readAgentStartupOutcome(
-  path: string,
-): ManagedAgentStartupOutcome | undefined {
-  const outcome = read<ManagedAgentStartupOutcome>(
-    file(path, "startup.json"),
-    "startup",
-  );
+export function readAgentStartupOutcome(path: string): ManagedAgentStartupOutcome | undefined {
+  const outcome = read<ManagedAgentStartupOutcome>(file(path, "startup.json"), "startup");
   if (outcome) validate(outcome, "startup");
   return outcome;
 }
-export function writeAgentBootstrap(
-  path: string,
-  record: ManagedAgentBootstrapRecord,
-): void {
+export function writeAgentBootstrap(path: string, record: ManagedAgentBootstrapRecord): void {
   atomic(file(path, "bootstrap.json"), record, "bootstrap");
 }
-export function readAgentBootstrap(
-  path: string,
-): ManagedAgentBootstrapRecord | undefined {
-  const value = read<ManagedAgentBootstrapRecord>(
-    file(path, "bootstrap.json"),
-    "bootstrap",
-  );
+export function readAgentBootstrap(path: string): ManagedAgentBootstrapRecord | undefined {
+  const value = read<ManagedAgentBootstrapRecord>(file(path, "bootstrap.json"), "bootstrap");
   if (value) validate(value, "bootstrap");
   return value;
 }
@@ -1210,30 +1074,18 @@ export function writeRequest(path: string, request: RequestRecord): void {
   assertFileId(request.requestId);
   atomic(file(path, `request-${request.requestId}.json`), request, "request");
 }
-export function readRequest(
-  path: string,
-  requestId: string,
-): RequestRecord | undefined {
+export function readRequest(path: string, requestId: string): RequestRecord | undefined {
   assertFileId(requestId);
-  const v = read<RequestRecord>(
-    file(path, `request-${requestId}.json`),
-    "request",
-  );
+  const v = read<RequestRecord>(file(path, `request-${requestId}.json`), "request");
   if (v) validate(v, "request");
-  if (v && v.requestId !== requestId)
-    throw new Error("Request filename identity mismatch");
+  if (v && v.requestId !== requestId) throw new Error("Request filename identity mismatch");
   return v;
 }
 export function readUnacknowledgedRequest(
   path: string,
   state?: Pick<
     ManagedAgentState,
-    | "runId"
-    | "ownerSessionId"
-    | "workspaceId"
-    | "agentLabel"
-    | "paneId"
-    | "lastAck"
+    "runId" | "ownerSessionId" | "workspaceId" | "agentLabel" | "paneId" | "lastAck"
   >,
 ): RequestRecord | undefined {
   let names: string[];
@@ -1267,12 +1119,7 @@ export function unacknowledgedRequestExists(
   path: string,
   state?: Pick<
     ManagedAgentState,
-    | "runId"
-    | "ownerSessionId"
-    | "workspaceId"
-    | "agentLabel"
-    | "paneId"
-    | "lastAck"
+    "runId" | "ownerSessionId" | "workspaceId" | "agentLabel" | "paneId" | "lastAck"
   >,
 ): boolean {
   // This is mailbox-owned durable settlement truth; it does not change the mailbox schema or protocol.
@@ -1299,10 +1146,7 @@ export function readAsk(path: string): AskRecord | undefined {
   if (v) validate(v, "ask");
   return v;
 }
-export function readPendingAsk(
-  path: string,
-  state: ManagedAgentState,
-): AskRecord | undefined {
+export function readPendingAsk(path: string, state: ManagedAgentState): AskRecord | undefined {
   if (!state.pendingAskId) return undefined;
   const ask = readAsk(path);
   if (!ask) throw new Error("Pending owner ask artifact is missing");
@@ -1327,16 +1171,9 @@ export function removeAsk(path: string): void {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
 }
-export function writeOwnerMessage(
-  path: string,
-  message: OwnerMessageRecord,
-): void {
+export function writeOwnerMessage(path: string, message: OwnerMessageRecord): void {
   assertFileId(message.messageId);
-  atomic(
-    file(path, `owner-message-${message.messageId}.json`),
-    message,
-    "ownerMessage",
-  );
+  atomic(file(path, `owner-message-${message.messageId}.json`), message, "ownerMessage");
 }
 export function readOwnerMessages(path: string): OwnerMessageRecord[] {
   return readdirSync(path)
@@ -1351,10 +1188,7 @@ export function readOwnerMessages(path: string): OwnerMessageRecord[] {
         throw new Error("Owner message filename identity mismatch");
       return record;
     })
-    .sort(
-      (a, b) =>
-        a.createdAt - b.createdAt || a.messageId.localeCompare(b.messageId),
-    );
+    .sort((a, b) => a.createdAt - b.createdAt || a.messageId.localeCompare(b.messageId));
 }
 export function removeOwnerMessage(path: string, messageId: string): void {
   assertFileId(messageId);
@@ -1368,18 +1202,11 @@ export function writeResult(path: string, result: ResultRecord): void {
   assertFileId(result.requestId);
   atomic(file(path, `result-${result.requestId}.json`), result, "result");
 }
-export function readResult(
-  path: string,
-  requestId: string,
-): ResultRecord | undefined {
+export function readResult(path: string, requestId: string): ResultRecord | undefined {
   assertFileId(requestId);
-  const v = read<ResultRecord>(
-    file(path, `result-${requestId}.json`),
-    "result",
-  );
+  const v = read<ResultRecord>(file(path, `result-${requestId}.json`), "result");
   if (v) validate(v, "result");
-  if (v && v.requestId !== requestId)
-    throw new Error("Result filename identity mismatch");
+  if (v && v.requestId !== requestId) throw new Error("Result filename identity mismatch");
   return v;
 }
 export function removeResult(path: string, requestId: string): void {
@@ -1426,13 +1253,7 @@ function waitForMailbox<T>(
       }
     };
     const timer = setTimeout(
-      () =>
-        finish(
-          new DOMException(
-            `Timed out waiting for ${description}`,
-            "TimeoutError",
-          ),
-        ),
+      () => finish(new DOMException(`Timed out waiting for ${description}`, "TimeoutError")),
       options.timeoutMs,
     );
     const interval = setInterval(check, 250);
@@ -1463,9 +1284,5 @@ export function waitForStartupOutcome(
   path: string,
   options: { timeoutMs: number; signal?: AbortSignal },
 ): Promise<ManagedAgentStartupOutcome> {
-  return waitForMailbox(
-    () => readAgentStartupOutcome(path),
-    options,
-    "agent startup outcome",
-  );
+  return waitForMailbox(() => readAgentStartupOutcome(path), options, "agent startup outcome");
 }

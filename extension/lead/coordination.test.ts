@@ -47,8 +47,7 @@ test("scoped peer presence follows the live master setting", async (t) => {
           repoKey,
           primaryWorkspaceId: "primary-workspace",
         }),
-        writePeerLeadRecord: (_runtime: unknown, record: unknown) =>
-          records.push(record),
+        writePeerLeadRecord: (_runtime: unknown, record: unknown) => records.push(record),
         readPeerLeadRecord: () => records.at(-1),
         removePeerLeadRecord: () => {
           records.length = 0;
@@ -63,9 +62,7 @@ test("scoped peer presence follows the live master setting", async (t) => {
       },
       {
         get(target, key: string) {
-          return key in target
-            ? target[key as keyof typeof target]
-            : () => undefined;
+          return key in target ? target[key as keyof typeof target] : () => undefined;
         },
       },
     ) as any,
@@ -129,9 +126,7 @@ test("empty project-message drain skips assignment listing", async () => {
     },
     {
       get(target, key: string) {
-        return key in target
-          ? target[key as keyof typeof target]
-          : () => undefined;
+        return key in target ? target[key as keyof typeof target] : () => undefined;
       },
     },
   ) as any;
@@ -156,9 +151,7 @@ test("Manager startup fan-in submits every ready project handoff non-triggeringl
     createdAt: 20 + index,
   }));
   const sent: any[] = [];
-  const storage = supervisionRuntime(
-    join(testTmpRoot, `fan-in-${randomUUID()}`, "sock"),
-  );
+  const storage = supervisionRuntime(join(testTmpRoot, `fan-in-${randomUUID()}`, "sock"));
   for (const record of records) writeProjectMessage(record, storage);
   const context = fakeContext() as any;
   context.isIdle = () => true;
@@ -167,8 +160,7 @@ test("Manager startup fan-in submits every ready project handoff non-triggeringl
     new Proxy(
       {
         pi: {
-          sendMessage: (message: unknown, options: unknown) =>
-            sent.push({ message, options }),
+          sendMessage: (message: unknown, options: unknown) => sent.push({ message, options }),
         },
         leadRuntime: {
           chiefMode: "inactive",
@@ -185,21 +177,15 @@ test("Manager startup fan-in submits every ready project handoff non-triggeringl
         listProjectAssignments: () => [assignment],
         listProjectMessageHeaders: () => records,
         readProjectAssignment: () => assignment,
-        readProjectMessage: (
-          _runtime: unknown,
-          _repo: string,
-          _branch: string,
-          id: string,
-        ) => records.find((record) => record.id === id),
+        readProjectMessage: (_runtime: unknown, _repo: string, _branch: string, id: string) =>
+          records.find((record) => record.id === id),
         importResultBindings: () => {},
         removeProjectMessage: () => {},
         appendDurableError: () => {},
       },
       {
         get(target, key: string) {
-          return key in target
-            ? target[key as keyof typeof target]
-            : () => undefined;
+          return key in target ? target[key as keyof typeof target] : () => undefined;
         },
       },
     ) as any,
@@ -208,16 +194,10 @@ test("Manager startup fan-in submits every ready project handoff non-triggeringl
   runtime.beginProjectMessageStartup(context);
   context.isIdle = () => false;
 
-  assert.equal(
-    await runtime.drainProjectMessages(context, "startup", budget),
-    3,
-  );
+  assert.equal(await runtime.drainProjectMessages(context, "startup", budget), 3);
   assert.equal(sent.length, 3);
   assert.deepEqual(
-    sent.map(({ message, options }) => [
-      message.details.id,
-      options.triggerTurn,
-    ]),
+    sent.map(({ message, options }) => [message.details.id, options.triggerTurn]),
     records.map(({ id }) => [id, false]),
   );
   assert.equal(budget.count, 3);
@@ -249,9 +229,7 @@ test("Managed supervisor messages never fall through when the active role is not
     },
     {
       get(target, key: string) {
-        return key in target
-          ? target[key as keyof typeof target]
-          : () => undefined;
+        return key in target ? target[key as keyof typeof target] : () => undefined;
       },
     },
   ) as any;
@@ -308,10 +286,7 @@ test("supervisor message authority and transitions", async (t) => {
       const chiefLeaseId = randomUUID();
       const sessionId = randomUUID();
       const chiefSessionId = randomUUID();
-      let role =
-        scenario === "lead" || scenario === "recipient-changed"
-          ? "lead"
-          : "manager";
+      let role = scenario === "lead" || scenario === "recipient-changed" ? "lead" : "manager";
       let manager = { leaseId: managerLeaseId };
       let chief = { leaseId: chiefLeaseId, piSessionId: chiefSessionId };
       let currentRecipient = chief;
@@ -391,9 +366,7 @@ test("supervisor message authority and transitions", async (t) => {
         },
         {
           get(target, key: string) {
-            return key in target
-              ? target[key as keyof typeof target]
-              : () => undefined;
+            return key in target ? target[key as keyof typeof target] : () => undefined;
           },
         },
       ) as any;
@@ -435,14 +408,8 @@ test("supervisor message authority and transitions", async (t) => {
       }
       const result = await operation;
       assert.equal(written.length, 1);
-      assert.equal(
-        written[0].kind,
-        scenario === "lead" ? "lead_message" : "manager_message",
-      );
-      assert.equal(
-        written[0].leaseId,
-        scenario === "lead" ? chiefLeaseId : managerLeaseId,
-      );
+      assert.equal(written[0].kind, scenario === "lead" ? "lead_message" : "manager_message");
+      assert.equal(written[0].leaseId, scenario === "lead" ? chiefLeaseId : managerLeaseId);
       assert.equal(written[0].toSessionId, chiefSessionId);
       if (scenario === "failure-report") assert.equal(written[0].id, reportId);
       else {

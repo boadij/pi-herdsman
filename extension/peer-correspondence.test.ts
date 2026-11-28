@@ -59,24 +59,17 @@ function runPeerWorker(
       let kind = "unclassified";
       let phase: string | undefined;
       let diagnosticCode: string | undefined;
-      const marker = stderr
-        .split(/\r?\n/)
-        .find((line) => line.startsWith(WORKER_DIAGNOSTIC));
+      const marker = stderr.split(/\r?\n/).find((line) => line.startsWith(WORKER_DIAGNOSTIC));
       if (marker) {
         try {
-          const diagnostic: unknown = JSON.parse(
-            marker.slice(WORKER_DIAGNOSTIC.length),
-          );
+          const diagnostic: unknown = JSON.parse(marker.slice(WORKER_DIAGNOSTIC.length));
           if (
             diagnostic &&
             typeof diagnostic === "object" &&
             "kind" in diagnostic &&
-            [
-              "authorization",
-              "lock_verification",
-              "filesystem",
-              "other",
-            ].includes(String(diagnostic.kind))
+            ["authorization", "lock_verification", "filesystem", "other"].includes(
+              String(diagnostic.kind),
+            )
           )
             kind = String(diagnostic.kind);
           if (
@@ -249,10 +242,7 @@ test("peer correspondence isolates capability, exact sessions and generations, a
     c.recipientSession,
     c.recipientGeneration,
   );
-  assert.equal(
-    listPeerCorrespondences().find((item) => item.id === c.id)?.finalized,
-    true,
-  );
+  assert.equal(listPeerCorrespondences().find((item) => item.id === c.id)?.finalized, true);
   assert.throws(
     () =>
       pollPeerReplies(
@@ -285,10 +275,7 @@ test("correspondence role is validated and immutable with legacy Manager default
   const legacy = JSON.parse(readFileSync(legacyPath, "utf8"));
   delete legacy.role;
   writeFileSync(legacyPath, `${JSON.stringify(legacy)}\n`);
-  assert.equal(
-    listPeerCorrespondences().find((item) => item.id === manager.id)?.role,
-    undefined,
-  );
+  assert.equal(listPeerCorrespondences().find((item) => item.id === manager.id)?.role, undefined);
   assert.throws(
     () => storePeerCorrespondence({ ...manager, role: "lead" }),
     /conflicting peer correspondence role/,
@@ -337,12 +324,7 @@ test("peer origin display metadata validates, persists, and enriches without bre
       }),
     /invalid peer correspondence/,
   );
-  for (const name of [
-    "bad\nname",
-    "bad\u202Ename",
-    "bad\u2066name",
-    "bad\u2028name",
-  ])
+  for (const name of ["bad\nname", "bad\u202Ename", "bad\u2066name", "bad\u2028name"])
     assert.throws(
       () =>
         createPeerCorrespondence({
@@ -374,23 +356,23 @@ test("peer origin display metadata validates, persists, and enriches without bre
     ...c,
     originDisplay: { workspaceLabel: "project-alpha/main" },
   });
-  assert.deepEqual(
-    listPeerCorrespondences().find((item) => item.id === c.id)?.originDisplay,
-    { name: "Research Manager", workspaceLabel: "project-alpha/main" },
-  );
+  assert.deepEqual(listPeerCorrespondences().find((item) => item.id === c.id)?.originDisplay, {
+    name: "Research Manager",
+    workspaceLabel: "project-alpha/main",
+  });
   storePeerCorrespondence(c);
-  assert.deepEqual(
-    listPeerCorrespondences().find((item) => item.id === c.id)?.originDisplay,
-    { name: "Research Manager", workspaceLabel: "project-alpha/main" },
-  );
+  assert.deepEqual(listPeerCorrespondences().find((item) => item.id === c.id)?.originDisplay, {
+    name: "Research Manager",
+    workspaceLabel: "project-alpha/main",
+  });
   storePeerCorrespondence({
     ...c,
     originDisplay: { name: "Updated Manager" },
   });
-  assert.deepEqual(
-    listPeerCorrespondences().find((item) => item.id === c.id)?.originDisplay,
-    { name: "Updated Manager", workspaceLabel: "project-alpha/main" },
-  );
+  assert.deepEqual(listPeerCorrespondences().find((item) => item.id === c.id)?.originDisplay, {
+    name: "Updated Manager",
+    workspaceLabel: "project-alpha/main",
+  });
   removePeerCorrespondence(c.id);
 });
 
@@ -455,13 +437,7 @@ test("same exact session may explicitly recover a changed generation, but a mism
   );
   assert.throws(
     () =>
-      updatePeerOriginGeneration(
-        c.id,
-        c.capability,
-        c.originSession,
-        randomUUID(),
-        randomUUID(),
-      ),
+      updatePeerOriginGeneration(c.id, c.capability, c.originSession, randomUUID(), randomUUID()),
     /rejected/,
   );
   assert.throws(
@@ -512,10 +488,7 @@ test("same exact session may explicitly recover a changed generation, but a mism
 
 test("peer endpoint state-root mismatch fails closed", () => {
   assert.doesNotThrow(() => assertPeerDataRoot("/same/root", "/same/root"));
-  assert.throws(
-    () => assertPeerDataRoot("/manager/root", "/endpoint/root"),
-    /data root/,
-  );
+  assert.throws(() => assertPeerDataRoot("/manager/root", "/endpoint/root"), /data root/);
 });
 
 test("peer payload digests canonicalize object key order", () => {
@@ -553,8 +526,7 @@ test("acknowledgment compacts evidence while preserving reply duplicate protecti
     ];
     return { id: randomUUID(), text, attachments, resultBindings };
   });
-  for (const payload of payloads)
-    queuePeerReply(c, payload.id, payload.text, payload);
+  for (const payload of payloads) queuePeerReply(c, payload.id, payload.text, payload);
   const digests = payloads.map((payload) =>
     peerPayloadDigest({
       text: payload.text,
@@ -575,16 +547,14 @@ test("acknowledgment compacts evidence while preserving reply duplicate protecti
 
   const compacted = listPeerCorrespondences().find((item) => item.id === c.id)!;
   assert.deepEqual(
-    compacted.replies.map(
-      ({ id, digest, text, acknowledged, attachments, resultBindings }) => ({
-        id,
-        digest,
-        text,
-        acknowledged,
-        attachments,
-        resultBindings,
-      }),
-    ),
+    compacted.replies.map(({ id, digest, text, acknowledged, attachments, resultBindings }) => ({
+      id,
+      digest,
+      text,
+      acknowledged,
+      attachments,
+      resultBindings,
+    })),
     payloads.map((payload, index) => ({
       id: payload.id,
       digest: digests[index],
@@ -595,18 +565,9 @@ test("acknowledgment compacts evidence while preserving reply duplicate protecti
     })),
   );
   for (const payload of payloads) {
-    assert.equal(
-      queuePeerReply(compacted, payload.id, payload.text, payload),
-      "duplicate",
-    );
+    assert.equal(queuePeerReply(compacted, payload.id, payload.text, payload), "duplicate");
     assert.throws(
-      () =>
-        queuePeerReply(
-          compacted,
-          payload.id,
-          `${payload.text} changed`,
-          payload,
-        ),
+      () => queuePeerReply(compacted, payload.id, `${payload.text} changed`, payload),
       /conflicting peer reply identity/,
     );
   }
@@ -622,12 +583,7 @@ test("reply polling bounds full serialized envelopes and drains replies in order
     acceptanceId: randomUUID(),
   });
   assert.throws(
-    () =>
-      queuePeerReply(
-        c,
-        randomUUID(),
-        "x".repeat(PEER_TRANSPORT_FRAME_LIMIT_BYTES - 100),
-      ),
+    () => queuePeerReply(c, randomUUID(), "x".repeat(PEER_TRANSPORT_FRAME_LIMIT_BYTES - 100)),
     /response limit/,
   );
   const ids = Array.from({ length: 20 }, () => randomUUID());
@@ -716,15 +672,8 @@ test("independent processes preserve concurrent reply acknowledgment and enqueue
     const failure = results.find((result) => result.status === "rejected");
     if (failure?.status === "rejected") throw failure.reason;
     const current = listPeerCorrespondences().find((item) => item.id === c.id)!;
-    assert.equal(
-      current.replies.find((reply) => reply.id === acknowledgedId)
-        ?.acknowledged,
-      true,
-    );
-    assert.equal(
-      current.replies.find((reply) => reply.id === queuedId)?.text,
-      "concurrent",
-    );
+    assert.equal(current.replies.find((reply) => reply.id === acknowledgedId)?.acknowledged, true);
+    assert.equal(current.replies.find((reply) => reply.id === queuedId)?.text, "concurrent");
   } finally {
     removePeerCorrespondence(c.id);
   }
@@ -742,12 +691,8 @@ test("peer worker failures wait for running siblings and clean up after propagat
   const workers: Promise<void>[] = [];
   let markSiblingReady!: () => void;
   let markSiblingClosed!: () => void;
-  const siblingReady = new Promise<void>(
-    (resolve) => (markSiblingReady = resolve),
-  );
-  const siblingClosed = new Promise<void>(
-    (resolve) => (markSiblingClosed = resolve),
-  );
+  const siblingReady = new Promise<void>((resolve) => (markSiblingReady = resolve));
+  const siblingClosed = new Promise<void>((resolve) => (markSiblingClosed = resolve));
   let readinessOutput = "";
   try {
     const sibling = runPeerWorker(
@@ -803,12 +748,7 @@ test("peer worker failures wait for running siblings and clean up after propagat
 
 test("peer worker reports cancellation and spawn errors only after close", async () => {
   await assert.rejects(
-    runPeerWorker(
-      "cancelled",
-      "setInterval(() => {}, 1000)",
-      process.execPath,
-      100,
-    ),
+    runPeerWorker("cancelled", "setInterval(() => {}, 1000)", process.execPath, 100),
     /cancelled worker aborted/,
   );
   await assert.rejects(

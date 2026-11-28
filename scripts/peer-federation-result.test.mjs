@@ -1,12 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -86,9 +80,7 @@ test("federated Manager A recognizes provider-context peer replies and completes
 
   assert.ok(
     answer.content?.some(
-      (part) =>
-        part.type === "text" &&
-        part.text?.includes("PEER_E2E_A_SINGLE_REPLIED"),
+      (part) => part.type === "text" && part.text?.includes("PEER_E2E_A_SINGLE_REPLIED"),
     ),
   );
 });
@@ -125,9 +117,7 @@ test("federated Manager B replies to a Lead-origin provider-context request", ()
   });
   assert.ok(
     completed.content?.some(
-      (part) =>
-        part.type === "text" &&
-        part.text?.includes("PEER_E2E_B_SINGLE_REPLIED"),
+      (part) => part.type === "text" && part.text?.includes("PEER_E2E_B_SINGLE_REPLIED"),
     ),
   );
 });
@@ -149,46 +139,25 @@ test("ordinary Lead send acceptance requires one fresh discovery, one send, and 
     durableQueueReceipt: false,
   }))
     assert.throws(
-      () =>
-        assertOrdinaryLeadSendAcceptance({ ...diagnostics, [field]: value }),
+      () => assertOrdinaryLeadSendAcceptance({ ...diagnostics, [field]: value }),
       new RegExp(field),
     );
 });
 
 test("send-turn discovery requires exactly one correlated result containing the peer", () => {
   const calls = new Map([["list-call", {}]]);
-  const results = new Map([
-    ["list-call", { details: { peers: [{ target: "expected-peer" }] } }],
-  ]);
+  const results = new Map([["list-call", { details: { peers: [{ target: "expected-peer" }] } }]]);
   assert.equal(
-    currentSendDiscoveryMatched(
-      calls,
-      results,
-      new Map([["list-call", 1]]),
-      "expected-peer",
-    ),
+    currentSendDiscoveryMatched(calls, results, new Map([["list-call", 1]]), "expected-peer"),
     true,
   );
+  assert.equal(currentSendDiscoveryMatched(calls, results, new Map(), "expected-peer"), false);
   assert.equal(
-    currentSendDiscoveryMatched(calls, results, new Map(), "expected-peer"),
+    currentSendDiscoveryMatched(calls, results, new Map([["list-call", 2]]), "expected-peer"),
     false,
   );
   assert.equal(
-    currentSendDiscoveryMatched(
-      calls,
-      results,
-      new Map([["list-call", 2]]),
-      "expected-peer",
-    ),
-    false,
-  );
-  assert.equal(
-    currentSendDiscoveryMatched(
-      calls,
-      results,
-      new Map([["list-call", 1]]),
-      "other-peer",
-    ),
+    currentSendDiscoveryMatched(calls, results, new Map([["list-call", 1]]), "other-peer"),
     false,
   );
 });
@@ -220,10 +189,7 @@ test("parent reconstruction classifies bounded expected-peer and receipt evidenc
     sendEvidence: evidence,
     receipt: { id: "receipt-1" },
   });
-  assert.doesNotMatch(
-    serializedEvidence,
-    /expected-peer|fromSessionId|remoteSessionId/u,
-  );
+  assert.doesNotMatch(serializedEvidence, /expected-peer|fromSessionId|remoteSessionId/u);
   const diagnostics = classifyCurrentSendEvidence(evidence, "expected-peer", {
     id: "receipt-1",
   });
@@ -258,18 +224,11 @@ test("parent reconstruction classifies bounded expected-peer and receipt evidenc
       }).freshDiscoveryMatched,
       false,
     );
-  assert.equal(
-    classifyCurrentSendEvidence(null, "expected-peer", null)
-      .durableQueueReceipt,
-    false,
-  );
+  assert.equal(classifyCurrentSendEvidence(null, "expected-peer", null).durableQueueReceipt, false);
 });
 
 test("embedded reader returns only bounded delivery and binding projections", () => {
-  const smokeSource = readFileSync(
-    new URL("./peer-federation-smoke.mjs", import.meta.url),
-    "utf8",
-  );
+  const smokeSource = readFileSync(new URL("./peer-federation-smoke.mjs", import.meta.url), "utf8");
   const readerPattern =
     /const readOrdinaryLeadSession = \([\s\S]*?\r?\n  \};\r?\n  const readBDecisionDiagnostics/u;
   for (const source of [smokeSource, smokeSource.replace(/\r?\n/gu, "\r\n")])
@@ -281,17 +240,14 @@ test("embedded reader returns only bounded delivery and binding projections", ()
     smokeSource,
     /const herdrEnv = \(side\) => \[[\s\S]*?`PI_CODING_AGENT_DIR=\$\{fixturePath\(side\)\}\/\.pi\/agent`/u,
   );
-  const embeddedSource = smokeSource.match(
-    /const script = `([\s\S]*?)`;/u,
-  )?.[1];
+  const embeddedSource = smokeSource.match(/const script = `([\s\S]*?)`;/u)?.[1];
   assert.ok(embeddedSource, "embedded reader script exists");
   const embeddedScript = runInNewContext(`\`${embeddedSource}\``);
   const artifact = "EXPECTED_ARTIFACT_CONTENT\nsecond line";
   const messageId = "message-1";
   const ref = "result:source#1";
   const canonicalRef = "result:canonical";
-  const fingerprint = (value) =>
-    createHash("sha256").update(value).digest("hex");
+  const fingerprint = (value) => createHash("sha256").update(value).digest("hex");
   const tempDir = mkdtempSync(join(tmpdir(), "peer-reader-test-"));
   try {
     const transcript = join(tempDir, "session.jsonl");
@@ -337,9 +293,7 @@ test("embedded reader returns only bounded delivery and binding projections", ()
           type: "message",
           message: {
             role: "assistant",
-            content: [
-              { type: "toolCall", name: "message_peer", id: "send-call" },
-            ],
+            content: [{ type: "toolCall", name: "message_peer", id: "send-call" }],
           },
         },
         {
@@ -456,14 +410,11 @@ test("current send diagnostics keep authorization and receipt tied to one exact 
   );
 
   const call = new Map([["call-2", {}]]);
-  assert.deepEqual(
-    currentSendDiagnostics(call, multipleResults, counts, { id: "receipt-2" }),
-    {
-      messagePeerOutcome: "success",
-      authorizationReason: "unknown",
-      durableQueueReceipt: true,
-    },
-  );
+  assert.deepEqual(currentSendDiagnostics(call, multipleResults, counts, { id: "receipt-2" }), {
+    messagePeerOutcome: "success",
+    authorizationReason: "unknown",
+    durableQueueReceipt: true,
+  });
   assert.equal(
     currentSendDiagnostics(call, multipleResults, counts, {
       id: "other-receipt",
@@ -473,9 +424,7 @@ test("current send diagnostics keep authorization and receipt tied to one exact 
   assert.equal(
     currentSendDiagnostics(
       call,
-      new Map([
-        ["call-2", { isError: false, details: { queued: true, id: "" } }],
-      ]),
+      new Map([["call-2", { isError: false, details: { queued: true, id: "" } }]]),
       counts,
       { id: "" },
     ).durableQueueReceipt,
@@ -488,12 +437,8 @@ test("current send diagnostics keep authorization and receipt tied to one exact 
     "unknown",
   );
   assert.equal(
-    currentSendDiagnostics(
-      new Map([["call-1", {}]]),
-      multipleResults,
-      counts,
-      null,
-    ).authorizationReason,
+    currentSendDiagnostics(new Map([["call-1", {}]]), multipleResults, counts, null)
+      .authorizationReason,
     "route_ambiguous",
   );
 });
@@ -507,14 +452,8 @@ test("ordinary Lead delivery wait does not accept an initially empty inbox", () 
   };
   assert.equal(ordinaryLeadDeliveryReady([], messageId, ""), false);
   assert.equal(ordinaryLeadDeliveryReady([delivered], messageId, ""), true);
-  assert.equal(
-    ordinaryLeadDeliveryReady([delivered, delivered], messageId, ""),
-    false,
-  );
-  assert.equal(
-    ordinaryLeadDeliveryReady([delivered], messageId, "pending"),
-    false,
-  );
+  assert.equal(ordinaryLeadDeliveryReady([delivered, delivered], messageId, ""), false);
+  assert.equal(ordinaryLeadDeliveryReady([delivered], messageId, "pending"), false);
 });
 
 test("live correspondence recipient matches role, session, generation, and Lead eligibility", () => {
@@ -544,10 +483,7 @@ test("live correspondence recipient matches role, session, generation, and Lead 
       },
     ],
   };
-  assert.equal(
-    isLiveCorrespondenceRecipient(lead, { ...correspondence, role: "lead" }),
-    true,
-  );
+  assert.equal(isLiveCorrespondenceRecipient(lead, { ...correspondence, role: "lead" }), true);
   assert.equal(
     isLiveCorrespondenceRecipient(
       { ...lead, ordinaryLeadsComplete: false },
@@ -605,14 +541,11 @@ test("unbound target rejection requires exact nested call and correlated error r
     matchedUnboundTargetRejection([call, result], "lead:0123456789").text,
     "Unknown coordinator target; rediscover it",
   );
-  assert.deepEqual(
-    managedLeadRejectionSummary([call, result], "lead:0123456789"),
-    {
-      exactTargetCalls: 1,
-      matchingToolResults: 1,
-      outcome: "expected_rejection",
-    },
-  );
+  assert.deepEqual(managedLeadRejectionSummary([call, result], "lead:0123456789"), {
+    exactTargetCalls: 1,
+    matchingToolResults: 1,
+    outcome: "expected_rejection",
+  });
   assert.deepEqual(managedLeadRejectionSummary([call], "lead:0123456789"), {
     exactTargetCalls: 1,
     matchingToolResults: 0,
@@ -629,13 +562,12 @@ test("unbound target rejection requires exact nested call and correlated error r
       outcome: "non_error_result",
     },
   );
-  assert.deepEqual(
-    managedLeadRejectionSummary([call, result], "lead:9876543210"),
-    { exactTargetCalls: 0, matchingToolResults: 0, outcome: "missing_call" },
-  );
-  assert.throws(() =>
-    matchedUnboundTargetRejection([call, result], "lead:9876543210"),
-  );
+  assert.deepEqual(managedLeadRejectionSummary([call, result], "lead:9876543210"), {
+    exactTargetCalls: 0,
+    matchingToolResults: 0,
+    outcome: "missing_call",
+  });
+  assert.throws(() => matchedUnboundTargetRejection([call, result], "lead:9876543210"));
   assert.throws(() => matchedUnboundTargetRejection([call], "lead:0123456789"));
   const unexpectedText =
     "unexpected secret-session /private/path target=lead:0123456789 tool-args=private";
@@ -648,11 +580,7 @@ test("unbound target rejection requires exact nested call and correlated error r
   };
   let error;
   assert.throws(
-    () =>
-      matchedUnboundTargetRejection(
-        [call, unexpectedResult],
-        "lead:0123456789",
-      ),
+    () => matchedUnboundTargetRejection([call, unexpectedResult], "lead:0123456789"),
     (caught) => {
       error = caught;
       return true;
@@ -662,14 +590,8 @@ test("unbound target rejection requires exact nested call and correlated error r
     error.message,
     /outcome=wrong_rejection; exactTargetCalls=1; matchingToolResults=1/u,
   );
-  assert.doesNotMatch(
-    error.message,
-    /unexpected secret-session|private|lead:/u,
-  );
-  const summary = managedLeadRejectionSummary(
-    [call, unexpectedResult],
-    "lead:0123456789",
-  );
+  assert.doesNotMatch(error.message, /unexpected secret-session|private|lead:/u);
+  const summary = managedLeadRejectionSummary([call, unexpectedResult], "lead:0123456789");
   assert.deepEqual(summary, {
     exactTargetCalls: 1,
     matchingToolResults: 1,
@@ -684,9 +606,7 @@ test("delegate_work error text is surfaced before JSON parsing", () => {
       type: "message",
       message: {
         role: "assistant",
-        content: [
-          { type: "toolCall", name: "delegate_work", id: "call-exact" },
-        ],
+        content: [{ type: "toolCall", name: "delegate_work", id: "call-exact" }],
       },
     },
     {
@@ -710,8 +630,7 @@ test("delegate_work error text is surfaced before JSON parsing", () => {
   assert.throws(
     () => parseDelegateResult(message),
     (error) =>
-      error.message ===
-        "Lead started but its exact Pi session identity did not materialize" &&
+      error.message === "Lead started but its exact Pi session identity did not materialize" &&
       !(error instanceof SyntaxError),
   );
 });
@@ -763,9 +682,7 @@ test("list_peers accepts the exact public peer target in its correlated result",
       },
     },
   ];
-  assert.doesNotThrow(() =>
-    assertPeerInListPeersResult(entries, "lead:0123456789"),
-  );
+  assert.doesNotThrow(() => assertPeerInListPeersResult(entries, "lead:0123456789"));
   assert.throws(
     () => assertPeerInListPeersResult(entries, "lead:9876543210"),
     /exact list_peers result omitted/u,

@@ -33,16 +33,13 @@ mock.module("node:fs", {
     },
     fstatSync: realFs.fstatSync,
     fsyncSync: (...args: Parameters<typeof realFs.fsyncSync>) => {
-      if (typeof args[0] === "number" && directoryFsyncFds.has(args[0]))
-        directoryFsyncCount++;
+      if (typeof args[0] === "number" && directoryFsyncFds.has(args[0])) directoryFsyncCount++;
       if (
         failDirectoryFsyncAt === directoryFsyncCount &&
         typeof args[0] === "number" &&
         directoryFsyncFds.has(args[0])
       ) {
-        const error = new Error(
-          "directory fsync failed",
-        ) as NodeJS.ErrnoException;
+        const error = new Error("directory fsync failed") as NodeJS.ErrnoException;
         error.code = "EIO";
         lastDirectoryFsyncError = error;
         throw error;
@@ -53,8 +50,7 @@ mock.module("node:fs", {
     lstatSync: realFs.lstatSync,
     openSync: (...args: Parameters<typeof realFs.openSync>) => {
       const fd = realFs.openSync(...args);
-      if (typeof args[0] === "string" && args[0] === failureDirectory)
-        directoryFsyncFds.add(fd);
+      if (typeof args[0] === "string" && args[0] === failureDirectory) directoryFsyncFds.add(fd);
       return fd;
     },
     opendirSync: realFs.opendirSync,
@@ -71,9 +67,7 @@ mock.module("node:fs", {
         raceJsonRename = false;
         realFs.renameSync(...args);
         realFs.unlinkSync(args[1]);
-        const error = new Error(
-          "message already removed",
-        ) as NodeJS.ErrnoException;
+        const error = new Error("message already removed") as NodeJS.ErrnoException;
         error.code = "ENOENT";
         throw error;
       }
@@ -88,9 +82,7 @@ mock.module("node:fs", {
         String(args[0]).endsWith(".json.quarantine") &&
         dirname(String(args[0])) === failureDirectory
       ) {
-        const error = new Error(
-          "marker unlink failed",
-        ) as NodeJS.ErrnoException;
+        const error = new Error("marker unlink failed") as NodeJS.ErrnoException;
         error.code = "EACCES";
         throw error;
       }
@@ -124,8 +116,7 @@ const {
   writeChiefMessage,
 } = await import("./supervision.ts");
 
-const socket = () =>
-  join(realFs.mkdtempSync(join(tmpdir(), "supervision-")), "sock");
+const socket = () => join(realFs.mkdtempSync(join(tmpdir(), "supervision-")), "sock");
 
 function malformedInbox() {
   const runtime = supervisionRuntime(socket());
@@ -135,32 +126,28 @@ function malformedInbox() {
   return { runtime, path };
 }
 
-test(
-  "Chief descriptor publication fsyncs its containing directory",
-  { concurrency: false },
-  () => {
-    const previousSocket = process.env.HERDR_SOCKET_PATH;
-    process.env.HERDR_SOCKET_PATH = socket();
-    const runtime = supervisionRuntime();
+test("Chief descriptor publication fsyncs its containing directory", { concurrency: false }, () => {
+  const previousSocket = process.env.HERDR_SOCKET_PATH;
+  process.env.HERDR_SOCKET_PATH = socket();
+  const runtime = supervisionRuntime();
+  directoryFsyncCount = 0;
+  failureDirectory = runtime.root;
+  try {
+    const lease = claimChiefLease({
+      build: HERDSMAN_BUILD,
+      piSessionId: randomUUID(),
+      paneId: "pane",
+      workspaceId: "workspace",
+    });
+    assert.equal(directoryFsyncCount, process.platform === "win32" ? 0 : 1);
+    lease.release();
+  } finally {
     directoryFsyncCount = 0;
-    failureDirectory = runtime.root;
-    try {
-      const lease = claimChiefLease({
-        build: HERDSMAN_BUILD,
-        piSessionId: randomUUID(),
-        paneId: "pane",
-        workspaceId: "workspace",
-      });
-      assert.equal(directoryFsyncCount, process.platform === "win32" ? 0 : 1);
-      lease.release();
-    } finally {
-      directoryFsyncCount = 0;
-      failureDirectory = undefined;
-      if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
-      else process.env.HERDR_SOCKET_PATH = previousSocket;
-    }
-  },
-);
+    failureDirectory = undefined;
+    if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+    else process.env.HERDR_SOCKET_PATH = previousSocket;
+  }
+});
 
 function assertCleanupError(
   error: unknown,
@@ -227,15 +214,10 @@ test(
         },
       });
       assert.equal(errors.length, 1);
-      assertCleanupError(
-        errors[0],
-        "Unable to remove Chief message quarantine",
-        undefined,
-        {
-          message: "marker unlink failed",
-          code: "EACCES",
-        },
-      );
+      assertCleanupError(errors[0], "Unable to remove Chief message quarantine", undefined, {
+        message: "marker unlink failed",
+        code: "EACCES",
+      });
       assert.equal(realFs.existsSync(path), false);
       assert.equal(realFs.existsSync(`${path}.quarantine`), true);
     } finally {
@@ -344,12 +326,10 @@ test(
         },
       });
       assert.equal(errors.length, 1);
-      assertCleanupError(
-        errors[0],
-        "Unable to remove Chief message quarantine",
-        undefined,
-        { message: "directory fsync failed", code: "EIO" },
-      );
+      assertCleanupError(errors[0], "Unable to remove Chief message quarantine", undefined, {
+        message: "directory fsync failed",
+        code: "EIO",
+      });
       assert.equal(directoryFsyncCount, 5);
       assert.equal(realFs.existsSync(path), false);
       assert.equal(realFs.existsSync(`${path}.quarantine`), true);
@@ -398,15 +378,10 @@ test(
         },
       });
       assert.equal(errors.length, 1);
-      assertCleanupError(
-        errors[0],
-        "Unable to remove Chief message",
-        undefined,
-        {
-          message: "unlink failed",
-          code: "EACCES",
-        },
-      );
+      assertCleanupError(errors[0], "Unable to remove Chief message", undefined, {
+        message: "unlink failed",
+        code: "EACCES",
+      });
       assert.equal(realFs.existsSync(path), true);
       assert.equal(realFs.existsSync(`${path}.quarantine`), true);
     } finally {

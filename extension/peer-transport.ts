@@ -123,17 +123,14 @@ export function resolveRemotePeerOutboundRetry(
   try {
     const parsed: unknown = JSON.parse(outbound.envelope);
     if (!parsed || typeof parsed !== "object") return { kind: "pending" };
-    const correspondence = (parsed as { correspondence?: { role?: unknown } })
-      .correspondence;
+    const correspondence = (parsed as { correspondence?: { role?: unknown } }).correspondence;
     const source = (
       parsed as {
         record?: { peerSource?: { role?: unknown; remoteOrdinary?: unknown } };
       }
     ).record?.peerSource;
     correspondenceRole =
-      correspondence?.role === undefined
-        ? "manager"
-        : (correspondence.role as "manager" | "lead");
+      correspondence?.role === undefined ? "manager" : (correspondence.role as "manager" | "lead");
     if (
       (correspondenceRole !== "manager" && correspondenceRole !== "lead") ||
       (correspondenceRole === "manager" && source?.role !== "manager") ||
@@ -198,14 +195,11 @@ function outboundDirectory(): string {
   return path;
 }
 
-export function tryClaimRemotePeerOutbound(
-  id: string,
-): (() => void) | undefined {
+export function tryClaimRemotePeerOutbound(id: string): (() => void) | undefined {
   try {
-    return acquireProcessLock(
-      join(outboundDirectory(), `${id}.delivery.lock`),
-      { name: "peer outbound delivery" },
-    ).release;
+    return acquireProcessLock(join(outboundDirectory(), `${id}.delivery.lock`), {
+      name: "peer outbound delivery",
+    }).release;
   } catch (error) {
     if (error instanceof ProcessLockOccupiedError) return undefined;
     throw error;
@@ -249,16 +243,11 @@ export function retargetRemotePeerOutbound(
   });
   try {
     const current = listRemotePeerOutbounds().find((item) => item.id === id);
-    if (
-      !current ||
-      current.digest !== digest ||
-      current.recipientSession !== recipientSession
-    )
+    if (!current || current.digest !== digest || current.recipientSession !== recipientSession)
       throw new Error("remote peer outbound identity changed");
     const updated = { ...current, envelope };
     if (
-      Buffer.byteLength(JSON.stringify(updated), "utf8") >
-        OUTBOUND_RECORD_LIMIT_BYTES ||
+      Buffer.byteLength(JSON.stringify(updated), "utf8") > OUTBOUND_RECORD_LIMIT_BYTES ||
       Buffer.byteLength(envelope, "utf8") > PEER_TRANSPORT_FRAME_LIMIT_BYTES
     )
       throw new Error("invalid remote peer outbound record");
@@ -281,17 +270,10 @@ export function retargetRemotePeerOutbound(
   }
 }
 
-function loadRemotePeerOutbound(
-  path: string,
-  id: string,
-): RemotePeerOutbound | undefined {
+function loadRemotePeerOutbound(path: string, id: string): RemotePeerOutbound | undefined {
   try {
     const stat = lstatSync(path);
-    if (
-      !stat.isFile() ||
-      stat.isSymbolicLink() ||
-      stat.size > OUTBOUND_RECORD_LIMIT_BYTES
-    )
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > OUTBOUND_RECORD_LIMIT_BYTES)
       return undefined;
     const value: unknown = JSON.parse(readFileSync(path, "utf8"));
     if (
@@ -307,14 +289,9 @@ function loadRemotePeerOutbound(
   }
 }
 
-export function readRemotePeerOutbound(
-  id: string,
-): RemotePeerOutbound | undefined {
+export function readRemotePeerOutbound(id: string): RemotePeerOutbound | undefined {
   if (!UUID.test(id)) return undefined;
-  return loadRemotePeerOutbound(
-    join(outboundDirectoryPath(), `${id}.json`),
-    id,
-  );
+  return loadRemotePeerOutbound(join(outboundDirectoryPath(), `${id}.json`), id);
 }
 
 export function listRemotePeerOutbounds(): RemotePeerOutbound[] {
@@ -322,10 +299,7 @@ export function listRemotePeerOutbounds(): RemotePeerOutbound[] {
   return readdirSync(directory)
     .filter((name) => UUID.test(name.slice(0, -5)) && name.endsWith(".json"))
     .flatMap((name) => {
-      const outbound = loadRemotePeerOutbound(
-        join(directory, name),
-        name.slice(0, -5),
-      );
+      const outbound = loadRemotePeerOutbound(join(directory, name), name.slice(0, -5));
       return outbound ? [outbound] : [];
     });
 }
@@ -398,8 +372,7 @@ function run(
     });
     child.once("close", (code) => {
       if (stdinError) finish(stdinError);
-      else if (signal?.aborted)
-        finish(new Error("Peer transport was cancelled"));
+      else if (signal?.aborted) finish(new Error("Peer transport was cancelled"));
       else if (code === 0) finish(undefined, stdout);
       else {
         const error = new Error(stderr.trim() || `${command} exited ${code}`);
@@ -411,9 +384,7 @@ function run(
   });
 }
 
-export async function listSavedPeerMachines(
-  signal?: AbortSignal,
-): Promise<SavedPeerMachine[]> {
+export async function listSavedPeerMachines(signal?: AbortSignal): Promise<SavedPeerMachine[]> {
   assertPeerFederationEnabled();
   const [listText, statusText] = await Promise.all([
     run("herdr", ["machine", "list", "--json"], undefined, signal),
@@ -473,8 +444,7 @@ export function parsePeerSshTarget(target: string): {
       throw new Error("Unsupported saved SSH target");
     const username = url.username ? `${decodeURIComponent(url.username)}@` : "";
     const host = `${username}${url.hostname}`;
-    if (/^[\s-]|[\s\0]/u.test(host))
-      throw new Error("Unsupported saved SSH target");
+    if (/^[\s-]|[\s\0]/u.test(host)) throw new Error("Unsupported saved SSH target");
     return {
       host,
       ...(url.port ? { port: url.port } : {}),
@@ -522,9 +492,7 @@ export async function runPeerEndpoint(
   }
 }
 
-export async function tryPollPeerReplies(
-  poll: () => Promise<string>,
-): Promise<string | undefined> {
+export async function tryPollPeerReplies(poll: () => Promise<string>): Promise<string | undefined> {
   try {
     return await poll();
   } catch (error) {
@@ -559,9 +527,7 @@ export async function probePeerEndpoint(
         typeof peer.claim.id !== "string" ||
         peer.claim.id.length === 0 ||
         (peer.role !== "manager" && peer.role !== "lead") ||
-        (peer.role === "lead" &&
-          peer.sessionKind !== "ordinary" &&
-          peer.sessionKind !== "managed"),
+        (peer.role === "lead" && peer.sessionKind !== "ordinary" && peer.sessionKind !== "managed"),
     ) ||
     (snapshot.ordinaryLeadsComplete !== undefined &&
       typeof snapshot.ordinaryLeadsComplete !== "boolean")

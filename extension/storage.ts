@@ -21,17 +21,10 @@ import { fileURLToPath } from "node:url";
 import { acquireProcessLock } from "./lock.ts";
 
 const RESULT_PREFIX = "result:";
-const RESULT_ID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const RESULT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SEMANTIC_RESULT_REF = /^result:([a-z][a-z0-9_-]{0,31})#([1-9][0-9]*)$/;
-const SEMANTIC_EVIDENCE_REF =
-  /^evidence:([a-z][a-z0-9_-]{0,31})#([1-9][0-9]*)$/;
-const INCIDENTAL_METADATA = new Set([
-  ".ds_store",
-  "desktop.ini",
-  "thumbs.db",
-  ".directory",
-]);
+const SEMANTIC_EVIDENCE_REF = /^evidence:([a-z][a-z0-9_-]{0,31})#([1-9][0-9]*)$/;
+const INCIDENTAL_METADATA = new Set([".ds_store", "desktop.ini", "thumbs.db", ".directory"]);
 
 export function isIncidentalMetadata(entry: Dirent): boolean {
   return entry.isFile() && INCIDENTAL_METADATA.has(entry.name.toLowerCase());
@@ -68,14 +61,12 @@ export function isRequiredEvidence(value: unknown): value is RequiredEvidence {
     r.name.length > 255
   )
     return false;
-  if (Object.hasOwn(r, "result"))
-    return Object.keys(r).length === 3 && isResultBinding(r.result);
+  if (Object.hasOwn(r, "result")) return Object.keys(r).length === 3 && isResultBinding(r.result);
   const keys = Object.keys(r).sort();
   const legacyKeys = ["id", "name", "path", "sha256", "sourceAssignmentId"];
   const semanticKeys = [...legacyKeys, "ref"].sort();
   return (
-    (keys.join("\0") === legacyKeys.join("\0") ||
-      keys.join("\0") === semanticKeys.join("\0")) &&
+    (keys.join("\0") === legacyKeys.join("\0") || keys.join("\0") === semanticKeys.join("\0")) &&
     (!Object.hasOwn(r, "ref") || isCanonicalSemanticEvidenceRef(r.ref)) &&
     typeof r.sourceAssignmentId === "string" &&
     EVIDENCE_ID.test(r.sourceAssignmentId) &&
@@ -86,9 +77,7 @@ export function isRequiredEvidence(value: unknown): value is RequiredEvidence {
   );
 }
 
-export function isCanonicalSemanticEvidenceRef(
-  value: unknown,
-): value is string {
+export function isCanonicalSemanticEvidenceRef(value: unknown): value is string {
   if (typeof value !== "string") return false;
   const match = SEMANTIC_EVIDENCE_REF.exec(value);
   return !!match && Number.isSafeInteger(Number(match[2]));
@@ -97,8 +86,7 @@ export function isCanonicalSemanticEvidenceRef(
 /** Existing result identities remain unchanged; legacy snapshots must be upgraded before display. */
 export function semanticEvidenceRef(evidence: RequiredEvidence): string {
   if ("result" in evidence) return evidence.result.ref;
-  if (!evidence.ref)
-    throw new Error("required evidence has no semantic reference");
+  if (!evidence.ref) throw new Error("required evidence has no semantic reference");
   return evidence.ref;
 }
 
@@ -111,18 +99,12 @@ export function upgradeRequiredEvidence(value: unknown): RequiredEvidence {
 }
 
 /** Checks an existing snapshot identity without allocating or repairing it. */
-export function verifySemanticEvidenceReservation(
-  evidenceId: string,
-  ref: string,
-): void {
+export function verifySemanticEvidenceReservation(evidenceId: string, ref: string): void {
   if (!EVIDENCE_ID.test(evidenceId) || !isCanonicalSemanticEvidenceRef(ref))
     throw new Error("invalid semantic evidence reservation");
   const match = SEMANTIC_EVIDENCE_REF.exec(ref)!;
   const root = join(herdsmanDataRoot(), "evidence-ref-reservations");
-  const paths = [
-    join(root, "by-id", evidenceId),
-    join(root, "refs", match[1]!, match[2]!),
-  ];
+  const paths = [join(root, "by-id", evidenceId), join(root, "refs", match[1]!, match[2]!)];
   const contents = paths.map((path) => {
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink())
@@ -135,31 +117,20 @@ export function verifySemanticEvidenceReservation(
 }
 
 /** Upgrades legacy snapshots first, then verifies the durable identity. */
-export function upgradeAndVerifyRequiredEvidence(
-  value: unknown,
-): RequiredEvidence {
+export function upgradeAndVerifyRequiredEvidence(value: unknown): RequiredEvidence {
   const evidence = upgradeRequiredEvidence(value);
-  if (!("result" in evidence))
-    verifySemanticEvidenceReservation(evidence.id, evidence.ref!);
+  if (!("result" in evidence)) verifySemanticEvidenceReservation(evidence.id, evidence.ref!);
   return evidence;
 }
 
 export function requiredEvidenceDirectory(assignmentId: string): string {
-  if (!EVIDENCE_ID.test(assignmentId))
-    throw new Error("invalid evidence assignment id");
+  if (!EVIDENCE_ID.test(assignmentId)) throw new Error("invalid evidence assignment id");
   return join(herdsmanDataRoot(), "evidence", assignmentId);
 }
 
-function assertEvidenceDirectory(
-  assignmentId: string,
-  create: boolean,
-): string {
+function assertEvidenceDirectory(assignmentId: string, create: boolean): string {
   const directory = requiredEvidenceDirectory(assignmentId);
-  const paths = [
-    herdsmanDataRoot(),
-    join(herdsmanDataRoot(), "evidence"),
-    directory,
-  ];
+  const paths = [herdsmanDataRoot(), join(herdsmanDataRoot(), "evidence"), directory];
   for (const path of paths) {
     if (create) {
       try {
@@ -194,9 +165,7 @@ export function persistRequiredEvidenceSnapshot(
     bytes.includes(0) ||
     new TextDecoder("utf-8", { fatal: true }).decode(bytes) !== text
   )
-    throw new Error(
-      "Required evidence must be supported UTF-8 text no larger than 1 MiB",
-    );
+    throw new Error("Required evidence must be supported UTF-8 text no larger than 1 MiB");
   const directory = assertEvidenceDirectory(assignmentId, true);
   chmodSync(directory, 0o700);
   const id = randomUUID();
@@ -248,10 +217,7 @@ export function persistRequiredEvidenceSnapshot(
   }
 }
 
-export function reserveSemanticEvidenceRef(
-  evidenceId: string,
-  name: string,
-): string {
+export function reserveSemanticEvidenceRef(evidenceId: string, name: string): string {
   if (!EVIDENCE_ID.test(evidenceId)) throw new Error("invalid evidence id");
   const root = join(herdsmanDataRoot(), "evidence-ref-reservations");
   const byId = join(root, "by-id");
@@ -281,8 +247,7 @@ export function reserveSemanticEvidenceRef(
     if (/^[1-9][0-9]*$/.test(entry)) index = Math.max(index, Number(entry) + 1);
   }
   for (;;) {
-    if (!Number.isSafeInteger(index))
-      throw new Error("Semantic evidence index exhausted");
+    if (!Number.isSafeInteger(index)) throw new Error("Semantic evidence index exhausted");
     const ref = `evidence:${label}#${index}`;
     try {
       writeFileSync(join(directory, String(index)), `${evidenceId}\n`, {
@@ -323,34 +288,19 @@ export function readRequiredEvidenceSnapshot(
   if (evidence.sourceAssignmentId !== assignmentId)
     throw new Error("required evidence source assignment mismatch");
   const directory = requiredEvidenceDirectory(evidence.sourceAssignmentId);
-  if (
-    evidence.path !==
-    join(directory, `${evidence.id}-${safeEvidenceName(evidence.name)}`)
-  )
+  if (evidence.path !== join(directory, `${evidence.id}-${safeEvidenceName(evidence.name)}`))
     throw new Error("required evidence path mismatch");
   assertEvidenceDirectory(evidence.sourceAssignmentId, false);
   const before = lstatSync(evidence.path);
-  if (
-    !before.isFile() ||
-    before.isSymbolicLink() ||
-    before.size > EVIDENCE_SNAPSHOT_MAX_BYTES
-  )
-    throw new Error(
-      "required evidence snapshot is missing, unsafe, or oversized",
-    );
+  if (!before.isFile() || before.isSymbolicLink() || before.size > EVIDENCE_SNAPSHOT_MAX_BYTES)
+    throw new Error("required evidence snapshot is missing, unsafe, or oversized");
   const fd = openSync(
     evidence.path,
-    constants.O_RDONLY |
-      (constants.O_NOFOLLOW ?? 0) |
-      (constants.O_NONBLOCK ?? 0),
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
   );
   try {
     const opened = fstatSync(fd);
-    if (
-      !opened.isFile() ||
-      opened.dev !== before.dev ||
-      opened.ino !== before.ino
-    )
+    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino)
       throw new Error("required evidence snapshot changed during read");
     const bytes = readFileSync(fd);
     if (
@@ -411,17 +361,11 @@ export function nodeOnlyAgentDir(): string {
     !directory.startsWith("//") &&
     !directory.includes("\\")
   ) {
-    const match = directory.match(
-      /^\/(?:mnt\/|cygdrive\/)?([a-z])(?:\/(.*))?$/i,
-    );
-    if (match)
-      directory = `${match[1].toUpperCase()}:\\${(match[2] ?? "").replaceAll("/", "\\")}`;
+    const match = directory.match(/^\/(?:mnt\/|cygdrive\/)?([a-z])(?:\/(.*))?$/i);
+    if (match) directory = `${match[1].toUpperCase()}:\\${(match[2] ?? "").replaceAll("/", "\\")}`;
   }
   if (directory === "~") return homedir();
-  if (
-    directory.startsWith("~/") ||
-    (process.platform === "win32" && directory.startsWith("~\\"))
-  )
+  if (directory.startsWith("~/") || (process.platform === "win32" && directory.startsWith("~\\")))
     return join(homedir(), directory.slice(2));
   if (directory.startsWith("file://")) return fileURLToPath(directory);
   return directory;
@@ -456,12 +400,7 @@ export function peerAttachmentPath(name: string, text: string): string {
   const bytes = Buffer.from(text, "utf8");
   if (new TextDecoder("utf-8", { fatal: true }).decode(bytes) !== text)
     throw new Error("invalid peer attachment text");
-  const directory = join(
-    herdsmanDataRoot(),
-    "runtime",
-    "peers-v2",
-    "received-evidence",
-  );
+  const directory = join(herdsmanDataRoot(), "runtime", "peers-v2", "received-evidence");
   const digest = createHash("sha256").update(bytes).digest("hex");
   return join(directory, `${digest}-${name}`);
 }
@@ -483,10 +422,7 @@ export function persistPeerAttachment(name: string, text: string): string {
 }
 
 /** Import a forwarded result artifact without allowing canonical-ID rebinding. */
-export function persistPeerResultArtifact(
-  canonicalRef: string,
-  text: string,
-): string {
+export function persistPeerResultArtifact(canonicalRef: string, text: string): string {
   if (!isCanonicalResultRef(canonicalRef) || typeof text !== "string")
     throw new Error("invalid peer result artifact");
   const path = resultPath(canonicalRef.slice(RESULT_PREFIX.length));
@@ -497,8 +433,7 @@ export function persistPeerResultArtifact(
     writeFileSync(path, bytes, { flag: "wx", mode: 0o600, flush: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    if (!readFileSync(path).equals(bytes))
-      throw new Error("peer result identity collision");
+    if (!readFileSync(path).equals(bytes)) throw new Error("peer result identity collision");
   }
   return path;
 }
@@ -515,11 +450,7 @@ export function reserveSemanticResultRef(
   if (!parseSemanticResultRef(`result:${agentLabel}#${minimumIndex}`))
     throw new Error("Invalid semantic result identity");
 
-  const directory = join(
-    herdsmanDataRoot(),
-    "result-ref-reservations",
-    agentLabel,
-  );
+  const directory = join(herdsmanDataRoot(), "result-ref-reservations", agentLabel);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(directory, 0o700);
 
@@ -533,8 +464,7 @@ export function reserveSemanticResultRef(
   }
 
   for (;;) {
-    if (!Number.isSafeInteger(index))
-      throw new Error("Semantic result index exhausted");
+    if (!Number.isSafeInteger(index)) throw new Error("Semantic result index exhausted");
     try {
       writeFileSync(join(directory, String(index)), "reserved\n", {
         encoding: "utf8",
@@ -585,8 +515,7 @@ export function publishScopedResult(
   const artifact = resolveResultRef(canonicalRef);
   if (!artifact) throw new Error("Invalid scoped result artifact");
   const stat = lstatSync(artifact);
-  if (!stat.isFile() || stat.isSymbolicLink())
-    throw new Error("Invalid scoped result artifact");
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Invalid scoped result artifact");
   const dataRoot = herdsmanDataRoot();
   const reservationRoot = join(dataRoot, "result-ref-reservations");
   const directory = join(reservationRoot, agentLabel);
@@ -612,10 +541,9 @@ export function publishScopedResult(
       closeSync(reservationRootFd);
     }
   }
-  const lease = acquireProcessLock(
-    join(dataRoot, "locks", "scoped-result-publication"),
-    { name: "scoped result publication" },
-  );
+  const lease = acquireProcessLock(join(dataRoot, "locks", "scoped-result-publication"), {
+    name: "scoped result publication",
+  });
   try {
     let index = minimumIndex;
     for (const name of readdirSync(directory)) {
@@ -649,15 +577,15 @@ export function publishScopedResult(
       }
     }
     for (;;) {
-      if (!Number.isSafeInteger(index))
-        throw new Error("Semantic result index exhausted");
+      if (!Number.isSafeInteger(index)) throw new Error("Semantic result index exhausted");
       const path = join(directory, String(index));
       try {
-        writeFileSync(
-          path,
-          `${JSON.stringify({ version: 1, canonicalRef, rootSessionId })}\n`,
-          { encoding: "utf8", flag: "wx", mode: 0o600, flush: true },
-        );
+        writeFileSync(path, `${JSON.stringify({ version: 1, canonicalRef, rootSessionId })}\n`, {
+          encoding: "utf8",
+          flag: "wx",
+          mode: 0o600,
+          flush: true,
+        });
         if (process.platform !== "win32") {
           const fd = openSync(directory, "r");
           try {
@@ -692,17 +620,14 @@ export function resolveScopedResult(
   try {
     stat = lstatSync(path);
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT"
-      ? undefined
-      : "invalid";
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? undefined : "invalid";
   }
   try {
     if (!stat.isFile() || stat.isSymbolicLink()) return "invalid";
     const contents = readFileSync(path, "utf8");
     if (contents === "reserved\n") return "reserved";
     const value: unknown = JSON.parse(contents);
-    if (!value || typeof value !== "object" || Array.isArray(value))
-      return "invalid";
+    if (!value || typeof value !== "object" || Array.isArray(value)) return "invalid";
     const record = value as Record<string, unknown>;
     if (
       Object.keys(record).length !== 3 ||
@@ -716,8 +641,7 @@ export function resolveScopedResult(
     const artifact = resolveResultRef(record.canonicalRef);
     if (!artifact) return "invalid";
     const artifactStat = lstatSync(artifact);
-    if (!artifactStat.isFile() || artifactStat.isSymbolicLink())
-      return "invalid";
+    if (!artifactStat.isFile() || artifactStat.isSymbolicLink()) return "invalid";
     return {
       version: 1,
       canonicalRef: record.canonicalRef,

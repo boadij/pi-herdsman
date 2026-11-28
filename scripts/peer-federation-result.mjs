@@ -1,11 +1,7 @@
 const MAX_EVIDENCE_LENGTH = 500;
 
 function isBoundedId(value) {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    Buffer.byteLength(value, "utf8") <= 128
-  );
+  return typeof value === "string" && value.length > 0 && Buffer.byteLength(value, "utf8") <= 128;
 }
 
 export function ordinaryLeadDeliveryReady(entries, messageId, inbox) {
@@ -66,20 +62,14 @@ export function assertOrdinaryLeadSendAcceptance(diagnostics) {
     );
 }
 
-export function currentSendDiscoveryMatched(
-  calls,
-  results,
-  resultCounts,
-  peerTarget,
-) {
+export function currentSendDiscoveryMatched(calls, results, resultCounts, peerTarget) {
   if (calls.size !== 1) return false;
   const [callId] = calls.keys();
   const result = results.get(callId);
   return (
     resultCounts.get(callId) === 1 &&
     (result?.details?.expectedPeerMatched === true ||
-      result?.details?.peers?.some((peer) => peer.target === peerTarget) ===
-        true)
+      result?.details?.peers?.some((peer) => peer.target === peerTarget) === true)
   );
 }
 
@@ -151,9 +141,7 @@ export function classifyCurrentSendEvidence(evidence, peerSession, receipt) {
   for (const result of evidence.sendResults) {
     sendResults.set(result.toolCallId, {
       isError: result.isError,
-      content: result.reasonCode
-        ? [{ type: "text", text: `[${result.reasonCode}]` }]
-        : [],
+      content: result.reasonCode ? [{ type: "text", text: `[${result.reasonCode}]` }] : [],
       details: { queued: result.queued, id: result.receiptId },
     });
     sendResultCounts.set(result.toolCallId, result.resultCount);
@@ -163,27 +151,16 @@ export function classifyCurrentSendEvidence(evidence, peerSession, receipt) {
     freshListPeersCalls: evidence.freshListPeersCalls,
     freshDiscoveryMatched:
       evidence.freshListPeersCalls === 1 &&
-      currentSendDiscoveryMatched(
-        listCalls,
-        listResults,
-        listResultCounts,
-        peerSession,
-      ),
+      currentSendDiscoveryMatched(listCalls, listResults, listResultCounts, peerSession),
     messagePeerCalls: evidence.messagePeerCalls,
-    ...currentSendDiagnostics(
-      sendCalls,
-      sendResults,
-      sendResultCounts,
-      receipt,
-    ),
+    ...currentSendDiagnostics(sendCalls, sendResults, sendResultCounts, receipt),
   };
 }
 
 export function isLiveCorrespondenceRecipient(probe, correspondence) {
   const role = correspondence.role ?? "manager";
   return (
-    (role === "manager" ||
-      (role === "lead" && probe.ordinaryLeadsComplete === true)) &&
+    (role === "manager" || (role === "lead" && probe.ordinaryLeadsComplete === true)) &&
     probe.peers.some(
       (peer) =>
         peer.role === role &&
@@ -208,21 +185,14 @@ function sanitize(value) {
 
 export function matchedDelegateResult(entries) {
   const calls = entries
-    .filter(
-      (entry) =>
-        entry.type === "message" && entry.message?.role === "assistant",
-    )
+    .filter((entry) => entry.type === "message" && entry.message?.role === "assistant")
     .flatMap((entry) => entry.message.content ?? [])
     .filter(
       (part) =>
-        part.type === "toolCall" &&
-        part.name === "delegate_work" &&
-        typeof part.id === "string",
+        part.type === "toolCall" && part.name === "delegate_work" && typeof part.id === "string",
     );
   if (calls.length !== 1)
-    throw new Error(
-      "Manager omitted or duplicated exact delegate_work tool call",
-    );
+    throw new Error("Manager omitted or duplicated exact delegate_work tool call");
   const [call] = calls;
   const results = entries.filter(
     (entry) =>
@@ -232,18 +202,13 @@ export function matchedDelegateResult(entries) {
       entry.message.toolCallId === call.id,
   );
   if (results.length !== 1)
-    throw new Error(
-      "Manager omitted or duplicated exact delegate_work tool result",
-    );
+    throw new Error("Manager omitted or duplicated exact delegate_work tool result");
   return { toolCallId: call.id, message: results[0].message };
 }
 
 export function matchedUnboundTargetRejection(entries, assignedLeadTarget) {
   const calls = entries
-    .filter(
-      (entry) =>
-        entry.type === "message" && entry.message?.role === "assistant",
-    )
+    .filter((entry) => entry.type === "message" && entry.message?.role === "assistant")
     .flatMap((entry) => entry.message.content ?? [])
     .filter(
       (part) =>
@@ -253,9 +218,7 @@ export function matchedUnboundTargetRejection(entries, assignedLeadTarget) {
         typeof part.id === "string",
     );
   if (calls.length !== 1)
-    throw new Error(
-      "Lead omitted or duplicated exact managed message_peer call",
-    );
+    throw new Error("Lead omitted or duplicated exact managed message_peer call");
   const [call] = calls;
   const results = entries.filter(
     (entry) =>
@@ -265,18 +228,13 @@ export function matchedUnboundTargetRejection(entries, assignedLeadTarget) {
       entry.message.toolCallId === call.id,
   );
   if (results.length !== 1)
-    throw new Error(
-      "Lead omitted or duplicated exact managed message_peer result",
-    );
+    throw new Error("Lead omitted or duplicated exact managed message_peer result");
   const message = results[0].message;
   const text = (message.content ?? [])
     .filter((part) => part.type === "text")
     .map((part) => part.text)
     .join("\n");
-  if (
-    message.isError !== true ||
-    !/Unknown coordinator target; rediscover it/u.test(text)
-  ) {
+  if (message.isError !== true || !/Unknown coordinator target; rediscover it/u.test(text)) {
     const summary = managedLeadRejectionSummary(entries, assignedLeadTarget);
     throw new Error(
       `Unbound target did not match expected rejection (outcome=${summary.outcome}; exactTargetCalls=${summary.exactTargetCalls}; matchingToolResults=${summary.matchingToolResults})`,
@@ -287,10 +245,7 @@ export function matchedUnboundTargetRejection(entries, assignedLeadTarget) {
 
 export function managedLeadRejectionSummary(entries, assignedLeadTarget) {
   const calls = entries
-    .filter(
-      (entry) =>
-        entry.type === "message" && entry.message?.role === "assistant",
-    )
+    .filter((entry) => entry.type === "message" && entry.message?.role === "assistant")
     .flatMap((entry) => entry.message.content ?? [])
     .filter(
       (part) =>
@@ -317,8 +272,7 @@ export function managedLeadRejectionSummary(entries, assignedLeadTarget) {
       .filter((part) => part.type === "text")
       .map((part) => part.text)
       .join("\n");
-    if (/Unknown coordinator target; rediscover it/u.test(text))
-      outcome = "expected_rejection";
+    if (/Unknown coordinator target; rediscover it/u.test(text)) outcome = "expected_rejection";
   }
   return {
     exactTargetCalls: calls.length,
@@ -329,19 +283,13 @@ export function managedLeadRejectionSummary(entries, assignedLeadTarget) {
 
 export function assertPeerInListPeersResult(entries, peerTarget) {
   const calls = entries
-    .filter(
-      (entry) =>
-        entry.type === "message" && entry.message?.role === "assistant",
-    )
+    .filter((entry) => entry.type === "message" && entry.message?.role === "assistant")
     .flatMap((entry) => entry.message.content ?? [])
     .filter(
       (part) =>
-        part.type === "toolCall" &&
-        part.name === "list_peers" &&
-        typeof part.id === "string",
+        part.type === "toolCall" && part.name === "list_peers" && typeof part.id === "string",
     );
-  if (calls.length !== 1)
-    throw new Error("Lead omitted or duplicated exact list_peers tool call");
+  if (calls.length !== 1) throw new Error("Lead omitted or duplicated exact list_peers tool call");
   const [call] = calls;
   const results = entries.filter(
     (entry) =>
@@ -352,11 +300,7 @@ export function assertPeerInListPeersResult(entries, peerTarget) {
   );
   if (results.length !== 1)
     throw new Error("Lead omitted or duplicated exact list_peers tool result");
-  if (
-    !results[0].message.details?.peers?.some(
-      (peer) => peer.target === peerTarget,
-    )
-  )
+  if (!results[0].message.details?.peers?.some((peer) => peer.target === peerTarget))
     throw new Error("exact list_peers result omitted the remote ordinary Lead");
 }
 
@@ -370,10 +314,7 @@ export function delegateResultEvidence(toolCallId, message) {
         .map((part) => part.text)
         .join("\n"),
     ),
-    details:
-      message.details === undefined
-        ? undefined
-        : sanitize(JSON.stringify(message.details)),
+    details: message.details === undefined ? undefined : sanitize(JSON.stringify(message.details)),
   };
 }
 
@@ -383,11 +324,8 @@ export function parseDelegateResult(message) {
     : undefined;
   if (message.isError)
     throw new Error(
-      typeof firstText === "string"
-        ? firstText
-        : "Manager delegate_work returned an error",
+      typeof firstText === "string" ? firstText : "Manager delegate_work returned an error",
     );
-  if (typeof firstText !== "string")
-    throw new Error("missing single JSON text result");
+  if (typeof firstText !== "string") throw new Error("missing single JSON text result");
   return JSON.parse(firstText);
 }

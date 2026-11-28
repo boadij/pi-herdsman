@@ -38,6 +38,7 @@ function classify(paths) {
 
     if (
       path !== "CHANGELOG.md" &&
+      path !== "package-lock.json" &&
       /\.(?:[cm]?[jt]sx?|json|ya?ml|md|css|html)$/u.test(path)
     )
       format = true;
@@ -47,7 +48,7 @@ function classify(paths) {
       path === "CONTRIBUTING.md" ||
       path === "CONTRIBUTORS.md" ||
       path === "CHANGELOG.md" ||
-      path === ".prettierignore" ||
+      path === ".oxfmtrc.json" ||
       path === "renovate.json" ||
       path === "release-please-config.json" ||
       path === ".release-please-manifest.json" ||
@@ -55,11 +56,11 @@ function classify(paths) {
       path.startsWith(".github/ISSUE_TEMPLATE/") ||
       path.startsWith(".agents/")
     ) {
-      if (path === ".prettierignore") format = true;
       continue;
     }
 
     if (path === ".gitignore") {
+      format = true;
       packageCheck = true;
       continue;
     }
@@ -193,15 +194,8 @@ function classify(paths) {
       continue;
     }
 
-    if (
-      path === "Dockerfile" ||
-      path === ".dockerignore" ||
-      path.startsWith("docker/")
-    ) {
-      if (
-        path === "docker/pi-herdsman-peer" ||
-        path === "docker/pi-herdsman-peer.test.mjs"
-      )
+    if (path === "Dockerfile" || path === ".dockerignore" || path.startsWith("docker/")) {
+      if (path === "docker/pi-herdsman-peer" || path === "docker/pi-herdsman-peer.test.mjs")
         tests = true;
       smoke();
       peer = true;
@@ -218,18 +212,12 @@ function classify(paths) {
       continue;
     }
 
-    if (
-      path === "compose.tailscale.yaml" ||
-      path === "compose.bind-mount.yaml"
-    ) {
+    if (path === "compose.tailscale.yaml" || path === "compose.bind-mount.yaml") {
       config();
       continue;
     }
 
-    if (
-      path === ".github/workflows/validate.yml" ||
-      path === "scripts/ci-scope.mjs"
-    ) {
+    if (path === ".github/workflows/validate.yml" || path === "scripts/ci-scope.mjs") {
       all();
       continue;
     }
@@ -510,7 +498,7 @@ if (process.argv[2] === "--self-test") {
     ".agents/skills/testing/SKILL.md",
     ".github/pull_request_template.md",
     ".github/ISSUE_TEMPLATE/01-bug.yml",
-    ".prettierignore",
+    ".oxfmtrc.json",
     "renovate.json",
     "release-please-config.json",
     ".release-please-manifest.json",
@@ -519,7 +507,23 @@ if (process.argv[2] === "--self-test") {
     expectOnly(path, { format: true });
 
   expectOnly("CHANGELOG.md");
-  expectOnly(".gitignore", { package: true });
+  expectOnly("package-lock.json", {
+    tests: true,
+    package: true,
+    container: "smoke",
+    smoke: true,
+    peer: true,
+  });
+  assert.deepEqual(classify(["extension/core.test.ts", "package-lock.json"]), {
+    format: true,
+    tests: true,
+    package: true,
+    container: "smoke",
+    smoke: true,
+    bootstrap: false,
+    peer: true,
+  });
+  expectOnly(".gitignore", { format: true, package: true });
   expectOnly("LICENSE", { package: true });
   expectOnly("docs/assets/thumbnail.webp", { package: true });
   expectOnly("skills/agent-definitions/SKILL.md", {

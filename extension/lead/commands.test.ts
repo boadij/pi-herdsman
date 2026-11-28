@@ -1,19 +1,9 @@
 import assert from "node:assert/strict";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import {
-  claimDelegationLock,
-  visibleAgentSnapshots,
-} from "../agent-controller.ts";
+import { claimDelegationLock, visibleAgentSnapshots } from "../agent-controller.ts";
 import {
   DEFAULT_CONFIG,
   readConfig,
@@ -63,8 +53,7 @@ test("override picker filters, toggles, applies bulk shortcuts and saves or canc
               { requestRender() {} },
               { fg: (_color: string, text: string) => text },
               {
-                matches: (input: string, name: string) =>
-                  input === keyData[name],
+                matches: (input: string, name: string) => input === keyData[name],
                 getKeys: (name: string) => [name],
               },
               (value: string[] | undefined) => {
@@ -76,10 +65,7 @@ test("override picker filters, toggles, applies bulk shortcuts and saves or canc
             component.handleInput("\u0001"); // Select available models, retaining unavailable selections.
             assert.match(display(), /3\/3 selected · 1 unavailable/);
             component.handleInput("\u0018"); // Clear all (including unavailable).
-            assert.match(
-              display(),
-              /No custom models selected\. Pi scoped models will be used\./,
-            );
+            assert.match(display(), /No custom models selected\. Pi scoped models will be used\./);
             for (const char of "Alpha") component.handleInput(char);
             assert.match(display(), /→   first \(Alpha\) \[group\/one\]/);
             assert.doesNotMatch(display(), /second \(Beta\)/);
@@ -186,8 +172,7 @@ for (const mode of ["tui", "rpc"]) {
                 { fg: (_color: string, text: string) => text },
                 {
                   matches: (input: string, name: string) =>
-                    (input === steps.remove.key &&
-                      name === "tui.select.confirm") ||
+                    (input === steps.remove.key && name === "tui.select.confirm") ||
                     (input === steps.save.key && name === "app.models.save") ||
                     (input === up && name === "tui.select.up") ||
                     (input === down && name === "tui.select.down") ||
@@ -220,10 +205,7 @@ for (const mode of ["tui", "rpc"]) {
                   component.handleInput(clear);
                   assert.match(display(), /No custom models selected/);
                   component.handleInput("z");
-                  assert.match(
-                    display(),
-                    /→   Use Pi scoped models[\s\S]*No matching models/,
-                  );
+                  assert.match(display(), /→   Use Pi scoped models[\s\S]*No matching models/);
                 }
                 component.handleInput(action.key);
                 if (action === steps.inherit) assertInherited(display());
@@ -238,9 +220,7 @@ for (const mode of ["tui", "rpc"]) {
           const action = actions.shift();
           assert.ok(action);
           assert.equal(items[0]?.value, "inherit");
-          const display = [title, ...items.map(({ label }) => label)].join(
-            "\n",
-          );
+          const display = [title, ...items.map(({ label }) => label)].join("\n");
           if (!previous && !configured.length) {
             assertInherited(display);
             assertSelectedFirst(display);
@@ -284,10 +264,7 @@ test("Delegation settings allow editing while Off and write only when saved", as
     selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
       const choice = choices.shift();
       if (choice === "allowed-override-models") {
-        assert.equal(
-          items.find((item) => item.value === "model-overrides")?.description,
-          "Off",
-        );
+        assert.equal(items.find((item) => item.value === "model-overrides")?.description, "Off");
         assert.equal(
           items.find((item) => item.value === choice)?.description,
           "Custom selection · 1 selected",
@@ -306,8 +283,7 @@ test("Delegation settings allow editing while Off and write only when saved", as
       }
       if (choice === "model-overrides") {
         assert.equal(
-          items.find((item) => item.value === "allowed-override-models")
-            ?.description,
+          items.find((item) => item.value === "allowed-override-models")?.description,
           "Using Pi scoped models",
         );
       }
@@ -372,8 +348,7 @@ test("status widget rows Settings validates choices and reports persistence erro
       selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
         if (title === "Interface") {
           assert.equal(
-            items.find((item) => item.value === "status-widget-rows")
-              .description,
+            items.find((item) => item.value === "status-widget-rows").description,
             "8 lines",
           );
           return settings++ === 0 ? "status-widget-rows" : undefined;
@@ -390,17 +365,13 @@ test("status widget rows Settings validates choices and reports persistence erro
       {
         isProjectTrusted: () => false,
         ui: {
-          notify: (message: string, level?: string) =>
-            notices.push([message, level]),
+          notify: (message: string, level?: string) => notices.push([message, level]),
         },
       } as any,
       "interface",
     );
     assert.deepEqual(updates, scenario.expected);
-    assert.equal(
-      notices.filter(([, level]) => level === "error").length,
-      scenario.errors,
-    );
+    assert.equal(notices.filter(([, level]) => level === "error").length, scenario.errors);
     if (scenario.fail)
       assert.equal(
         notices.some(([, level]) => level !== "error"),
@@ -463,17 +434,13 @@ test("max Agent depth Settings validates choices and reports persistence errors"
       {
         isProjectTrusted: () => false,
         ui: {
-          notify: (message: string, level?: string) =>
-            notices.push([message, level]),
+          notify: (message: string, level?: string) => notices.push([message, level]),
         },
       } as any,
       "delegation",
     );
     assert.deepEqual(updates, scenario.expected);
-    assert.equal(
-      notices.filter(([, level]) => level === "error").length,
-      scenario.errors,
-    );
+    assert.equal(notices.filter(([, level]) => level === "error").length, scenario.errors);
   }
 });
 
@@ -506,12 +473,7 @@ test("Herdsman root renders when status and definition metadata fail", async () 
         mode: scenario.mode,
       }),
       roleActive: (role: string) => role === scenario.role,
-      selectMenu: async (
-        _ctx: unknown,
-        title: string,
-        items: any[],
-        selected: string,
-      ) => {
+      selectMenu: async (_ctx: unknown, title: string, items: any[], selected: string) => {
         calls++;
         assert.equal(
           title,
@@ -557,12 +519,7 @@ test("Settings retain category selection and Agents & definitions lists its dest
   const runtime = createLeadCommandRuntime({
     readConfig: () => readConfig(),
     placementSettings: async () => ({ effective: "tab" }),
-    selectMenu: async (
-      _ctx: unknown,
-      title: string,
-      items: any[],
-      selected?: string,
-    ) => {
+    selectMenu: async (_ctx: unknown, title: string, items: any[], selected?: string) => {
       calls.push({ title, labels: items.map((item) => item.label), selected });
       return answers.shift();
     },
@@ -609,12 +566,7 @@ test("Agents & definitions skips discovery before rendering and retains its sele
       loadedDefinitions++;
       return { definitions: [], roleDefinitions: [], projectTrusted: false };
     },
-    selectMenu: async (
-      _ctx: unknown,
-      title: string,
-      _items: unknown[],
-      selected?: string,
-    ) => {
+    selectMenu: async (_ctx: unknown, title: string, _items: unknown[], selected?: string) => {
       if (title !== "Agents & definitions") return undefined;
       selections.push(selected);
       if (selections.length === 1) {
@@ -631,11 +583,7 @@ test("Agents & definitions skips discovery before rendering and retains its sele
   } as any);
   assert.equal(statusReads, 0);
   assert.equal(loadedDefinitions, 1);
-  assert.deepEqual(selections, [
-    "agent-definitions",
-    "coordinator-profiles",
-    "agent-definitions",
-  ]);
+  assert.deepEqual(selections, ["agent-definitions", "coordinator-profiles", "agent-definitions"]);
 });
 
 test("Role menus retain selection and refresh active state after operations", async () => {
@@ -688,12 +636,7 @@ test("Value menus identify current options in text and message row shows effecti
       enabled: false,
       identity: {},
     }),
-    selectMenu: async (
-      _ctx: unknown,
-      title: string,
-      items: any[],
-      selected?: string,
-    ) => {
+    selectMenu: async (_ctx: unknown, title: string, items: any[], selected?: string) => {
       menus.push({ title, items, selected });
       return undefined;
     },
@@ -710,10 +653,7 @@ test("Value menus identify current options in text and message row shows effecti
   await runtime.openRemovalSetting(ctx);
   const removal = menus.at(-1)!;
   assert.equal(removal.selected, "required");
-  assert.equal(
-    removal.items.find((i) => i.value === "required").description,
-    "current",
-  );
+  assert.equal(removal.items.find((i) => i.value === "required").description, "current");
 });
 
 test("Current setting choices remain visible after cursor movement and in non-TUI labels", async () => {
@@ -783,21 +723,13 @@ test("Current setting choices remain visible after cursor movement and in non-TU
         enabled: false,
         identity: {},
       }),
-      selectMenu: async (
-        _ctx: unknown,
-        title: string,
-        items: any[],
-        selected: string,
-      ) => {
+      selectMenu: async (_ctx: unknown, title: string, items: any[], selected: string) => {
         if (title === scenario.title) {
           found = true;
           assert.equal(selected, scenario.current);
           const current = items.find((item) => item.value === scenario.current);
           // The non-TUI selector concatenates label and description, independent of cursor.
-          assert.match(
-            `${current.label}  ${current.description ?? ""}`,
-            /current/,
-          );
+          assert.match(`${current.label}  ${current.description ?? ""}`, /current/);
           const defaultValue = {
             "Agent nesting limit": "2",
             "Status widget lines": "8",
@@ -820,32 +752,17 @@ test("Current setting choices remain visible after cursor movement and in non-TU
       isProjectTrusted: () => true,
       ui: { notify: () => undefined },
     } as any;
-    if (scenario.action === "project")
-      await runtime.openProjectSetting(ctx, "autoActivateManager");
+    if (scenario.action === "project") await runtime.openProjectSetting(ctx, "autoActivateManager");
     else if (scenario.action === "merge") await runtime.openMergeSetting(ctx);
-    else if (scenario.action === "limits")
-      await runtime.openMessageLimitsMenu(ctx);
+    else if (scenario.action === "limits") await runtime.openMessageLimitsMenu(ctx);
     else await runtime.openSettingsCategory(ctx, scenario.action);
     assert.equal(found, true, scenario.title);
   }
 });
 
 test("Message and file limit selectors restore defaults even when already effective", async () => {
-  for (const key of [
-    "inlineAttachmentLimitBytes",
-    "mailboxPayloadLimitBytes",
-  ] as const) {
-    const answers = [
-      key,
-      "custom",
-      key,
-      "custom",
-      key,
-      "default",
-      key,
-      "default",
-      undefined,
-    ];
+  for (const key of ["inlineAttachmentLimitBytes", "mailboxPayloadLimitBytes"] as const) {
+    const answers = [key, "custom", key, "custom", key, "default", key, "default", undefined];
     const inputs = ["0", undefined];
     const writes: unknown[][] = [];
     const errors: string[] = [];
@@ -930,8 +847,7 @@ test("Herdsman role menus dispatch shared role commands", async () => {
           managed: false,
           mode: "flexible",
         }),
-        roleActive: (selectedRole: string) =>
-          selectedRole === role && scenario.active,
+        roleActive: (selectedRole: string) => selectedRole === role && scenario.active,
         transitionRole: async (selectedRole: string, leave: boolean) => {
           dispatched.push([selectedRole, leave]);
           return "transition requested";
@@ -961,8 +877,7 @@ test("Herdsman role menus dispatch shared role commands", async () => {
       assert.ok(
         menus.some(
           (menu) =>
-            menu.title === title &&
-            scenario.labels.every((label) => menu.labels.includes(label)),
+            menu.title === title && scenario.labels.every((label) => menu.labels.includes(label)),
         ),
       );
       assert.deepEqual(
@@ -976,10 +891,7 @@ test("Herdsman role menus dispatch shared role commands", async () => {
               : [],
       );
       assert.deepEqual(overviews, scenario.action === "overview" ? [role] : []);
-      assert.deepEqual(
-        notices,
-        scenario.action === "overview" ? [] : ["transition requested"],
-      );
+      assert.deepEqual(notices, scenario.action === "overview" ? [] : ["transition requested"]);
     }
   }
 });
@@ -1007,8 +919,7 @@ test("role overview bypasses the idle-gated refresh and invalid commands do noth
     } as any);
     const ctx = {
       ui: {
-        notify: (message: string, level?: string) =>
-          notices.push([message, level]),
+        notify: (message: string, level?: string) => notices.push([message, level]),
       },
     } as any;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1016,10 +927,7 @@ test("role overview bypasses the idle-gated refresh and invalid commands do noth
       await Promise.race([
         runtime.runRoleCommand(role, "open", ctx),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error("overview waited for idle")),
-            1000,
-          );
+          timer = setTimeout(() => reject(new Error("overview waited for idle")), 1000);
         }),
       ]);
       assert.equal(overviews, 1);
@@ -1037,9 +945,7 @@ test("role overview bypasses the idle-gated refresh and invalid commands do noth
     await runtime.runRoleCommand(role, "refresh", ctx);
     assert.equal(transitions, 1);
     assert.equal(overviews, 1);
-    assert.deepEqual(notices, [
-      [`/${role}-refresh requires active ${role} mode`, "error"],
-    ]);
+    assert.deepEqual(notices, [[`/${role}-refresh requires active ${role} mode`, "error"]]);
   }
 });
 
@@ -1049,38 +955,18 @@ test("Settings categories expose canonical rows, values and contextual help", as
       "sessions",
       [
         ["default-lead-execution", "Default Lead mode", "Flexible"],
-        [
-          "context-retirement",
-          "Finish Agents near context limit",
-          "On · Global",
-        ],
-        [
-          "message-limits",
-          "Message and file limits",
-          "Files 4097 B · Messages 16 KiB",
-        ],
+        ["context-retirement", "Finish Agents near context limit", "On · Global"],
+        ["message-limits", "Message and file limits", "Files 4097 B · Messages 16 KiB"],
       ],
     ],
     [
       "manager",
       [
-        [
-          "auto-activate-manager",
-          "Start Manager automatically",
-          "Off · Global",
-        ],
-        [
-          "manager-git-bootstrap-confirmation",
-          "Confirm Git initialization",
-          "Required",
-        ],
+        ["auto-activate-manager", "Start Manager automatically", "Off · Global"],
+        ["manager-git-bootstrap-confirmation", "Confirm Git initialization", "Required"],
         ["manager-merge", "Merge accepted branches", "Repository unavailable"],
         ["projects-directory", "Projects directory", "~/Projects"],
-        [
-          "removal-confirmation",
-          "Confirm worktree removal",
-          "Repository unavailable",
-        ],
+        ["removal-confirmation", "Confirm worktree removal", "Repository unavailable"],
       ],
     ],
     [
@@ -1096,11 +982,7 @@ test("Settings categories expose canonical rows, values and contextual help", as
         ["max-agent-depth", "Agent nesting limit", "2 levels"],
         ["cwd-override", "Delegate Agents to other directories (cwd)", "Off"],
         ["model-overrides", "Agent model overrides", "Off"],
-        [
-          "allowed-override-models",
-          "Allowed override models",
-          "Using Pi scoped models",
-        ],
+        ["allowed-override-models", "Allowed override models", "Using Pi scoped models"],
       ],
     ],
     [
@@ -1135,16 +1017,10 @@ test("Settings categories expose canonical rows, values and contextual help", as
       const category = selectedCategory.value;
       const rows = expected.find(([value]) => value === category)?.[1];
       assert.deepEqual(
-        items.map(({ value, label, description }) => [
-          value,
-          label,
-          description,
-        ]),
+        items.map(({ value, label, description }) => [value, label, description]),
         rows,
       );
-      assert.ok(
-        items.every(({ help }) => help?.length > 0 && help.length <= 280),
-      );
+      assert.ok(items.every(({ help }) => help?.length > 0 && help.length <= 280));
       for (const item of items) {
         assert.ok(!Object.hasOwn(item, "category"));
         displayedRows.push([title, item.label]);
@@ -1159,9 +1035,7 @@ test("Settings categories expose canonical rows, values and contextual help", as
     new URL("../../docs/reference/commands.md", import.meta.url),
     "utf8",
   );
-  const table = commands.match(
-    /^### Settings menu\r?\n\r?\n([\s\S]*?)\r?\n\r?\n/m,
-  )?.[1];
+  const table = commands.match(/^### Settings menu\r?\n\r?\n([\s\S]*?)\r?\n\r?\n/m)?.[1];
   assert.ok(table, "Settings menu inventory is missing");
   const documentedRows = table
     .split(/\r?\n/)
@@ -1201,10 +1075,7 @@ test("Settings identifies trusted project and verified repository sources", asyn
         );
       },
     } as any);
-    await runtime.openSettingsCategory(
-      { isProjectTrusted: () => true } as any,
-      "manager",
-    );
+    await runtime.openSettingsCategory({ isProjectTrusted: () => true } as any, "manager");
   }
 });
 
@@ -1251,8 +1122,7 @@ test("Projects directory edits use the active profile's global configuration", a
       {
         isProjectTrusted: () => false,
         ui: {
-          notify: (message: string, level: string) =>
-            notices.push([message, level]),
+          notify: (message: string, level: string) => notices.push([message, level]),
         },
       } as any,
       "manager",
@@ -1294,25 +1164,11 @@ test("Delegate Agents to other directories (cwd) shows the current choice and pe
       if (title === "Delegation options") {
         assert.deepEqual(
           items.map((item) => item.value),
-          [
-            "max-agent-depth",
-            "cwd-override",
-            "model-overrides",
-            "allowed-override-models",
-          ],
+          ["max-agent-depth", "cwd-override", "model-overrides", "allowed-override-models"],
         );
-        assert.equal(
-          selected,
-          attempts.length === 4 ? "max-agent-depth" : "cwd-override",
-        );
-        assert.equal(
-          items[1]?.label,
-          "Delegate Agents to other directories (cwd)",
-        );
-        assert.equal(
-          items[1]?.description,
-          config.allowAgentCwdOverride ? "On" : "Off",
-        );
+        assert.equal(selected, attempts.length === 4 ? "max-agent-depth" : "cwd-override");
+        assert.equal(items[1]?.label, "Delegate Agents to other directories (cwd)");
+        assert.equal(items[1]?.description, config.allowAgentCwdOverride ? "On" : "Off");
         assert.equal(
           items[1]?.help,
           "Allow ordinary Leads to select another directory using `cwd` in `delegate_agent`. Without it, Agents use the Lead's directory. Global setting; changes apply to subsequent model turns without `/reload`.",
@@ -1325,10 +1181,7 @@ test("Delegate Agents to other directories (cwd) shows the current choice and pe
         ["Off", "On"],
       );
       assert.equal(selected, config.allowAgentCwdOverride ? "on" : "off");
-      assert.equal(
-        items.find((item) => item.value === selected)?.description,
-        "current",
-      );
+      assert.equal(items.find((item) => item.value === selected)?.description, "current");
       return attempts.shift();
     },
   } as any);
@@ -1374,20 +1227,12 @@ test("Communication settings preserve the federation preference while inactive",
   ];
   const runtime = createLeadCommandRuntime({
     readConfig: () => ({ ...config }),
-    updateConfig: (
-      key: "peerCommunicationEnabled" | "peerFederationEnabled",
-      value: boolean,
-    ) => {
+    updateConfig: (key: "peerCommunicationEnabled" | "peerFederationEnabled", value: boolean) => {
       writes.push([key, value]);
       config[key] = value;
     },
-    selectMenu: async (
-      _ctx: unknown,
-      title: string,
-      items: { description: string }[],
-    ) => {
-      if (title === "Communication")
-        descriptions.push(items.map((item) => item.description));
+    selectMenu: async (_ctx: unknown, title: string, items: { description: string }[]) => {
+      if (title === "Communication") descriptions.push(items.map((item) => item.description));
       return answers.shift();
     },
   } as any);
@@ -1418,34 +1263,17 @@ test("Project setting combines scopes and skips unchanged values", async () => {
   const config = { ...readConfig(), autoActivateManager: true };
   const overrides: { autoActivateManager?: boolean } = {};
   const writes: unknown[] = [];
-  const answers = [
-    "project",
-    "off",
-    "project",
-    "off",
-    "project",
-    "inherit",
-    undefined,
-  ];
+  const answers = ["project", "off", "project", "off", "project", "inherit", undefined];
   const selections: (string | undefined)[] = [];
   const runtime = createLeadCommandRuntime({
     readConfig: () => config,
     readProjectOverrides: () => ({ ...overrides }),
-    updateProjectOverride: (
-      _ctx: unknown,
-      _key: string,
-      value: boolean | undefined,
-    ) => {
+    updateProjectOverride: (_ctx: unknown, _key: string, value: boolean | undefined) => {
       writes.push(value);
       if (value === undefined) delete overrides.autoActivateManager;
       else overrides.autoActivateManager = value;
     },
-    selectMenu: async (
-      _ctx: unknown,
-      _title: string,
-      _items: unknown,
-      selected: string,
-    ) => {
+    selectMenu: async (_ctx: unknown, _title: string, _items: unknown, selected: string) => {
       selections.push(selected);
       return answers.shift();
     },
@@ -1469,22 +1297,13 @@ test("Removal selector passes verified identity and avoids unchanged writes", as
       identity,
       enabled: false,
     }),
-    setRemovalPreauthorization: async (
-      value: boolean,
-      _ctx: unknown,
-      expected: unknown,
-    ) => {
+    setRemovalPreauthorization: async (value: boolean, _ctx: unknown, expected: unknown) => {
       assert.equal(value, true);
       assert.equal(expected, identity);
       writes++;
       return true;
     },
-    selectMenu: async (
-      _ctx: unknown,
-      title: string,
-      _items: unknown,
-      selected: string,
-    ) => {
+    selectMenu: async (_ctx: unknown, title: string, _items: unknown, selected: string) => {
       assert.match(title, /\/verified\/repository/);
       assert.equal(selected, "required");
       return choice;
@@ -1554,8 +1373,7 @@ test("Global integration confirms increases and rejects stale changes", async ()
         throw new Error("unavailable");
       },
       selectMenu: async (_ctx: unknown, title: string) => {
-        if (title === "Merge accepted branches")
-          return scopeCalls++ ? undefined : "global";
+        if (title === "Merge accepted branches") return scopeCalls++ ? undefined : "global";
         if (during === "selection") current = true;
         return "divergent";
       },
@@ -1616,8 +1434,7 @@ test("Repository integration delegates inheritance and explicit grants to guarde
     const config = {
       ...readConfig(),
       managerMergeEnabled: "divergent" as const,
-      managerMergeOverrides:
-        override === undefined ? {} : { "/repo": override },
+      managerMergeOverrides: override === undefined ? {} : { "/repo": override },
     };
     const answers = ["repository", choice, undefined];
     const runtime = createLeadCommandRuntime({
@@ -1718,12 +1535,7 @@ test("Definitions retains the last selected Agent when returning to its list", a
       roleDefinitions: [],
       projectTrusted: true,
     }),
-    selectMenu: async (
-      _ctx: unknown,
-      title: string,
-      _items: any[],
-      selected?: string,
-    ) => {
+    selectMenu: async (_ctx: unknown, title: string, _items: any[], selected?: string) => {
       selections.push({ title, selected });
       return results.shift();
     },
@@ -1734,9 +1546,7 @@ test("Definitions retains the last selected Agent when returning to its list", a
     ui: { notify: () => undefined },
   } as any);
   assert.deepEqual(
-    selections
-      .filter(({ title }) => title === "Agents")
-      .map(({ selected }) => selected),
+    selections.filter(({ title }) => title === "Agents").map(({ selected }) => selected),
     [undefined, "second"],
   );
 });
@@ -1764,11 +1574,7 @@ test("ordinary Agent Details order native and appended context by launch mode", 
         inheritAncestorContext: true,
         inheritProjectContext: true,
       },
-      expected: [
-        "definition body",
-        "context sentinel",
-        "Herdsman shared guidance",
-      ],
+      expected: ["definition body", "context sentinel", "Herdsman shared guidance"],
     },
     {
       name: "global and project but not ancestor",
@@ -1777,11 +1583,7 @@ test("ordinary Agent Details order native and appended context by launch mode", 
         inheritAncestorContext: false,
         inheritProjectContext: true,
       },
-      expected: [
-        "Selected Pi context: global, project",
-        "definition body",
-        "context sentinel",
-      ],
+      expected: ["Selected Pi context: global, project", "definition body", "context sentinel"],
     },
     {
       name: "empty first source",
@@ -1895,12 +1697,9 @@ test("ordinary Agent Details order native and appended context by launch mode", 
         displayed = [
           ...data.inspector.summary,
           ...data.inspector.sections.flatMap((section: any) =>
-            [
-              section.title,
-              section.source,
-              ...(section.changes ?? []),
-              section.content,
-            ].filter(Boolean),
+            [section.title, section.source, ...(section.changes ?? []), section.content].filter(
+              Boolean,
+            ),
           ),
         ];
       },
@@ -1924,9 +1723,7 @@ test("ordinary Agent Details order native and appended context by launch mode", 
       prompt,
     );
     if (scenario.allFragmentsEmpty) {
-      const fallback = inspectedSections!.find(
-        (section) => section.changes?.length,
-      );
+      const fallback = inspectedSections!.find((section) => section.changes?.length);
       assert.ok(fallback, JSON.stringify(inspectedSections));
       assert.equal(fallback.content, undefined);
       assert.equal(
@@ -1947,10 +1744,7 @@ test("ordinary Agent Details order native and appended context by launch mode", 
         (section) => section.content === "definition body",
       );
       assert.ok(firstVisible, JSON.stringify(inspectedSections));
-      assert.ok(
-        firstVisible.changes?.length,
-        JSON.stringify(inspectedSections),
-      );
+      assert.ok(firstVisible.changes?.length, JSON.stringify(inspectedSections));
       assert.equal(
         inspectedSections!.some((section) => section.content === ""),
         false,
@@ -1960,13 +1754,7 @@ test("ordinary Agent Details order native and appended context by launch mode", 
 });
 
 test("inactive Managed Lead Details include Working directory exactly once", async () => {
-  const choices = [
-    "roles",
-    "lead:managed-lead",
-    "details",
-    undefined,
-    undefined,
-  ];
+  const choices = ["roles", "lead:managed-lead", "details", undefined, undefined];
   let details: any;
   let selectedCwd: string | undefined;
   const definition = {
@@ -1989,9 +1777,7 @@ test("inactive Managed Lead Details include Working directory exactly once", asy
     inspectDefinition: () => ({
       definition,
       layers: [],
-      bodyFragments: [
-        { path: definition.path, scope: "bundled", body: definition.body },
-      ],
+      bodyFragments: [{ path: definition.path, scope: "bundled", body: definition.body }],
     }),
     expandDefinitionBodyFragments: (fragments: Array<{ body: string }>) =>
       fragments.map(({ body }) => body),
@@ -2016,42 +1802,25 @@ test("inactive Managed Lead Details include Working directory exactly once", asy
     ui: { notify: () => undefined },
   } as any);
 
-  assert.ok(
-    details,
-    "Details should be appended for the prospective Managed Lead",
-  );
+  assert.ok(details, "Details should be appended for the prospective Managed Lead");
   assert.equal(selectedCwd, "/workspace");
-  assert.match(
-    details.inspector.summary.join("\n"),
-    /Preview cwd: \/workspace/u,
-  );
-  assert.match(
-    details.inspector.summary.join("\n"),
-    /Selected Pi context: project/u,
-  );
+  assert.match(details.inspector.summary.join("\n"), /Preview cwd: \/workspace/u);
+  assert.match(details.inspector.summary.join("\n"), /Selected Pi context: project/u);
   assert.ok(
     details.inspector.sections.some(
-      (section: any) =>
-        section.title === "Pi context" &&
-        section.source === "/workspace/AGENTS.md",
+      (section: any) => section.title === "Pi context" && section.source === "/workspace/AGENTS.md",
     ),
   );
   assert.equal(
-    details.inspector.sections.filter(
-      (section: any) => section.title === "Working directory",
-    ).length,
+    details.inspector.sections.filter((section: any) => section.title === "Working directory")
+      .length,
     1,
   );
   assert.equal(
-    details.inspector.sections.some(
-      (section: any) => section.title === "Preview limitation",
-    ),
+    details.inspector.sections.some((section: any) => section.title === "Preview limitation"),
     false,
   );
-  assert.match(
-    details.inspector.summary.join("\n"),
-    /Known-input preview only/u,
-  );
+  assert.match(details.inspector.summary.join("\n"), /Known-input preview only/u);
 });
 
 test("same-named Lead and Manager entries expose only applicable settings", async (t) => {
@@ -2079,27 +1848,18 @@ test("same-named Lead and Manager entries expose only applicable settings", asyn
   ];
   const profileMenus: string[][] = [];
   const runtime = createLeadCommandRuntime({
-    selectMenu: async (
-      _ctx: unknown,
-      title: string,
-      items: { value: string; label: string }[],
-    ) => {
+    selectMenu: async (_ctx: unknown, title: string, items: { value: string; label: string }[]) => {
       if (title === "Coordinators") {
         assert.ok(
-          items.some(
-            ({ value, label }) =>
-              value === "lead:shared" && label === "shared (lead)",
-          ),
+          items.some(({ value, label }) => value === "lead:shared" && label === "shared (lead)"),
         );
         assert.ok(
           items.some(
-            ({ value, label }) =>
-              value === "manager:shared" && label === "shared (manager)",
+            ({ value, label }) => value === "manager:shared" && label === "shared (manager)",
           ),
         );
       }
-      if (title === "shared")
-        profileMenus.push(items.map(({ value }) => value));
+      if (title === "shared") profileMenus.push(items.map(({ value }) => value));
       return choices.shift();
     },
     getThinkingLevel: () => "high",
@@ -2127,9 +1887,7 @@ test("Coordinator Details show current prompt inputs in composition order", asyn
     getThinkingLevel: () => "high",
     agentDefinitionEnabled: () => true,
     getSystemPromptOptions: () => ({
-      contextFiles: [
-        { path: "/workspace/AGENTS.md", content: "Current project context" },
-      ],
+      contextFiles: [{ path: "/workspace/AGENTS.md", content: "Current project context" }],
     }),
     inspectDefinition: () => ({
       definition: {
@@ -2159,12 +1917,9 @@ test("Coordinator Details show current prompt inputs in composition order", asyn
       displayed = [
         ...data.inspector.summary,
         ...data.inspector.sections.flatMap((section: any) =>
-          [
-            section.title,
-            section.source,
-            ...(section.changes ?? []),
-            section.content,
-          ].filter(Boolean),
+          [section.title, section.source, ...(section.changes ?? []), section.content].filter(
+            Boolean,
+          ),
         ),
       ];
     },
@@ -2193,8 +1948,7 @@ test("Coordinator Details show current prompt inputs in composition order", asyn
 });
 
 test("Chief Details use the forced prompt producer with global-only context", async () => {
-  const { chiefGlobalInstructions, chiefSystemPrompt } =
-    await import("../chief-prompt.ts");
+  const { chiefGlobalInstructions, chiefSystemPrompt } = await import("../chief-prompt.ts");
   const choices = ["roles", "chief:chief", "details", undefined, undefined];
   let displayed: string[] | undefined;
   const promptOptions = {
@@ -2238,12 +1992,7 @@ test("Chief Details use the forced prompt producer with global-only context", as
     chiefGlobalInstructions: (options: typeof promptOptions) =>
       chiefGlobalInstructions(options, "/home/user/.pi/agent"),
     chiefSystemPrompt: (options: typeof promptOptions, body: string) =>
-      chiefSystemPrompt(
-        options,
-        body,
-        "Chief role contract sentinel",
-        "/home/user/.pi/agent",
-      ),
+      chiefSystemPrompt(options, body, "Chief role contract sentinel", "/home/user/.pi/agent"),
     leadExecutionPresentation: () => ({
       managed: false,
       mode: "flexible",
@@ -2257,12 +2006,9 @@ test("Chief Details use the forced prompt producer with global-only context", as
       displayed = [
         ...data.inspector.summary,
         ...data.inspector.sections.flatMap((section: any) =>
-          [
-            section.title,
-            section.source,
-            ...(section.changes ?? []),
-            section.content,
-          ].filter(Boolean),
+          [section.title, section.source, ...(section.changes ?? []), section.content].filter(
+            Boolean,
+          ),
         ),
       ];
     },
@@ -2280,12 +2026,10 @@ test("Chief Details use the forced prompt producer with global-only context", as
   assert.doesNotMatch(details, /Project context sentinel/u);
   assert.match(details, /project context excluded/u);
   assert.ok(
-    details.indexOf("Chief role contract sentinel") <
-      details.indexOf("Chief profile sentinel"),
+    details.indexOf("Chief role contract sentinel") < details.indexOf("Chief profile sentinel"),
   );
   assert.ok(
-    details.indexOf("Chief profile sentinel") <
-      details.indexOf("Global user instruction sentinel"),
+    details.indexOf("Chief profile sentinel") < details.indexOf("Global user instruction sentinel"),
   );
 });
 
@@ -2301,10 +2045,7 @@ test("Definitions lists and displays misplaced-definition warnings without editi
   const notices: [string, string | undefined][] = [];
   const results = ["agents", "__definition_warnings__", undefined, undefined];
   const runtime = createLeadCommandRuntime({
-    contextAgentDefinitions: async (
-      _ctx: unknown,
-      onWarning?: (message: string) => void,
-    ) => {
+    contextAgentDefinitions: async (_ctx: unknown, onWarning?: (message: string) => void) => {
       onWarning?.(warning);
       return {
         definitions: [first],
@@ -2322,8 +2063,7 @@ test("Definitions lists and displays misplaced-definition warnings without editi
   await runtime.openDefinitionsMenu({
     isProjectTrusted: () => false,
     ui: {
-      notify: (message: string, level?: string) =>
-        notices.push([message, level]),
+      notify: (message: string, level?: string) => notices.push([message, level]),
     },
   } as any);
   const list = menus.find(({ title }) => title === "Agents")!;
@@ -2344,10 +2084,7 @@ test("lead stop-all does not report an empty inventory while delegation is locke
   const summaries: string[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
-  const release = claimDelegationLock(
-    WORKSPACE,
-    context.sessionManager.getSessionId(),
-  );
+  const release = claimDelegationLock(WORKSPACE, context.sessionManager.getSessionId());
   const runtime = createLeadCommandRuntime({
     loadStatusSnapshot: async () => ({ agents: [] }),
     controller: {
@@ -2370,10 +2107,7 @@ test("lead stop-all does not report an empty inventory while delegation is locke
     presentStopSummary: (summary: string) => summaries.push(summary),
   } as any);
   try {
-    await assert.rejects(
-      runtime.confirmAndStopAll(context),
-      /already in progress/,
-    );
+    await assert.rejects(runtime.confirmAndStopAll(context), /already in progress/);
     assert.deepEqual(summaries, []);
   } finally {
     release();
@@ -2424,29 +2158,14 @@ test("lead stop-all rejects an empty inventory with unresolved mailbox state", a
 
 test("lead stop-all empty recheck sees only the Lead-owned root tree", async () => {
   const ownerSessionId = fakeContext().sessionManager.getSessionId();
-  const makeAgent = (
-    agentLabel: string,
-    workspaceId: string,
-    owner: string,
-    piSessionId: string,
-  ) =>
+  const makeAgent = (agentLabel: string, workspaceId: string, owner: string, piSessionId: string) =>
     ({
       state: { agentLabel, workspaceId, ownerSessionId: owner, piSessionId },
     }) as any;
   const ownedRoot = makeAgent("owned-root", WORKSPACE, ownerSessionId, "owned");
   const ownedChild = makeAgent("owned-child", WORKSPACE, "owned", "child");
-  const unrelatedRoot = makeAgent(
-    "unrelated-root",
-    "other-workspace",
-    "other",
-    "other",
-  );
-  const unrelatedChild = makeAgent(
-    "unrelated-child",
-    "other-workspace",
-    "other",
-    "other-child",
-  );
+  const unrelatedRoot = makeAgent("unrelated-root", "other-workspace", "other", "other");
+  const unrelatedChild = makeAgent("unrelated-child", "other-workspace", "other", "other-child");
 
   for (const scenario of [
     {
@@ -2476,11 +2195,7 @@ test("lead stop-all empty recheck sees only the Lead-owned root tree", async () 
           operation: (held: ReadonlySet<string>) => Promise<unknown>,
         ) => operation(new Set()),
         agentSnapshotView: async (_ctx: unknown, scope: { kind: "root" }) => {
-          const visible = visibleAgentSnapshots(
-            { agents: scenario.agents },
-            scope,
-            ownerSessionId,
-          );
+          const visible = visibleAgentSnapshots({ agents: scenario.agents }, scope, ownerSessionId);
           assert.deepEqual(
             visible.map(({ state }) => state.agentLabel),
             scenario.visible,
@@ -2493,14 +2208,8 @@ test("lead stop-all empty recheck sees only the Lead-owned root tree", async () 
     context.ui.notify = (message: string) => notices.push(message);
 
     await runtime.confirmAndStopAll(context);
-    assert.deepEqual(
-      notices,
-      scenario.visible.length ? [scenario.summary] : [],
-    );
-    assert.deepEqual(
-      summaries,
-      scenario.visible.length ? [] : [scenario.summary],
-    );
+    assert.deepEqual(notices, scenario.visible.length ? [scenario.summary] : []);
+    assert.deepEqual(summaries, scenario.visible.length ? [] : [scenario.summary]);
   }
 });
 

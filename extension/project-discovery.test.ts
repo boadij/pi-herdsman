@@ -50,10 +50,7 @@ function fixture(t: TestContext) {
   const projectsRoot = join(root, "projects");
   const configFile = herdsmanConfigPath();
   mkdirSync(dirname(configFile), { recursive: true });
-  writeFileSync(
-    configFile,
-    JSON.stringify({ projectsDirectory: projectsRoot }),
-  );
+  writeFileSync(configFile, JSON.stringify({ projectsDirectory: projectsRoot }));
   const runtime = {
     ...supervisionRuntime(join(root, "socket")),
     managers: join(root, "authority", "managers"),
@@ -71,15 +68,12 @@ function fixture(t: TestContext) {
       return { ...result, code: 0, killed: false, truncated: false };
     },
   } satisfies Pick<ExtensionAPI, "exec">;
-  const observe = (
-    options: Partial<Parameters<typeof discoverProjects>[2]> = {},
-  ) =>
+  const observe = (options: Partial<Parameters<typeof discoverProjects>[2]> = {}) =>
     discoverProjects(pi as ExtensionAPI, { cwd: root } as ExtensionContext, {
       runtime,
       includeProjectsDirectory: false,
       inventory: { workspaces: [], panes: [], agents: [] },
-      verifyRunningManager: async () =>
-        assert.fail("Unexpected Manager readiness check"),
+      verifyRunningManager: async () => assert.fail("Unexpected Manager readiness check"),
       ...options,
     });
   return { root, projectsRoot, runtime, calls, observe };
@@ -231,10 +225,7 @@ test("discovery does not infer running from a lease alone or expose foreign auth
   const incomplete = await observe({
     inventory: {
       ...inventory,
-      workspaces: [
-        ...inventory.workspaces,
-        { workspace_id: "incomplete", worktree: {} },
-      ],
+      workspaces: [...inventory.workspaces, { workspace_id: "incomplete", worktree: {} }],
     },
   });
   assert.equal(incomplete.complete, false);
@@ -307,16 +298,10 @@ test("recovery enumeration checks filenames and file type without following syml
     references: [reference],
     complete: true,
   });
-  writeFileSync(
-    join(runtime.managerRecovery, `${"a".repeat(64)}.json`),
-    readFileSync(recordPath),
-  );
+  writeFileSync(join(runtime.managerRecovery, `${"a".repeat(64)}.json`), readFileSync(recordPath));
   mkdirSync(join(runtime.managerRecovery, `${"b".repeat(64)}.json`));
   if (process.platform !== "win32")
-    symlinkSync(
-      recordPath,
-      join(runtime.managerRecovery, `${"c".repeat(64)}.json`),
-    );
+    symlinkSync(recordPath, join(runtime.managerRecovery, `${"c".repeat(64)}.json`));
   assert.deepEqual(listManagerRecoveryReferences(runtime), {
     references: [reference],
     complete: false,
@@ -332,8 +317,5 @@ test("directory discovery reports depth truncation and honors cancellation", asy
   assert.deepEqual(result.projects, []);
   assert.deepEqual(calls, []);
   const signal = AbortSignal.abort(new Error("discovery canceled"));
-  await assert.rejects(
-    observe({ includeProjectsDirectory: true, signal }),
-    /discovery canceled/,
-  );
+  await assert.rejects(observe({ includeProjectsDirectory: true, signal }), /discovery canceled/);
 });

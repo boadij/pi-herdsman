@@ -1,11 +1,5 @@
 import { execFileSync } from "node:child_process";
-import {
-  existsSync,
-  readFileSync,
-  readdirSync,
-  realpathSync,
-  statSync,
-} from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
 
 const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
@@ -40,9 +34,7 @@ const sameHooks = (other) => {
         name === newFiles[i] &&
         statSync(join(other, name)).isFile() &&
         statSync(join(hooksPath, name)).isFile() &&
-        readFileSync(join(other, name)).equals(
-          readFileSync(join(hooksPath, name)),
-        ),
+        readFileSync(join(other, name)).equals(readFileSync(join(hooksPath, name))),
     )
   );
 };
@@ -55,9 +47,7 @@ if (configured !== null) {
       localConfigured === configured &&
       (!existsSync(configured) || sameHooks(configured));
     if (!copiedHooks) {
-      throw new Error(
-        `Refusing to replace existing core.hooksPath: ${configured}`,
-      );
+      throw new Error(`Refusing to replace existing core.hooksPath: ${configured}`);
     }
     git("config", "--local", "core.hooksPath", hooksPath);
   }
@@ -68,11 +58,7 @@ if (configured !== null) {
     readdirSync(defaultHooks).some((name) => {
       const file = join(defaultHooks, name);
       const entry = statSync(file);
-      return (
-        !name.endsWith(".sample") &&
-        entry.isFile() &&
-        (entry.mode & 0o111) !== 0
-      );
+      return !name.endsWith(".sample") && entry.isFile() && (entry.mode & 0o111) !== 0;
     })
   ) {
     throw new Error(`Refusing to replace executable hooks in ${defaultHooks}`);

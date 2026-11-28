@@ -1,19 +1,9 @@
-import type {
-  ExtensionCommandContext,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { basename } from "node:path";
 import { formatRuntimeBuild, type RuntimeBuild } from "../compatibility.ts";
-import {
-  getSupportedThinkingLevels,
-  type Api,
-  type Model,
-} from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import type { SelectItem } from "@earendil-works/pi-tui";
-import {
-  overrideModelPickerTitle,
-  pickOverrideModels,
-} from "./override-model-picker.ts";
+import { overrideModelPickerTitle, pickOverrideModels } from "./override-model-picker.ts";
 import {
   DEFAULT_CONFIG,
   DEFAULT_MAX_AGENT_DEPTH,
@@ -38,11 +28,7 @@ import {
   type AgentDefinition,
   type DefinitionEditScope,
 } from "../agent-definitions.ts";
-import {
-  isLeadExecutionMode,
-  type LeadExecutionMode,
-  type SpawnPlacement,
-} from "../core.ts";
+import { isLeadExecutionMode, type LeadExecutionMode, type SpawnPlacement } from "../core.ts";
 import {
   compactModelToken,
   managedExecutionLabel,
@@ -55,9 +41,7 @@ import {
 type LeadCommandHost = {
   persistStopClosures(
     ctx: ExtensionContext,
-    closures: NonNullable<
-      import("../agent-controller.ts").StopOwnedAgentsResult["closures"]
-    >,
+    closures: NonNullable<import("../agent-controller.ts").StopOwnedAgentsResult["closures"]>,
   ): Promise<number>;
   collectOwnedSessionUsage(
     ctx: ExtensionContext,
@@ -104,22 +88,15 @@ type LeadCommandHost = {
     ctx: ExtensionCommandContext,
   ): import("@earendil-works/pi-coding-agent").BuildSystemPromptOptions;
   chiefSystemPrompt(
-    options:
-      | import("@earendil-works/pi-coding-agent").BuildSystemPromptOptions
-      | undefined,
+    options: import("@earendil-works/pi-coding-agent").BuildSystemPromptOptions | undefined,
     body: string,
   ): string;
   chiefGlobalInstructions(
-    options:
-      | import("@earendil-works/pi-coding-agent").BuildSystemPromptOptions
-      | undefined,
+    options: import("@earendil-works/pi-coding-agent").BuildSystemPromptOptions | undefined,
   ): Array<{ path: string; content: string }>;
   roleCharter(ctx: ExtensionContext): string;
   isCurrentChief(ctx: ExtensionContext): boolean;
-  supervisoryProfileBody(
-    ctx: ExtensionContext,
-    role: "manager" | "chief",
-  ): string;
+  supervisoryProfileBody(ctx: ExtensionContext, role: "manager" | "chief"): string;
   executionPrompt(): string | undefined;
   leadExecutionDefinition(): AgentDefinition | undefined;
   resolveDefinition(
@@ -136,10 +113,7 @@ type LeadCommandHost = {
   expandDefinitionBodyFragmentsWithSources?: typeof expandDefinitionBodyFragmentsWithSources;
   expandAgentBodyFiles: typeof import("../agent-definitions.ts").expandAgentBodyFiles;
   selectedAgentContextFiles: typeof selectedAgentContextFiles;
-  setLeadExecutionMode(
-    ctx: ExtensionCommandContext,
-    mode: LeadExecutionMode,
-  ): Promise<void>;
+  setLeadExecutionMode(ctx: ExtensionCommandContext, mode: LeadExecutionMode): Promise<void>;
   leadExecutionPresentation(): {
     managed: boolean;
     mode: LeadExecutionMode;
@@ -152,9 +126,7 @@ type LeadCommandHost = {
     definitions: Record<string, unknown>[];
     inspector: { summary: string[]; sections: InstructionSection[] };
   }): void;
-  formatAgentDefinitions(
-    definitions: readonly Record<string, unknown>[],
-  ): string[];
+  formatAgentDefinitions(definitions: readonly Record<string, unknown>[]): string[];
   validThinkingLevels: readonly string[];
   updateAgentOverride(
     definition: AgentDefinition,
@@ -162,9 +134,7 @@ type LeadCommandHost = {
     value: unknown,
     options?: { scope?: DefinitionEditScope; expectedContent?: string | null },
   ): { changed: boolean; path?: string };
-  placementSettings(
-    ctx: ExtensionContext,
-  ): Promise<{ effective: SpawnPlacement }>;
+  placementSettings(ctx: ExtensionContext): Promise<{ effective: SpawnPlacement }>;
   updateSpawnPlacement(placement: string): void;
   messageLimits(
     ctx: ExtensionContext,
@@ -173,21 +143,13 @@ type LeadCommandHost = {
   validByteLimit(bytes: number): boolean;
   validStatusWidgetMaxRows: typeof import("../config.ts").validStatusWidgetMaxRows;
   validMaxAgentDepth: typeof import("../config.ts").validMaxAgentDepth;
-  input(
-    ctx: ExtensionCommandContext,
-    label: string,
-  ): Promise<string | undefined>;
+  input(ctx: ExtensionCommandContext, label: string): Promise<string | undefined>;
   updateMessageLimit(key: string, value: number | undefined): void;
   isLead(): boolean;
   formatStatusCounts: typeof formatStatusCounts;
   openSupervisionOverview(ctx: ExtensionCommandContext): Promise<void>;
-  controller: ReturnType<
-    typeof import("../agent-controller.ts").createAgentController
-  >;
-  loadStatusSnapshot(
-    ctx: ExtensionContext,
-    signal?: AbortSignal,
-  ): Promise<StatusSnapshot>;
+  controller: ReturnType<typeof import("../agent-controller.ts").createAgentController>;
+  loadStatusSnapshot(ctx: ExtensionContext, signal?: AbortSignal): Promise<StatusSnapshot>;
   roleActive(role: "manager" | "chief"): boolean;
   transitionRole(
     role: "manager" | "chief",
@@ -221,8 +183,7 @@ const leadModeLabels = {
   orchestrate: "Orchestrate",
 } as const;
 
-const sizeLabel = (bytes: number) =>
-  bytes % 1024 === 0 ? `${bytes / 1024} KiB` : `${bytes} B`;
+const sizeLabel = (bytes: number) => (bytes % 1024 === 0 ? `${bytes / 1024} KiB` : `${bytes} B`);
 
 const countLabel = (count: number, unit: "line" | "level") =>
   `${count} ${unit}${count === 1 ? "" : "s"}`;
@@ -243,17 +204,12 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         : "Allow fast-forward integration and automatic cleanup of successfully integrated source worktrees?",
       { signal: ctx.signal },
     );
-  const markCurrent = <T extends SelectItem>(
-    items: T[],
-    current: string,
-  ): T[] =>
+  const markCurrent = <T extends SelectItem>(items: T[], current: string): T[] =>
     items.map((item) =>
       item.value === current
         ? {
             ...item,
-            description: item.description
-              ? `${item.description} · current`
-              : "current",
+            description: item.description ? `${item.description} · current` : "current",
           }
         : item,
     );
@@ -294,12 +250,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       host.updateSpawnPlacement(selected);
       const verified = await host.placementSettings(ctx);
       if (verified.effective !== selected)
-        throw new Error(
-          `Agent placement did not become effective: ${verified.effective}`,
-        );
-      ctx.ui.notify(
-        `Agent terminal layout: ${layoutLabels[verified.effective]}`,
-      );
+        throw new Error(`Agent placement did not become effective: ${verified.effective}`);
+      ctx.ui.notify(`Agent terminal layout: ${layoutLabels[verified.effective]}`);
     },
     async openMessageLimitsMenu(ctx: ExtensionCommandContext): Promise<void> {
       let selectedLimit = "inlineAttachmentLimitBytes";
@@ -328,16 +280,11 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           ],
           selectedLimit,
         );
-        if (
-          setting !== "inlineAttachmentLimitBytes" &&
-          setting !== "mailboxPayloadLimitBytes"
-        )
+        if (setting !== "inlineAttachmentLimitBytes" && setting !== "mailboxPayloadLimitBytes")
           return;
         selectedLimit = setting;
         const currentBytes =
-          setting === "inlineAttachmentLimitBytes"
-            ? limits.inline.bytes
-            : limits.mailbox.bytes;
+          setting === "inlineAttachmentLimitBytes" ? limits.inline.bytes : limits.mailbox.bytes;
         const defaultBytes = DEFAULT_CONFIG[setting];
         const presets = [1, 4, 16, 64, 128]
           .map((kib) => kib * 1024)
@@ -365,9 +312,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 value: "custom",
                 label: "Custom…",
                 description:
-                  currentChoice === "custom"
-                    ? host.formatMessageLimit(currentBytes)
-                    : undefined,
+                  currentChoice === "custom" ? host.formatMessageLimit(currentBytes) : undefined,
                 help: "Enter a custom limit in KiB, from 1 through 1024.",
               },
             ],
@@ -382,10 +327,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           const input = await host.input(ctx, "Custom limit in KiB (1–1024)");
           if (input === undefined) continue;
           const kib = Number(input);
-          if (
-            !/^\d+$/u.test(input.trim()) ||
-            !host.validByteLimit(kib * 1024)
-          ) {
+          if (!/^\d+$/u.test(input.trim()) || !host.validByteLimit(kib * 1024)) {
             ctx.ui.notify("Enter an integer from 1 through 1024 KiB", "error");
             continue;
           }
@@ -398,10 +340,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             `${labels[setting]}: ${value === undefined ? "default restored" : host.formatMessageLimit(value)}`,
           );
         } catch (error) {
-          ctx.ui.notify(
-            `Could not update ${labels[setting]}: ${String(error)}`,
-            "error",
-          );
+          ctx.ui.notify(`Could not update ${labels[setting]}: ${String(error)}`, "error");
         }
       }
     },
@@ -424,18 +363,14 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               : `inherit · ${host.getThinkingLevel()}`,
       };
     },
-    resolveConfiguredModel(
-      ctx: ExtensionContext,
-      configured: string,
-    ): Model<Api> | undefined {
+    resolveConfiguredModel(ctx: ExtensionContext, configured: string): Model<Api> | undefined {
       const models = ctx.modelRegistry.getAll();
       const canonical = models.find(
         (candidate: Model<Api>) => modelToken(candidate) === configured,
       );
       if (canonical) return canonical;
       const compactMatches = models.filter(
-        (candidate: Model<Api>) =>
-          compactModelToken(modelToken(candidate)) === configured,
+        (candidate: Model<Api>) => compactModelToken(modelToken(candidate)) === configured,
       );
       return compactMatches.length === 1 ? compactMatches[0] : undefined;
     },
@@ -453,9 +388,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         section === "agents"
           ? (await host.contextAgentDefinitions(ctx, onWarning)).definitions
           : discoverRoleDefinitions({
-              ...(includeProject && ctx.isProjectTrusted()
-                ? { projectRoot: ctx.cwd }
-                : {}),
+              ...(includeProject && ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {}),
               onWarning: (message) => {
                 notifyDefinitionWarning(ctx, message);
                 onWarning?.(message);
@@ -463,16 +396,10 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             });
       const definitionKey = ({ category, name }: AgentDefinition) =>
         category === "agent" ? name : `${category}:${name}`;
-      const reloadDefinition = async (
-        category: DefinitionCategory,
-        name: string,
-      ) => {
-        const loaded = await loadDefinitions(
-          category === "agent" ? "agents" : "roles",
-        );
+      const reloadDefinition = async (category: DefinitionCategory, name: string) => {
+        const loaded = await loadDefinitions(category === "agent" ? "agents" : "roles");
         return loaded.find(
-          (candidate) =>
-            candidate.category === category && candidate.name === name,
+          (candidate) => candidate.category === category && candidate.name === name,
         );
       };
       while (true) {
@@ -502,10 +429,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         selectedSection = section;
         definitionList: while (true) {
           const warnings: string[] = [];
-          const availableDefinitions = await loadDefinitions(
-            section,
-            true,
-            (message) => warnings.push(message),
+          const availableDefinitions = await loadDefinitions(section, true, (message) =>
+            warnings.push(message),
           );
           if (!availableDefinitions.length && !warnings.length) {
             ctx.ui.notify(
@@ -528,17 +453,13 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             const description = [
               ...(launchSettings ? [model, thinking] : []),
               sources,
-              ...(!coordinator && !host.agentDefinitionEnabled(definition)
-                ? ["disabled"]
-                : []),
+              ...(!coordinator && !host.agentDefinitionEnabled(definition) ? ["disabled"] : []),
             ]
               .filter(Boolean)
               .join(" · ");
             return {
               value: definitionKey(definition),
-              label: coordinator
-                ? `${definition.name} (${definition.category})`
-                : definition.name,
+              label: coordinator ? `${definition.name} (${definition.category})` : definition.name,
               description,
               ...(typeof definition.frontmatter.description === "string"
                 ? { help: definition.frontmatter.description }
@@ -547,9 +468,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           });
           let warningValue = "__definition_warnings__";
           while (
-            availableDefinitions.some(
-              (definition) => definitionKey(definition) === warningValue,
-            )
+            availableDefinitions.some((definition) => definitionKey(definition) === warningValue)
           )
             warningValue += "_";
           if (warnings.length)
@@ -578,23 +497,18 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           selectedDefinitions[section] = definitionKey(selectedEntry);
           let definition = selectedEntry;
           const { category, name: selectedName } = definition;
-          let selectedScope =
-            definitionEditTargets(definition)[0]?.scope ?? "global";
+          let selectedScope = definitionEditTargets(definition)[0]?.scope ?? "global";
           let selectedAction = "model";
           while (true) {
             const targets = definitionEditTargets(definition);
-            if (
-              !targets.some((candidate) => candidate.scope === selectedScope)
-            ) {
+            if (!targets.some((candidate) => candidate.scope === selectedScope)) {
               ctx.ui.notify(
                 `The ${selectedScope} definition source is no longer available.`,
                 "warning",
               );
               break;
             }
-            const target = targets.find(
-              (candidate) => candidate.scope === selectedScope,
-            )!;
+            const target = targets.find((candidate) => candidate.scope === selectedScope)!;
             const snapshotResult = (() => {
               try {
                 return {
@@ -604,56 +518,40 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 return { error };
               }
             })();
-            const snapshot =
-              "snapshot" in snapshotResult
-                ? snapshotResult.snapshot
-                : undefined;
-            const snapshotError =
-              "error" in snapshotResult ? snapshotResult.error : undefined;
+            const snapshot = "snapshot" in snapshotResult ? snapshotResult.snapshot : undefined;
+            const snapshotError = "error" in snapshotResult ? snapshotResult.error : undefined;
             const globalDefinition =
               category !== "agent"
                 ? (await loadDefinitions("roles", false)).find(
                     (candidate) =>
-                      candidate.category === category &&
-                      candidate.name === definition.name,
+                      candidate.category === category && candidate.name === definition.name,
                   )
                 : discoverGlobalAgentDefinition(definition.name);
-            const projectSnapshot =
-              selectedScope === "project" ? snapshot : undefined;
+            const projectSnapshot = selectedScope === "project" ? snapshot : undefined;
             const valueAtScope = (field: "model" | "thinking" | "enabled") =>
               selectedScope === "private"
                 ? definition.frontmatter[field]
                 : selectedScope === "project"
-                  ? (projectSnapshot?.frontmatter[field] ??
-                    globalDefinition?.frontmatter[field])
+                  ? (projectSnapshot?.frontmatter[field] ?? globalDefinition?.frontmatter[field])
                   : globalDefinition?.frontmatter[field];
             const effectiveHere = (field: "model" | "thinking" | "enabled") =>
               field === "enabled"
                 ? host.agentDefinitionEnabled(definition)
                 : definition.frontmatter[field];
             const enabledAtScope = valueAtScope("enabled") ?? true;
-            const scopeLabel =
-              selectedScope === "private" ? "private repo" : selectedScope;
+            const scopeLabel = selectedScope === "private" ? "private repo" : selectedScope;
             const thinkingValue = (value: unknown) =>
-              value === false
-                ? "off"
-                : typeof value === "string"
-                  ? value
-                  : "inherit";
+              value === false ? "off" : typeof value === "string" ? value : "inherit";
             const localValue = (field: "model" | "thinking" | "enabled") =>
               snapshot ? snapshot.frontmatter[field] : undefined;
-            const localValueLabel = (
-              field: "model" | "thinking" | "enabled",
-            ) =>
+            const localValueLabel = (field: "model" | "thinking" | "enabled") =>
               snapshotError
                 ? "unavailable"
-                : typeof localValue(field) === "string" ||
-                    typeof localValue(field) === "boolean"
+                : typeof localValue(field) === "string" || typeof localValue(field) === "boolean"
                   ? String(localValue(field))
                   : "inherit";
             const managedDefinition =
-              category === "lead" &&
-              supportsDefinitionLaunchSettings(definition);
+              category === "lead" && supportsDefinitionLaunchSettings(definition);
             const launchSettings = supportsDefinitionLaunchSettings(definition);
             const action = await host.selectMenu(
               ctx,
@@ -721,8 +619,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   label:
                     candidate.scope === "private"
                       ? "Private repository"
-                      : candidate.scope[0].toUpperCase() +
-                        candidate.scope.slice(1),
+                      : candidate.scope[0].toUpperCase() + candidate.scope.slice(1),
                   description: candidate.path,
                   help:
                     candidate.scope === "project"
@@ -733,11 +630,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 })),
                 selectedScope,
               );
-              if (
-                chosen === "private" ||
-                chosen === "project" ||
-                chosen === "global"
-              )
+              if (chosen === "private" || chosen === "project" || chosen === "global")
                 selectedScope = chosen;
               continue;
             }
@@ -750,10 +643,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 break;
               }
               if (!current) {
-                ctx.ui.notify(
-                  `Definition ${selectedName} is no longer available.`,
-                  "warning",
-                );
+                ctx.ui.notify(`Definition ${selectedName} is no longer available.`, "warning");
                 break;
               }
               definition = current;
@@ -761,9 +651,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               if (ctx.mode === "tui") {
                 try {
                   const promptOptions =
-                    category !== "agent"
-                      ? host.getSystemPromptOptions(ctx)
-                      : undefined;
+                    category !== "agent" ? host.getSystemPromptOptions(ctx) : undefined;
                   const inspection = host.inspectDefinition(
                     category,
                     current.name,
@@ -788,9 +676,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   const sources = inspection.layers.map(({ scope }) => scope);
                   const roleProfile = category !== "agent";
                   const selectedLead =
-                    category === "lead"
-                      ? host.leadExecutionDefinition()
-                      : undefined;
+                    category === "lead" ? host.leadExecutionDefinition() : undefined;
                   const managedLeadProfile = managedDefinition;
                   let activeRole =
                     (category === "manager" &&
@@ -804,9 +690,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       !host.roleActive("chief"));
                   const activeChief = category === "chief" && activeRole;
                   const currentRoleCharter =
-                    activeRole && category !== "chief"
-                      ? host.roleCharter(ctx)
-                      : undefined;
+                    activeRole && category !== "chief" ? host.roleCharter(ctx) : undefined;
                   if (
                     currentRoleCharter?.includes(
                       "No active Herdsman role is verified for this Pi session.",
@@ -817,9 +701,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                     ? host.leadExecutionDefinition()
                     : undefined;
                   const inheritance =
-                    !roleProfile || managedLeadProfile
-                      ? contextInheritance(current)
-                      : undefined;
+                    !roleProfile || managedLeadProfile ? contextInheritance(current) : undefined;
                   const roleContextFiles =
                     activeRole && category !== "chief"
                       ? (promptOptions?.contextFiles ?? []).map((file) => ({
@@ -829,21 +711,17 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       : [];
                   const chiefContextFiles =
                     category === "chief"
-                      ? host
-                          .chiefGlobalInstructions(promptOptions)
-                          .map((file) => ({
-                            path: file.path,
-                            text: file.content,
-                          }))
+                      ? host.chiefGlobalInstructions(promptOptions).map((file) => ({
+                          path: file.path,
+                          text: file.content,
+                        }))
                       : [];
                   const futureContextFiles =
                     inheritance && (!roleProfile || !activeRole)
-                      ? host
-                          .selectedAgentContextFiles(current, ctx.cwd)
-                          .map((file) => ({
-                            path: file.path,
-                            text: file.content,
-                          }))
+                      ? host.selectedAgentContextFiles(current, ctx.cwd).map((file) => ({
+                          path: file.path,
+                          text: file.content,
+                        }))
                       : [];
                   const contextFiles =
                     category === "chief"
@@ -866,9 +744,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       : activeRole
                         ? "Current Pi context from getSystemPromptOptions()"
                         : inheritance
-                          ? inheritance.global &&
-                            inheritance.ancestor &&
-                            inheritance.project
+                          ? inheritance.global && inheritance.ancestor && inheritance.project
                             ? "Pi native context: global, ancestor, project"
                             : [
                                   inheritance.global && "global",
@@ -896,8 +772,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                     source?: string,
                     format: "markdown" | "text" = "text",
                     changes?: string[],
-                  ) =>
-                    sections.push({ title, content, source, format, changes });
+                  ) => sections.push({ title, content, source, format, changes });
                   const addContexts = () => {
                     for (const file of contextFiles)
                       add("Pi context", file.text, file.path, "markdown");
@@ -905,9 +780,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   const appendDefinition = (title: string) => {
                     const provenance = inspection.layers.flatMap((layer) => [
                       `${layer.scope} · ${basename(layer.path)}`,
-                      ...summarizeDefinitionLayerChanges(layer).map(
-                        (change) => `  ${change}`,
-                      ),
+                      ...summarizeDefinitionLayerChanges(layer).map((change) => `  ${change}`),
                     ]);
                     const fragments = inspection.bodyFragments;
                     let provenanceAttached = false;
@@ -933,8 +806,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                         provenance.length ? provenance : undefined,
                       );
                   };
-                  const promptMode =
-                    current.frontmatter.systemPromptMode ?? "append";
+                  const promptMode = current.frontmatter.systemPromptMode ?? "append";
                   const chiefBody = activeChief
                     ? host.supervisoryProfileBody(ctx, "chief")
                     : fragments.join("\n\n");
@@ -944,9 +816,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       : undefined;
                   if (!roleProfile) {
                     add(
-                      promptMode === "replace"
-                        ? "Replacement prompt"
-                        : "Pi base instructions",
+                      promptMode === "replace" ? "Replacement prompt" : "Pi base instructions",
                       promptMode === "replace"
                         ? "Pi base prefix replaced."
                         : "Native Pi defaults and tool guidance are not reconstructed.",
@@ -958,21 +828,14 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                     );
                     const addGuidance = () =>
                       add("Herdsman shared guidance", "Managed launch input.");
-                    if (
-                      inheritance?.global &&
-                      inheritance.ancestor &&
-                      inheritance.project
-                    ) {
+                    if (inheritance?.global && inheritance.ancestor && inheritance.project) {
                       addGuidance();
                       addContexts();
                     } else {
                       addContexts();
                       addGuidance();
                     }
-                    add(
-                      "Pi skills/extensions",
-                      "Configured selections; load status unknown.",
-                    );
+                    add("Pi skills/extensions", "Configured selections; load status unknown.");
                     add("Working directory", ctx.cwd);
                     add("Runtime contributions", "Session-dependent.");
                   } else if (category === "chief") {
@@ -1006,20 +869,10 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                         );
                       add("Herdsman shared guidance", "Managed launch input.");
                       addContexts();
-                      add(
-                        "Runtime role contract",
-                        currentRoleCharter ?? "",
-                        undefined,
-                        "text",
-                      );
+                      add("Runtime role contract", currentRoleCharter ?? "", undefined, "text");
                     } else {
-                      appendDefinition(
-                        "Managed Lead definition · future launch",
-                      );
-                      add(
-                        "Herdsman shared guidance",
-                        "Managed Lead launch input.",
-                      );
+                      appendDefinition("Managed Lead definition · future launch");
+                      add("Herdsman shared guidance", "Managed Lead launch input.");
                       addContexts();
                     }
                     add("Working directory", ctx.cwd);
@@ -1034,42 +887,23 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                       undefined,
                       "text",
                     );
-                    if (
-                      current.name === "flexible-lead" ||
-                      current.name === "orchestrator-lead"
-                    ) {
+                    if (current.name === "flexible-lead" || current.name === "orchestrator-lead") {
                       const activeBody = host.executionPrompt();
-                      if (activeBody)
-                        add(
-                          "Lead execution profile",
-                          activeBody,
-                          undefined,
-                          "text",
-                        );
+                      if (activeBody) add("Lead execution profile", activeBody, undefined, "text");
                       appendDefinition(
                         "Effective Lead profile on disk · active prompt is a session snapshot",
                       );
-                    } else if (
-                      category === "manager" &&
-                      current.name === "manager"
-                    )
+                    } else if (category === "manager" && current.name === "manager")
                       appendDefinition(
                         "Effective Manager profile on disk · active prompt is a session snapshot",
                       );
                     add("Runtime contributions", "Session-dependent.");
                   } else {
-                    appendDefinition(
-                      "Prospective Coordinator profile contribution",
-                    );
+                    appendDefinition("Prospective Coordinator profile contribution");
                     add("Runtime sections", "Depend on active role/session.");
                     add("Exact future prompt", "Unavailable until launch.");
                   }
-                  if (
-                    roleProfile &&
-                    !activeRole &&
-                    !managedLeadProfile &&
-                    category !== "chief"
-                  )
+                  if (roleProfile && !activeRole && !managedLeadProfile && category !== "chief")
                     add("Working directory", ctx.cwd);
                   host.appendDefinitionsEntry({
                     definitions: [metadata],
@@ -1090,9 +924,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   );
                 }
               } else {
-                ctx.ui.notify(
-                  host.formatAgentDefinitions([metadata]).join("\n"),
-                );
+                ctx.ui.notify(host.formatAgentDefinitions([metadata]).join("\n"));
               }
               continue;
             }
@@ -1115,9 +947,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   : undefined;
               if (configured && !tokens.includes(configured)) {
                 const resolved = this.resolveConfiguredModel(ctx, configured);
-                const resolvedToken = resolved
-                  ? modelToken(resolved)
-                  : configured;
+                const resolvedToken = resolved ? modelToken(resolved) : configured;
                 if (!tokens.includes(resolvedToken)) tokens.push(resolvedToken);
               }
               const idCounts = new Map<string, number>();
@@ -1132,10 +962,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 models.map((item: Model<Api>) => [modelToken(item), item]),
               );
               if (resolvedConfigured)
-                modelsByToken.set(
-                  modelToken(resolvedConfigured),
-                  resolvedConfigured,
-                );
+                modelsByToken.set(modelToken(resolvedConfigured), resolvedConfigured);
               const modelItems = tokens.map((token) => {
                 const id = compactModelToken(token);
                 return {
@@ -1170,9 +997,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 typeof valueAtScope("model") === "string"
                   ? (valueAtScope("model") as string)
                   : undefined;
-              const model = configured
-                ? this.resolveConfiguredModel(ctx, configured)
-                : ctx.model;
+              const model = configured ? this.resolveConfiguredModel(ctx, configured) : ctx.model;
               const levels = model
                 ? getSupportedThinkingLevels(model)
                 : [...host.validThinkingLevels];
@@ -1201,8 +1026,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 configuredThinking ?? "inherit",
               );
               if (!selectedThinking) continue;
-              value =
-                selectedThinking === "inherit" ? undefined : selectedThinking;
+              value = selectedThinking === "inherit" ? undefined : selectedThinking;
             } else if (action === "enabled") {
               field = "enabled";
               value = enabledAtScope === false;
@@ -1211,9 +1035,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             if (
               !latest ||
               !definitionEditTargets(latest).some(
-                (candidate) =>
-                  candidate.scope === selectedScope &&
-                  candidate.path === target.path,
+                (candidate) => candidate.scope === selectedScope && candidate.path === target.path,
               )
             ) {
               ctx.ui.notify(
@@ -1227,21 +1049,14 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               expectedContent: snapshotResult.snapshot.content,
             });
             const verified = await reloadDefinition(category, definition.name);
-            if (!verified)
-              throw new Error(
-                `definition ${definition.name} is no longer available`,
-              );
+            if (!verified) throw new Error(`definition ${definition.name} is no longer available`);
             if (
               result.changed &&
               !definitionEditTargets(verified).some(
-                (candidate) =>
-                  candidate.scope === selectedScope &&
-                  candidate.path === result.path,
+                (candidate) => candidate.scope === selectedScope && candidate.path === result.path,
               )
             )
-              throw new Error(
-                `agent ${definition.name} override verification failed`,
-              );
+              throw new Error(`agent ${definition.name} override verification failed`);
             const effectiveValue =
               field === "enabled"
                 ? host.agentDefinitionEnabled(verified)
@@ -1277,10 +1092,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       );
     },
     async confirmAndStopAll(ctx: ExtensionCommandContext): Promise<void> {
-      const snapshot = await host.loadStatusSnapshot(
-        ctx,
-        host.controller.sessionSignal(),
-      );
+      const snapshot = await host.loadStatusSnapshot(ctx, host.controller.sessionSignal());
       if (!snapshot.agents.length) {
         await host.controller.withQuiescedTree(
           ctx,
@@ -1293,9 +1105,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               host.controller.sessionSignal(),
             );
             if (fresh.stateIssues.length)
-              throw new Error(
-                "Owned Agent mailbox state is unresolved; stop not verified",
-              );
+              throw new Error("Owned Agent mailbox state is unresolved; stop not verified");
             if (fresh.visible.length) {
               ctx.ui.notify("Agent state changed; reopen Stop all.", "warning");
               return;
@@ -1328,10 +1138,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           );
           let persisted = 0;
           try {
-            persisted = await host.persistStopClosures(
-              ctx,
-              result.closures ?? [],
-            );
+            persisted = await host.persistStopClosures(ctx, result.closures ?? []);
           } catch {
             // A verified stop does not imply that continuation proof was persisted.
           }
@@ -1378,8 +1185,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           {
             value: "orchestrate",
             label: "orchestrate",
-            description:
-              execution.mode === "orchestrate" ? "current" : undefined,
+            description: execution.mode === "orchestrate" ? "current" : undefined,
           },
         ],
         execution.mode,
@@ -1412,10 +1218,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         await this.openSettingsCategory(ctx, category);
       }
     },
-    async openSettingsCategory(
-      ctx: ExtensionCommandContext,
-      category: string,
-    ): Promise<void> {
+    async openSettingsCategory(ctx: ExtensionCommandContext, category: string): Promise<void> {
       let selectedSetting =
         category === "sessions"
           ? "default-lead-execution"
@@ -1427,8 +1230,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 ? "peer-communication"
                 : "agent-layout";
       const loadProjectState = () => {
-        if (!ctx.isProjectTrusted())
-          return { trusted: false as const, overrides: {} };
+        if (!ctx.isProjectTrusted()) return { trusted: false as const, overrides: {} };
         try {
           return {
             trusted: true as const,
@@ -1445,9 +1247,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       while (true) {
         const config = host.readConfig();
         const project = loadProjectState();
-        let repository:
-          | Awaited<ReturnType<typeof host.getRemovalPreauthorization>>
-          | undefined;
+        let repository: Awaited<ReturnType<typeof host.getRemovalPreauthorization>> | undefined;
         if (category === "manager") {
           try {
             repository = await host.getRemovalPreauthorization(ctx);
@@ -1455,9 +1255,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             /* Repository settings remain unavailable. */
           }
         }
-        const merge = repository
-          ? effectiveMergePolicy(config, repository.repoKey)
-          : undefined;
+        const merge = repository ? effectiveMergePolicy(config, repository.repoKey) : undefined;
         let messageSummary: string | undefined;
         if (category === "sessions") {
           try {
@@ -1467,12 +1265,9 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             messageSummary = "Unavailable";
           }
         }
-        const projectDescription = (
-          key: "autoActivateManager" | "contextRetirement",
-        ) => {
+        const projectDescription = (key: "autoActivateManager" | "contextRetirement") => {
           if ("error" in project) return "Project unavailable";
-          const overridden =
-            project.trusted && Object.hasOwn(project.overrides, key);
+          const overridden = project.trusted && Object.hasOwn(project.overrides, key);
           const enabled = overridden ? project.overrides[key] : config[key];
           return `${enabled ? "On" : "Off"} · ${overridden ? "Project" : "Global"}`;
         };
@@ -1516,9 +1311,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               value: "manager-git-bootstrap-confirmation",
               category: "manager",
               label: "Confirm Git initialization",
-              description: config.managerGitBootstrapWithoutConfirmation
-                ? "Skipped"
-                : "Required",
+              description: config.managerGitBootstrapWithoutConfirmation ? "Skipped" : "Required",
               help: "Ask before initializing Git when Manager is started explicitly in a directory without a Git repository.",
             },
             {
@@ -1532,9 +1325,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               value: "manager-merge",
               category: "manager",
               label: "Merge accepted branches",
-              description: merge
-                ? mergeDescription(merge)
-                : "Repository unavailable",
+              description: merge ? mergeDescription(merge) : "Repository unavailable",
               help: "Control whether Manager can merge accepted local branches, using fast-forward only or conflict-free divergent merges.",
             },
             {
@@ -1634,11 +1425,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             ),
             current,
           );
-          if (
-            (choice !== "on" && choice !== "off") ||
-            choice === current ||
-            ctx.signal?.aborted
-          )
+          if ((choice !== "on" && choice !== "off") || choice === current || ctx.signal?.aborted)
             continue;
           try {
             host.updateConfig("allowAgentModelOverrides", choice === "on");
@@ -1646,10 +1433,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               `Agent model overrides: ${choice === "on" ? "On" : "Off"}. Applies to subsequent delegations and model turns.`,
             );
           } catch (error) {
-            ctx.ui.notify(
-              `Could not update “Agent model overrides”: ${String(error)}`,
-              "error",
-            );
+            ctx.ui.notify(`Could not update “Agent model overrides”: ${String(error)}`, "error");
           }
         } else if (selected === "allowed-override-models") {
           try {
@@ -1681,11 +1465,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             ),
             current,
           );
-          if (
-            (choice !== "on" && choice !== "off") ||
-            choice === current ||
-            ctx.signal?.aborted
-          )
+          if ((choice !== "on" && choice !== "off") || choice === current || ctx.signal?.aborted)
             continue;
           try {
             host.updateConfig("allowAgentCwdOverride", choice === "on");
@@ -1698,14 +1478,9 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               "error",
             );
           }
-        } else if (
-          selected === "peer-communication" ||
-          selected === "peer-federation"
-        ) {
+        } else if (selected === "peer-communication" || selected === "peer-federation") {
           const federation = selected === "peer-federation";
-          const key = federation
-            ? "peerFederationEnabled"
-            : "peerCommunicationEnabled";
+          const key = federation ? "peerFederationEnabled" : "peerCommunicationEnabled";
           const inactiveMessage =
             "Peer federation is inactive while peer communication is off. Its saved setting is unchanged.";
           try {
@@ -1727,8 +1502,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               ),
               currentChoice,
             );
-            if ((choice !== "on" && choice !== "off") || ctx.signal?.aborted)
-              continue;
+            if ((choice !== "on" && choice !== "off") || ctx.signal?.aborted) continue;
             const latest = host.readConfig();
             if (federation && !latest.peerCommunicationEnabled) {
               ctx.ui.notify(inactiveMessage, "info");
@@ -1751,17 +1525,11 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   label: "Skip confirmation on explicit Manager start",
                 },
               ],
-              config.managerGitBootstrapWithoutConfirmation
-                ? "skip"
-                : "required",
+              config.managerGitBootstrapWithoutConfirmation ? "skip" : "required",
             ),
             config.managerGitBootstrapWithoutConfirmation ? "skip" : "required",
           );
-          if (
-            choice &&
-            (choice === "skip") !==
-              config.managerGitBootstrapWithoutConfirmation
-          ) {
+          if (choice && (choice === "skip") !== config.managerGitBootstrapWithoutConfirmation) {
             if (
               choice === "skip" &&
               !(await ctx.ui.confirm(
@@ -1772,10 +1540,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             )
               continue;
             if (ctx.signal?.aborted) continue;
-            host.updateConfig(
-              "managerGitBootstrapWithoutConfirmation",
-              choice === "skip",
-            );
+            host.updateConfig("managerGitBootstrapWithoutConfirmation", choice === "skip");
             ctx.ui.notify(
               `Confirm Git initialization: ${choice === "skip" ? "Skipped" : "Required"}.`,
             );
@@ -1820,22 +1585,15 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             let value: number | undefined;
             if (choice === "default") value = undefined;
             else if (choice === "custom") {
-              const input = await host.input(
-                ctx,
-                "Custom status widget lines (1–100)",
-              );
+              const input = await host.input(ctx, "Custom status widget lines (1–100)");
               if (input === undefined) continue;
               value = Number(input.trim());
-              if (
-                !/^\d+$/u.test(input.trim()) ||
-                !host.validStatusWidgetMaxRows(value)
-              ) {
+              if (!/^\d+$/u.test(input.trim()) || !host.validStatusWidgetMaxRows(value)) {
                 ctx.ui.notify("Enter an integer from 1 through 100", "error");
                 continue;
               }
             } else value = Number(choice);
-            if (value !== undefined && value === config.statusWidgetMaxRows)
-              break;
+            if (value !== undefined && value === config.statusWidgetMaxRows) break;
             try {
               host.updateConfig("statusWidgetMaxRows", value);
               ctx.ui.notify(
@@ -1843,10 +1601,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               );
               break;
             } catch (error) {
-              ctx.ui.notify(
-                `Could not update Status widget lines: ${String(error)}`,
-                "error",
-              );
+              ctx.ui.notify(`Could not update Status widget lines: ${String(error)}`, "error");
             }
           }
         } else if (selected === "max-agent-depth") {
@@ -1889,16 +1644,10 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             let value: number | undefined;
             if (choice === "default") value = undefined;
             else if (choice === "custom") {
-              const input = await host.input(
-                ctx,
-                "Custom Agent nesting limit (positive integer)",
-              );
+              const input = await host.input(ctx, "Custom Agent nesting limit (positive integer)");
               if (input === undefined) continue;
               value = Number(input.trim());
-              if (
-                !/^\d+$/u.test(input.trim()) ||
-                !host.validMaxAgentDepth(value)
-              ) {
+              if (!/^\d+$/u.test(input.trim()) || !host.validMaxAgentDepth(value)) {
                 ctx.ui.notify("Enter a positive integer", "error");
                 continue;
               }
@@ -1911,14 +1660,10 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               );
               break;
             } catch (error) {
-              ctx.ui.notify(
-                `Could not update Agent nesting limit: ${String(error)}`,
-                "error",
-              );
+              ctx.ui.notify(`Could not update Agent nesting limit: ${String(error)}`, "error");
             }
           }
-        } else if (selected === "message-limits")
-          await this.openMessageLimitsMenu(ctx);
+        } else if (selected === "message-limits") await this.openMessageLimitsMenu(ctx);
         else if (selected === "default-lead-execution") {
           const mode = await host.selectMenu(
             ctx,
@@ -1940,36 +1685,21 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             ),
             config.defaultLeadExecution,
           );
-          if (
-            mode &&
-            isLeadExecutionMode(mode) &&
-            mode !== config.defaultLeadExecution
-          ) {
+          if (mode && isLeadExecutionMode(mode) && mode !== config.defaultLeadExecution) {
             host.updateConfig("defaultLeadExecution", mode);
             ctx.ui.notify(`Default Lead mode: ${leadModeLabels[mode]}`);
           }
-        } else if (
-          selected === "context-retirement" ||
-          selected === "auto-activate-manager"
-        ) {
+        } else if (selected === "context-retirement" || selected === "auto-activate-manager") {
           await this.openProjectSetting(
             ctx,
-            selected === "context-retirement"
-              ? "contextRetirement"
-              : "autoActivateManager",
+            selected === "context-retirement" ? "contextRetirement" : "autoActivateManager",
           );
         } else if (selected === "projects-directory") {
           const defaultPath = DEFAULT_CONFIG.projectsDirectory;
-          const input = await host.input(
-            ctx,
-            `Projects directory (default: ${defaultPath})`,
-          );
+          const input = await host.input(ctx, `Projects directory (default: ${defaultPath})`);
           if (input === undefined || ctx.signal?.aborted) continue;
           try {
-            host.updateConfig(
-              "projectsDirectory",
-              input === defaultPath ? undefined : input,
-            );
+            host.updateConfig("projectsDirectory", input === defaultPath ? undefined : input);
           } catch (error) {
             ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
           }
@@ -2001,9 +1731,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             unavailable = `Project settings unavailable: ${String(error).replace(/^Error: /, "")}`;
           }
         const projectValue =
-          overrides && Object.hasOwn(overrides, key)
-            ? overrides[key]
-            : undefined;
+          overrides && Object.hasOwn(overrides, key) ? overrides[key] : undefined;
         const scope = await host.selectMenu(
           ctx,
           title,
@@ -2086,24 +1814,16 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       while (true) {
         const config = host.readConfig();
         const global = config.managerMergeEnabled;
-        let policy:
-          | Awaited<ReturnType<typeof host.getRemovalPreauthorization>>
-          | undefined;
+        let policy: Awaited<ReturnType<typeof host.getRemovalPreauthorization>> | undefined;
         let unavailable = "";
         try {
           policy = await host.getRemovalPreauthorization(ctx);
         } catch (error) {
           unavailable = String(error).replace(/^Error: /, "");
         }
-        const repositoryPolicy = policy
-          ? effectiveMergePolicy(config, policy.repoKey)
-          : undefined;
+        const repositoryPolicy = policy ? effectiveMergePolicy(config, policy.repoKey) : undefined;
         const label = (value: false | true | "divergent") =>
-          value === false
-            ? "Off"
-            : value === true
-              ? "Fast-forward"
-              : "Conflict-free merges";
+          value === false ? "Off" : value === true ? "Fast-forward" : "Conflict-free merges";
         const scope = await host.selectMenu(
           ctx,
           "Merge accepted branches",
@@ -2116,9 +1836,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             {
               value: "repository",
               label: "Current repository",
-              description: repositoryPolicy
-                ? mergeDescription(repositoryPolicy)
-                : "Unavailable",
+              description: repositoryPolicy ? mergeDescription(repositoryPolicy) : "Unavailable",
             },
           ],
           selectedScope,
@@ -2167,12 +1885,10 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   : "divergent";
           if (value === override) continue;
           try {
-            const stored = await host.setRepositoryMergeOverride(
-              value,
-              ctx,
-              policy.identity,
-              { global, override },
-            );
+            const stored = await host.setRepositoryMergeOverride(value, ctx, policy.identity, {
+              global,
+              override,
+            });
             if (stored)
               ctx.ui.notify(
                 `Merge accepted branches: ${value === undefined ? "Uses global setting" : label(value)} (${policy.repoKey}).`,
@@ -2184,11 +1900,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         }
         const current = host.readConfig().managerMergeEnabled;
         const currentChoice =
-          current === false
-            ? "off"
-            : current === true
-              ? "fast-forward"
-              : "divergent";
+          current === false ? "off" : current === true ? "fast-forward" : "divergent";
         const choice = await host.selectMenu(
           ctx,
           "Global · Merge accepted branches",
@@ -2203,22 +1915,13 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           currentChoice,
         );
         if (!choice) continue;
-        const setting =
-          choice === "off"
-            ? false
-            : choice === "fast-forward"
-              ? true
-              : "divergent";
+        const setting = choice === "off" ? false : choice === "fast-forward" ? true : "divergent";
         if (setting === current) continue;
         if (
           setting !== false &&
-          (current === false ||
-            (setting === "divergent" && current !== "divergent"))
+          (current === false || (setting === "divergent" && current !== "divergent"))
         ) {
-          if (
-            !(await confirmMergeGrant(ctx, setting, "global settings")) ||
-            ctx.signal?.aborted
-          )
+          if (!(await confirmMergeGrant(ctx, setting, "global settings")) || ctx.signal?.aborted)
             continue;
         }
         if (ctx.signal?.aborted) continue;
@@ -2289,10 +1992,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         );
         if (!selected) return;
         selectedSection = selected;
-        if (selected === "agent-definitions")
-          await this.openDefinitionsMenu(ctx, "agents");
-        else if (selected === "coordinator-profiles")
-          await this.openDefinitionsMenu(ctx, "roles");
+        if (selected === "agent-definitions") await this.openDefinitionsMenu(ctx, "agents");
+        else if (selected === "coordinator-profiles") await this.openDefinitionsMenu(ctx, "roles");
         else if (selected === "stop-all") await this.confirmAndStopAll(ctx);
       }
     },
@@ -2301,8 +2002,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       while (true) {
         const execution = host.leadExecutionPresentation();
         const showLeadMode = host.isLead() && !execution.managed;
-        if (!showLeadMode && selectedSection === "execution")
-          selectedSection = "agents";
+        if (!showLeadMode && selectedSection === "execution") selectedSection = "agents";
         const selected = await host.selectMenu(
           ctx,
           `Pi Herdsman · ${formatRuntimeBuild(host.build)}`,
@@ -2355,17 +2055,13 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         selectedSection = selected;
         if (selected === "execution") await this.openExecutionMenu(ctx);
         else if (selected === "agents") await this.openAgentsMenu(ctx);
-        else if (selected === "manager")
-          await this.openRoleMenu("manager", ctx);
+        else if (selected === "manager") await this.openRoleMenu("manager", ctx);
         else if (selected === "stats") await this.showSessionStats(ctx);
         else if (selected === "settings") await this.openSettingsMenu(ctx);
         else if (selected === "chief") await this.openRoleMenu("chief", ctx);
       }
     },
-    async openRoleMenu(
-      role: "manager" | "chief",
-      ctx: ExtensionCommandContext,
-    ): Promise<void> {
+    async openRoleMenu(role: "manager" | "chief", ctx: ExtensionCommandContext): Promise<void> {
       const name = role === "manager" ? "Manager" : "Chief";
       const title = role === "manager" ? "Project management" : "Chief mode";
       let selectedAction: string | undefined;
@@ -2390,10 +2086,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                   : []),
                 {
                   value: "refresh",
-                  label:
-                    role === "manager"
-                      ? "Refresh Manager profile"
-                      : "Refresh profile",
+                  label: role === "manager" ? "Refresh Manager profile" : "Refresh profile",
                   help: "Apply definition changes after the current turn becomes idle.",
                 },
                 { value: "leave", label: `Leave ${name} mode` },
@@ -2405,12 +2098,9 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         selectedAction = selected;
         if (selected === "overview" || selected === "start")
           await this.runRoleCommand(role, "open", ctx);
-        else if (selected === "pending-removals")
-          await host.reviewPendingRemoval(ctx);
-        else if (selected === "refresh")
-          await this.runRoleCommand(role, "refresh", ctx);
-        else if (selected === "leave")
-          await this.runRoleCommand(role, "leave", ctx);
+        else if (selected === "pending-removals") await host.reviewPendingRemoval(ctx);
+        else if (selected === "refresh") await this.runRoleCommand(role, "refresh", ctx);
+        else if (selected === "leave") await this.runRoleCommand(role, "leave", ctx);
       }
     },
     async runRoleCommand(
@@ -2424,10 +2114,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           return;
         }
         if (action === "refresh" && !host.roleActive(role)) {
-          ctx.ui.notify(
-            `/${role}-refresh requires active ${role} mode`,
-            "error",
-          );
+          ctx.ui.notify(`/${role}-refresh requires active ${role} mode`, "error");
           return;
         }
         ctx.ui.notify(await host.transitionRole(role, action === "leave", ctx));
@@ -2435,22 +2122,14 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
       }
     },
-    async setPlacement(
-      placement: SpawnPlacement,
-      ctx: ExtensionCommandContext,
-    ): Promise<void> {
+    async setPlacement(placement: SpawnPlacement, ctx: ExtensionCommandContext): Promise<void> {
       host.updateConfig("spawnPlacement", placement);
       const verified = await host.placementSettings(ctx);
       if (verified.effective !== placement)
-        throw new Error(
-          `Agent placement did not become effective: ${verified.effective}`,
-        );
+        throw new Error(`Agent placement did not become effective: ${verified.effective}`);
       ctx.ui.notify(`placement: ${verified.effective}`);
     },
-    async setLeadMode(
-      mode: LeadExecutionMode,
-      ctx: ExtensionCommandContext,
-    ): Promise<void> {
+    async setLeadMode(mode: LeadExecutionMode, ctx: ExtensionCommandContext): Promise<void> {
       try {
         await host.setLeadExecutionMode(ctx, mode);
         ctx.ui.notify(`Lead execution: ${mode}`);

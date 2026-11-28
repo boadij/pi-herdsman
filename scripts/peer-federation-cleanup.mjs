@@ -9,9 +9,7 @@ export function isMissingDockerResource(kind, id, stderr) {
   const lowercaseContainerIndex = stderr.indexOf(lowercaseContainerMarker);
   const lowercaseContainerMatch =
     lowercaseContainerIndex !== -1 &&
-    !/[A-Za-z0-9_-]/u.test(
-      stderr[lowercaseContainerIndex + lowercaseContainerMarker.length] ?? "",
-    );
+    !/[A-Za-z0-9_-]/u.test(stderr[lowercaseContainerIndex + lowercaseContainerMarker.length] ?? "");
   return (
     (kind === "container" &&
       (stderr.includes(`No such object: ${id}`) || lowercaseContainerMatch)) ||
@@ -22,13 +20,7 @@ export function isMissingDockerResource(kind, id, stderr) {
 }
 
 export function cleanupSmokeFixture(resources, manifestPath, options) {
-  const {
-    canonicalize,
-    fixtureBase,
-    inspectResource,
-    removeResource,
-    removeRoot,
-  } = options;
+  const { canonicalize, fixtureBase, inspectResource, removeResource, removeRoot } = options;
   if (
     typeof resources.runId !== "string" ||
     !new RegExp(`^peer474-${UUID}$`, "u").test(resources.runId)
@@ -38,13 +30,9 @@ export function cleanupSmokeFixture(resources, manifestPath, options) {
   const expectedRoot = resolve(canonicalize(fixtureBase), resources.runId);
   const root = canonicalize(resources.root);
   if (root !== expectedRoot)
-    throw new Error(
-      "refusing cleanup outside the canonical smoke fixture root",
-    );
+    throw new Error("refusing cleanup outside the canonical smoke fixture root");
   if (canonicalize(manifestPath) !== join(expectedRoot, "resources.json"))
-    throw new Error(
-      "refusing cleanup from a manifest outside its smoke fixture",
-    );
+    throw new Error("refusing cleanup from a manifest outside its smoke fixture");
 
   const expectedVolumes = new Set(
     ["a", "b"].flatMap((side) =>
@@ -53,23 +41,16 @@ export function cleanupSmokeFixture(resources, manifestPath, options) {
   );
   if (
     !Array.isArray(resources.containers) ||
-    resources.containers.some(
-      (id) => typeof id !== "string" || !DOCKER_ID.test(id),
-    ) ||
+    resources.containers.some((id) => typeof id !== "string" || !DOCKER_ID.test(id)) ||
     new Set(resources.containers).size !== resources.containers.length ||
     !Array.isArray(resources.volumes) ||
-    resources.volumes.some(
-      (name) => typeof name !== "string" || !expectedVolumes.has(name),
-    ) ||
+    resources.volumes.some((name) => typeof name !== "string" || !expectedVolumes.has(name)) ||
     new Set(resources.volumes).size !== resources.volumes.length ||
     (resources.network !== null &&
-      (typeof resources.network !== "string" ||
-        !DOCKER_ID.test(resources.network))) ||
-    (resources.imageTag !== null &&
-      resources.imageTag !== `${resources.runId}:fixture`) ||
+      (typeof resources.network !== "string" || !DOCKER_ID.test(resources.network))) ||
+    (resources.imageTag !== null && resources.imageTag !== `${resources.runId}:fixture`) ||
     (resources.image !== null &&
-      (typeof resources.image !== "string" ||
-        !IMAGE_ID.test(resources.image))) ||
+      (typeof resources.image !== "string" || !IMAGE_ID.test(resources.image))) ||
     (resources.image !== null && resources.imageTag === null)
   )
     throw new Error("refusing invalid smoke fixture Docker resources");
@@ -100,10 +81,8 @@ export function cleanupSmokeFixture(resources, manifestPath, options) {
 
   for (const [kind, id] of verifiedResources) removeResource(kind, id);
   const leftovers = [];
-  for (const [kind, id] of verifiedResources)
-    if (inspectResource(kind, id)) leftovers.push(kind);
-  if (leftovers.length)
-    throw new Error(`fixture cleanup left exact ${leftovers.join(", ")}`);
+  for (const [kind, id] of verifiedResources) if (inspectResource(kind, id)) leftovers.push(kind);
+  if (leftovers.length) throw new Error(`fixture cleanup left exact ${leftovers.join(", ")}`);
   removeRoot(root);
   return root;
 }

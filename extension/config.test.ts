@@ -9,8 +9,7 @@ let deleteBeforeRead = false;
 let failConfigRename = false;
 let configUnlinkError: NodeJS.ErrnoException | undefined;
 let configPath: string | undefined;
-const testAgentDir =
-  process.env.PI_CODING_AGENT_DIR ?? "/tmp/pi-herdsman-config-test";
+const testAgentDir = process.env.PI_CODING_AGENT_DIR ?? "/tmp/pi-herdsman-config-test";
 mock.module("@earendil-works/pi-coding-agent", {
   namedExports: {
     getAgentDir: () => testAgentDir,
@@ -45,9 +44,7 @@ mock.module("node:fs", {
         !basename(from).startsWith(`.${basename(configPath)}.lock.`)
       ) {
         failConfigRename = false;
-        const error = new Error(
-          "injected config rename failure",
-        ) as NodeJS.ErrnoException;
+        const error = new Error("injected config rename failure") as NodeJS.ErrnoException;
         error.code = "EIO";
         throw error;
       }
@@ -125,10 +122,7 @@ test("Configuration reference documents every built-in default", () => {
     );
   }
 
-  assert.deepEqual(
-    [...documented.keys()].sort(),
-    Object.keys(DEFAULT_CONFIG).sort(),
-  );
+  assert.deepEqual([...documented.keys()].sort(), Object.keys(DEFAULT_CONFIG).sort());
   for (const [field, value] of Object.entries(DEFAULT_CONFIG)) {
     assert.equal(
       documented.get(field),
@@ -149,14 +143,8 @@ test("Agent working directory override defaults off and persists only booleans",
     /Invalid Pi Herdsman config field allowAgentCwdOverride/,
   );
   assert.equal(readConfig().allowAgentCwdOverride, false);
-  realFs.writeFileSync(
-    herdsmanConfigPath(),
-    '{"allowAgentCwdOverride":"true"}',
-  );
-  assert.throws(
-    () => readConfig(),
-    /Invalid Pi Herdsman config field allowAgentCwdOverride/,
-  );
+  realFs.writeFileSync(herdsmanConfigPath(), '{"allowAgentCwdOverride":"true"}');
+  assert.throws(() => readConfig(), /Invalid Pi Herdsman config field allowAgentCwdOverride/);
 });
 
 test("Agent model overrides default off and retain explicit model IDs", () => {
@@ -185,14 +173,8 @@ test("Agent model override settings reject invalid updates and file contents", (
   }
   updateConfig("allowAgentModelOverrides", true);
   for (const [key, value] of invalid) {
-    realFs.writeFileSync(
-      herdsmanConfigPath(),
-      JSON.stringify({ [key]: value }),
-    );
-    assert.throws(
-      () => readConfig(),
-      new RegExp(`Invalid Pi Herdsman config field ${key}`),
-    );
+    realFs.writeFileSync(herdsmanConfigPath(), JSON.stringify({ [key]: value }));
+    assert.throws(() => readConfig(), new RegExp(`Invalid Pi Herdsman config field ${key}`));
   }
 });
 
@@ -201,20 +183,11 @@ test("status widget rows validates, persists, and resets", () => {
   for (const value of [1, 100]) {
     updateConfig("statusWidgetMaxRows", value);
     assert.equal(readConfig().statusWidgetMaxRows, value);
-    assert.equal(
-      JSON.parse(realFs.readFileSync(configPath!, "utf8")).statusWidgetMaxRows,
-      value,
-    );
+    assert.equal(JSON.parse(realFs.readFileSync(configPath!, "utf8")).statusWidgetMaxRows, value);
   }
   for (const value of [0, 101, 1.5, "8", null]) {
-    assert.throws(
-      () => updateConfig("statusWidgetMaxRows", value as never),
-      /statusWidgetMaxRows/,
-    );
-    realFs.writeFileSync(
-      configPath!,
-      JSON.stringify({ statusWidgetMaxRows: value }),
-    );
+    assert.throws(() => updateConfig("statusWidgetMaxRows", value as never), /statusWidgetMaxRows/);
+    realFs.writeFileSync(configPath!, JSON.stringify({ statusWidgetMaxRows: value }));
     assert.throws(() => readConfig(), /statusWidgetMaxRows/);
   }
   realFs.writeFileSync(configPath!, JSON.stringify({ statusWidgetMaxRows: 5 }));
@@ -241,16 +214,9 @@ test("reset skips absent keys but removes explicit default-valued overrides", ()
       bigint: true,
     });
     assert.equal(realFs.readFileSync(configPath!, "utf8"), before, key);
-    assert.equal(
-      afterStat.ino,
-      beforeStat.ino,
-      `${key} must not replace the config file`,
-    );
+    assert.equal(afterStat.ino, beforeStat.ino, `${key} must not replace the config file`);
     updateConfig(key, DEFAULT_CONFIG[key]);
-    assert.equal(
-      JSON.parse(realFs.readFileSync(configPath!, "utf8"))[key],
-      DEFAULT_CONFIG[key],
-    );
+    assert.equal(JSON.parse(realFs.readFileSync(configPath!, "utf8"))[key], DEFAULT_CONFIG[key]);
     updateConfig(key, undefined);
     const stored = JSON.parse(realFs.readFileSync(configPath!, "utf8"));
     assert.equal(Object.hasOwn(stored, key), false, key);
@@ -295,19 +261,13 @@ test("peer policy defaults to enabled and rereads the saved global preferences",
 
 test("peer settings reject non-boolean values on read and update", () => {
   realFs.mkdirSync(herdsmanDataRoot(), { recursive: true });
-  for (const key of [
-    "peerCommunicationEnabled",
-    "peerFederationEnabled",
-  ] as const) {
+  for (const key of ["peerCommunicationEnabled", "peerFederationEnabled"] as const) {
     const message = new RegExp(key);
     for (const value of ["false", 0, null]) {
       realFs.writeFileSync(herdsmanConfigPath(), "{}");
       assert.throws(() => updateConfig(key, value as never), message);
       assert.equal(realFs.readFileSync(herdsmanConfigPath(), "utf8"), "{}");
-      realFs.writeFileSync(
-        herdsmanConfigPath(),
-        JSON.stringify({ [key]: value }),
-      );
+      realFs.writeFileSync(herdsmanConfigPath(), JSON.stringify({ [key]: value }));
       assert.throws(() => readPeerPolicy(), message);
     }
   }
@@ -330,10 +290,7 @@ test("invalid worktree-removal preauthorization fails closed", () => {
     configPath!,
     JSON.stringify({ worktreeRemovalPreapprovedRepos: ["/repo-a", 2] }),
   );
-  assert.throws(
-    () => isWorktreeRemovalPreapproved("/repo-a"),
-    /worktreeRemovalPreapprovedRepos/,
-  );
+  assert.throws(() => isWorktreeRemovalPreapproved("/repo-a"), /worktreeRemovalPreapprovedRepos/);
 });
 
 test("Manager merge policy defaults off and repository overrides inherit, set, and clear", () => {
@@ -382,8 +339,7 @@ test("merge policy writes reject stale snapshots under the config lock", () => {
   const snapshot = readConfig();
   updateConfig("managerMergeEnabled", false);
   assert.throws(
-    () =>
-      updateConfig("managerMergeEnabled", true, snapshot.managerMergeEnabled),
+    () => updateConfig("managerMergeEnabled", true, snapshot.managerMergeEnabled),
     /policy changed/,
   );
   assert.equal(readConfig().managerMergeEnabled, false);
@@ -459,10 +415,7 @@ test("Manager merge policy supports explicit divergent grants and strictly valid
     assert.throws(() => readConfig(), /managerMerge/);
   }
   for (const repoKey of ["", " /repo", "repo\nkey", "__proto__"]) {
-    assert.throws(
-      () => setManagerMergeOverride(repoKey, true),
-      /verified repository identity/,
-    );
+    assert.throws(() => setManagerMergeOverride(repoKey, true), /verified repository identity/);
   }
   assert.throws(() => setManagerMergeOverride("/repo-a", "yes" as never));
   assert.throws(
@@ -475,10 +428,7 @@ test("Manager merge repository keys reject remaining control characters", () => 
   realFs.mkdirSync(herdsmanDataRoot(), { recursive: true });
   for (const code of [0x00, 0x1f, 0x7f]) {
     const repoKey = `repo${String.fromCharCode(code)}key`;
-    assert.throws(
-      () => setManagerMergeOverride(repoKey, true),
-      /verified repository identity/,
-    );
+    assert.throws(() => setManagerMergeOverride(repoKey, true), /verified repository identity/);
     realFs.writeFileSync(
       configPath!,
       JSON.stringify({ managerMergeOverrides: { [repoKey]: true } }),
@@ -529,19 +479,11 @@ test("projectsDirectory is a global preference with a home-relative default", ()
   resetConfig();
   try {
     assert.equal(readConfig().projectsDirectory, "~/Projects");
-    for (const path of [
-      "~/Work Repositories",
-      join(tmpdir(), "Work Repositories"),
-    ]) {
+    for (const path of ["~/Work Repositories", join(tmpdir(), "Work Repositories")]) {
       updateConfig("projectsDirectory", path);
       assert.equal(readConfig().projectsDirectory, path);
     }
-    for (const invalid of [
-      "",
-      "Work Repositories",
-      "./Projects",
-      "~/../Projects",
-    ]) {
+    for (const invalid of ["", "Work Repositories", "./Projects", "~/../Projects"]) {
       assert.throws(
         () => updateConfig("projectsDirectory", invalid),
         /projectsDirectory.*absolute/,
@@ -551,10 +493,7 @@ test("projectsDirectory is a global preference with a home-relative default", ()
     assert.equal(readConfig().projectsDirectory, "~/Projects");
     realFs.mkdirSync(dirname(configPath!), { recursive: true });
     for (const invalid of [42, "Work Repositories", "~/bad/../Projects"]) {
-      realFs.writeFileSync(
-        configPath!,
-        JSON.stringify({ projectsDirectory: invalid }),
-      );
+      realFs.writeFileSync(configPath!, JSON.stringify({ projectsDirectory: invalid }));
       assert.throws(readConfig, /projectsDirectory.*absolute/);
     }
   } finally {
@@ -577,8 +516,7 @@ test("trusted project preferences override only the two supported global values"
     assert.equal(readEffectiveConfig(ctx).autoActivateManager, false);
     assert.equal(readEffectiveConfig(ctx).contextRetirement, true);
     assert.equal(
-      readEffectiveConfig({ ...ctx, isProjectTrusted: () => false })
-        .autoActivateManager,
+      readEffectiveConfig({ ...ctx, isProjectTrusted: () => false }).autoActivateManager,
       true,
     );
     realFs.writeFileSync(
@@ -594,10 +532,7 @@ test("trusted project preferences override only the two supported global values"
       "{",
     ]) {
       realFs.writeFileSync(`${cwd}/.pi/settings.json`, content);
-      assert.throws(
-        () => readProjectOverrides(ctx),
-        /settings|boolean|unsupported/,
-      );
+      assert.throws(() => readProjectOverrides(ctx), /settings|boolean|unsupported/);
     }
   } finally {
     realFs.rmSync(cwd, { recursive: true, force: true });
@@ -696,9 +631,7 @@ test("inheriting on a missing project file does not create it", () => {
 });
 
 test("project writes enforce trust and reject invalid data without changing bytes", () => {
-  const cwd = realFs.mkdtempSync(
-    join(tmpdir(), "pi-herdsman-project-invalid-"),
-  );
+  const cwd = realFs.mkdtempSync(join(tmpdir(), "pi-herdsman-project-invalid-"));
   const path = join(cwd, ".pi", "settings.json");
   realFs.mkdirSync(dirname(path), { recursive: true });
   const ctx = { cwd, isProjectTrusted: () => true } as never;
@@ -709,9 +642,7 @@ test("project writes enforce trust and reject invalid data without changing byte
       '{"piHerdsman":{"autoActivateManager":"false"}}',
     ]) {
       realFs.writeFileSync(path, content);
-      assert.throws(() =>
-        updateProjectOverride(ctx, "autoActivateManager", true),
-      );
+      assert.throws(() => updateProjectOverride(ctx, "autoActivateManager", true));
       assert.equal(realFs.readFileSync(path, "utf8"), content);
     }
     const original = realFs.readFileSync(path, "utf8");
@@ -724,10 +655,7 @@ test("project writes enforce trust and reject invalid data without changing byte
         ),
       /untrusted/,
     );
-    assert.throws(
-      () => updateProjectOverride(ctx, "unknown" as never, true),
-      /key/,
-    );
+    assert.throws(() => updateProjectOverride(ctx, "unknown" as never, true), /key/);
     assert.throws(
       () => updateProjectOverride(ctx, "autoActivateManager", "true" as never),
       /value/,
@@ -772,24 +700,12 @@ test("invalid values, malformed JSON, non-object roots, and unknown keys fail cl
   for (const [content, message] of [
     ['{"spawnPlacement":"invalid"}', "spawnPlacement"],
     ['{"defaultLeadExecution":"invalid"}', "defaultLeadExecution"],
-    [
-      `{"inlineAttachmentLimitBytes":${MIN_BYTE_LIMIT - 1}}`,
-      "inlineAttachmentLimitBytes",
-    ],
-    [
-      `{"mailboxPayloadLimitBytes":${MAX_BYTE_LIMIT + 1}}`,
-      "mailboxPayloadLimitBytes",
-    ],
-    [
-      `{"mailboxPayloadLimitBytes":${MIN_BYTE_LIMIT + 0.5}}`,
-      "mailboxPayloadLimitBytes",
-    ],
+    [`{"inlineAttachmentLimitBytes":${MIN_BYTE_LIMIT - 1}}`, "inlineAttachmentLimitBytes"],
+    [`{"mailboxPayloadLimitBytes":${MAX_BYTE_LIMIT + 1}}`, "mailboxPayloadLimitBytes"],
+    [`{"mailboxPayloadLimitBytes":${MIN_BYTE_LIMIT + 0.5}}`, "mailboxPayloadLimitBytes"],
     ['{"contextRetirement":"false"}', "contextRetirement"],
     ['{"autoActivateManager":"true"}', "autoActivateManager"],
-    [
-      '{"managerGitBootstrapWithoutConfirmation":1}',
-      "managerGitBootstrapWithoutConfirmation",
-    ],
+    ['{"managerGitBootstrapWithoutConfirmation":1}', "managerGitBootstrapWithoutConfirmation"],
     ["{", "Invalid Pi Herdsman config JSON"],
     ["[]", "root must be an object"],
     ['{"typo":true}', "unknown field typo"],
@@ -806,8 +722,7 @@ test("invalid values, malformed JSON, non-object roots, and unknown keys fail cl
     /defaultLeadExecution/,
   );
   assert.throws(
-    () =>
-      updateConfig("managerGitBootstrapWithoutConfirmation", "yes" as never),
+    () => updateConfig("managerGitBootstrapWithoutConfirmation", "yes" as never),
     /managerGitBootstrapWithoutConfirmation/,
   );
 });
@@ -819,17 +734,14 @@ test("updates preserve configured keys, reset one key, and delete the final conf
   updateConfig("autoActivateManager", true);
   updateConfig("managerGitBootstrapWithoutConfirmation", true);
   updateConfig("mailboxPayloadLimitBytes", 64 * 1024);
-  assert.deepEqual(
-    JSON.parse(realFs.readFileSync(herdsmanConfigPath(), "utf8")),
-    {
-      spawnPlacement: "tab",
-      defaultLeadExecution: "orchestrate",
-      contextRetirement: false,
-      autoActivateManager: true,
-      managerGitBootstrapWithoutConfirmation: true,
-      mailboxPayloadLimitBytes: 64 * 1024,
-    },
-  );
+  assert.deepEqual(JSON.parse(realFs.readFileSync(herdsmanConfigPath(), "utf8")), {
+    spawnPlacement: "tab",
+    defaultLeadExecution: "orchestrate",
+    contextRetirement: false,
+    autoActivateManager: true,
+    managerGitBootstrapWithoutConfirmation: true,
+    mailboxPayloadLimitBytes: 64 * 1024,
+  });
   assert.equal(readConfig().spawnPlacement, "tab");
   assert.equal(readConfig().defaultLeadExecution, "orchestrate");
   assert.equal(readConfig().contextRetirement, false);
@@ -838,14 +750,11 @@ test("updates preserve configured keys, reset one key, and delete the final conf
   updateConfig("managerGitBootstrapWithoutConfirmation", undefined);
   updateConfig("spawnPlacement", undefined);
   updateConfig("defaultLeadExecution", undefined);
-  assert.deepEqual(
-    JSON.parse(realFs.readFileSync(herdsmanConfigPath(), "utf8")),
-    {
-      contextRetirement: false,
-      autoActivateManager: true,
-      mailboxPayloadLimitBytes: 64 * 1024,
-    },
-  );
+  assert.deepEqual(JSON.parse(realFs.readFileSync(herdsmanConfigPath(), "utf8")), {
+    contextRetirement: false,
+    autoActivateManager: true,
+    mailboxPayloadLimitBytes: 64 * 1024,
+  });
   updateConfig("mailboxPayloadLimitBytes", undefined);
   updateConfig("contextRetirement", undefined);
   updateConfig("autoActivateManager", undefined);
@@ -869,9 +778,7 @@ test("failed atomic replacement preserves the old config and cleans its temporar
   );
   assert.equal(realFs.readFileSync(herdsmanConfigPath(), "utf8"), before);
   assert.deepEqual(
-    realFs
-      .readdirSync(herdsmanDataRoot())
-      .filter((entry) => entry.startsWith(".config.json.")),
+    realFs.readdirSync(herdsmanDataRoot()).filter((entry) => entry.startsWith(".config.json.")),
     [],
   );
 });
@@ -883,10 +790,7 @@ test("config temporary cleanup preserves primary errors and reports standalone f
   try {
     configUnlinkError = cleanup;
     failConfigRename = true;
-    assert.throws(
-      () => updateConfig("spawnPlacement", "tab"),
-      /injected config rename failure/,
-    );
+    assert.throws(() => updateConfig("spawnPlacement", "tab"), /injected config rename failure/);
     assert.throws(
       () => updateConfig("spawnPlacement", "tab"),
       (error) => error === cleanup,

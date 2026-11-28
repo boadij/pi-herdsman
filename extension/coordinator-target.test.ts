@@ -43,10 +43,7 @@ test("coordinator targets are deterministic, role-scoped, and normalized", () =>
   const leadTarget = coordinatorTarget("lead", OWNER_SESSION_ID);
   assert.equal(leadTarget, "lead:t4mjqepa65");
   assert.equal(coordinatorTarget("lead", OWNER_SESSION_ID), leadTarget);
-  assert.equal(
-    coordinatorTarget("manager", OWNER_SESSION_ID),
-    "manager:099y7rb03g",
-  );
+  assert.equal(coordinatorTarget("manager", OWNER_SESSION_ID), "manager:099y7rb03g");
   assert.notEqual(coordinatorTarget("lead", RECIPIENT_SESSION_ID), leadTarget);
 
   const pattern = new RegExp(COORDINATOR_TARGET_PATTERN);
@@ -62,12 +59,7 @@ test("coordinator targets are deterministic, role-scoped, and normalized", () =>
 
 test("caller bindings persist once and resolve after session restoration", () => {
   const { ctx, pi, entries } = fixture();
-  const target = rememberCoordinatorTarget(
-    pi,
-    ctx,
-    "lead",
-    RECIPIENT_SESSION_ID,
-  );
+  const target = rememberCoordinatorTarget(pi, ctx, "lead", RECIPIENT_SESSION_ID);
   assert.equal(entries.length, 1);
   assert.deepEqual((entries[0] as any).data, {
     version: 1,
@@ -76,10 +68,7 @@ test("caller bindings persist once and resolve after session restoration", () =>
     role: "lead",
     sessionId: RECIPIENT_SESSION_ID,
   });
-  assert.equal(
-    rememberCoordinatorTarget(pi, ctx, "lead", RECIPIENT_SESSION_ID),
-    target,
-  );
+  assert.equal(rememberCoordinatorTarget(pi, ctx, "lead", RECIPIENT_SESSION_ID), target);
   assert.equal(entries.length, 1);
 
   const restored = fixture(OWNER_SESSION_ID, entries);
@@ -87,13 +76,11 @@ test("caller bindings persist once and resolve after session restoration", () =>
     role: "lead",
     sessionId: RECIPIENT_SESSION_ID,
   });
-  const uppercaseSuffixTarget = `lead:${target
-    .slice(target.indexOf(":") + 1)
-    .toUpperCase()}`;
-  assert.deepEqual(
-    resolveCoordinatorTarget(restored.ctx, uppercaseSuffixTarget),
-    { role: "lead", sessionId: RECIPIENT_SESSION_ID },
-  );
+  const uppercaseSuffixTarget = `lead:${target.slice(target.indexOf(":") + 1).toUpperCase()}`;
+  assert.deepEqual(resolveCoordinatorTarget(restored.ctx, uppercaseSuffixTarget), {
+    role: "lead",
+    sessionId: RECIPIENT_SESSION_ID,
+  });
   assert.throws(
     () =>
       resolveCoordinatorTarget(
@@ -115,12 +102,7 @@ test("forked sessions rediscover coordinator targets without inheriting bindings
     },
   } as unknown as ExtensionAPI;
 
-  const target = rememberCoordinatorTarget(
-    pi,
-    ctx,
-    "lead",
-    RECIPIENT_SESSION_ID,
-  );
+  const target = rememberCoordinatorTarget(pi, ctx, "lead", RECIPIENT_SESSION_ID);
   const leaf = sessionManager.getBranch().at(-1)!;
 
   sessionManager.createBranchedSession(leaf.id);
@@ -132,14 +114,8 @@ test("forked sessions rediscover coordinator targets without inheriting bindings
     /Unknown coordinator target; rediscover it/,
   );
 
-  assert.equal(
-    rememberCoordinatorTarget(pi, ctx, "lead", RECIPIENT_SESSION_ID),
-    target,
-  );
-  assert.equal(
-    rememberCoordinatorTarget(pi, ctx, "lead", RECIPIENT_SESSION_ID),
-    target,
-  );
+  assert.equal(rememberCoordinatorTarget(pi, ctx, "lead", RECIPIENT_SESSION_ID), target);
+  assert.equal(rememberCoordinatorTarget(pi, ctx, "lead", RECIPIENT_SESSION_ID), target);
   assert.deepEqual(resolveCoordinatorTarget(ctx, target), {
     role: "lead",
     sessionId: RECIPIENT_SESSION_ID,
@@ -151,8 +127,7 @@ test("forked sessions rediscover coordinator targets without inheriting bindings
   assert.equal(bindings.length, 2);
   assert.deepEqual(
     bindings.map(
-      (entry) =>
-        (entry as CustomEntry<{ ownerSessionId: string }>).data?.ownerSessionId,
+      (entry) => (entry as CustomEntry<{ ownerSessionId: string }>).data?.ownerSessionId,
     ),
     [OWNER_SESSION_ID, forkId],
   );
@@ -160,12 +135,7 @@ test("forked sessions rediscover coordinator targets without inheriting bindings
 
 test("bindings on an abandoned branch must be rebound in the active branch", () => {
   const { ctx, pi, entries } = fixture();
-  const target = rememberCoordinatorTarget(
-    pi,
-    ctx,
-    "lead",
-    RECIPIENT_SESSION_ID,
-  );
+  const target = rememberCoordinatorTarget(pi, ctx, "lead", RECIPIENT_SESSION_ID);
   const activeBranch: unknown[] = [];
   (ctx.sessionManager as any).getBranch = () => activeBranch;
   (pi as any).appendEntry = (type: string, data: unknown) => {
@@ -175,10 +145,7 @@ test("bindings on an abandoned branch must be rebound in the active branch", () 
   };
 
   assert.throws(() => resolveCoordinatorTarget(ctx, target));
-  assert.equal(
-    rememberCoordinatorTarget(pi, ctx, "lead", RECIPIENT_SESSION_ID),
-    target,
-  );
+  assert.equal(rememberCoordinatorTarget(pi, ctx, "lead", RECIPIENT_SESSION_ID), target);
   assert.equal(entries.length, 2);
   assert.equal(activeBranch.length, 1);
   assert.deepEqual(resolveCoordinatorTarget(ctx, target), {
@@ -193,9 +160,7 @@ test("absent, malformed, tampered, and conflicting bindings fail closed", () => 
   assert.throws(() => resolveCoordinatorTarget(fixture().ctx, "lead:t4mj"));
 
   for (const sessionId of INVALID_SESSION_IDS) {
-    assert.throws(() =>
-      rememberCoordinatorTarget(fixture().pi, fixture().ctx, "lead", sessionId),
-    );
+    assert.throws(() => rememberCoordinatorTarget(fixture().pi, fixture().ctx, "lead", sessionId));
   }
 
   const invalidBindings = [
@@ -252,12 +217,8 @@ test("absent, malformed, tampered, and conflicting bindings fail closed", () => 
   ];
   for (const data of invalidBindings) {
     const entries = [{ type: "custom", customType: ENTRY, data }];
-    const resolve = () =>
-      resolveCoordinatorTarget(fixture(OWNER_SESSION_ID, entries).ctx, target);
-    if (
-      data.sessionId === INVALID_SESSION_IDS[0] ||
-      data.ownerSessionId === "session-id."
-    ) {
+    const resolve = () => resolveCoordinatorTarget(fixture(OWNER_SESSION_ID, entries).ctx, target);
+    if (data.sessionId === INVALID_SESSION_IDS[0] || data.ownerSessionId === "session-id.") {
       assert.throws(resolve, /Invalid canonical Pi session ID/);
     } else {
       assert.throws(resolve);
@@ -296,10 +257,5 @@ test("absent, malformed, tampered, and conflicting bindings fail closed", () => 
       },
     },
   ];
-  assert.throws(() =>
-    resolveCoordinatorTarget(
-      fixture(OWNER_SESSION_ID, conflicting).ctx,
-      target,
-    ),
-  );
+  assert.throws(() => resolveCoordinatorTarget(fixture(OWNER_SESSION_ID, conflicting).ctx, target));
 });

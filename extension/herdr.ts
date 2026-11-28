@@ -1,8 +1,4 @@
-import type {
-  ExecResult,
-  ExtensionAPI,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExecResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
 import {
   accessSync,
@@ -40,22 +36,15 @@ export function validateHerdrStatus(status: unknown): void {
   const value = settingRecord(status);
   const client = settingRecord(value.client);
   const server = settingRecord(value.server);
-  const clientVersion =
-    typeof client.version === "string" ? client.version : undefined;
-  const clientMatch = clientVersion
-    ? parseHerdrVersion(clientVersion)
-    : undefined;
+  const clientVersion = typeof client.version === "string" ? client.version : undefined;
+  const clientMatch = clientVersion ? parseHerdrVersion(clientVersion) : undefined;
   const supported = (match: RegExpMatchArray | undefined): boolean =>
     !!match &&
     (Number(match[1]) > 0 ||
       Number(match[2]) > 9 ||
       (Number(match[2]) === 9 && Number(match[3]) >= 1));
 
-  if (
-    !supported(clientMatch) ||
-    server.running !== true ||
-    server.compatible !== true
-  ) {
+  if (!supported(clientMatch) || server.running !== true || server.compatible !== true) {
     fail(
       "invalid_request",
       "Herdr status is unavailable or incompatible; Herdr >=0.9.1 with a running compatible server is required",
@@ -87,14 +76,10 @@ export async function verifiedHerdrAgent(
   },
 ): Promise<HerdrRecord | undefined> {
   const inventory = await options.listAgents();
-  const expected = options.expectedSession(
-    descriptor.piSessionId,
-    descriptor.piSessionFile,
-  );
+  const expected = options.expectedSession(descriptor.piSessionId, descriptor.piSessionFile);
   const matches = inventory.filter(
     (agent) =>
-      options.isPiAgent(agent) &&
-      options.matchesExpectedSession(agent.agent_session, expected),
+      options.isPiAgent(agent) && options.matchesExpectedSession(agent.agent_session, expected),
   );
   const agent = matches[0];
   if (
@@ -162,12 +147,7 @@ export class HerdrStartFailure extends Error {
   readonly attempt: StartedHerdrAgent;
   readonly retryAttempted: boolean;
 
-  constructor(
-    cause: unknown,
-    stage: string,
-    attempt: StartedHerdrAgent,
-    retryAttempted = false,
-  ) {
+  constructor(cause: unknown, stage: string, attempt: StartedHerdrAgent, retryAttempted = false) {
     super(cause instanceof Error ? cause.message : String(cause));
     this.cause = cause;
     this.stage = stage;
@@ -181,11 +161,9 @@ const START_DIAGNOSTIC_TIMEOUT = 2_000;
 const FRESH_PANE_BUSY_RETRY_TIMEOUT = 2_000;
 const HERDR_START_TIMEOUT_MIN = 3_001;
 const HERDR_START_TIMEOUT_MAX = 300_000;
-export const STARTUP_TIMEOUT_MIN =
-  HERDR_START_TIMEOUT_MIN + START_DIAGNOSTIC_TIMEOUT;
+export const STARTUP_TIMEOUT_MIN = HERDR_START_TIMEOUT_MIN + START_DIAGNOSTIC_TIMEOUT;
 export const STARTUP_TIMEOUT_MAX = HERDR_START_TIMEOUT_MAX;
-const STARTUP_TIMEOUT_DEFAULT =
-  HERDR_START_TIMEOUT_MAX + START_DIAGNOSTIC_TIMEOUT;
+const STARTUP_TIMEOUT_DEFAULT = HERDR_START_TIMEOUT_MAX + START_DIAGNOSTIC_TIMEOUT;
 const RAW_DIAGNOSTIC_BYTES = 8 * 1024;
 const INSPECTION_LINES = 80;
 const INSPECTION_OUTPUT_BYTES = 16 * 1024;
@@ -285,10 +263,7 @@ function error(operation: string, message: string, details?: unknown): never {
   });
 }
 
-function boundedUtf8Tail(
-  value: string,
-  maxBytes: number,
-): { text: string; truncated: boolean } {
+function boundedUtf8Tail(value: string, maxBytes: number): { text: string; truncated: boolean } {
   const bytes = Buffer.from(value);
   if (bytes.length <= maxBytes) return { text: value, truncated: false };
   let start = bytes.length - maxBytes;
@@ -321,9 +296,7 @@ export type AgentInspectionTarget = {
   piSessionId: string;
   piSessionFile?: string;
 };
-export type AgentInspectionValidator = (
-  agent: HerdrRecord,
-) => boolean | Promise<boolean>;
+export type AgentInspectionValidator = (agent: HerdrRecord) => boolean | Promise<boolean>;
 
 export type AgentInspection = {
   identity: AgentInspectionTarget & { agent: HerdrRecord };
@@ -339,11 +312,7 @@ export type RemovedHerdrWorktree = Readonly<{
 }>;
 
 function removedHerdrWorktree(message: any): RemovedHerdrWorktree | undefined {
-  if (
-    message?.event !== "worktree_removed" ||
-    message?.data?.type !== "worktree_removed"
-  )
-    return;
+  if (message?.event !== "worktree_removed" || message?.data?.type !== "worktree_removed") return;
 
   const data = message.data;
   const workspace = data.workspace;
@@ -374,14 +343,9 @@ export async function inspectHerdrAgent(
   signal?: AbortSignal,
   validate?: AgentInspectionValidator,
 ): Promise<AgentInspection> {
-  const beforeResult = await runHerdr(
-    pi,
-    ctx,
-    ["agent", "get", target.paneId],
-    {
-      signal,
-    },
-  );
+  const beforeResult = await runHerdr(pi, ctx, ["agent", "get", target.paneId], {
+    signal,
+  });
   const before = beforeResult?.agent;
   if (
     before?.workspace_id !== target.workspaceId ||
@@ -398,15 +362,7 @@ export async function inspectHerdrAgent(
   // Herdsman's local bound below still caps evidence at 80 lines / 16 KiB.
   const outputResult = await pi.exec(
     "herdr",
-    [
-      "agent",
-      "read",
-      target.paneId,
-      "--source",
-      "recent-unwrapped",
-      "--format",
-      "text",
-    ],
+    ["agent", "read", target.paneId, "--source", "recent-unwrapped", "--format", "text"],
     { cwd: ctx.cwd, signal, timeout: 30_000 },
   );
   if (outputResult.code !== 0 || outputResult.killed)
@@ -431,9 +387,7 @@ export async function inspectHerdrAgent(
     (validate && !(await validate(after)))
   )
     throw new Error("Inspection target changed during capture");
-  const inspectionOutput = boundedInspectionOutput(
-    String(outputResult.stdout ?? ""),
-  );
+  const inspectionOutput = boundedInspectionOutput(String(outputResult.stdout ?? ""));
   return Object.freeze({
     identity: Object.freeze({ ...target, agent: after }),
     capturedAt: Date.now(),
@@ -480,8 +434,7 @@ function throwHerdrFailure(operation: string, result: HerdrExecResult): never {
   const stderrDiagnostic = boundedDiagnostic(stderr);
   const value = result.truncated
     ? undefined
-    : (structuredHerdrError(parseJson(stdout)) ??
-      structuredHerdrError(parseJson(stderr)));
+    : (structuredHerdrError(parseJson(stdout)) ?? structuredHerdrError(parseJson(stderr)));
   const structuredMessage =
     typeof value?.message === "string" ? boundedDiagnostic(value.message) : "";
 
@@ -494,12 +447,8 @@ function throwHerdrFailure(operation: string, result: HerdrExecResult): never {
           stdoutDiagnostic ||
           (result.killed ? "Herdr command was killed" : `exit ${result.code}`),
     {
-      ...(value?.details && typeof value.details === "object"
-        ? value.details
-        : {}),
-      ...(typeof value?.code === "string" && value.code
-        ? { herdrCode: value.code }
-        : {}),
+      ...(value?.details && typeof value.details === "object" ? value.details : {}),
+      ...(typeof value?.code === "string" && value.code ? { herdrCode: value.code } : {}),
       exitCode: result.code,
       killed: result.killed === true,
       ...(result.truncated ? { truncated: true } : {}),
@@ -531,8 +480,7 @@ export async function runHerdr(
   const stderr = String(result.stderr ?? "");
   const stdoutJson = parseJson(stdout);
   if (stdoutJson === undefined) {
-    const classification =
-      stdout.trim() || stderr.trim() ? "malformed" : "empty";
+    const classification = stdout.trim() || stderr.trim() ? "malformed" : "empty";
     const raw = {
       classification,
       stdout: boundedDiagnostic(stdout),
@@ -546,8 +494,7 @@ export async function runHerdr(
       { result: raw },
     );
   }
-  if (args.length === 2 && args[0] === "status" && args[1] === "--json")
-    return stdoutJson;
+  if (args.length === 2 && args[0] === "status" && args[1] === "--json") return stdoutJson;
   if (
     stdoutJson === null ||
     typeof stdoutJson !== "object" ||
@@ -582,12 +529,7 @@ export function sameDirectory(left: string, right: string): boolean {
     const leftStat = statSync(leftPath, { bigint: true });
     const rightStat = statSync(rightPath, { bigint: true });
     if (!leftStat.isDirectory() || !rightStat.isDirectory()) return false;
-    if (
-      leftStat.dev !== 0n &&
-      rightStat.dev !== 0n &&
-      leftStat.ino !== 0n &&
-      rightStat.ino !== 0n
-    )
+    if (leftStat.dev !== 0n && rightStat.dev !== 0n && leftStat.ino !== 0n && rightStat.ino !== 0n)
       return leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino;
     return leftPath === rightPath;
   } catch {
@@ -610,8 +552,7 @@ export function resolveAssignmentCheckout<T extends HerdrRecord>(
   if (recorded && sessionCwd && !sameDirectory(recorded, sessionCwd))
     return { status: "conflict", reason: "checkout provenance disagrees" };
   const path = recorded ?? sessionCwd;
-  if (!path)
-    return { status: "unknown", reason: "checkout provenance unavailable" };
+  if (!path) return { status: "unknown", reason: "checkout provenance unavailable" };
   const matches = worktrees.filter(
     (item) =>
       item.is_linked_worktree === true &&
@@ -632,22 +573,13 @@ export async function gitRepositoryScope(
   signal?: AbortSignal,
 ) {
   const gitPath = async (argument: string) => {
-    const result = await pi.exec(
-      "git",
-      ["rev-parse", "--path-format=absolute", argument],
-      {
-        cwd,
-        signal,
-        timeout: 10_000,
-      },
-    );
+    const result = await pi.exec("git", ["rev-parse", "--path-format=absolute", argument], {
+      cwd,
+      signal,
+      timeout: 10_000,
+    });
     const path = String(result.stdout ?? "").trim();
-    if (
-      result.code !== 0 ||
-      result.killed ||
-      result.stderr?.trim() ||
-      !isAbsolute(path)
-    )
+    if (result.code !== 0 || result.killed || result.stderr?.trim() || !isAbsolute(path))
       throw new Error("Git local repository identity is unavailable");
     return realpathSync.native(path);
   };
@@ -672,9 +604,8 @@ export async function localRepositoryScope(
     (await runHerdr(pi, ctx, ["worktree", "list", "--cwd", ctx.cwd], {
       signal,
     }));
-  const workspace = (
-    await runHerdr(pi, ctx, ["workspace", "get", workspaceId], { signal })
-  )?.workspace;
+  const workspace = (await runHerdr(pi, ctx, ["workspace", "get", workspaceId], { signal }))
+    ?.workspace;
   const source = listed?.source;
   if (
     workspace?.workspace_id !== workspaceId ||
@@ -702,9 +633,7 @@ export async function localRepositoryScope(
       !sameDirectory(membership.checkout_path, checkoutPath) ||
       membership.is_linked_worktree !== !isPrimary)
   )
-    throw new Error(
-      "Herdr workspace association does not match the current checkout",
-    );
+    throw new Error("Herdr workspace association does not match the current checkout");
   return {
     repoKey: source.repo_key as string,
     repoName: source.repo_name as string,
@@ -721,12 +650,10 @@ export async function worktreeGroupScope(
   signal?: AbortSignal,
   timeout?: number,
 ): Promise<WorktreeGroupScope> {
-  const listed = await runHerdr(
-    pi,
-    ctx,
-    ["worktree", "list", "--workspace", workspaceId],
-    { signal, timeout },
-  );
+  const listed = await runHerdr(pi, ctx, ["worktree", "list", "--workspace", workspaceId], {
+    signal,
+    timeout,
+  });
   return worktreeGroupScopeFromTopology(workspaceId, listed);
 }
 
@@ -752,8 +679,7 @@ export function worktreeGroupScopeFromTopology(
     ...new Set([
       source.source_workspace_id,
       ...worktrees.flatMap((worktree: HerdrRecord) =>
-        typeof worktree?.open_workspace_id === "string" &&
-        worktree.open_workspace_id
+        typeof worktree?.open_workspace_id === "string" && worktree.open_workspace_id
           ? [worktree.open_workspace_id]
           : [],
       ),
@@ -782,15 +708,11 @@ export function structuredTopologyEnvironment(
 ): string[] {
   const validated = validateEnvironment(assignments);
   const owner = validated
-    .find((assignment) =>
-      assignment.startsWith("PI_HERDSMAN_OWNER_SESSION_ID="),
-    )
+    .find((assignment) => assignment.startsWith("PI_HERDSMAN_OWNER_SESSION_ID="))
     ?.slice("PI_HERDSMAN_OWNER_SESSION_ID=".length);
   const forwardingSession =
     validated
-      .find((assignment) =>
-        assignment.startsWith("PI_SUBAGENT_PARENT_SESSION="),
-      )
+      .find((assignment) => assignment.startsWith("PI_SUBAGENT_PARENT_SESSION="))
       ?.slice("PI_SUBAGENT_PARENT_SESSION=".length) ?? owner;
   const reserved = new Set([
     "HERDR_SOCKET_PATH",
@@ -804,14 +726,10 @@ export function structuredTopologyEnvironment(
   ]);
   return [
     ...validated.filter(
-      (assignment) =>
-        !reserved.has(assignment.slice(0, assignment.indexOf("="))),
+      (assignment) => !reserved.has(assignment.slice(0, assignment.indexOf("="))),
     ),
     ...(forwardingSession
-      ? [
-          "PI_SUBAGENT_CHILD=1",
-          `PI_SUBAGENT_PARENT_SESSION=${forwardingSession}`,
-        ]
+      ? ["PI_SUBAGENT_CHILD=1", `PI_SUBAGENT_PARENT_SESSION=${forwardingSession}`]
       : []),
     `PI_HERDSMAN_WORKSPACE_ID=${workspaceId}`,
   ];
@@ -819,11 +737,7 @@ export function structuredTopologyEnvironment(
 function alias(workspaceId: string, label: string, runId: string): string {
   return `${label.slice(0, 15)}_${createHash("sha256").update(`${workspaceId}\0${label}\0${runId}`).digest("hex").slice(0, 16)}`;
 }
-export function herdrAgentAlias(
-  workspaceId: string,
-  label: string,
-  runId: string,
-): string {
+export function herdrAgentAlias(workspaceId: string, label: string, runId: string): string {
   return alias(workspaceId, label, runId);
 }
 
@@ -839,10 +753,7 @@ export function sameCwd(observed: unknown, expected: string): boolean {
   if (typeof observed !== "string") return false;
   return canonicalCwd(observed) === canonicalCwd(expected);
 }
-type PaneIdentity = Pick<
-  StartedHerdrAgent,
-  "paneId" | "workspaceId" | "tabId" | "terminalId"
->;
+type PaneIdentity = Pick<StartedHerdrAgent, "paneId" | "workspaceId" | "tabId" | "terminalId">;
 
 function matchesAttemptTerminal(pane: any, attempt: PaneIdentity): boolean {
   return (
@@ -852,24 +763,14 @@ function matchesAttemptTerminal(pane: any, attempt: PaneIdentity): boolean {
     pane.terminal_id === attempt.terminalId
   );
 }
-function matchesAttemptPane(
-  pane: any,
-  attempt: PaneIdentity & { cwd: string },
-): boolean {
-  return (
-    matchesAttemptTerminal(pane, attempt) && sameCwd(pane.cwd, attempt.cwd)
-  );
+function matchesAttemptPane(pane: any, attempt: PaneIdentity & { cwd: string }): boolean {
+  return matchesAttemptTerminal(pane, attempt) && sameCwd(pane.cwd, attempt.cwd);
 }
 function capturedShellProcess(process: PaneProcess) {
-  return process.foreground_processes?.find(
-    (candidate) => candidate.pid === process.shell_pid,
-  );
+  return process.foreground_processes?.find((candidate) => candidate.pid === process.shell_pid);
 }
 
-export function sameShellProcessOwner(
-  expected: PaneProcess,
-  observed: PaneProcess,
-): boolean {
+export function sameShellProcessOwner(expected: PaneProcess, observed: PaneProcess): boolean {
   if (
     !Number.isInteger(expected.shell_pid) ||
     expected.shell_pid <= 0 ||
@@ -894,11 +795,9 @@ export function sameShellProcessOwner(
   // process sharing the shell's group. Without a reported group the stricter
   // singleton observation remains the only proof.
   const foregroundShell =
-    processes !== undefined &&
-    processes.some((process) => process.pid === observed.shell_pid);
+    processes !== undefined && processes.some((process) => process.pid === observed.shell_pid);
   if (observed.foreground_process_group_id === undefined) {
-    if (processes?.length !== 1 || processes[0]?.pid !== observed.shell_pid)
-      return false;
+    if (processes?.length !== 1 || processes[0]?.pid !== observed.shell_pid) return false;
   } else if (processes !== undefined && !foregroundShell) {
     return false;
   }
@@ -908,15 +807,9 @@ export function sameShellProcessOwner(
   // passes the running-agent snapshot, which lists the agent, so it proves the
   // original shell through shell pid, foreground group, foreground presence and
   // the readiness marker rather than through argv0 continuity.
-  if (
-    !captured ||
-    typeof captured.argv0 !== "string" ||
-    processes === undefined
-  )
-    return true;
+  if (!captured || typeof captured.argv0 !== "string" || processes === undefined) return true;
   return processes.some(
-    (process) =>
-      process.pid === observed.shell_pid && process.argv0 === captured.argv0,
+    (process) => process.pid === observed.shell_pid && process.argv0 === captured.argv0,
   );
 }
 
@@ -935,33 +828,22 @@ export function terminalOccupierSurvived(
   if (!occupier) return false;
   const captured = (occupier.foreground_processes ?? [])
     .map((process) => process.pid)
-    .filter(
-      (pid): pid is number => pid !== undefined && pid !== occupier.shell_pid,
-    );
+    .filter((pid): pid is number => pid !== undefined && pid !== occupier.shell_pid);
   const foreground = observed.foreground_processes;
   if (captured.length === 0 || foreground === undefined) return false;
-  return foreground.some(
-    (process) => process.pid !== undefined && captured.includes(process.pid),
-  );
+  return foreground.some((process) => process.pid !== undefined && captured.includes(process.pid));
 }
 
-function terminalOccupierGone(
-  occupier: PaneProcess | undefined,
-  observed: PaneProcess,
-): boolean {
+function terminalOccupierGone(occupier: PaneProcess | undefined, observed: PaneProcess): boolean {
   if (
     !occupier ||
-    (occupier as PaneProcessWithCompleteness)[foregroundProcessesComplete] !==
-      true ||
-    (observed as PaneProcessWithCompleteness)[foregroundProcessesComplete] !==
-      true
+    (occupier as PaneProcessWithCompleteness)[foregroundProcessesComplete] !== true ||
+    (observed as PaneProcessWithCompleteness)[foregroundProcessesComplete] !== true
   )
     return false;
   const captured = (occupier.foreground_processes ?? [])
     .map((process) => process.pid)
-    .filter(
-      (pid): pid is number => pid !== undefined && pid !== occupier.shell_pid,
-    );
+    .filter((pid): pid is number => pid !== undefined && pid !== occupier.shell_pid);
   const foreground = observed.foreground_processes;
   if (captured.length === 0 || foreground === undefined) return false;
   return !terminalOccupierSurvived(occupier, observed);
@@ -975,17 +857,13 @@ export function settledShell(
   if (!sameShellProcessOwner(expected, observed)) return false;
   if (occupier) return terminalOccupierGone(occupier, observed);
   return (
-    (observed as PaneProcessWithCompleteness)[foregroundProcessesComplete] ===
-      true &&
+    (observed as PaneProcessWithCompleteness)[foregroundProcessesComplete] === true &&
     observed.foreground_processes?.length === 1 &&
     observed.foreground_processes[0]?.pid === observed.shell_pid
   );
 }
 
-export function sameRunningProcessOwner(
-  expected: PaneProcess,
-  observed: PaneProcess,
-): boolean {
+export function sameRunningProcessOwner(expected: PaneProcess, observed: PaneProcess): boolean {
   if (
     expected.pane_id === undefined ||
     expected.pane_id !== observed.pane_id ||
@@ -998,9 +876,7 @@ export function sameRunningProcessOwner(
   const observedGroup = observed.foreground_process_group_id;
   if (expectedGroup !== undefined || observedGroup !== undefined)
     return (
-      expectedGroup !== undefined &&
-      observedGroup !== undefined &&
-      expectedGroup === observedGroup
+      expectedGroup !== undefined && observedGroup !== undefined && expectedGroup === observedGroup
     );
   const expectedForeground = expected.foreground_processes?.[0]?.pid;
   const observedForeground = observed.foreground_processes?.[0]?.pid;
@@ -1014,24 +890,14 @@ export function sameRunningProcessOwner(
     expectedForeground === observedForeground
   );
 }
-async function lockLifecycle(
-  ctx: ExtensionContext,
-  signal?: AbortSignal,
-): Promise<() => void> {
+async function lockLifecycle(ctx: ExtensionContext, signal?: AbortSignal): Promise<() => void> {
   return lockLifecycleForWorkspace(workspace(ctx), signal);
 }
 
-async function lockLifecycleForWorkspace(
-  id: string,
-  signal?: AbortSignal,
-): Promise<() => void> {
+async function lockLifecycleForWorkspace(id: string, signal?: AbortSignal): Promise<() => void> {
   // ponytail: serialize physical lifecycle mutations per workspace.
   // Split only if lifecycle throughput becomes a measured problem.
-  const path = join(
-    herdsmanTempRoot(),
-    "locks",
-    createHash("sha256").update(id).digest("hex"),
-  );
+  const path = join(herdsmanTempRoot(), "locks", createHash("sha256").update(id).digest("hex"));
   mkdirSync(resolve(path, ".."), { recursive: true, mode: 0o700 });
   const deadline = Date.now() + 30_000;
   while (true) {
@@ -1042,8 +908,7 @@ async function lockLifecycleForWorkspace(
         occupiedMessage: "Herdr lifecycle is in progress",
       });
     } catch (e) {
-      if (!(e instanceof ProcessLockOccupiedError) || Date.now() >= deadline)
-        throw e;
+      if (!(e instanceof ProcessLockOccupiedError) || Date.now() >= deadline) throw e;
       await sleep(50, undefined, { signal });
     }
   }
@@ -1250,23 +1115,15 @@ export function leadMetadataArgs(metadata: LeadMetadata): string[] {
     "--token",
     "pi_herdsman_role=lead",
   ];
-  if (metadata.pendingAskId)
-    args.push("--token", `pi_herdsman_ask=${metadata.pendingAskId}`);
+  if (metadata.pendingAskId) args.push("--token", `pi_herdsman_ask=${metadata.pendingAskId}`);
   else args.push("--clear-token", "pi_herdsman_ask");
-  if (metadata.name?.trim())
-    args.push("--token", `pi_herdsman_name=${metadata.name.trim()}`);
+  if (metadata.name?.trim()) args.push("--token", `pi_herdsman_name=${metadata.name.trim()}`);
   else args.push("--clear-token", "pi_herdsman_name");
   if (metadata.herdRunStartedAt !== undefined)
-    args.push(
-      "--token",
-      `pi_herdsman_herd_run_started_at=${metadata.herdRunStartedAt}`,
-    );
+    args.push("--token", `pi_herdsman_herd_run_started_at=${metadata.herdRunStartedAt}`);
   else args.push("--clear-token", "pi_herdsman_herd_run_started_at");
   if (metadata.contextPercent !== undefined)
-    args.push(
-      "--token",
-      `pi_herdsman_context_percent=${metadata.contextPercent}`,
-    );
+    args.push("--token", `pi_herdsman_context_percent=${metadata.contextPercent}`);
   else args.push("--clear-token", "pi_herdsman_context_percent");
   return args;
 }
@@ -1289,9 +1146,7 @@ export type StartHerdrOptions = {
   cwd: string;
   extensionPath?: string;
   placement: HerdrStartPlacement;
-  placementRevalidator?: (
-    placement: HerdrStartPlacement,
-  ) => Promise<HerdrStartPlacement>;
+  placementRevalidator?: (placement: HerdrStartPlacement) => Promise<HerdrStartPlacement>;
   // Final authorization of the launch cwd after placement awaits.
   assertLaunchAuthorized?: (cwd: string) => void | Promise<void>;
   agentArgs?: string[];
@@ -1303,11 +1158,7 @@ export type StartHerdrOptions = {
 
 export type StartHerdrInPaneOptions = Omit<
   StartHerdrOptions,
-  | "placement"
-  | "placementRevalidator"
-  | "assertLaunchAuthorized"
-  | "direction"
-  | "env"
+  "placement" | "placementRevalidator" | "assertLaunchAuthorized" | "direction" | "env"
 > & {
   primaryWorkspaceId: string;
   workspaceId: string;
@@ -1325,20 +1176,15 @@ type SplitPlacement = {
   direction: "right" | "down";
 };
 
-function shouldCaptureStartupDiagnostic(
-  value: unknown,
-): value is OperationError {
+function shouldCaptureStartupDiagnostic(value: unknown): value is OperationError {
   if (!(value instanceof OperationError)) return false;
 
   const details = value.detail.details;
-  const classification = (
-    details?.result as { classification?: unknown } | undefined
-  )?.classification;
+  const classification = (details?.result as { classification?: unknown } | undefined)
+    ?.classification;
 
   return (
-    classification === "empty" ||
-    classification === "malformed" ||
-    details?.herdrCode === "timeout"
+    classification === "empty" || classification === "malformed" || details?.herdrCode === "timeout"
   );
 }
 
@@ -1371,8 +1217,7 @@ export function startupTimeoutBudget(timeoutMs?: number): StartupTimeoutBudget {
   if (
     !Number.isInteger(totalTimeout) ||
     (timeoutMs !== undefined &&
-      (totalTimeout < STARTUP_TIMEOUT_MIN ||
-        totalTimeout > STARTUP_TIMEOUT_MAX)) ||
+      (totalTimeout < STARTUP_TIMEOUT_MIN || totalTimeout > STARTUP_TIMEOUT_MAX)) ||
     childTimeout < HERDR_START_TIMEOUT_MIN ||
     childTimeout > HERDR_START_TIMEOUT_MAX
   )
@@ -1404,10 +1249,8 @@ export async function captureStartupDiagnostic(
   signal?: AbortSignal,
 ): Promise<StartupDiagnosticOutcome> {
   const timeout = Math.min(START_DIAGNOSTIC_TIMEOUT, deadline - Date.now());
-  if (signal?.aborted)
-    return { attempted: false, status: "unavailable", reason: "aborted" };
-  if (timeout <= 0)
-    return { attempted: false, status: "unavailable", reason: "deadline" };
+  if (signal?.aborted) return { attempted: false, status: "unavailable", reason: "aborted" };
+  if (timeout <= 0) return { attempted: false, status: "unavailable", reason: "deadline" };
   try {
     const result = await pi.exec(
       "herdr",
@@ -1431,11 +1274,8 @@ export async function captureStartupDiagnostic(
         status: "unavailable",
         reason: signal?.aborted ? "aborted" : "exception_or_timeout",
       };
-    if (result.code !== 0)
-      return { attempted: true, status: "unavailable", reason: "nonzero" };
-    const snapshot = boundedDiagnostic(
-      `${result.stdout ?? ""}\n${result.stderr ?? ""}`,
-    );
+    if (result.code !== 0) return { attempted: true, status: "unavailable", reason: "nonzero" };
+    const snapshot = boundedDiagnostic(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
     return snapshot
       ? { attempted: true, status: "captured", snapshot }
       : { attempted: true, status: "empty" };
@@ -1456,12 +1296,8 @@ function withStartupDiagnostic(
     ...failure.detail.details,
     paneSnapshotAttempted: outcome.attempted,
     paneSnapshotStatus: outcome.status,
-    ...(outcome.status === "unavailable"
-      ? { paneSnapshotReason: outcome.reason }
-      : {}),
-    ...(outcome.status === "captured"
-      ? { paneSnapshot: outcome.snapshot }
-      : {}),
+    ...(outcome.status === "unavailable" ? { paneSnapshotReason: outcome.reason } : {}),
+    ...(outcome.status === "captured" ? { paneSnapshot: outcome.snapshot } : {}),
   };
   return new OperationError({
     ...failure.detail,
@@ -1497,10 +1333,8 @@ async function selectSplitPlacement(
   if (!agentPanes.length) {
     const anchor =
       callerPaneId ??
-      panes.find(
-        (pane: any) =>
-          pane.workspace_id === workspaceId && pane.tab_id === tabId,
-      )?.pane_id;
+      panes.find((pane: any) => pane.workspace_id === workspaceId && pane.tab_id === tabId)
+        ?.pane_id;
     if (!anchor) error("start", `tab ${tabId} has no pane to split`);
     return {
       paneId: anchor,
@@ -1523,61 +1357,36 @@ async function selectSplitPlacement(
     layout.tab_id !== tabId ||
     !Array.isArray(layout.panes)
   )
-    error(
-      "start",
-      `cannot safely select an agent split anchor in tab ${tabId}`,
-    );
+    error("start", `cannot safely select an agent split anchor in tab ${tabId}`);
 
   const rectangles = new Map<string, { width: number; height: number }>();
   for (const item of layout.panes) {
     const paneId = item?.pane_id;
     const rect = item?.rect;
     if (typeof paneId !== "string" || rectangles.has(paneId) || !rect)
-      error(
-        "start",
-        `cannot safely select an agent split anchor in tab ${tabId}`,
-      );
+      error("start", `cannot safely select an agent split anchor in tab ${tabId}`);
     const { width, height } = rect;
-    if (
-      !Number.isFinite(width) ||
-      !Number.isFinite(height) ||
-      width <= 0 ||
-      height <= 0
-    )
-      error(
-        "start",
-        `cannot safely select an agent split anchor in tab ${tabId}`,
-      );
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0)
+      error("start", `cannot safely select an agent split anchor in tab ${tabId}`);
     rectangles.set(paneId, { width, height });
   }
 
-  let anchor:
-    { pane: any; rect: { width: number; height: number } } | undefined;
+  let anchor: { pane: any; rect: { width: number; height: number } } | undefined;
   let anchorArea = -1;
   for (const pane of agentPanes) {
     const paneId = pane.pane_id;
     const rect = rectangles.get(paneId);
     if (typeof paneId !== "string" || !rect)
-      error(
-        "start",
-        `cannot safely select an agent split anchor in tab ${tabId}`,
-      );
+      error("start", `cannot safely select an agent split anchor in tab ${tabId}`);
     const area = rect.width * rect.height;
     if (!Number.isFinite(area))
-      error(
-        "start",
-        `cannot safely select an agent split anchor in tab ${tabId}`,
-      );
+      error("start", `cannot safely select an agent split anchor in tab ${tabId}`);
     if (area > anchorArea) {
       anchor = { pane, rect };
       anchorArea = area;
     }
   }
-  if (!anchor)
-    error(
-      "start",
-      `cannot safely select an agent split anchor in tab ${tabId}`,
-    );
+  if (!anchor) error("start", `cannot safely select an agent split anchor in tab ${tabId}`);
   return {
     paneId: anchor.pane.pane_id,
     ratio: AGENT_SPLIT_RATIO,
@@ -1593,9 +1402,7 @@ export async function startHerdrAgent(
   const herdrStateExtension = requireHerdrPiIntegration(options.agentDir);
   const workspaceId = workspace(ctx);
   const env = validateEnvironment([
-    ...(options.env ?? []).filter(
-      (entry) => !entry.startsWith("PI_CODING_AGENT_DIR="),
-    ),
+    ...(options.env ?? []).filter((entry) => !entry.startsWith("PI_CODING_AGENT_DIR=")),
     `PI_CODING_AGENT_DIR=${options.agentDir}`,
   ]);
   const release = await lockLifecycle(ctx, options.signal);
@@ -1604,9 +1411,7 @@ export async function startHerdrAgent(
   let stage = "topology";
   try {
     const cwd = canonicalCwd(options.cwd);
-    const { totalTimeout, childTimeout } = startupTimeoutBudget(
-      options.timeoutMs,
-    );
+    const { totalTimeout, childTimeout } = startupTimeoutBudget(options.timeoutMs);
     const startupDeadline = Date.now() + totalTimeout;
     const topologyEnv = structuredTopologyEnvironment(workspaceId, env);
     const placement = options.placementRevalidator
@@ -1623,60 +1428,36 @@ export async function startHerdrAgent(
       placement.kind === "tab" && !placement.tabId
         ? undefined
         : ((
-            await runHerdr(
-              pi,
-              ctx,
-              ["tab", "list", "--workspace", workspaceId],
-              {
-                signal: options.signal,
-                timeout: startupCallTimeout(startupDeadline),
-              },
-            )
+            await runHerdr(pi, ctx, ["tab", "list", "--workspace", workspaceId], {
+              signal: options.signal,
+              timeout: startupCallTimeout(startupDeadline),
+            })
           ).tabs ?? []);
     if (placement.kind === "split") {
       const listedPanes =
         (
-          await runHerdr(
-            pi,
-            ctx,
-            ["pane", "list", "--workspace", workspaceId],
-            {
-              signal: options.signal,
-              timeout: startupCallTimeout(startupDeadline),
-            },
-          )
+          await runHerdr(pi, ctx, ["pane", "list", "--workspace", workspaceId], {
+            signal: options.signal,
+            timeout: startupCallTimeout(startupDeadline),
+          })
         ).panes ?? [];
       panes = listedPanes;
       const callerPane = listedPanes.find(
-        (pane: any) =>
-          pane.pane_id === placement.paneId &&
-          pane.workspace_id === workspaceId,
+        (pane: any) => pane.pane_id === placement.paneId && pane.workspace_id === workspaceId,
       );
       if (!callerPane)
-        error(
-          "start",
-          "caller pane " +
-            placement.paneId +
-            " is not in workspace " +
-            workspaceId,
-        );
+        error("start", "caller pane " + placement.paneId + " is not in workspace " + workspaceId);
       tab = tabs.find(
         (item: any) =>
           item.tab_id === callerPane.tab_id &&
-          (item.workspace_id === undefined ||
-            item.workspace_id === workspaceId),
+          (item.workspace_id === undefined || item.workspace_id === workspaceId),
       );
-      if (!tab)
-        error(
-          "start",
-          "caller pane " + placement.paneId + " has no owning Herdr tab",
-        );
+      if (!tab) error("start", "caller pane " + placement.paneId + " has no owning Herdr tab");
     } else {
       tab = tabs?.find((item: any) => item.tab_id === placement.tabId);
     }
     if (!tab) {
-      if (placement.kind !== "tab")
-        error("start", "cannot create a tab for split placement");
+      if (placement.kind !== "tab") error("start", "cannot create a tab for split placement");
       const authorization = options.assertLaunchAuthorized?.(cwd);
       if (authorization) await authorization;
       const made = await runHerdr(
@@ -1706,15 +1487,10 @@ export async function startHerdrAgent(
       const existingPanes =
         panes ??
         (
-          await runHerdr(
-            pi,
-            ctx,
-            ["pane", "list", "--workspace", workspaceId],
-            {
-              signal: options.signal,
-              timeout: startupCallTimeout(startupDeadline),
-            },
-          )
+          await runHerdr(pi, ctx, ["pane", "list", "--workspace", workspaceId], {
+            signal: options.signal,
+            timeout: startupCallTimeout(startupDeadline),
+          })
         ).panes ??
         [];
       {
@@ -1765,8 +1541,7 @@ export async function startHerdrAgent(
     }
     const paneId = createdPane?.pane_id;
     const terminalId = createdPane?.terminal_id;
-    if (typeof paneId !== "string" || !paneId)
-      error("start", "Herdr did not return a pane");
+    if (typeof paneId !== "string" || !paneId) error("start", "Herdr did not return a pane");
     if (typeof terminalId !== "string" || !terminalId)
       error("start", `pane ${paneId} did not include terminal identity`);
     attempt = {
@@ -1782,14 +1557,7 @@ export async function startHerdrAgent(
     let started: any;
     stage = "pane_readiness";
     try {
-      await waitForShellMarker(
-        pi,
-        ctx,
-        paneId,
-        startupDeadline,
-        "start",
-        options.signal,
-      );
+      await waitForShellMarker(pi, ctx, paneId, startupDeadline, "start", options.signal);
       attempt.shellProcess = (await paneProcess(
         pi,
         ctx,
@@ -1802,13 +1570,7 @@ export async function startHerdrAgent(
       if (failure instanceof OperationError)
         throw withStartupDiagnostic(
           failure,
-          await captureStartupDiagnostic(
-            pi,
-            ctx,
-            paneId,
-            startupDeadline,
-            options.signal,
-          ),
+          await captureStartupDiagnostic(pi, ctx, paneId, startupDeadline, options.signal),
         );
 
       throw failure;
@@ -1821,15 +1583,11 @@ export async function startHerdrAgent(
           timeout: startupCallTimeout(startupDeadline),
         })
       ).panes ?? [];
-    const currentPane = currentPanes.find(
-      (item: any) => item.pane_id === paneId,
-    );
+    const currentPane = currentPanes.find((item: any) => item.pane_id === paneId);
     if (!matchesAttemptPane(currentPane, attempt))
       error("start", `pane ${paneId} identity changed before launch`);
     if (createdTab) {
-      const tabPanes = currentPanes.filter(
-        (item: any) => item.tab_id === tab.tab_id,
-      );
+      const tabPanes = currentPanes.filter((item: any) => item.tab_id === tab.tab_id);
       if (tabPanes.length !== 1 || tabPanes[0]?.pane_id !== paneId)
         error("start", `tab ${tab.tab_id} topology changed before launch`);
     }
@@ -1865,9 +1623,7 @@ export async function startHerdrAgent(
             // makes the managed mailbox state observable.
             "--extension",
             herdrStateExtension,
-            ...(options.extensionPath
-              ? ["--extension", options.extensionPath]
-              : []),
+            ...(options.extensionPath ? ["--extension", options.extensionPath] : []),
             ...(options.agentArgs ?? []),
           ],
           {
@@ -1876,8 +1632,7 @@ export async function startHerdrAgent(
             // its structured failure is the one reported. With the identical
             // value this command's kill always won the race, and "Herdr command
             // was killed" replaced Herdr's reason.
-            timeout:
-              Math.min(remaining, childTimeout) + START_DIAGNOSTIC_TIMEOUT,
+            timeout: Math.min(remaining, childTimeout) + START_DIAGNOSTIC_TIMEOUT,
           },
         );
         attempt.launchMayHaveStarted = true;
@@ -1895,10 +1650,7 @@ export async function startHerdrAgent(
             })
           ).pane;
           if (!matchesAttemptPane(pane, attempt))
-            error(
-              "start",
-              `pane ${paneId} identity changed during startup retry`,
-            );
+            error("start", `pane ${paneId} identity changed during startup retry`);
           const remainingRetry = retryDeadline - Date.now();
           if (remainingRetry > 0)
             await sleep(Math.min(POLL_INTERVAL, remainingRetry), undefined, {
@@ -1911,13 +1663,7 @@ export async function startHerdrAgent(
         if (shouldCaptureStartupDiagnostic(failure))
           throw withStartupDiagnostic(
             failure,
-            await captureStartupDiagnostic(
-              pi,
-              ctx,
-              paneId,
-              startupDeadline,
-              options.signal,
-            ),
+            await captureStartupDiagnostic(pi, ctx, paneId, startupDeadline, options.signal),
           );
         throw failure;
       }
@@ -1936,8 +1682,7 @@ export async function startHerdrAgent(
     attempt.agent = agent;
     return attempt;
   } catch (cause) {
-    if (attempt)
-      throw new HerdrStartFailure(cause, stage, attempt, retryAttempted);
+    if (attempt) throw new HerdrStartFailure(cause, stage, attempt, retryAttempted);
     throw cause;
   } finally {
     release();
@@ -1974,8 +1719,7 @@ export type StartHerdrManagerInPaneOptions = ManagerPaneOptions & {
 };
 
 export class HerdrManagerPreparationFailure extends Error {
-  readonly stage:
-    "workspace_create" | "workspace_verify" | "tab_create" | "pane_verify";
+  readonly stage: "workspace_create" | "workspace_verify" | "tab_create" | "pane_verify";
   readonly placement: Readonly<{
     workspaceId?: string;
     tabId?: string;
@@ -1994,10 +1738,7 @@ export class HerdrManagerPreparationFailure extends Error {
   }
 }
 
-async function verifyPrimaryRepository(
-  pi: ExtensionAPI,
-  options: PrimaryWorkspaceOptions,
-) {
+async function verifyPrimaryRepository(pi: ExtensionAPI, options: PrimaryWorkspaceOptions) {
   const { repository, signal } = options;
   const { checkoutPath, canonicalRepoKey } = repository;
   if (!isAbsolute(checkoutPath) || !isAbsolute(canonicalRepoKey))
@@ -2062,8 +1803,7 @@ async function findPrimaryWorkspace(
       error("start", "candidate workspace has conflicting repository identity");
     return true;
   });
-  if (candidates.length > 1)
-    error("start", "duplicate primary workspaces for repository");
+  if (candidates.length > 1) error("start", "duplicate primary workspaces for repository");
   if (!candidates.length) return undefined;
   const workspaceId = candidates[0]!.workspace_id;
   if (
@@ -2073,12 +1813,10 @@ async function findPrimaryWorkspace(
   )
     error("start", "workspace identity is inconsistent");
 
-  const topology = await runHerdr(
-    pi,
-    ctx,
-    ["worktree", "list", "--workspace", workspaceId],
-    { signal, timeout: startupCallTimeout(deadline) },
-  );
+  const topology = await runHerdr(pi, ctx, ["worktree", "list", "--workspace", workspaceId], {
+    signal,
+    timeout: startupCallTimeout(deadline),
+  });
   const scope = worktreeGroupScopeFromTopology(workspaceId, topology);
   const sourceCheckout = topology?.source?.source_checkout_path;
   if (
@@ -2141,10 +1879,7 @@ async function verifyManagerPane(
     !Array.isArray(agents) ||
     agents.some((agent) => agent?.pane_id === target.paneId)
   )
-    error(
-      "start",
-      "prepared Coordinator pane is occupied or its identity changed",
-    );
+    error("start", "prepared Coordinator pane is occupied or its identity changed");
 }
 
 type CoordinatorPanePreparation = {
@@ -2165,20 +1900,16 @@ export async function prepareHerdrCoordinatorPane(
   ctx: ExtensionContext,
   options: CoordinatorPanePreparation,
 ): Promise<HerdrManagerPaneSelection> {
-  const deadline =
-    Date.now() + startupTimeoutBudget(options.timeoutMs).totalTimeout;
+  const deadline = Date.now() + startupTimeoutBudget(options.timeoutMs).totalTimeout;
   const { workspaceId, signal } = options;
   const cwd = canonicalCwd(options.cwd);
   if (!options.workspaceVerified) {
     const snapshot = await herdrSessionSnapshot(pi, ctx, signal);
-    const workspaces = snapshot.workspaces.filter(
-      (item) => item?.workspace_id === workspaceId,
-    );
+    const workspaces = snapshot.workspaces.filter((item) => item?.workspace_id === workspaceId);
     const workspacePaths = new Set<string>();
     for (const item of workspaces) {
       const path = item?.worktree?.checkout_path;
-      if (typeof path === "string" && isAbsolute(path))
-        workspacePaths.add(canonicalCwd(path));
+      if (typeof path === "string" && isAbsolute(path)) workspacePaths.add(canonicalCwd(path));
     }
     if (workspacePaths.size === 0) {
       for (const pane of snapshot.panes) {
@@ -2195,22 +1926,13 @@ export async function prepareHerdrCoordinatorPane(
       workspacePaths.size !== 1 ||
       !sameCwd([...workspacePaths][0]!, cwd)
     )
-      error(
-        "start",
-        "selected Herdr workspace does not have one verified checkout",
-      );
+      error("start", "selected Herdr workspace does not have one verified checkout");
   }
   let tabId: string | undefined;
   let paneId: string | undefined;
   let stage: HerdrManagerPreparationFailure["stage"] = "workspace_verify";
   try {
-    const before = await managerTabInventory(
-      pi,
-      ctx,
-      workspaceId,
-      signal,
-      deadline,
-    );
+    const before = await managerTabInventory(pi, ctx, workspaceId, signal, deadline);
     await options.assertCurrentAuthority();
     signal?.throwIfAborted();
     stage = "tab_create";
@@ -2280,9 +2002,7 @@ export async function ensurePrimaryWorkspace(
   ctx: ExtensionContext,
   options: PrimaryWorkspaceOptions,
   deadline = Date.now() + startupTimeoutBudget(options.timeoutMs).totalTimeout,
-): Promise<
-  Readonly<{ workspaceId: string; checkoutPath: string; created: boolean }>
-> {
+): Promise<Readonly<{ workspaceId: string; checkoutPath: string; created: boolean }>> {
   const { signal } = options;
   const checkoutPath = canonicalCwd(options.repository.checkoutPath);
   const existing = await findPrimaryWorkspace(pi, ctx, options, deadline);
@@ -2306,9 +2026,7 @@ export async function ensurePrimaryWorkspace(
     }
 
     stage = "workspace_verify";
-    if (
-      (await findPrimaryWorkspace(pi, ctx, options, deadline)) !== workspaceId
-    )
+    if ((await findPrimaryWorkspace(pi, ctx, options, deadline)) !== workspaceId)
       error("start", "prepared primary workspace identity changed");
     return { workspaceId, checkoutPath, created: existing === undefined };
   } catch (cause) {
@@ -2324,8 +2042,7 @@ export async function prepareHerdrManagerPane(
   options: ManagerPaneOptions,
 ): Promise<HerdrManagerPaneSelection> {
   const { signal } = options;
-  const deadline =
-    Date.now() + startupTimeoutBudget(options.timeoutMs).totalTimeout;
+  const deadline = Date.now() + startupTimeoutBudget(options.timeoutMs).totalTimeout;
   const {
     workspaceId,
     checkoutPath: cwd,
@@ -2369,32 +2086,14 @@ export async function startHerdrManagerInPane(
     !pane.terminalId ||
     !sameDirectory(pane.cwd, repository.checkoutPath)
   )
-    error(
-      "start",
-      "prepared Manager pane does not match the selected repository",
-    );
+    error("start", "prepared Manager pane does not match the selected repository");
   const verifyTarget = async (deadline: number) => {
-    if (
-      (await findPrimaryWorkspace(pi, ctx, options, deadline)) !==
-      pane.workspaceId
-    )
-      error(
-        "start",
-        "prepared Manager primary workspace changed before launch",
-      );
+    if ((await findPrimaryWorkspace(pi, ctx, options, deadline)) !== pane.workspaceId)
+      error("start", "prepared Manager primary workspace changed before launch");
     if (file !== undefined) {
-      const header = statSync(file).isFile()
-        ? readPiSessionHeaderIdentity(file)
-        : undefined;
-      if (
-        header?.id !== id ||
-        !header.cwd ||
-        !sameDirectory(header.cwd, pane.cwd)
-      )
-        error(
-          "start",
-          "existing Pi session does not match the exact Manager session and checkout",
-        );
+      const header = statSync(file).isFile() ? readPiSessionHeaderIdentity(file) : undefined;
+      if (header?.id !== id || !header.cwd || !sameDirectory(header.cwd, pane.cwd))
+        error("start", "existing Pi session does not match the exact Manager session and checkout");
     }
   };
   return launchPiInVerifiedPane(
@@ -2430,31 +2129,25 @@ export async function startHerdrAgentInPane(
   options: StartHerdrInPaneOptions,
 ): Promise<StartedHerdrAgent> {
   const currentWorkspaceId = workspace(ctx);
-  return launchPiInVerifiedPane(
-    pi,
-    ctx,
-    options,
-    currentWorkspaceId,
-    async (deadline) => {
-      const scope = await worktreeGroupScope(
-        pi,
-        ctx,
-        currentWorkspaceId,
-        options.signal,
-        startupCallTimeout(deadline),
+  return launchPiInVerifiedPane(pi, ctx, options, currentWorkspaceId, async (deadline) => {
+    const scope = await worktreeGroupScope(
+      pi,
+      ctx,
+      currentWorkspaceId,
+      options.signal,
+      startupCallTimeout(deadline),
+    );
+    if (scope.primaryWorkspaceId !== options.primaryWorkspaceId)
+      error(
+        "start",
+        `workspace ${currentWorkspaceId} is not in primary workspace ${options.primaryWorkspaceId}'s worktree group`,
       );
-      if (scope.primaryWorkspaceId !== options.primaryWorkspaceId)
-        error(
-          "start",
-          `workspace ${currentWorkspaceId} is not in primary workspace ${options.primaryWorkspaceId}'s worktree group`,
-        );
-      if (!scope.workspaceIds.includes(options.workspaceId))
-        error(
-          "start",
-          `workspace ${options.workspaceId} is not in primary workspace ${options.primaryWorkspaceId}'s worktree group`,
-        );
-    },
-  );
+    if (!scope.workspaceIds.includes(options.workspaceId))
+      error(
+        "start",
+        `workspace ${options.workspaceId} is not in primary workspace ${options.primaryWorkspaceId}'s worktree group`,
+      );
+  });
 }
 
 export type StartHerdrCoordinatorInPaneOptions = Omit<
@@ -2479,8 +2172,7 @@ export async function startHerdrCoordinatorInPane(
     error("start", "an exact Pi session ID is required");
   if (
     options.session.path !== undefined &&
-    (!isAbsolute(options.session.path) ||
-      !statSync(options.session.path).isFile())
+    (!isAbsolute(options.session.path) || !statSync(options.session.path).isFile())
   )
     error("start", "an exact existing Pi session file is required");
   const pane: HerdrManagerPaneSelection = {
@@ -2498,21 +2190,15 @@ export async function startHerdrCoordinatorInPane(
     const matches = snapshot.workspaces.filter(
       (workspace) => workspace?.workspace_id === options.workspaceId,
     );
-    if (matches.length !== 1)
-      error("start", "Coordinator workspace identity is ambiguous");
+    if (matches.length !== 1) error("start", "Coordinator workspace identity is ambiguous");
     const worktreePath = matches[0]?.worktree?.checkout_path;
     const observedPaths = worktreePath
       ? [worktreePath]
       : snapshot.panes
-          .filter(
-            (candidate) => candidate?.workspace_id === options.workspaceId,
-          )
+          .filter((candidate) => candidate?.workspace_id === options.workspaceId)
           .map((candidate) => candidate.cwd)
           .filter((path) => typeof path === "string" && isAbsolute(path));
-    if (
-      !observedPaths.length ||
-      observedPaths.some((path) => !sameDirectory(path, options.cwd))
-    )
+    if (!observedPaths.length || observedPaths.some((path) => !sameDirectory(path, options.cwd)))
       error("start", "Coordinator workspace checkout changed before launch");
     if (file) {
       const header = statSync(file).isFile()
@@ -2535,18 +2221,11 @@ export async function startHerdrCoordinatorInPane(
     if (!matchesAttemptPane(currentPane, pane))
       error("start", "prepared Coordinator placement changed before launch");
   };
-  return launchPiInVerifiedPane(
-    pi,
-    ctx,
-    options,
-    options.workspaceId,
-    verifyTarget,
-    {
-      pane,
-      session: options.session,
-      assertCurrentAuthority: options.assertCurrentAuthority,
-    },
-  );
+  return launchPiInVerifiedPane(pi, ctx, options, options.workspaceId, verifyTarget, {
+    pane,
+    session: options.session,
+    assertCurrentAuthority: options.assertCurrentAuthority,
+  });
 }
 
 async function launchPiInVerifiedPane(
@@ -2561,9 +2240,7 @@ async function launchPiInVerifiedPane(
     assertCurrentAuthority: ManagerPaneOptions["assertCurrentAuthority"];
   },
 ): Promise<StartedHerdrAgent> {
-  const { totalTimeout, childTimeout } = startupTimeoutBudget(
-    options.timeoutMs,
-  );
+  const { totalTimeout, childTimeout } = startupTimeoutBudget(options.timeoutMs);
   const deadline = Date.now() + totalTimeout;
   let release: (() => void) | undefined;
   let attempt: StartedHerdrAgent | undefined;
@@ -2576,16 +2253,12 @@ async function launchPiInVerifiedPane(
     const cwd = canonicalCwd(options.cwd);
     const panes =
       (
-        await runHerdr(
-          pi,
-          ctx,
-          ["pane", "list", "--workspace", options.workspaceId],
-          { signal: options.signal, timeout: startupCallTimeout(deadline) },
-        )
+        await runHerdr(pi, ctx, ["pane", "list", "--workspace", options.workspaceId], {
+          signal: options.signal,
+          timeout: startupCallTimeout(deadline),
+        })
       ).panes ?? [];
-    const matches = panes.filter(
-      (item: any) => item?.pane_id === options.paneId,
-    );
+    const matches = panes.filter((item: any) => item?.pane_id === options.paneId);
     const pane = matches[0];
     if (
       matches.length !== 1 ||
@@ -2596,10 +2269,7 @@ async function launchPiInVerifiedPane(
     )
       error("start", `pane ${options.paneId} topology changed before launch`);
     if (typeof pane.terminal_id !== "string" || !pane.terminal_id)
-      error(
-        "start",
-        `pane ${options.paneId} did not include terminal identity`,
-      );
+      error("start", `pane ${options.paneId} did not include terminal identity`);
 
     if (manager && pane.terminal_id !== manager.pane.terminalId)
       error("start", "prepared Manager terminal identity changed");
@@ -2620,31 +2290,14 @@ async function launchPiInVerifiedPane(
     const verifyAvailableManagerPane = async () => {
       if (!manager) return;
       await verifyManagerPane(pi, ctx, manager.pane, options.signal, deadline);
-      const shell = (await paneProcess(
-        pi,
-        ctx,
-        options.paneId,
-        options.signal,
-        deadline,
-        true,
-      ))!;
+      const shell = (await paneProcess(pi, ctx, options.paneId, options.signal, deadline, true))!;
       if (!settledShell(attempt?.shellProcess ?? shell, shell))
-        error(
-          "start",
-          "prepared Manager pane does not contain an available shell",
-        );
+        error("start", "prepared Manager pane does not contain an available shell");
       return shell;
     };
     const originalShell = await verifyAvailableManagerPane();
     try {
-      await waitForShellMarker(
-        pi,
-        ctx,
-        options.paneId,
-        deadline,
-        "start",
-        options.signal,
-      );
+      await waitForShellMarker(pi, ctx, options.paneId, deadline, "start", options.signal);
       attempt.shellProcess = (await paneProcess(
         pi,
         ctx,
@@ -2659,13 +2312,7 @@ async function launchPiInVerifiedPane(
       if (failure instanceof OperationError)
         throw withStartupDiagnostic(
           failure,
-          await captureStartupDiagnostic(
-            pi,
-            ctx,
-            options.paneId,
-            deadline,
-            options.signal,
-          ),
+          await captureStartupDiagnostic(pi, ctx, options.paneId, deadline, options.signal),
         );
       throw failure;
     }
@@ -2712,17 +2359,14 @@ async function launchPiInVerifiedPane(
             "--timeout",
             String(Math.min(remaining, childTimeout)),
             "--",
-            ...(options.extensionPath
-              ? ["--extension", options.extensionPath]
-              : []),
+            ...(options.extensionPath ? ["--extension", options.extensionPath] : []),
             "--extension",
             herdrStateExtension,
             ...(options.agentArgs ?? []),
           ],
           {
             signal: options.signal,
-            timeout:
-              Math.min(remaining, childTimeout) + START_DIAGNOSTIC_TIMEOUT,
+            timeout: Math.min(remaining, childTimeout) + START_DIAGNOSTIC_TIMEOUT,
           },
         );
         break;
@@ -2740,10 +2384,7 @@ async function launchPiInVerifiedPane(
             })
           ).pane;
           if (!matchesAttemptPane(observed, attempt))
-            error(
-              "start",
-              `pane ${options.paneId} identity changed during startup retry`,
-            );
+            error("start", `pane ${options.paneId} identity changed during startup retry`);
           const remainingRetry = retryDeadline - Date.now();
           if (remainingRetry > 0)
             await sleep(Math.min(POLL_INTERVAL, remainingRetry), undefined, {
@@ -2755,13 +2396,7 @@ async function launchPiInVerifiedPane(
         if (shouldCaptureStartupDiagnostic(failure))
           throw withStartupDiagnostic(
             failure,
-            await captureStartupDiagnostic(
-              pi,
-              ctx,
-              options.paneId,
-              deadline,
-              options.signal,
-            ),
+            await captureStartupDiagnostic(pi, ctx, options.paneId, deadline, options.signal),
           );
         throw failure;
       }
@@ -2789,17 +2424,14 @@ async function launchPiInVerifiedPane(
         sessionReference: manager.session,
         launchMayHaveStarted: false,
       };
-    if (attempt)
-      throw new HerdrStartFailure(cause, stage, attempt, retryAttempted);
+    if (attempt) throw new HerdrStartFailure(cause, stage, attempt, retryAttempted);
     throw cause;
   } finally {
     release?.();
   }
 }
 
-function validateEnvironment(
-  assignments: readonly string[],
-): readonly string[] {
+function validateEnvironment(assignments: readonly string[]): readonly string[] {
   const validated = [...assignments];
   for (const assignment of validated) {
     const separator = assignment.indexOf("=");
@@ -2807,8 +2439,7 @@ function validateEnvironment(
     const value = separator < 0 ? "" : assignment.slice(separator + 1);
     if (separator <= 0 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
       error("start", "invalid environment key");
-    if (/[\0\r\n]/.test(value))
-      error("start", `invalid environment value for ${key}`);
+    if (/[\0\r\n]/.test(value)) error("start", `invalid environment value for ${key}`);
   }
   return Object.freeze(validated);
 }
@@ -2823,29 +2454,18 @@ export async function paneProcess(
   timeoutMs = Infinity,
 ): Promise<PaneProcess | undefined> {
   const timeout =
-    deadline === undefined
-      ? timeoutMs
-      : Math.min(startupCallTimeout(deadline), timeoutMs);
-  const result = await runHerdr(
-    pi,
-    ctx,
-    ["pane", "process-info", "--pane", paneId],
-    {
-      signal,
-      ...(Number.isFinite(timeout) ? { timeout } : {}),
-    },
-  );
+    deadline === undefined ? timeoutMs : Math.min(startupCallTimeout(deadline), timeoutMs);
+  const result = await runHerdr(pi, ctx, ["pane", "process-info", "--pane", paneId], {
+    signal,
+    ...(Number.isFinite(timeout) ? { timeout } : {}),
+  });
   const value = result?.process_info;
   const observed = normalizePaneProcess(value, paneId, required);
-  if (required && !observed)
-    error("start", `pane ${paneId} process ownership is unavailable`);
+  if (required && !observed) error("start", `pane ${paneId} process ownership is unavailable`);
   return observed;
 }
 
-function boundedProcessString(
-  value: unknown,
-  maxBytes: number,
-): string | undefined {
+function boundedProcessString(value: unknown, maxBytes: number): string | undefined {
   if (typeof value !== "string") return undefined;
   const bytes = Buffer.from(value);
   return bytes.length <= maxBytes
@@ -2877,10 +2497,7 @@ function normalizePaneProcess(
   const foreground = Array.isArray(candidate.foreground_processes)
     ? candidate.foreground_processes
         .slice(0, MAX_FOREGROUND_PROCESSES)
-        .filter(
-          (item): item is Record<string, unknown> =>
-            !!item && typeof item === "object",
-        )
+        .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
         .map((item) => {
           const process = {
             ...(Number.isInteger(item.pid) && (item.pid as number) > 0
@@ -2888,18 +2505,12 @@ function normalizePaneProcess(
               : {}),
             ...(boundedProcessString(item.argv0, MAX_PROCESS_ARGV0_BYTES)
               ? {
-                  argv0: boundedProcessString(
-                    item.argv0,
-                    MAX_PROCESS_ARGV0_BYTES,
-                  ),
+                  argv0: boundedProcessString(item.argv0, MAX_PROCESS_ARGV0_BYTES),
                 }
               : {}),
             ...(boundedProcessString(item.cmdline, MAX_PROCESS_CMDLINE_BYTES)
               ? {
-                  cmdline: boundedProcessString(
-                    item.cmdline,
-                    MAX_PROCESS_CMDLINE_BYTES,
-                  ),
+                  cmdline: boundedProcessString(item.cmdline, MAX_PROCESS_CMDLINE_BYTES),
                 }
               : {}),
             ...(boundedProcessString(item.state, 64)
@@ -2924,13 +2535,10 @@ function normalizePaneProcess(
     shell_pid: candidate.shell_pid as number,
     ...(candidate.foreground_process_group_id !== undefined
       ? {
-          foreground_process_group_id:
-            candidate.foreground_process_group_id as number,
+          foreground_process_group_id: candidate.foreground_process_group_id as number,
         }
       : {}),
-    ...(foreground !== undefined
-      ? { foreground_processes: Object.freeze(foreground) }
-      : {}),
+    ...(foreground !== undefined ? { foreground_processes: Object.freeze(foreground) } : {}),
   } as PaneProcessWithCompleteness;
   Object.defineProperty(normalized, foregroundProcessesComplete, {
     value: foregroundComplete,
@@ -2938,10 +2546,7 @@ function normalizePaneProcess(
   return Object.freeze(normalized);
 }
 
-function settlementRemaining(
-  deadline: number,
-  operation: "close" | "rollback",
-): number {
+function settlementRemaining(deadline: number, operation: "close" | "rollback"): number {
   const remaining = deadline - Date.now();
   if (remaining <= 0) error(operation, "Process settlement deadline exhausted");
   return remaining;
@@ -2969,15 +2574,7 @@ async function waitForShellMarker(
   await runHerdr(
     pi,
     ctx,
-    [
-      "pane",
-      "wait-output",
-      paneId,
-      "--regex",
-      `^${marker}$`,
-      "--timeout",
-      String(waitTimeout),
-    ],
+    ["pane", "wait-output", paneId, "--regex", `^${marker}$`, "--timeout", String(waitTimeout)],
     {
       signal,
       timeout: waitTimeout,
@@ -2998,15 +2595,11 @@ async function proveShellReady(
 ): Promise<PaneProcess> {
   await waitForShellMarker(pi, ctx, paneId, deadline, operation, signal);
   const timeout =
-    operation === "start"
-      ? startupCallTimeout(deadline)
-      : settlementRemaining(deadline, operation);
-  const result = await runHerdr(
-    pi,
-    ctx,
-    ["pane", "process-info", "--pane", paneId],
-    { signal, timeout },
-  );
+    operation === "start" ? startupCallTimeout(deadline) : settlementRemaining(deadline, operation);
+  const result = await runHerdr(pi, ctx, ["pane", "process-info", "--pane", paneId], {
+    signal,
+    timeout,
+  });
   const value = result?.process_info;
   const shell = normalizePaneProcess(value, paneId, true);
   if (!shell || !settledShell(expected ?? shell, shell, terminalOccupier))
@@ -3041,8 +2634,7 @@ async function settlePreservedPane(
     const agents = listed.agents;
     const currentAgent = agents.find((item: any) => item.name === herdrAgent);
     const replacement = agents.find(
-      (item: any) =>
-        item.pane_id === expected.paneId && item.name !== herdrAgent,
+      (item: any) => item.pane_id === expected.paneId && item.name !== herdrAgent,
     );
     if (currentAgent || replacement) {
       safeObservation = false;
@@ -3070,10 +2662,7 @@ async function settlePreservedPane(
         false,
         settlementRemaining(deadline, operation),
       );
-      if (
-        observed &&
-        settledShell(processIdentity, observed, terminalOccupier)
-      ) {
+      if (observed && settledShell(processIdentity, observed, terminalOccupier)) {
         if (safeObservation) {
           if (!capturedShellProcess(processIdentity))
             await proveShellReady(
@@ -3093,16 +2682,11 @@ async function settlePreservedPane(
         safeObservation = false;
       }
     }
-    await sleep(
-      Math.min(POLL_INTERVAL, settlementRemaining(deadline, operation)),
-      undefined,
-      { signal },
-    );
+    await sleep(Math.min(POLL_INTERVAL, settlementRemaining(deadline, operation)), undefined, {
+      signal,
+    });
   }
-  error(
-    operation,
-    `agent ${herdrAgent} did not settle back to its original shell`,
-  );
+  error(operation, `agent ${herdrAgent} did not settle back to its original shell`);
 }
 
 type RunningAgentExpectation = {
@@ -3173,17 +2757,13 @@ export function sameObservedSessionPath(left: string, right: string): boolean {
     canonicalRight = realpathSync(right);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw new Error(
-      `could not canonicalize exact Pi session path ${right}: ${String(error)}`,
-    );
+    throw new Error(`could not canonicalize exact Pi session path ${right}: ${String(error)}`);
   }
   try {
     return realpathSync(left) === canonicalRight;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw new Error(
-      `could not canonicalize exact Pi session path ${left}: ${String(error)}`,
-    );
+    throw new Error(`could not canonicalize exact Pi session path ${left}: ${String(error)}`);
   }
 }
 // Missing/empty prospective files are unresolved; invalid content and I/O errors
@@ -3223,9 +2803,7 @@ export function readPiSessionHeaderIdentity(
       );
       if (bytes === 0) break;
       newline = buffer.subarray(0, bytes).indexOf(0x0a);
-      content += decoder.write(
-        buffer.subarray(0, newline === -1 ? bytes : newline),
-      );
+      content += decoder.write(buffer.subarray(0, newline === -1 ? bytes : newline));
       if (newline !== -1) break;
       length += bytes;
     }
@@ -3241,11 +2819,7 @@ export function readPiSessionHeaderIdentity(
     closeSync(fd);
   }
   const header = JSON.parse(content);
-  if (
-    header?.type !== "session" ||
-    typeof header.id !== "string" ||
-    header.id.length === 0
-  )
+  if (header?.type !== "session" || typeof header.id !== "string" || header.id.length === 0)
     throw new Error("Invalid Pi session header");
   return {
     id: header.id,
@@ -3261,25 +2835,20 @@ export function matchesExpectedSession(
   if (!session) return false;
   if (session.kind === "id")
     return (
-      typeof expected.id === "string" &&
-      expected.id.length > 0 &&
-      session.value === expected.id
+      typeof expected.id === "string" && expected.id.length > 0 && session.value === expected.id
     );
   const expectedPath = expected.path;
-  const hasExpectedPath =
-    typeof expectedPath === "string" && expectedPath.length > 0;
+  const hasExpectedPath = typeof expectedPath === "string" && expectedPath.length > 0;
   if (hasExpectedPath) {
     if (!sameObservedSessionPath(session.value, expectedPath)) return false;
-    if (typeof expected.id !== "string" || expected.id.length === 0)
-      return true;
+    if (typeof expected.id !== "string" || expected.id.length === 0) return true;
   }
   if (typeof expected.id !== "string" || expected.id.length === 0) return false;
   let path: string;
   try {
     path = realpathSync(session.value);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT")
-      return hasExpectedPath;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return hasExpectedPath;
     if (hasExpectedPath)
       throw new Error(
         `could not canonicalize exact Pi session path ${session.value}: ${String(error)}`,
@@ -3304,24 +2873,19 @@ async function proveExactRunningAgent(
   allowPostCompletionTransition = false,
   signal?: AbortSignal,
 ): Promise<RunningAgentProof> {
-  const agent = (
-    await runHerdr(pi, ctx, ["agent", "get", herdrAgent], { signal })
-  ).agent;
+  const agent = (await runHerdr(pi, ctx, ["agent", "get", herdrAgent], { signal })).agent;
   const paneId = typeof agent?.pane_id === "string" ? agent.pane_id : undefined;
-  const workspaceId =
-    typeof agent?.workspace_id === "string" ? agent.workspace_id : undefined;
+  const workspaceId = typeof agent?.workspace_id === "string" ? agent.workspace_id : undefined;
   const cwd = typeof agent?.cwd === "string" ? agent.cwd : undefined;
   const agentSession = sessionIdentity(agent?.agent_session);
   if (
     !agent ||
-    (agent.name !== herdrAgent &&
-      !(herdrAgent === expected.paneId && paneId === herdrAgent)) ||
+    (agent.name !== herdrAgent && !(herdrAgent === expected.paneId && paneId === herdrAgent)) ||
     !paneId ||
     !workspaceId ||
     !cwd ||
     (expected.paneId !== undefined && paneId !== expected.paneId) ||
-    (expected.workspaceId !== undefined &&
-      workspaceId !== expected.workspaceId) ||
+    (expected.workspaceId !== undefined && workspaceId !== expected.workspaceId) ||
     (expected.cwd !== undefined && !sameCwd(cwd, expected.cwd)) ||
     (expected.tabId !== undefined && agent.tab_id !== expected.tabId) ||
     typeof agent.tab_id !== "string" ||
@@ -3334,8 +2898,7 @@ async function proveExactRunningAgent(
   )
     error(operation, `agent ${herdrAgent} ownership is unproven`);
 
-  const pane = (await runHerdr(pi, ctx, ["pane", "get", paneId], { signal }))
-    .pane;
+  const pane = (await runHerdr(pi, ctx, ["pane", "get", paneId], { signal })).pane;
   const paneSession = sessionIdentity(pane?.agent_session);
   if (
     !pane ||
@@ -3349,58 +2912,40 @@ async function proveExactRunningAgent(
       paneSession === undefined) ||
     (expected.session !== undefined
       ? !matchesExpectedSession(pane?.agent_session, expected.session)
-      : paneSession?.kind !== agentSession?.kind ||
-        paneSession?.value !== agentSession?.value)
+      : paneSession?.kind !== agentSession?.kind || paneSession?.value !== agentSession?.value)
   )
     error(operation, `pane ${paneId} ownership is unproven`);
 
-  const listedTabs = await runHerdr(
-    pi,
-    ctx,
-    ["tab", "list", "--workspace", workspaceId],
-    { signal },
-  );
-  if (!Array.isArray(listedTabs?.tabs))
-    error(operation, "tab list ownership proof is unavailable");
+  const listedTabs = await runHerdr(pi, ctx, ["tab", "list", "--workspace", workspaceId], {
+    signal,
+  });
+  if (!Array.isArray(listedTabs?.tabs)) error(operation, "tab list ownership proof is unavailable");
   const tabs = listedTabs.tabs;
   const tab = tabs.find((item: any) => item.tab_id === agent.tab_id);
-  if (
-    !tab ||
-    (tab.workspace_id !== undefined && tab.workspace_id !== workspaceId)
-  )
+  if (!tab || (tab.workspace_id !== undefined && tab.workspace_id !== workspaceId))
     error(operation, `tab ${agent.tab_id} ownership is unproven`);
 
   const observed = await paneProcess(pi, ctx, paneId, signal);
   if (!observed || observed.pane_id !== paneId)
     error(operation, `pane ${paneId} process ownership is unproven`);
   const runningOwnerMatches =
-    processOwner !== undefined &&
-    sameRunningProcessOwner(processOwner, observed);
+    processOwner !== undefined && sameRunningProcessOwner(processOwner, observed);
   const capturedPids = (processOwner?.foreground_processes ?? [])
     .map((process) => process.pid)
-    .filter(
-      (pid): pid is number =>
-        pid !== undefined && pid !== processOwner?.shell_pid,
-    );
+    .filter((pid): pid is number => pid !== undefined && pid !== processOwner?.shell_pid);
   const capturedPidStillObserved =
     observed.foreground_processes?.some(
-      (process) =>
-        process.pid !== undefined && capturedPids.includes(process.pid),
+      (process) => process.pid !== undefined && capturedPids.includes(process.pid),
     ) ?? false;
   const capturedPidContinuity =
     processOwner !== undefined &&
-    (processOwner as PaneProcessWithCompleteness)[
-      foregroundProcessesComplete
-    ] === true &&
-    (observed as PaneProcessWithCompleteness)[foregroundProcessesComplete] ===
-      true &&
+    (processOwner as PaneProcessWithCompleteness)[foregroundProcessesComplete] === true &&
+    (observed as PaneProcessWithCompleteness)[foregroundProcessesComplete] === true &&
     capturedPids.length > 0 &&
     capturedPidStillObserved;
   const alreadyAtShell =
     processOwner !== undefined &&
-    (processOwner as PaneProcessWithCompleteness)[
-      foregroundProcessesComplete
-    ] === true &&
+    (processOwner as PaneProcessWithCompleteness)[foregroundProcessesComplete] === true &&
     capturedPids.length === 0 &&
     settledShell(processOwner, processOwner);
   const recoveryProven =
@@ -3409,13 +2954,8 @@ async function proveExactRunningAgent(
       ? terminalOccupierGone(processOwner, observed)
       : alreadyAtShell && settledShell(processOwner, observed));
   const postCompletionShellTransition =
-    allowPostCompletionTransition &&
-    runningOwnerMatches &&
-    !capturedPidContinuity;
-  if (
-    processOwner !== undefined &&
-    (!runningOwnerMatches || postCompletionShellTransition)
-  ) {
+    allowPostCompletionTransition && runningOwnerMatches && !capturedPidContinuity;
+  if (processOwner !== undefined && (!runningOwnerMatches || postCompletionShellTransition)) {
     if (
       !allowPostCompletionTransition ||
       !sameShellProcessOwner(processOwner, observed) ||
@@ -3494,12 +3034,8 @@ async function retainedPaneObservation(
 
   const snapshot = await herdrSessionSnapshot(pi, ctx, signal);
   if (
-    !snapshot.workspaces.some(
-      (item) => item?.workspace_id === target.workspaceId,
-    ) ||
-    snapshot.workspaces.filter(
-      (item) => item?.workspace_id === target.workspaceId,
-    ).length !== 1
+    !snapshot.workspaces.some((item) => item?.workspace_id === target.workspaceId) ||
+    snapshot.workspaces.filter((item) => item?.workspace_id === target.workspaceId).length !== 1
   )
     return undefined;
 
@@ -3511,15 +3047,13 @@ async function retainedPaneObservation(
     pane.workspace_id !== target.workspaceId ||
     pane.terminal_id !== target.terminalId ||
     !sameCwd(pane.cwd, target.cwd) ||
-    (pane.agent_session != null &&
-      !matchesExpectedSession(pane.agent_session, target.session))
+    (pane.agent_session != null && !matchesExpectedSession(pane.agent_session, target.session))
   )
     return undefined;
 
   const sessionPanes = snapshot.panes.filter(
     (item) =>
-      item.pane_id !== target.paneId &&
-      matchesExpectedSession(item.agent_session, target.session),
+      item.pane_id !== target.paneId && matchesExpectedSession(item.agent_session, target.session),
   );
   const sessionAgents = snapshot.agents.filter((agent) =>
     matchesExpectedSession(agent.agent_session, target.session),
@@ -3533,22 +3067,12 @@ async function retainedPaneObservation(
   )
     return undefined;
 
-  const process = await paneProcess(
-    pi,
-    ctx,
-    target.paneId,
-    signal,
-    undefined,
-    true,
-  );
+  const process = await paneProcess(pi, ctx, target.paneId, signal, undefined, true);
   if (
     !process ||
     process.pane_id !== target.paneId ||
     process.shell_pid !== target.launchShellPid ||
-    !settledShell(
-      { pane_id: target.paneId, shell_pid: target.launchShellPid },
-      process,
-    )
+    !settledShell({ pane_id: target.paneId, shell_pid: target.launchShellPid }, process)
   )
     return undefined;
 
@@ -3643,21 +3167,14 @@ async function verifyHerdrPaneClosed(
       error(operation, "agent list disappearance proof is unavailable");
     if (!Array.isArray(panes?.panes))
       error(operation, "pane list disappearance proof is unavailable");
-    const agentGone = !agents.agents.some(
-      (item: any) => item.name === herdrAgent,
-    );
+    const agentGone = !agents.agents.some((item: any) => item.name === herdrAgent);
     const paneGone = !panes.panes.some((item: any) => item.pane_id === paneId);
     if (agentGone && paneGone) return;
-    await sleep(
-      Math.min(POLL_INTERVAL, settlementRemaining(deadline, operation)),
-      undefined,
-      { signal },
-    );
+    await sleep(Math.min(POLL_INTERVAL, settlementRemaining(deadline, operation)), undefined, {
+      signal,
+    });
   }
-  error(
-    operation,
-    `agent ${herdrAgent} and pane ${paneId} did not disappear after close`,
-  );
+  error(operation, `agent ${herdrAgent} and pane ${paneId} did not disappear after close`);
 }
 
 export async function closeHerdrPane(
@@ -3674,8 +3191,7 @@ export async function closeHerdrPane(
   },
   signal?: AbortSignal,
 ): Promise<void> {
-  const allowPostCompletionTransition =
-    expected?.allowPostCompletionTransition === true;
+  const allowPostCompletionTransition = expected?.allowPostCompletionTransition === true;
   const release = await lockLifecycle(ctx, signal);
   try {
     let initial: RunningAgentProof;
@@ -3746,10 +3262,7 @@ export async function stopHerdrAgentPreservingPane(
   },
   signal?: AbortSignal,
 ): Promise<void> {
-  const release = await lockLifecycleForWorkspace(
-    expected?.workspaceId ?? workspace(ctx),
-    signal,
-  );
+  const release = await lockLifecycleForWorkspace(expected?.workspaceId ?? workspace(ctx), signal);
   try {
     const initial = await proveExactRunningAgent(
       pi,
@@ -3777,21 +3290,13 @@ export async function stopHerdrAgentPreservingPane(
       signal,
     );
     const alreadyAtShell = settledShell(proved.process, proved.process);
-    if (
-      !alreadyAtShell &&
-      sameShellProcessOwner(proved.process, proved.process)
-    )
-      error(
-        "rollback",
-        `pane ${proved.paneId} foreground shell has unproven occupants`,
-      );
+    if (!alreadyAtShell && sameShellProcessOwner(proved.process, proved.process))
+      error("rollback", `pane ${proved.paneId} foreground shell has unproven occupants`);
     if (!alreadyAtShell)
-      await runHerdr(
-        pi,
-        ctx,
-        ["agent", "send-keys", proved.paneId, "ctrl+c", "ctrl+d"],
-        { signal, noResult: true },
-      );
+      await runHerdr(pi, ctx, ["agent", "send-keys", proved.paneId, "ctrl+c", "ctrl+d"], {
+        signal,
+        noResult: true,
+      });
     await settlePreservedPane(
       pi,
       ctx,
@@ -3829,16 +3334,12 @@ export async function rollbackHerdrStart(
     if (!Array.isArray(listedAgents?.agents))
       error("rollback", "agent list ownership proof is unavailable");
     const agents = listedAgents.agents;
-    const managed = agents.find(
-      (item: any) => item.name === started.herdrAgent,
-    );
+    const managed = agents.find((item: any) => item.name === started.herdrAgent);
     let runningOccupier: PaneProcess | undefined;
     const replacement = agents.find(
-      (item: any) =>
-        item.pane_id === started.paneId && item.name !== started.herdrAgent,
+      (item: any) => item.pane_id === started.paneId && item.name !== started.herdrAgent,
     );
-    if (replacement)
-      error("rollback", `pane ${started.paneId} has a replacement agent`);
+    if (replacement) error("rollback", `pane ${started.paneId} has a replacement agent`);
     if (!started.launchMayHaveStarted && managed)
       error("rollback", `pane ${started.paneId} agent ownership changed`);
     if (started.launchMayHaveStarted && managed && expectedShell) {
@@ -3884,24 +3385,15 @@ export async function rollbackHerdrStart(
       );
       runningOccupier = proved.process;
       const alreadyAtShell =
-        expectedShell !== undefined &&
-        settledShell(expectedShell, proved.process);
+        expectedShell !== undefined && settledShell(expectedShell, proved.process);
       if (alreadyAtShell) runningOccupier = undefined;
-      else if (
-        expectedShell !== undefined &&
-        sameShellProcessOwner(expectedShell, proved.process)
-      )
-        error(
-          "rollback",
-          `pane ${proved.paneId} foreground shell has unproven occupants`,
-        );
+      else if (expectedShell !== undefined && sameShellProcessOwner(expectedShell, proved.process))
+        error("rollback", `pane ${proved.paneId} foreground shell has unproven occupants`);
       else
-        await runHerdr(
-          pi,
-          ctx,
-          ["agent", "send-keys", proved.paneId, "ctrl+c", "ctrl+d"],
-          { signal, noResult: true },
-        );
+        await runHerdr(pi, ctx, ["agent", "send-keys", proved.paneId, "ctrl+c", "ctrl+d"], {
+          signal,
+          noResult: true,
+        });
       await settlePreservedPane(
         pi,
         ctx,
@@ -3928,45 +3420,27 @@ export async function rollbackHerdrStart(
       error("rollback", "tab list ownership proof is unavailable");
     const tabs = listedTabs.tabs;
     const tab = tabs.find((item: any) => item.tab_id === started.tabId);
-    if (
-      !tab ||
-      (tab.workspace_id !== undefined &&
-        tab.workspace_id !== started.workspaceId)
-    ) {
+    if (!tab || (tab.workspace_id !== undefined && tab.workspace_id !== started.workspaceId)) {
       error("rollback", `tab ${started.tabId} ownership is unproven`);
     }
     if (started.createdTab) {
-      const result = await runHerdr(
-        pi,
-        ctx,
-        ["pane", "list", "--workspace", started.workspaceId],
-        { signal },
-      );
+      const result = await runHerdr(pi, ctx, ["pane", "list", "--workspace", started.workspaceId], {
+        signal,
+      });
       if (!Array.isArray(result?.panes))
         error("rollback", "pane list ownership proof is unavailable");
       const listedPanes = result.panes;
-      const tabPanes = listedPanes.filter(
-        (pane: any) => pane.tab_id === started.tabId,
-      );
+      const tabPanes = listedPanes.filter((pane: any) => pane.tab_id === started.tabId);
       if (tabPanes.length !== 1 || tabPanes[0]?.pane_id !== started.paneId)
         error("rollback", `tab ${started.tabId} pane ownership is unproven`);
     }
-    const pane = (
-      await runHerdr(pi, ctx, ["pane", "get", started.paneId], { signal })
-    ).pane;
+    const pane = (await runHerdr(pi, ctx, ["pane", "get", started.paneId], { signal })).pane;
     if (!matchesAttemptTerminal(pane, started))
       error("rollback", `pane ${started.paneId} ownership is unproven`);
     if (started.launchMayHaveStarted || !sameCwd(pane.cwd, started.cwd)) {
       const observed = await paneProcess(pi, ctx, started.paneId, signal);
-      if (
-        !expectedShell ||
-        !observed ||
-        !sameShellProcessOwner(expectedShell, observed)
-      )
-        error(
-          "rollback",
-          `pane ${started.paneId} process ownership is unproven`,
-        );
+      if (!expectedShell || !observed || !sameShellProcessOwner(expectedShell, observed))
+        error("rollback", `pane ${started.paneId} process ownership is unproven`);
     }
     const currentAgents = await runHerdr(pi, ctx, ["agent", "list"], {
       signal,
@@ -3975,15 +3449,12 @@ export async function rollbackHerdrStart(
       error("rollback", "agent list ownership proof is unavailable");
     if (
       currentAgents.agents.some(
-        (item: any) =>
-          item.name === started.herdrAgent || item.pane_id === started.paneId,
+        (item: any) => item.name === started.herdrAgent || item.pane_id === started.paneId,
       )
     )
       error("rollback", `pane ${started.paneId} agent ownership changed`);
 
-    const finalPane = (
-      await runHerdr(pi, ctx, ["pane", "get", started.paneId], { signal })
-    ).pane;
+    const finalPane = (await runHerdr(pi, ctx, ["pane", "get", started.paneId], { signal })).pane;
     if (!matchesAttemptTerminal(finalPane, started))
       error("rollback", `pane ${started.paneId} ownership is unproven`);
     if (started.launchMayHaveStarted || !sameCwd(finalPane.cwd, started.cwd)) {
@@ -3995,24 +3466,17 @@ export async function rollbackHerdrStart(
           ? !settledShell(expectedShell, finalProcess, runningOccupier)
           : !sameShellProcessOwner(expectedShell, finalProcess))
       )
-        error(
-          "rollback",
-          `pane ${started.paneId} process ownership is unproven`,
-        );
+        error("rollback", `pane ${started.paneId} process ownership is unproven`);
     }
-    const finalTabs = await runHerdr(
-      pi,
-      ctx,
-      ["tab", "list", "--workspace", started.workspaceId],
-      { signal },
-    );
+    const finalTabs = await runHerdr(pi, ctx, ["tab", "list", "--workspace", started.workspaceId], {
+      signal,
+    });
     if (
       !Array.isArray(finalTabs?.tabs) ||
       !finalTabs.tabs.some(
         (item: any) =>
           item.tab_id === started.tabId &&
-          (item.workspace_id === undefined ||
-            item.workspace_id === started.workspaceId),
+          (item.workspace_id === undefined || item.workspace_id === started.workspaceId),
       )
     )
       error("rollback", `tab ${started.tabId} ownership is unproven`);
@@ -4025,9 +3489,7 @@ export async function rollbackHerdrStart(
       );
       if (!Array.isArray(finalPanes?.panes))
         error("rollback", "pane list ownership proof is unavailable");
-      const tabPanes = finalPanes.panes.filter(
-        (item: any) => item.tab_id === started.tabId,
-      );
+      const tabPanes = finalPanes.panes.filter((item: any) => item.tab_id === started.tabId);
       if (tabPanes.length !== 1 || tabPanes[0]?.pane_id !== started.paneId)
         error("rollback", `tab ${started.tabId} pane ownership is unproven`);
     }
@@ -4039,8 +3501,7 @@ export async function rollbackHerdrStart(
       error("rollback", "agent list ownership proof is unavailable");
     if (
       finalAgents.agents.some(
-        (item: any) =>
-          item.name === started.herdrAgent || item.pane_id === started.paneId,
+        (item: any) => item.name === started.herdrAgent || item.pane_id === started.paneId,
       )
     )
       error("rollback", `pane ${started.paneId} agent ownership changed`);
@@ -4060,12 +3521,7 @@ export async function rollbackHerdrStart(
         runHerdr(pi, ctx, ["tab", "list", "--workspace", started.workspaceId], {
           signal,
         }),
-        runHerdr(
-          pi,
-          ctx,
-          ["pane", "list", "--workspace", started.workspaceId],
-          { signal },
-        ),
+        runHerdr(pi, ctx, ["pane", "list", "--workspace", started.workspaceId], { signal }),
       ]);
       if (!Array.isArray(currentTabs?.tabs))
         error("rollback", "tab list disappearance proof is unavailable");

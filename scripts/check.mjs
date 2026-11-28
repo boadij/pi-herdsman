@@ -76,19 +76,14 @@ function terminateWindowsProcessTree(pid) {
 // Only accept complete command-line arguments that resolve to existing test files.
 export function windowsTestFile(command) {
   const files = new Set();
-  for (const match of command.matchAll(
-    /(?:^|\s)(?:"([^"\r\n]+)"|([^\s"]+))(?=\s|$)/g,
-  )) {
+  for (const match of command.matchAll(/(?:^|\s)(?:"([^"\r\n]+)"|([^\s"]+))(?=\s|$)/g)) {
     const argument = match[1] ?? match[2];
     if (!/\.test\.(?:[cm]?[jt]s)$/i.test(argument)) continue;
     try {
       const root = realpathSync(repoRoot);
       const file = realpathSync(resolve(root, argument));
       const name = relative(root, file).split(sep).join("/");
-      if (
-        /^(?!\.\.?\/)[a-z0-9_./-]+\.test\.(?:[cm]?[jt]s)$/i.test(name) &&
-        statSync(file).isFile()
-      )
+      if (/^(?!\.\.?\/)[a-z0-9_./-]+\.test\.(?:[cm]?[jt]s)$/i.test(name) && statSync(file).isFile())
         files.add(name);
     } catch {
       // Unresolvable arguments are not evidence of a test worker.
@@ -180,8 +175,7 @@ ConvertTo-Json -InputObject @{ rows = @($rows.ToArray()); truncated = $truncated
 `;
   const formatSnapshot = (error, stdout) => {
     try {
-      if (error)
-        return `${unavailable} (${error.killed ? "deadline" : "process error"})`;
+      if (error) return `${unavailable} (${error.killed ? "deadline" : "process error"})`;
       const snapshot = JSON.parse(stdout);
       if (
         !Array.isArray(snapshot.rows) ||
@@ -211,23 +205,17 @@ ConvertTo-Json -InputObject @{ rows = @($rows.ToArray()); truncated = $truncated
           (row.category !== null && !categories.has(row.category))
         )
           throw new Error();
-        const file =
-          row.node && row.file ? windowsTestFile(row.file) : undefined;
+        const file = row.node && row.file ? windowsTestFile(row.file) : undefined;
         if (file) lines.push(`check: candidate test worker file=${file}`);
         else if (row.node) {
           unattributedNodeWorkers++;
           if (row.category)
-            categoryCounts.set(
-              row.category,
-              (categoryCounts.get(row.category) ?? 0) + 1,
-            );
+            categoryCounts.set(row.category, (categoryCounts.get(row.category) ?? 0) + 1);
         } else otherDescendants++;
       }
       lines.push(`check: unattributed node workers=${unattributedNodeWorkers}`);
       for (const category of [...categories].sort())
-        lines.push(
-          `check: unattributed workers ${category}=${categoryCounts.get(category) ?? 0}`,
-        );
+        lines.push(`check: unattributed workers ${category}=${categoryCounts.get(category) ?? 0}`);
       lines.push(`check: other descendants=${otherDescendants}`);
       lines.push(`check: snapshot truncated=${snapshot.truncated}`);
       return lines.join("\n");
@@ -310,11 +298,7 @@ ConvertTo-Json -InputObject @{ rows = @($rows.ToArray()); truncated = $truncated
   };
 }
 
-async function settleWindowsWorkerSnapshot(
-  snapshotPromise,
-  closePromise,
-  cancelSnapshot,
-) {
+async function settleWindowsWorkerSnapshot(snapshotPromise, closePromise, cancelSnapshot) {
   let timeoutId;
   const result = await Promise.race([
     snapshotPromise.then(
@@ -463,9 +447,7 @@ export async function runTestRunner(
 
   const spawnFailure = async (error) => {
     const pid = child.pid;
-    const cleanup = pid
-      ? await terminateProcessTree(pid)
-      : noProcessTreeCleanup();
+    const cleanup = pid ? await terminateProcessTree(pid) : noProcessTreeCleanup();
     const close = await awaitClose(closePromise);
     return {
       ok: false,
@@ -500,9 +482,7 @@ export async function runTestRunner(
       const cleanup = await terminateProcessTree(child.pid);
       return {
         ok: false,
-        kind: cleanup.treeGone
-          ? "leaked-process-tree"
-          : "leaked-process-tree-cleanup-failed",
+        kind: cleanup.treeGone ? "leaked-process-tree" : "leaked-process-tree-cleanup-failed",
         label,
         pid: child.pid,
         ...cleanup,
@@ -556,8 +536,7 @@ export async function runTestRunner(
               typeof diagnostic === "string"
                 ? diagnostic
                 : "check: Windows timeout snapshot unavailable";
-            if (runnerClosed)
-              return "check: Windows timeout snapshot unavailable (runner exited)";
+            if (runnerClosed) return "check: Windows timeout snapshot unavailable (runner exited)";
             (diagnosticOptions.emit ?? console.log)(
               `check: Windows worker snapshot phase=pre-deadline elapsed=${Date.now() - startedAt}ms\n${safeDiagnostic}`,
             );
@@ -601,18 +580,13 @@ export async function runTestRunner(
     clearTimeout(snapshotTimer);
     const cleanup = await terminateProcessTree(pid);
     let workerDiagnostic = proactiveSnapshot
-      ? await settleWindowsWorkerSnapshot(
-          proactiveSnapshot,
-          closePromise,
-          cancelSnapshot,
-        )
+      ? await settleWindowsWorkerSnapshot(proactiveSnapshot, closePromise, cancelSnapshot)
       : undefined;
     const close = await awaitClose(closePromise);
     // Closure may have cancelled the capture even if its diagnostic settled.
     const captureStopUnconfirmed = (await closeCapture) === false;
     if (captureStopUnconfirmed)
-      workerDiagnostic =
-        "check: Windows timeout snapshot unavailable (capture stop unconfirmed)";
+      workerDiagnostic = "check: Windows timeout snapshot unavailable (capture stop unconfirmed)";
     const cleanupComplete =
       cleanup.cleanupError === undefined &&
       (isWindows ? cleanup.runnerGone : cleanup.treeGone) &&
@@ -683,19 +657,14 @@ export async function runCheck(mode = "check") {
   return runTestRunner(testRunnerArgs, deadline);
 }
 
-if (
-  process.argv[1] &&
-  resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))
-) {
+if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   const result = await runCheck();
   if (!result.ok) {
     if (result.workerDiagnostic) console.error(result.workerDiagnostic);
     console.error(result.diagnostic);
     if (result.kind === "suite-timeout-cleanup-failed") {
       if (result.cleanupError)
-        console.error(
-          `check: process tree ${result.pid} cleanup failed: ${result.cleanupError}`,
-        );
+        console.error(`check: process tree ${result.pid} cleanup failed: ${result.cleanupError}`);
       else if (!(isWindows ? result.runnerGone : result.treeGone))
         console.error(`check: process tree ${result.pid} could not be reaped`);
       else if (result.close === undefined)

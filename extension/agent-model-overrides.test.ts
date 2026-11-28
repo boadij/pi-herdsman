@@ -1,10 +1,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import {
-  agentModelCatalog,
-  allowedOverrideModels,
-} from "./agent-model-overrides.ts";
+import { agentModelCatalog, allowedOverrideModels } from "./agent-model-overrides.ts";
 import { DEFAULT_CONFIG } from "./config.ts";
 
 test("Agent model catalog follows the live Pi scope unless a custom list is configured", () => {

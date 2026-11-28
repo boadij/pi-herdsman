@@ -11,8 +11,7 @@ function realpath(path) {
 
 function repositoryPath(root, file) {
   const name = relative(root, file);
-  if (!name || name === ".." || name.startsWith(`..${sep}`) || isAbsolute(name))
-    return undefined;
+  if (!name || name === ".." || name.startsWith(`..${sep}`) || isAbsolute(name)) return undefined;
   return name.split(sep).join("/");
 }
 
@@ -41,8 +40,7 @@ export default async function* checkProgress(source) {
 
     if (type === "test:dequeue") {
       const name = repositoryPath(cwd, data.file);
-      if (!name || /[^a-zA-Z0-9_./-]/u.test(name) || active.has(data.file))
-        continue;
+      if (!name || /[^a-zA-Z0-9_./-]/u.test(name) || active.has(data.file)) continue;
       const file = realpath(data.file);
       if (!file || !repositoryPath(root, file)) continue;
       active.set(data.file, name);
@@ -53,9 +51,7 @@ export default async function* checkProgress(source) {
       active.delete(data.file);
       const elapsed = data.details?.duration_ms;
       const duration =
-        Number.isFinite(elapsed) && elapsed >= 0
-          ? ` elapsed=${Math.round(elapsed)}ms`
-          : "";
+        Number.isFinite(elapsed) && elapsed >= 0 ? ` elapsed=${Math.round(elapsed)}ms` : "";
       yield `check: complete ${name}${duration}\n`;
     }
   }

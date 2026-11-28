@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  includeFanInMessage,
-  registerRecipientFanIn,
-} from "./recipient-fan-in.ts";
+import { includeFanInMessage, registerRecipientFanIn } from "./recipient-fan-in.ts";
 
 function fanInApi() {
   const handlers: {
@@ -11,10 +8,7 @@ function fanInApi() {
     handler: (event: object, context: object) => Promise<unknown>;
   }[] = [];
   const pi = {
-    on: (
-      event: string,
-      handler: (event: object, context: object) => Promise<unknown>,
-    ) => {
+    on: (event: string, handler: (event: object, context: object) => Promise<unknown>) => {
       handlers.push({ event, handler });
     },
   };
@@ -28,9 +22,7 @@ test("one recipient handler shares budgets across sources despite per-handler ev
   const boundaryBudgets: object[] = [];
   let largeContent = "x".repeat(200 * 1024);
   let maxPerSource = 20;
-  const drainAgentNotifications = async (
-    budget: Parameters<typeof includeFanInMessage>[0],
-  ) => {
+  const drainAgentNotifications = async (budget: Parameters<typeof includeFanInMessage>[0]) => {
     sourceBudgets.push(budget);
     let submitted = 0;
     for (let index = 0; index < maxPerSource; index++) {
@@ -40,9 +32,7 @@ test("one recipient handler shares budgets across sources despite per-handler ev
     accepted[0] += submitted;
     return submitted;
   };
-  const drainCoordinationInbox = async (
-    budget: Parameters<typeof includeFanInMessage>[0],
-  ) => {
+  const drainCoordinationInbox = async (budget: Parameters<typeof includeFanInMessage>[0]) => {
     sourceBudgets.push(budget);
     let submitted = 0;
     for (let index = 0; index < maxPerSource; index++) {

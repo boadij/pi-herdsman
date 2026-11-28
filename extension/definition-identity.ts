@@ -30,7 +30,6 @@ export function isDefinitionName(name: unknown): name is string {
 export function isAssignedLeadDefinitionName(name: string): boolean {
   return (
     isDefinitionName(name) &&
-    (reservedDefinitionCategory(name) === undefined ||
-      name === MANAGED_LEAD_DEFINITION_NAME)
+    (reservedDefinitionCategory(name) === undefined || name === MANAGED_LEAD_DEFINITION_NAME)
   );
 }

@@ -54,11 +54,9 @@ test("historical and current Agent assignment tool results reconstruct ownership
       };
     });
     assert.deepEqual(
-      ownedAssignmentChildren(
-        entries,
-        "33333333-3333-4333-8333-333333333333",
-        true,
-      ).map(({ label, id }) => ({ label, id })),
+      ownedAssignmentChildren(entries, "33333333-3333-4333-8333-333333333333", true).map(
+        ({ label, id }) => ({ label, id }),
+      ),
       [
         { label: "child-0", id: "11111111-1111-4111-8111-111111111111" },
         { label: "child-1", id: "22222222-2222-4222-8222-222222222222" },
@@ -91,9 +89,7 @@ test("multiplexed coordination tool aliases are absent", async () => {
   assert.equal(pi.commands.includes("herdsman-version"), true);
   assert.equal(pi.commands.includes("workers"), false);
   assert.equal(
-    pi.entryRenderers.some(
-      ({ customType }) => customType === "pi-herdsman-worker-definition",
-    ),
+    pi.entryRenderers.some(({ customType }) => customType === "pi-herdsman-worker-definition"),
     false,
   );
   for (const customType of [
@@ -102,9 +98,7 @@ test("multiplexed coordination tool aliases are absent", async () => {
     "pi-herdsman-worker-stale",
   ])
     assert.equal(
-      pi.messageRenderers.some(
-        (renderer) => renderer.customType === customType,
-      ),
+      pi.messageRenderers.some((renderer) => renderer.customType === customType),
       false,
       `legacy renderer registered: ${customType}`,
     );
@@ -155,8 +149,7 @@ test("the legacy allowlist environment variable grants no agent capability", () 
 });
 
 test("managed Agent surfaces distinguish delegation capability from leaf access", () => {
-  const names = (pi: ReturnType<typeof fakePi>) =>
-    pi.tools.map((tool) => tool.name).sort();
+  const names = (pi: ReturnType<typeof fakePi>) => pi.tools.map((tool) => tool.name).sort();
   const leafMailbox = setAgentEnvironment("leaf-surface-agent");
   const leaf = fakePi();
   registerExtension!(leaf.pi as never);
@@ -198,10 +191,7 @@ test("managed Agent surfaces distinguish delegation capability from leaf access"
 
 test("legacy V3 marker and definition metadata are not accepted", () => {
   const id = "44444444-4444-4444-8444-444444444444";
-  assert.equal(
-    parseControlMarker(`__PI_HERDSMAN_WORKER_V3__:${id}`),
-    undefined,
-  );
+  assert.equal(parseControlMarker(`__PI_HERDSMAN_WORKER_V3__:${id}`), undefined);
   assert.equal(parseControlMarker(controlMarker(id)), id);
   assert.equal(
     sessionAgentIdentity(
@@ -223,10 +213,7 @@ test("current error codes replace the legacy label and busy codes", async () => 
   const duplicateLabel = "cutover-duplicate-agent";
   const duplicateIdentity = recoveryIdentity(duplicateLabel);
   const duplicateMailbox = agentMailboxPath(WORKSPACE, duplicateLabel);
-  writeAgentState(
-    duplicateMailbox,
-    managedState(duplicateLabel, undefined, duplicateIdentity),
-  );
+  writeAgentState(duplicateMailbox, managedState(duplicateLabel, undefined, duplicateIdentity));
   const duplicatePi = fakePi({
     exec: leadExec(
       duplicateLabel,
@@ -278,13 +265,7 @@ test("current error codes replace the legacy label and busy codes", async () => 
   try {
     const busyResult = await busyPi.tools
       .find((tool) => tool.name === "steer_agent")!
-      .execute(
-        "id",
-        { agent: busyLabel, message: "busy" },
-        undefined,
-        undefined,
-        fakeContext(),
-      );
+      .execute("id", { agent: busyLabel, message: "busy" }, undefined, undefined, fakeContext());
     assert.equal(busyResult.details.error.category, "agent_busy");
   } finally {
     busyPi.events.get("session_shutdown")?.[0]();
@@ -301,25 +282,13 @@ test("fresh root delegation refreshes cwd at safe turn boundaries", async () => 
   const second = fakePi();
   const delegate = (pi: ReturnType<typeof fakePi>) =>
     pi.tools.filter((tool) => tool.name === "delegate_agent").at(-1)!;
-  const trigger = (
-    pi: ReturnType<typeof fakePi>,
-    boundary: "before_agent_start" | "turn_end",
-  ) =>
+  const trigger = (pi: ReturnType<typeof fakePi>, boundary: "before_agent_start" | "turn_end") =>
     invokeEventHandlers(pi, boundary)(
       { systemPrompt: "base", systemPromptOptions: { sections: {} } },
       fakeContext(),
     );
-  const rejectCwd = async (
-    tool: ReturnType<typeof delegate>,
-    ctx = fakeContext(),
-  ) => {
-    const result = await tool.execute(
-      "cwd-blocked",
-      assignmentWithCwd,
-      undefined,
-      undefined,
-      ctx,
-    );
+  const rejectCwd = async (tool: ReturnType<typeof delegate>, ctx = fakeContext()) => {
+    const result = await tool.execute("cwd-blocked", assignmentWithCwd, undefined, undefined, ctx);
     assert.equal(result.details.error.category, "invalid_request");
     assert.match(result.details.error.message, /override is unavailable/);
   };
@@ -330,14 +299,8 @@ test("fresh root delegation refreshes cwd at safe turn boundaries", async () => 
     registerExtension!(first.pi as never);
     registerExtension!(second.pi as never);
     const initialRegistrations = first.tools.length;
-    assert.equal(
-      Value.Check(delegate(first).parameters, assignmentWithCwd),
-      false,
-    );
-    assert.equal(
-      Value.Check(delegate(second).parameters, assignmentWithCwd),
-      false,
-    );
+    assert.equal(Value.Check(delegate(first).parameters, assignmentWithCwd), false);
+    assert.equal(Value.Check(delegate(second).parameters, assignmentWithCwd), false);
 
     first.pi.setActiveTools(["read"]);
     updateConfig("allowAgentCwdOverride", true);
@@ -352,14 +315,9 @@ test("fresh root delegation refreshes cwd at safe turn boundaries", async () => 
     await trigger(first, "turn_end");
     assert.equal(first.tools.length, initialRegistrations + 1);
     await trigger(second, "turn_end");
-    assert.equal(
-      Value.Check(delegate(second).parameters, assignmentWithCwd),
-      true,
-    );
+    assert.equal(Value.Check(delegate(second).parameters, assignmentWithCwd), true);
 
-    const continuation = first.tools.find(
-      (tool) => tool.name === "resume_agent",
-    )!;
+    const continuation = first.tools.find((tool) => tool.name === "resume_agent")!;
     assert.equal(
       Value.Check(continuation.parameters, {
         session: "saved",
@@ -373,10 +331,7 @@ test("fresh root delegation refreshes cwd at safe turn boundaries", async () => 
     await rejectCwd(stale);
     await trigger(first, "turn_end");
     assert.equal(first.tools.length, initialRegistrations + 2);
-    assert.equal(
-      Value.Check(delegate(first).parameters, assignmentWithCwd),
-      false,
-    );
+    assert.equal(Value.Check(delegate(first).parameters, assignmentWithCwd), false);
 
     updateConfig("allowAgentCwdOverride", true);
     const mailbox = setAgentEnvironment("cwd-nested", ["scout"]);
@@ -436,24 +391,9 @@ test("each Agent operation has its own schema without projection", () => {
       { agent: "worker", message: "decision", session: "x" },
       ["agent", "message"],
     ],
-    [
-      "stop_agent",
-      { agent: "worker" },
-      { agent: "worker", message: "x" },
-      ["agent"],
-    ],
-    [
-      "inspect_agent",
-      { agent: "worker" },
-      { agent: "worker", session: "x" },
-      ["agent"],
-    ],
-    [
-      "read_agent_transcript",
-      { agent: "worker" },
-      { agent: "worker", session: "x" },
-      ["agent"],
-    ],
+    ["stop_agent", { agent: "worker" }, { agent: "worker", message: "x" }, ["agent"]],
+    ["inspect_agent", { agent: "worker" }, { agent: "worker", session: "x" }, ["agent"]],
+    ["read_agent_transcript", { agent: "worker" }, { agent: "worker", session: "x" }, ["agent"]],
   ] as const;
   for (const [name, valid, crossOperation, required] of cases) {
     const tool = pi.tools.find((candidate) => candidate.name === name);
@@ -462,22 +402,14 @@ test("each Agent operation has its own schema without projection", () => {
     assert.equal(schema.type, "object", name);
     assert.equal(schema.additionalProperties, false, name);
     assert.equal(schema.properties.action, undefined, name);
-    assert.deepEqual(
-      [...(schema.required ?? [])].sort(),
-      [...required].sort(),
-      name,
-    );
+    assert.deepEqual([...(schema.required ?? [])].sort(), [...required].sort(), name);
     assert.equal(Value.Check(schema, valid), true, `${name} valid input`);
     assert.equal(
       Value.Check(schema, crossOperation),
       false,
       `${name} rejects cross-operation fields`,
     );
-    assert.equal(
-      tool.prepareArguments,
-      undefined,
-      `${name} needs no projection`,
-    );
+    assert.equal(tool.prepareArguments, undefined, `${name} needs no projection`);
   }
   pi.events.get("session_shutdown")?.[0]();
 });

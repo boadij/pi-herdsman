@@ -62,9 +62,7 @@ function isolatedGit(root: string, overrides: NodeJS.ProcessEnv = {}) {
       code: result.status ?? 1,
       killed: result.signal !== null,
       truncated:
-        result.error !== undefined &&
-        "code" in result.error &&
-        result.error.code === "ENOBUFS",
+        result.error !== undefined && "code" in result.error && result.error.code === "ENOBUFS",
       stdout: result.stdout ?? "",
       stderr: result.stderr ?? "",
     };
@@ -89,18 +87,8 @@ test("checkout clone source reads only a single supported effective origin fetch
   configure("remote", "add", "unrelated", remote);
   await rejected();
   configure("remote", "add", "origin", "fixture:project.git");
-  configure(
-    "config",
-    "url.https://example.test/owner/team/.insteadOf",
-    "fixture:",
-  );
-  configure(
-    "remote",
-    "set-url",
-    "--push",
-    "origin",
-    "git@example.test:push/project.git",
-  );
+  configure("config", "url.https://example.test/owner/team/.insteadOf", "fixture:");
+  configure("remote", "set-url", "--push", "origin", "git@example.test:push/project.git");
   assert.deepEqual(await source(), parseRepositorySource(remote));
   const child = join(root, "child");
   mkdirSync(child);
@@ -152,9 +140,7 @@ test("checkout clone source fails closed on incomplete, cancelled or stale obser
     };
     await assert.rejects(
       resolveCheckoutCloneSource({ exec }, root, abort.signal),
-      outcome === "cancelled"
-        ? { name: "AbortError" }
-        : /explicit HTTPS or SSH/,
+      outcome === "cancelled" ? { name: "AbortError" } : /explicit HTTPS or SSH/,
       outcome,
     );
     assert.ok(observedOrigin, outcome);
@@ -169,20 +155,11 @@ test("clone of an observed origin is not rewritten again in destination Git conf
   const url = "https://example.test/owner/project=fixture.git";
   assert.equal(git(["init", "-q"]).code, 0);
   assert.equal(
-    git([
-      "config",
-      "-f",
-      config,
-      `url.${pathToFileURL(root).href}.insteadOf`,
-      url,
-    ]).code,
+    git(["config", "-f", config, `url.${pathToFileURL(root).href}.insteadOf`, url]).code,
     0,
   );
   const gitDir = join(destination, ".git").replaceAll("\\", "/");
-  assert.equal(
-    git(["config", "--global", `includeIf.gitdir:${gitDir}.path`, config]).code,
-    0,
-  );
+  assert.equal(git(["config", "--global", `includeIf.gitdir:${gitDir}.path`, config]).code, 0);
   // The same configured URL is rewritten for an ordinary explicit clone.
   await cloneRepository(
     { exec: async (_command, args, options) => git(args, options?.cwd) },
@@ -225,12 +202,7 @@ test("protected clone loads URL-conditioned SSH config and verifies the persiste
   const configure = (...args: string[]) => assert.equal(git(args).code, 0);
   configure("init", "-q", fixture);
   configure("config", "--global", "core.sshCommand", "false");
-  configure(
-    "config",
-    "--global",
-    `includeIf.hasconfig:remote.*.url:${url}.path`,
-    auth,
-  );
+  configure("config", "--global", `includeIf.hasconfig:remote.*.url:${url}.path`, auth);
   // Only the matching include enables the transport; it never opens a socket.
   configure(
     "config",
@@ -248,10 +220,7 @@ test("protected clone loads URL-conditioned SSH config and verifies the persiste
   const destination = join(root, "clone");
   assert.equal((await clone(destination)).checkoutPath, destination);
   assert.equal(git(["remote"], destination).stdout.trim(), "origin");
-  assert.equal(
-    git(["remote", "get-url", "--all", "origin"], destination).stdout.trim(),
-    url,
-  );
+  assert.equal(git(["remote", "get-url", "--all", "origin"], destination).stdout.trim(), url);
 
   // The same include adds a rewrite for the validated URL. Initial transport
   // must still succeed over SSH, but the persisted origin must fail verification.
@@ -267,10 +236,7 @@ test("protected clone loads URL-conditioned SSH config and verifies the persiste
     return true;
   });
   assert.ok(existsSync(join(partial, ".git")));
-  assert.equal(
-    git(["remote", "get-url", "--all", "origin"], partial).stdout.trim(),
-    conflicting,
-  );
+  assert.equal(git(["remote", "get-url", "--all", "origin"], partial).stdout.trim(), conflicting);
 });
 
 test("repository source accepts explicit local paths and supported Git remotes", () => {
@@ -353,26 +319,17 @@ test("local resolution is non-mutating and rejects redirected ancestors and non-
   const created = createLocalRepositoryDirectory(selection);
   assert.equal(created.path, missing);
   assert.equal(created.exists, true);
-  assert.throws(
-    () => createLocalRepositoryDirectory(created),
-    /already exists/,
-  );
+  assert.throws(() => createLocalRepositoryDirectory(created), /already exists/);
 
   const file = join(root, "file");
   writeFileSync(file, "");
   assert.throws(() => resolveLocalRepositoryPath(file), /non-directory/);
-  assert.throws(
-    () => resolveLocalRepositoryPath(join(file, "child")),
-    /non-directory/,
-  );
+  assert.throws(() => resolveLocalRepositoryPath(join(file, "child")), /non-directory/);
 
   const alias = join(root, "alias");
   symlinkSync(missing, alias, "junction");
   assert.throws(() => resolveLocalRepositoryPath(alias), /symlink/);
-  assert.throws(
-    () => resolveLocalRepositoryPath(join(alias, "child")),
-    /symlink/,
-  );
+  assert.throws(() => resolveLocalRepositoryPath(join(alias, "child")), /symlink/);
   assert.equal(existsSync(join(missing, "child")), false);
 });
 
@@ -380,8 +337,7 @@ test("clone reserves the safe default or explicit destination and returns verifi
   const home = tempDirectory(t);
   const signal = new AbortController().signal;
   for (const override of [undefined, join(home, "custom", "checkout")]) {
-    const destination =
-      override ?? join(home, "Projects", "owner", "team", "project");
+    const destination = override ?? join(home, "Projects", "owner", "team", "project");
     const metadata = join(destination, ".git");
     const commands: string[] = [];
     const exec: Exec = async (command, args, options) => {
@@ -400,28 +356,18 @@ test("clone reserves the safe default or explicit destination and returns verifi
       return success(args.includes("--show-toplevel") ? destination : metadata);
     };
     assert.deepEqual(
-      await cloneRepository(
-        { exec },
-        remote,
-        override ? "unused" : "~/Projects",
-        {
-          destination: override,
-          homeDirectory: home,
-          signal,
-        },
-      ),
+      await cloneRepository({ exec }, remote, override ? "unused" : "~/Projects", {
+        destination: override,
+        homeDirectory: home,
+        signal,
+      }),
       {
         checkoutPath: destination,
         canonicalRepoKey: metadata,
         isPrimary: true,
       },
     );
-    assert.deepEqual(commands, [
-      "clone",
-      "rev-parse",
-      "rev-parse",
-      "rev-parse",
-    ]);
+    assert.deepEqual(commands, ["clone", "rev-parse", "rev-parse", "rev-parse"]);
   }
 });
 
@@ -442,11 +388,7 @@ test("clone refuses occupied leaves, unsafe overrides, and symlinked parents wit
       CloneDestinationExistsError,
     );
   }
-  for (const destination of [
-    join(alias, "project"),
-    `${root}/../project`,
-    join(root, "Aux.txt"),
-  ]) {
+  for (const destination of [join(alias, "project"), `${root}/../project`, join(root, "Aux.txt")]) {
     await assert.rejects(
       cloneRepository({ exec }, remote, root, { destination }),
       /symlink|unsafe/,
@@ -467,10 +409,7 @@ test("clone reports the directory left behind if preparation fails after mkdir",
   const exec: Exec = async () => assert.fail("Git must not run");
   for (const at of ["parent", "leaf"]) {
     const created = join(root, at);
-    const destination =
-      at === "parent"
-        ? join(created, oversize, "repo")
-        : join(created, oversize);
+    const destination = at === "parent" ? join(created, oversize, "repo") : join(created, oversize);
     await assert.rejects(
       cloneRepository({ exec }, remote, root, { destination }),
       (error) =>
@@ -488,14 +427,8 @@ test("a redirected Git environment fails before filesystem mutation", async (t) 
   process.env.GIT_WORK_TREE = join(root, "redirected");
   try {
     const exec: Exec = async () => assert.fail("Git must not run");
-    await assert.rejects(
-      cloneRepository({ exec }, remote, join(root, "Projects")),
-      /redirection/,
-    );
-    await assert.rejects(
-      resolveCheckoutCloneSource({ exec }, root),
-      /redirection/,
-    );
+    await assert.rejects(cloneRepository({ exec }, remote, join(root, "Projects")), /redirection/);
+    await assert.rejects(resolveCheckoutCloneSource({ exec }, root), /redirection/);
     assert.equal(existsSync(join(root, "Projects")), false);
   } finally {
     if (old === undefined) delete process.env.GIT_WORK_TREE;
@@ -514,9 +447,7 @@ test("clone classifies failures and preserves files at the exact reported destin
         return { ...success(), code: stage === "clone" ? 1 : 0 };
       }
       // Native Git output pointing outside the requested checkout is not enough.
-      return success(
-        args.includes("--show-toplevel") ? root : join(destination, ".git"),
-      );
+      return success(args.includes("--show-toplevel") ? root : join(destination, ".git"));
     };
     await assert.rejects(
       cloneRepository({ exec }, remote, root, { destination }),

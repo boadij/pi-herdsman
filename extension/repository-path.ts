@@ -3,8 +3,7 @@ import { isAbsolute, parse, resolve, sep } from "node:path";
 
 const windows = sep === "\\";
 const invalidSegment = /[\\/<>:"|?*]|[. ]$/;
-const deviceName =
-  /^(?:con|prn|aux|nul|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])(?: *\.|$)/i;
+const deviceName = /^(?:con|prn|aux|nul|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])(?: *\.|$)/i;
 
 export function hasControls(value: string): boolean {
   return [...value].some((character) => {
@@ -37,8 +36,7 @@ export function absolutePath(value: string, homeDirectory: string): string {
   if (
     !fromHome &&
     (!isAbsolute(path) ||
-      (windows &&
-        !/^(?:[a-z]:\\|\\\\(?![?.]\\)[^\\]+\\[^\\]+(?:\\|$))/i.test(path)))
+      (windows && !/^(?:[a-z]:\\|\\\\(?![?.]\\)[^\\]+\\[^\\]+(?:\\|$))/i.test(path)))
   )
     throw new Error("Repository path must be fully absolute or start with ~/");
 
@@ -47,24 +45,16 @@ export function absolutePath(value: string, homeDirectory: string): string {
     if (rootSegments.some((part) => !safeCloneSegment(part)))
       throw new Error("Repository path has an unsafe UNC authority");
   }
-  const segments = fromHome
-    ? path.slice(2).split(sep).filter(Boolean)
-    : pathSegments(path);
+  const segments = fromHome ? path.slice(2).split(sep).filter(Boolean) : pathSegments(path);
   if (
-    segments.some(
-      (part) =>
-        part === "." || part === ".." || (windows && !safeCloneSegment(part)),
-    )
+    segments.some((part) => part === "." || part === ".." || (windows && !safeCloneSegment(part)))
   )
     throw new Error("Repository path contains an unsafe path segment");
   return fromHome ? resolve(homeDirectory, ...segments) : resolve(path);
 }
 
 /** Lexical only: check filesystem state when a clone is requested. */
-export function resolveClonePath(
-  value: string,
-  homeDirectory = homedir(),
-): string {
+export function resolveClonePath(value: string, homeDirectory = homedir()): string {
   const path = absolutePath(value, homeDirectory);
   if (pathSegments(path).some((segment) => !safeCloneSegment(segment)))
     throw new Error("Clone path contains an unsafe path segment");

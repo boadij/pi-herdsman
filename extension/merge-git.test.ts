@@ -28,14 +28,7 @@ test("local merge strategy fast-forwards offline and refuses divergence unchange
     run(primary, "commit", "-m", "feature");
     const feature = run(primary, "rev-parse", "HEAD");
     run(primary, "checkout", "main");
-    run(
-      primary,
-      "merge",
-      "--ff-only",
-      "--no-autostash",
-      "--no-overwrite-ignore",
-      feature,
-    );
+    run(primary, "merge", "--ff-only", "--no-autostash", "--no-overwrite-ignore", feature);
     assert.equal(run(primary, "rev-parse", "HEAD"), feature);
 
     run(primary, "checkout", "-b", "independent", base);
@@ -46,14 +39,7 @@ test("local merge strategy fast-forwards offline and refuses divergence unchange
     run(primary, "checkout", "main");
     const before = run(primary, "rev-parse", "HEAD");
     assert.throws(() =>
-      run(
-        primary,
-        "merge",
-        "--ff-only",
-        "--no-autostash",
-        "--no-overwrite-ignore",
-        independent,
-      ),
+      run(primary, "merge", "--ff-only", "--no-autostash", "--no-overwrite-ignore", independent),
     );
     assert.equal(run(primary, "rev-parse", "HEAD"), before);
     assert.equal(run(primary, "remote"), "");
@@ -103,10 +89,7 @@ test("clean divergent merge matches merge-tree and conflicts leave Git state unc
       second,
     );
     assert.equal(run(repo, "rev-parse", "HEAD^{tree}"), expectedTree);
-    assert.deepEqual(
-      run(repo, "show", "-s", "--format=%P", "HEAD").split(" "),
-      [first, second],
-    );
+    assert.deepEqual(run(repo, "show", "-s", "--format=%P", "HEAD").split(" "), [first, second]);
     assert.equal(readFileSync(join(repo, "first"), "utf8"), "first");
     assert.equal(readFileSync(join(repo, "second"), "utf8"), "second");
     assert.equal(run(repo, "merge-base", "--is-ancestor", second, "HEAD"), "");

@@ -30,10 +30,7 @@ export function isRuntimeBuild(value: unknown): value is RuntimeBuild {
   );
 }
 
-export function sameRuntimeBuild(
-  left: RuntimeBuild,
-  right: RuntimeBuild,
-): boolean {
+export function sameRuntimeBuild(left: RuntimeBuild, right: RuntimeBuild): boolean {
   return left.version === right.version && left.sha256 === right.sha256;
 }
 

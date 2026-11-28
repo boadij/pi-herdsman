@@ -112,14 +112,8 @@ test("a controller's child depth is one more than its own, and 1 at the root", (
 });
 
 test("the roster advertises delegation only for children that may delegate", () => {
-  const definitions = [
-    definition("worker", { agents: ["worker"] }),
-    definition("plain"),
-  ];
-  const advertised = (
-    scope: Parameters<typeof visibleAgentCapabilities>[1],
-    max: number,
-  ) =>
+  const definitions = [definition("worker", { agents: ["worker"] }), definition("plain")];
+  const advertised = (scope: Parameters<typeof visibleAgentCapabilities>[1], max: number) =>
     visibleAgentCapabilities(definitions, scope, "all", max).find(
       ({ name }) => name === "worker",
     ) as Record<string, unknown>;
@@ -159,15 +153,11 @@ test("effective parent and child capability rosters remain independent", () => {
 
 test("the default limit is read from config when the caller passes none", () => {
   const definitions = [definition("worker", { agents: ["worker"] })];
-  assert.deepEqual(
-    (visibleAgentCapabilities(definitions, { kind: "root" })[0] as any).agents,
-    ["worker"],
-  );
+  assert.deepEqual((visibleAgentCapabilities(definitions, { kind: "root" })[0] as any).agents, [
+    "worker",
+  ]);
   writeMaxAgentDepth(1);
-  assert.equal(
-    "agents" in visibleAgentCapabilities(definitions, { kind: "root" })[0]!,
-    false,
-  );
+  assert.equal("agents" in visibleAgentCapabilities(definitions, { kind: "root" })[0]!, false);
 });
 
 test("PI_HERDSMAN_DEPTH is validated and defaults to a root-started Agent", () => {
@@ -253,8 +243,7 @@ async function launch(options: {
   details: Record<string, any>;
   childOwner: string | undefined;
 }> {
-  const parentLabel =
-    options.parentLabel ?? `depth-parent-${randomUUID().slice(0, 8)}`;
+  const parentLabel = options.parentLabel ?? `depth-parent-${randomUUID().slice(0, 8)}`;
   if (options.max !== undefined) writeMaxAgentDepth(options.max);
   else clearConfig();
   if (options.root) setLeadEnvironment();
@@ -305,8 +294,7 @@ async function launch(options: {
         },
       ]);
   try {
-    for (const handler of pi.events.get("session_start") ?? [])
-      await handler(undefined, context);
+    for (const handler of pi.events.get("session_start") ?? []) await handler(undefined, context);
     const result = await pi.tools
       .find((tool) => tool.name === "delegate_agent")!
       .execute(
@@ -346,10 +334,7 @@ test("delegation is allowed below the limit and the child records its depth", as
     const { env, ok } = await launch({ depth, max: 4 });
     assert.equal(ok, true, `depth ${depth}`);
     assert.ok(has(env, `PI_HERDSMAN_DEPTH=${depth + 1}`), env.join("\n"));
-    assert.ok(
-      has(env, 'PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS=["worker"]'),
-      env.join("\n"),
-    );
+    assert.ok(has(env, 'PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS=["worker"]'), env.join("\n"));
   }
 });
 
@@ -359,9 +344,7 @@ test("a child started at the limit is a leaf", async () => {
   assert.ok(has(env, "PI_HERDSMAN_DEPTH=4"), env.join("\n"));
   assert.ok(has(env, "PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS=[]"));
   assert.equal(
-    env.some((line) =>
-      line.startsWith('PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS=["'),
-    ),
+    env.some((line) => line.startsWith('PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS=["')),
     false,
   );
 });
@@ -394,10 +377,7 @@ test("depth-3 launch names its own label as the child's owner display and owns t
     parentLabel,
   });
   assert.equal(ok, true);
-  assert.ok(
-    has(env, `PI_HERDSMAN_OWNER_DISPLAY=worker:${parentLabel}`),
-    env.join("\n"),
-  );
+  assert.ok(has(env, `PI_HERDSMAN_OWNER_DISPLAY=worker:${parentLabel}`), env.join("\n"));
   assert.equal(childOwner, "dddddddd-dddd-4ddd-8ddd-dddddddddddd");
   assert.ok(has(env, `PI_SUBAGENT_PARENT_SESSION=${LEAD_SESSION_ID}`));
 });
@@ -417,16 +397,8 @@ test("a depth-3 Agent passes project evidence to its child and owns it directly"
   const projectRuntime = supervisionRuntime(socket);
   const branch = `depth-${randomUUID()}`;
   const requestId = randomUUID();
-  const inherited = persistRequiredEvidenceSnapshot(
-    projectAssignmentId,
-    "plan.md",
-    "plan body",
-  );
-  const local = persistRequiredEvidenceSnapshot(
-    projectAssignmentId,
-    "review.md",
-    "review body",
-  );
+  const inherited = persistRequiredEvidenceSnapshot(projectAssignmentId, "plan.md", "plan body");
+  const local = persistRequiredEvidenceSnapshot(projectAssignmentId, "review.md", "review body");
   writeProjectAssignment(projectRuntime, {
     version: 2,
     id: projectAssignmentId,
@@ -476,10 +448,7 @@ test("a depth-3 Agent passes project evidence to its child and owns it directly"
       const result = lifecycle.exec(command, args, options);
       if (command === "herdr" && args[0] === "agent" && args[1] === "start")
         stopConsumer = consumeMailboxRequest(
-          agentMailboxPath(
-            WORKSPACE,
-            lifecycle.paneEnvironment.PI_HERDSMAN_LABEL!,
-          ),
+          agentMailboxPath(WORKSPACE, lifecycle.paneEnvironment.PI_HERDSMAN_LABEL!),
           (request) => {
             published = request;
           },
@@ -516,8 +485,7 @@ test("a depth-3 Agent passes project evidence to its child and owns it directly"
   const context = fakeAgentContext(entries);
   registerExtension!(pi.pi as never);
   try {
-    for (const handler of pi.events.get("session_start") ?? [])
-      await handler(undefined, context);
+    for (const handler of pi.events.get("session_start") ?? []) await handler(undefined, context);
     const result = await pi.tools
       .find((tool) => tool.name === "delegate_agent")!
       .execute(
@@ -536,11 +504,7 @@ test("a depth-3 Agent passes project evidence to its child and owns it directly"
     assert.deepEqual(published!.inheritedEvidence, [inherited, local]);
     assert.equal(published!.requiredEvidence?.length, 3);
     assert.ok(lifecycle.environmentCommands.includes("PI_HERDSMAN_DEPTH=4"));
-    assert.ok(
-      lifecycle.environmentCommands.includes(
-        `PI_HERDSMAN_OWNER_DISPLAY=worker:${label}`,
-      ),
-    );
+    assert.ok(lifecycle.environmentCommands.includes(`PI_HERDSMAN_OWNER_DISPLAY=worker:${label}`));
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     stopConsumer?.();
@@ -564,8 +528,7 @@ const chain = ["a1", "a2", "a3", "a4"].map((label, index) => ({
   }),
 }));
 chain.forEach((state, index) => {
-  state.ownerSessionId =
-    index === 0 ? LEAD_SESSION_ID : chain[index - 1]!.piSessionId;
+  state.ownerSessionId = index === 0 ? LEAD_SESSION_ID : chain[index - 1]!.piSessionId;
 });
 const snapshotOf = (states: ManagedAgentState[]) => ({
   agents: states.map((state) => ({
@@ -583,31 +546,19 @@ const snapshotOf = (states: ManagedAgentState[]) => ({
 
 test("a controller sees only its direct children, the root sees the whole chain", () => {
   const snapshot = snapshotOf(chain);
-  const labels = (
-    scope: Parameters<typeof visibleAgentSnapshots>[1],
-    owner: string,
-  ) =>
+  const labels = (scope: Parameters<typeof visibleAgentSnapshots>[1], owner: string) =>
     visibleAgentSnapshots(snapshot, scope, owner)
       .map(({ state }) => state.agentLabel)
       .sort();
   assert.deepEqual(labels(managedScope(2), chain[1]!.piSessionId), ["a3"]);
   assert.deepEqual(labels(managedScope(3), chain[2]!.piSessionId), ["a4"]);
-  assert.deepEqual(labels({ kind: "root" }, LEAD_SESSION_ID), [
-    "a1",
-    "a2",
-    "a3",
-    "a4",
-  ]);
+  assert.deepEqual(labels({ kind: "root" }, LEAD_SESSION_ID), ["a1", "a2", "a3", "a4"]);
 });
 
 test("closing an Agent cascades through every level, deepest first", () => {
   const sameIdentity = (a: ManagedAgentState, b: ManagedAgentState) =>
     a.agentLabel === b.agentLabel && a.runId === b.runId;
-  const plan = managedAgentCascadePlanFromSnapshot(
-    snapshotOf(chain),
-    chain[0]!,
-    sameIdentity,
-  );
+  const plan = managedAgentCascadePlanFromSnapshot(snapshotOf(chain), chain[0]!, sameIdentity);
   assert.equal(plan.parent.state.agentLabel, "a1");
   assert.deepEqual(
     plan.descendants.map(({ state }) => state.agentLabel),
@@ -615,11 +566,9 @@ test("closing an Agent cascades through every level, deepest first", () => {
   );
   // Closing a middle Agent leaves its ancestors out.
   assert.deepEqual(
-    managedAgentCascadePlanFromSnapshot(
-      snapshotOf(chain),
-      chain[2]!,
-      sameIdentity,
-    ).descendants.map(({ state }) => state.agentLabel),
+    managedAgentCascadePlanFromSnapshot(snapshotOf(chain), chain[2]!, sameIdentity).descendants.map(
+      ({ state }) => state.agentLabel,
+    ),
     ["a4"],
   );
 });
@@ -659,10 +608,7 @@ async function cleanDeliveredChild(options: {
     writeAgentState(mailbox, state);
   }
   if (options.unreadable)
-    writeFileSync(
-      join(agentMailboxPath(WORKSPACE, a3.agentLabel), "state.json"),
-      "{ not json",
-    );
+    writeFileSync(join(agentMailboxPath(WORKSPACE, a3.agentLabel), "state.json"), "{ not json");
   const cleanupErrors: unknown[] = [];
   const lifecycle = cascadeExecutor(states);
   const pi = fakePi({ exec: lifecycle.exec });
@@ -717,11 +663,7 @@ async function cleanDeliveredChild(options: {
     agentDefinition: "worker",
   };
   try {
-    const done = await controller.cleanupDeliveredResult(
-      runtime as any,
-      { requestId },
-      context,
-    );
+    const done = await controller.cleanupDeliveredResult(runtime as any, { requestId }, context);
     return {
       done,
       closeOrder: lifecycle.closeOrder,
@@ -729,9 +671,7 @@ async function cleanDeliveredChild(options: {
       remaining: states
         .filter((state) => {
           try {
-            return readAgentState(
-              agentMailboxPath(WORKSPACE, state.agentLabel),
-            );
+            return readAgentState(agentMailboxPath(WORKSPACE, state.agentLabel));
           } catch {
             return false; // the deliberately unreadable descendant
           }
@@ -740,8 +680,7 @@ async function cleanDeliveredChild(options: {
     };
   } finally {
     controller.abortSession();
-    for (const state of states)
-      resetAgentMailbox(agentMailboxPath(WORKSPACE, state.agentLabel));
+    for (const state of states) resetAgentMailbox(agentMailboxPath(WORKSPACE, state.agentLabel));
   }
 }
 
@@ -764,8 +703,10 @@ test("cleanup of a delivered Agent closes its own Agents first instead of orphan
 });
 
 test("cleanup of a delivered Agent fails closed when a descendant mailbox is unreadable", async () => {
-  const { done, closeOrder, cleanupErrors, remaining } =
-    await cleanDeliveredChild({ grandchild: true, unreadable: true });
+  const { done, closeOrder, cleanupErrors, remaining } = await cleanDeliveredChild({
+    grandchild: true,
+    unreadable: true,
+  });
   assert.equal(done, false);
   assert.deepEqual(closeOrder, [], "nothing was closed");
   // The delivered Agent keeps its durable ownership record, so it stays recoverable.
@@ -795,19 +736,12 @@ test("durable depth counts recorded owners and rejects a cycle or a foreign work
   );
   // Duplicate records for one owner are ambiguous.
   assert.throws(
-    () =>
-      durableAgentDepth(
-        [...chain, { ...chain[1]!, agentLabel: "a2-duplicate" }],
-        chain[3]!,
-      ),
+    () => durableAgentDepth([...chain, { ...chain[1]!, agentLabel: "a2-duplicate" }], chain[3]!),
     /2 ownership records.*ambiguous/,
   );
   // Without a verified root the chain cannot be checked.
   const { rootSessionId: _root, ...unrooted } = chain[0]!;
-  assert.throws(
-    () => durableAgentDepth([unrooted], unrooted),
-    /no verified root session/,
-  );
+  assert.throws(() => durableAgentDepth([unrooted], unrooted), /no verified root session/);
   const loop = [
     { ...chain[0]!, ownerSessionId: chain[1]!.piSessionId },
     { ...chain[1]!, ownerSessionId: chain[0]!.piSessionId },
@@ -874,18 +808,9 @@ test("a limit that changes while a launch is prepared rejects the launch", async
 
 test("an Agent at or beyond the limit is advertised no definitions", () => {
   const definitions = [definition("worker", { agents: ["worker"] })];
-  assert.equal(
-    visibleAgentCapabilities(definitions, managedScope(2), "all", 2).length,
-    0,
-  );
-  assert.equal(
-    visibleAgentCapabilities(definitions, managedScope(3), "all", 2).length,
-    0,
-  );
-  assert.equal(
-    visibleAgentCapabilities(definitions, managedScope(1), "all", 2).length,
-    1,
-  );
+  assert.equal(visibleAgentCapabilities(definitions, managedScope(2), "all", 2).length, 0);
+  assert.equal(visibleAgentCapabilities(definitions, managedScope(3), "all", 2).length, 0);
+  assert.equal(visibleAgentCapabilities(definitions, managedScope(1), "all", 2).length, 1);
 });
 
 test("resume_agent applies the same depth policy as delegate_agent", async () => {
@@ -921,8 +846,7 @@ test("resume_agent applies the same depth policy as delegate_agent", async () =>
       },
     ]);
     try {
-      for (const handler of pi.events.get("session_start") ?? [])
-        await handler(undefined, context);
+      for (const handler of pi.events.get("session_start") ?? []) await handler(undefined, context);
       const run = () =>
         pi.tools
           .find((candidate) => candidate.name === tool)!
@@ -937,11 +861,7 @@ test("resume_agent applies the same depth policy as delegate_agent", async () =>
       // depth policy (continue then fails to resolve the unknown session).
       writeMaxAgentDepth(3);
       const allowed = await run();
-      assert.doesNotMatch(
-        JSON.stringify(allowed.details),
-        /maxAgentDepth is/,
-        action,
-      );
+      assert.doesNotMatch(JSON.stringify(allowed.details), /maxAgentDepth is/, action);
     } finally {
       pi.events.get("session_shutdown")?.[0]();
       resetAgentMailbox(mailbox);
@@ -970,15 +890,12 @@ async function fromMiddleAgent(
     ...managedState(label, randomUUID(), {
       paneId: index === 1 ? "registered-pane" : `pane-${label}`,
       tabId: `tab-${label}`,
-      piSessionId:
-        index === 1 ? "dddddddd-dddd-4ddd-8ddd-dddddddddddd" : ids[index]!,
-      piSessionFile:
-        index === 1 ? "/tmp/registered-agent.jsonl" : `/tmp/${label}-mid.jsonl`,
+      piSessionId: index === 1 ? "dddddddd-dddd-4ddd-8ddd-dddddddddddd" : ids[index]!,
+      piSessionFile: index === 1 ? "/tmp/registered-agent.jsonl" : `/tmp/${label}-mid.jsonl`,
     }),
   }));
   states.forEach((state, index) => {
-    state.ownerSessionId =
-      index === 0 ? LEAD_SESSION_ID : states[index - 1]!.piSessionId;
+    state.ownerSessionId = index === 0 ? LEAD_SESSION_ID : states[index - 1]!.piSessionId;
   });
   const [a1, a2, a3, a4] = states as [
     ManagedAgentState,
@@ -1042,8 +959,7 @@ async function fromMiddleAgent(
     },
   ]);
   try {
-    for (const handler of pi.events.get("session_start") ?? [])
-      await handler(undefined, context);
+    for (const handler of pi.events.get("session_start") ?? []) await handler(undefined, context);
     await scenario({
       states,
       tool: (name, args) =>
@@ -1053,8 +969,7 @@ async function fromMiddleAgent(
     });
   } finally {
     pi.events.get("session_shutdown")?.[0]();
-    for (const state of states)
-      resetAgentMailbox(agentMailboxPath(WORKSPACE, state.agentLabel));
+    for (const state of states) resetAgentMailbox(agentMailboxPath(WORKSPACE, state.agentLabel));
   }
 }
 
@@ -1074,16 +989,13 @@ test("stop_agent availability accounts for the whole descendant cascade", async 
     assert.ok(listedTools(listing, "a3").includes("stop_agent"));
   });
   // The grandchild holds an undelivered result, so closing a3 would fail.
-  await fromMiddleAgent(
-    { max: 4, grandchildResult: true },
-    async ({ tool }) => {
-      const listing = await tool("list_agents", {});
-      assert.ok(listedTools(listing, "a3").includes("inspect_agent"));
-      assert.equal(listedTools(listing, "a3").includes("stop_agent"), false);
-      const stop = await tool("stop_agent", { agent: "a3" });
-      assert.equal(stop.details.ok, false);
-    },
-  );
+  await fromMiddleAgent({ max: 4, grandchildResult: true }, async ({ tool }) => {
+    const listing = await tool("list_agents", {});
+    assert.ok(listedTools(listing, "a3").includes("inspect_agent"));
+    assert.equal(listedTools(listing, "a3").includes("stop_agent"), false);
+    const stop = await tool("stop_agent", { agent: "a3" });
+    assert.equal(stop.details.ok, false);
+  });
 });
 
 test("a multi-level await_owner reaches only the direct owner, who can reply", async () => {

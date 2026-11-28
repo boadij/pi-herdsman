@@ -16,15 +16,9 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import {
-  SessionManager,
-  type ExtensionAPI,
-} from "@earendil-works/pi-coding-agent";
+import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createChiefProjectRuntime } from "./chief-project.ts";
-import {
-  AGENT_COORDINATION_TOOLS,
-  EXPECTED_COORDINATOR_LAUNCH_ENV,
-} from "./agent-definitions.ts";
+import { AGENT_COORDINATION_TOOLS, EXPECTED_COORDINATOR_LAUNCH_ENV } from "./agent-definitions.ts";
 import { fakeContext, PI_AGENT_ROOT } from "./support.ts";
 import {
   COORDINATOR_DEFINITION_ENTRY,
@@ -55,9 +49,7 @@ test("Chief clone provisions only a verified primary workspace", async (t) => {
     "unverified placement",
   ]) {
     await t.test(scenario, async (t) => {
-      const root = realpathSync.native(
-        mkdtempSync(join(tmpdir(), "chief-clone-")),
-      );
+      const root = realpathSync.native(mkdtempSync(join(tmpdir(), "chief-clone-")));
       t.after(() => rmSync(root, { recursive: true, force: true }));
       const repository = join(root, "project");
       const canonicalRepoKey = join(repository, ".git");
@@ -65,8 +57,7 @@ test("Chief clone provisions only a verified primary workspace", async (t) => {
       const url = "https://example.test/owner/project.git";
       const workspaceId = "project-workspace";
       const retired = join(root, "retired");
-      let workspaceExists =
-        scenario === "reuse" || scenario === "incomplete membership";
+      let workspaceExists = scenario === "reuse" || scenario === "incomplete membership";
       let checkoutReplaced = false;
       let snapshotObserved = false;
       let gitCheckedAfterSnapshot = false;
@@ -80,8 +71,7 @@ test("Chief clone provisions only a verified primary workspace", async (t) => {
         {
           exec: async (command: string, args: string[]) => {
             const ok = (stdout: string) => ({ code: 0, stdout, stderr: "" });
-            const response = (result: unknown) =>
-              ok(JSON.stringify({ id: 1, result }));
+            const response = (result: unknown) => ok(JSON.stringify({ id: 1, result }));
             if (command === "git") {
               if (args[0] === "clone") {
                 assert.deepEqual(args, ["clone", "--", url, repository]);
@@ -97,11 +87,7 @@ test("Chief clone provisions only a verified primary workspace", async (t) => {
                   stdout: "",
                   stderr: "not a git repository",
                 };
-              return ok(
-                args.at(-1) === "--show-toplevel"
-                  ? repository
-                  : canonicalRepoKey,
-              );
+              return ok(args.at(-1) === "--show-toplevel" ? repository : canonicalRepoKey);
             }
             switch (args.slice(0, 2).join(" ")) {
               case "api snapshot":
@@ -117,23 +103,16 @@ test("Chief clone provisions only a verified primary workspace", async (t) => {
                       ? [
                           {
                             workspace_id: workspaceId,
-                            worktree:
-                              scenario === "incomplete membership" ? {} : null,
+                            worktree: scenario === "incomplete membership" ? {} : null,
                           },
                         ]
                       : [],
-                    panes: workspaceExists
-                      ? [{ workspace_id: workspaceId, cwd: repository }]
-                      : [],
+                    panes: workspaceExists ? [{ workspace_id: workspaceId, cwd: repository }] : [],
                     agents: [],
                   },
                 });
               case "workspace create":
-                assert.deepEqual(args.slice(2), [
-                  "--cwd",
-                  repository,
-                  "--no-focus",
-                ]);
+                assert.deepEqual(args.slice(2), ["--cwd", repository, "--no-focus"]);
                 mutations.push("workspace create");
                 workspaceExists = true;
                 if (scenario === "lost acknowledgement")
@@ -146,8 +125,7 @@ test("Chief clone provisions only a verified primary workspace", async (t) => {
                     repo_key: canonicalRepoKey,
                     repo_name: "project",
                     source_workspace_id: workspaceId,
-                    source_checkout_path:
-                      scenario === "unverified placement" ? root : repository,
+                    source_checkout_path: scenario === "unverified placement" ? root : repository,
                   },
                   worktrees: [],
                 });
@@ -173,15 +151,11 @@ test("Chief clone provisions only a verified primary workspace", async (t) => {
       assert.ok("repository" in result);
       assert.equal(result.repository, repository);
       assert.ok(
-        statSync(
-          checkoutReplaced ? join(retired, ".git") : canonicalRepoKey,
-        ).isDirectory(),
+        statSync(checkoutReplaced ? join(retired, ".git") : canonicalRepoKey).isDirectory(),
       );
       assert.deepEqual(
         mutations,
-        ["create", "lost acknowledgement", "unverified placement"].includes(
-          scenario,
-        )
+        ["create", "lost acknowledgement", "unverified placement"].includes(scenario)
           ? ["git clone", "workspace create"]
           : ["git clone"],
       );
@@ -206,15 +180,9 @@ test("Chief clone provisions only a verified primary workspace", async (t) => {
           } else if (scenario === "incomplete membership") {
             assert.match(result.reason, /conflicting repository identity/);
           } else if (scenario === "checkout replaced") {
-            assert.match(
-              result.reason,
-              /Git local repository identity is unavailable/,
-            );
+            assert.match(result.reason, /Git local repository identity is unavailable/);
           } else {
-            assert.match(
-              result.reason,
-              /authority lost|startup lock is in progress/i,
-            );
+            assert.match(result.reason, /authority lost|startup lock is in progress/i);
           }
       }
     });
@@ -222,24 +190,16 @@ test("Chief clone provisions only a verified primary workspace", async (t) => {
 });
 
 test("Chief Git approval cannot transfer to a replacement directory", async (t) => {
-  for (const change of [
-    "existing",
-    "missing ancestor",
-    "missing symlink",
-    "declined",
-  ] as const) {
+  for (const change of ["existing", "missing ancestor", "missing symlink", "declined"] as const) {
     await t.test(change, async (t) => {
-      const root = realpathSync.native(
-        mkdtempSync(join(tmpdir(), "chief-approval-")),
-      );
+      const root = realpathSync.native(mkdtempSync(join(tmpdir(), "chief-approval-")));
       t.after(() => rmSync(root, { recursive: true, force: true }));
       const anchor = join(root, "selected");
       const retired = join(root, "retired");
       const replacement = join(root, "replacement");
       mkdirSync(anchor);
       mkdirSync(replacement);
-      const target =
-        change === "existing" ? anchor : join(anchor, "missing", "project");
+      const target = change === "existing" ? anchor : join(anchor, "missing", "project");
       let confirmations = 0;
       const context = fakeContext();
       context.hasUI = true;
@@ -248,8 +208,7 @@ test("Chief Git approval cannot transfer to a replacement directory", async (t) 
         assert.ok(message.includes(target));
         if (change === "declined") return false;
         renameSync(anchor, retired);
-        if (change === "missing symlink")
-          symlinkSync(replacement, anchor, "junction");
+        if (change === "missing symlink") symlinkSync(replacement, anchor, "junction");
         else mkdirSync(anchor);
         return true;
       };
@@ -287,8 +246,7 @@ test("Chief Git approval cannot transfer to a replacement directory", async (t) 
       assert.equal(confirmations, 1);
       for (const path of [anchor, retired, replacement])
         assert.equal(existsSync(join(path, ".git")), false);
-      if (change !== "existing")
-        assert.equal(existsSync(dirname(target)), false);
+      if (change !== "existing") assert.equal(existsSync(dirname(target)), false);
     });
   }
 });
@@ -312,26 +270,16 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
     "conflicting configuration",
   ] as const) {
     await t.test(scenario, async (t) => {
-      const root = realpathSync.native(
-        mkdtempSync(join(tmpdir(), "chief-project-")),
-      );
+      const root = realpathSync.native(mkdtempSync(join(tmpdir(), "chief-project-")));
       const prior = process.env.PI_CODING_AGENT_DIR;
       const agentDir = join(root, "pi");
       const hook = join("extensions", "herdr-agent-state.ts");
       process.env.PI_CODING_AGENT_DIR = agentDir;
       if (scenario !== "missing integration" && scenario !== "optional") {
         mkdirSync(join(agentDir, "extensions"), { recursive: true });
-        writeFileSync(
-          join(agentDir, hook),
-          readFileSync(join(PI_AGENT_ROOT, hook)),
-        );
+        writeFileSync(join(agentDir, hook), readFileSync(join(PI_AGENT_ROOT, hook)));
       }
-      const namedDefinition = join(
-        agentDir,
-        "coordinators",
-        "managers",
-        "custom-manager.md",
-      );
+      const namedDefinition = join(agentDir, "coordinators", "managers", "custom-manager.md");
       const writeNamedDefinition = (toolPolicy: string) =>
         writeFileSync(
           namedDefinition,
@@ -342,8 +290,7 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         writeNamedDefinition("tools: [codemode]\nagents: [scout]");
       }
       const originMismatch = scenario === "clone origin mismatch";
-      const cloneFromCheckout =
-        scenario === "clone from running project" || originMismatch;
+      const cloneFromCheckout = scenario === "clone from running project" || originMismatch;
       const sourceCheckout = join(root, "source");
       const sourceKey = join(sourceCheckout, ".git");
       const origin = "https://example.test/owner/project.git";
@@ -357,11 +304,7 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
       let manager: ManagerLease | undefined;
       let sourceManager: ManagerLease | undefined;
       t.after(() => {
-        if (
-          manager &&
-          !managerPublished &&
-          ["malformed", "foreign"].includes(scenario)
-        )
+        if (manager && !managerPublished && ["malformed", "foreign"].includes(scenario))
           renameSync(delayedDescriptor, descriptorPath);
         manager?.release();
         sourceManager?.release();
@@ -386,8 +329,7 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
       const delayedDescriptor = descriptorPath + ".delayed";
       const guardPath = descriptorPath + ".unsettled";
       const intents = join(runtime.root, "manager-start-intents");
-      const remainingIntents = () =>
-        existsSync(intents) ? readdirSync(intents) : [];
+      const remainingIntents = () => (existsSync(intents) ? readdirSync(intents) : []);
       let lostAcknowledgement = false;
       const workspace = {
         workspace_id: "manager-workspace",
@@ -432,14 +374,9 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
                   kind: "model_restore",
                   assignmentId: piSessionId,
                   generation: instanceId,
-                  result:
-                    scenario === "named"
-                      ? "definition_override"
-                      : "no_saved_model",
+                  result: scenario === "named" ? "definition_override" : "no_saved_model",
                   launchConfiguration:
-                    scenario === "conflicting configuration"
-                      ? "0".repeat(64)
-                      : launchConfiguration,
+                    scenario === "conflicting configuration" ? "0".repeat(64) : launchConfiguration,
                 },
               }
             : {}),
@@ -451,34 +388,19 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         stderr: "",
       });
       const pi = {
-        exec: async (
-          command: string,
-          args: string[],
-          options?: { cwd?: string },
-        ) => {
+        exec: async (command: string, args: string[], options?: { cwd?: string }) => {
           if (command === "git") {
             const cwd = options?.cwd;
             let stdout = "";
             if (args[0] === "rev-parse") {
-              assert.ok(
-                cwd === repository ||
-                  (cloneFromCheckout && cwd === sourceCheckout),
-              );
-              stdout =
-                args.at(-1) === "--show-toplevel" ? cwd : join(cwd, ".git");
+              assert.ok(cwd === repository || (cloneFromCheckout && cwd === sourceCheckout));
+              stdout = args.at(-1) === "--show-toplevel" ? cwd : join(cwd, ".git");
             } else {
               assert.ok(cloneFromCheckout);
               if (args[0] === "remote" && args[1] === "get-url") {
-                assert.deepEqual(args, [
-                  "remote",
-                  "get-url",
-                  "--all",
-                  "origin",
-                ]);
+                assert.deepEqual(args, ["remote", "get-url", "--all", "origin"]);
                 assert.ok(cwd === sourceCheckout || cwd === repository);
-                cloneCalls.push(
-                  cwd === sourceCheckout ? "read origin" : "verify origin",
-                );
+                cloneCalls.push(cwd === sourceCheckout ? "read origin" : "verify origin");
                 stdout =
                   cwd === repository && originMismatch
                     ? "https://different.test/repo.git\n"
@@ -505,13 +427,7 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
                 mkdirSync(canonicalRepoKey);
               } else {
                 assert.equal(cwd, repository);
-                assert.deepEqual(args, [
-                  "remote",
-                  "set-url",
-                  "--",
-                  "origin",
-                  origin,
-                ]);
+                assert.deepEqual(args, ["remote", "set-url", "--", "origin", origin]);
                 cloneCalls.push("record origin");
               }
             }
@@ -522,11 +438,7 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
             };
           }
           const operation = args.slice(0, 2).join(" ");
-          if (
-            ["workspace create", "tab create", "agent start"].includes(
-              operation,
-            )
-          )
+          if (["workspace create", "tab create", "agent start"].includes(operation))
             placementCalls.push(operation);
           switch (operation) {
             case "api snapshot":
@@ -535,18 +447,12 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
                   agents: [],
                   panes: [],
                   workspaces:
-                    scenario === "missing integration" || !workspaceCreated
-                      ? []
-                      : [workspace],
+                    scenario === "missing integration" || !workspaceCreated ? [] : [workspace],
                 },
               });
             case "workspace create":
               assert.ok(cloneFromCheckout && !workspaceCreated);
-              assert.deepEqual(args.slice(2), [
-                "--cwd",
-                repository,
-                "--no-focus",
-              ]);
+              assert.deepEqual(args.slice(2), ["--cwd", repository, "--no-focus"]);
               assert.ok(statSync(canonicalRepoKey).isDirectory());
               workspaceCreated = true;
               return response({ workspace });
@@ -563,14 +469,9 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
                 worktrees: [],
               });
             case "tab create":
-              assert.equal(
-                args[args.indexOf("--env") + 1],
-                `PI_CODING_AGENT_DIR=${agentDir}`,
-              );
+              assert.equal(args[args.indexOf("--env") + 1], `PI_CODING_AGENT_DIR=${agentDir}`);
               launchConfiguration = args
-                .find((arg) =>
-                  arg.startsWith(`${EXPECTED_COORDINATOR_LAUNCH_ENV}=`),
-                )
+                .find((arg) => arg.startsWith(`${EXPECTED_COORDINATOR_LAUNCH_ENV}=`))
                 ?.split("=")[1];
               assert.match(launchConfiguration ?? "", /^[0-9a-f]{64}$/);
               tabCreated = true;
@@ -580,9 +481,7 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
               });
             case "tab list":
               return response({
-                tabs: tabCreated
-                  ? [{ workspace_id: pane.workspace_id, tab_id: pane.tab_id }]
-                  : [],
+                tabs: tabCreated ? [{ workspace_id: pane.workspace_id, tab_id: pane.tab_id }] : [],
               });
             case "pane list":
               return response({ panes: tabCreated ? [pane] : [] });
@@ -622,12 +521,8 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
                 assert.ok(args.includes("test-provider/test-model"));
                 assert.ok(args.includes("--thinking"));
                 assert.ok(args.includes("high"));
-                const tools =
-                  args[args.indexOf("--tools") + 1]?.split(",") ?? [];
-                for (const name of [
-                  ...AGENT_COORDINATION_TOOLS,
-                  "delegate_work",
-                ])
+                const tools = args[args.indexOf("--tools") + 1]?.split(",") ?? [];
+                for (const name of [...AGENT_COORDINATION_TOOLS, "delegate_work"])
                   assert.ok(tools.includes(name), name);
                 assert.equal(tools.includes("codemode"), launches === 1);
                 assert.equal(args.includes("--no-tools"), launches === 2);
@@ -635,41 +530,24 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
               assert.ok(!args.includes("--no-skills"));
               assert.ok(!args.includes("--no-context-files"));
               if (scenario !== "named") {
-                const tools =
-                  args[args.indexOf("--tools") + 1]?.split(",") ?? [];
-                assert.ok(
-                  tools.includes("delegate_work"),
-                  JSON.stringify(args),
-                );
+                const tools = args[args.indexOf("--tools") + 1]?.split(",") ?? [];
+                assert.ok(tools.includes("delegate_work"), JSON.stringify(args));
               }
               assert.equal(args.at(-2), "--session");
               assert.ok(!args.some((arg) => arg.includes("--trust")));
               const path = args.at(-1)!;
               if (expectedHistoryAtLaunch !== undefined)
-                assert.equal(
-                  readFileSync(path, "utf8"),
-                  expectedHistoryAtLaunch,
-                );
+                assert.equal(readFileSync(path, "utf8"), expectedHistoryAtLaunch);
               const saved = SessionManager.open(path);
-              assert.ok(
-                existsSync(guardPath),
-                "Guard must be published before Herdr launch",
-              );
+              assert.ok(existsSync(guardPath), "Guard must be published before Herdr launch");
               if (!file) {
                 file = path;
                 id = saved.getSessionId();
                 assert.equal(saved.getCwd(), repository);
                 assert.equal(saved.getEntries().length, 0);
-                assert.equal(
-                  readFileSync(path, "utf8").trim().split("\n").length,
-                  1,
-                );
-                if (process.platform !== "win32")
-                  assert.equal(statSync(path).mode & 0o777, 0o600);
-                assert.equal(
-                  getManagerStartIntent(runtime, id)?.paneId,
-                  pane.pane_id,
-                );
+                assert.equal(readFileSync(path, "utf8").trim().split("\n").length, 1);
+                if (process.platform !== "win32") assert.equal(statSync(path).mode & 0o777, 0o600);
+                assert.equal(getManagerStartIntent(runtime, id)?.paneId, pane.pane_id);
                 assert.equal(
                   getManagerStartIntent(runtime, id)?.definition,
                   scenario === "named" ? "custom-manager" : "manager",
@@ -705,10 +583,7 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
               } else {
                 assert.equal(path, file);
                 assert.equal(saved.getSessionId(), id);
-                const intent = getManagerStartIntent(
-                  runtime,
-                  saved.getSessionId(),
-                );
+                const intent = getManagerStartIntent(runtime, saved.getSessionId());
                 assert.equal(intent?.recoverySessionFile, path);
                 assert.equal(intent?.paneId, pane.pane_id);
                 assert.ok(intent?.admission);
@@ -722,11 +597,7 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
               }
               const piSessionId = saved.getSessionId();
               activate(piSessionId, path);
-              if (
-                ["pending", "old generation", "malformed", "foreign"].includes(
-                  scenario,
-                )
-              ) {
+              if (["pending", "old generation", "malformed", "foreign"].includes(scenario)) {
                 renameSync(descriptorPath, delayedDescriptor);
                 if (scenario === "old generation")
                   writeFileSync(
@@ -736,12 +607,9 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
                       claim: { ...manager!.descriptor.claim, id: randomUUID() },
                     }),
                   );
-                if (scenario === "malformed")
-                  writeFileSync(descriptorPath, "{}");
+                if (scenario === "malformed") writeFileSync(descriptorPath, "{}");
                 if (scenario === "foreign") observedPid++;
-                assert.throws(() =>
-                  readManagerDescriptorStatus(runtime, canonicalRepoKey),
-                );
+                assert.throws(() => readManagerDescriptorStatus(runtime, canonicalRepoKey));
               }
               writeManagerRecoveryReference(runtime, {
                 version: 1,
@@ -819,28 +687,15 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
           repository,
           definition: "manager",
         });
-        const expectedPlacement = [
-          "workspace create",
-          "tab create",
-          "agent start",
-        ];
+        const expectedPlacement = ["workspace create", "tab create", "agent start"];
         assert.deepEqual(placementCalls, expectedPlacement);
         assert.equal(launches, 1);
-        const destination = readManagerDescriptorStatus(
-          runtime,
-          canonicalRepoKey,
-        );
+        const destination = readManagerDescriptorStatus(runtime, canonicalRepoKey);
         assert.ok(destination?.live);
         assert.equal(destination.descriptor.canonicalRepoKey, canonicalRepoKey);
-        assert.equal(
-          destination.descriptor.workspaceId,
-          workspace.workspace_id,
-        );
+        assert.equal(destination.descriptor.workspaceId, workspace.workspace_id);
         assert.equal(destination.descriptor.piSessionId, id);
-        assert.notEqual(
-          destination.descriptor.piSessionId,
-          sourceManager.descriptor.piSessionId,
-        );
+        assert.notEqual(destination.descriptor.piSessionId, sourceManager.descriptor.piSessionId);
 
         const destinationFile = join(repository, "keep.txt");
         writeFileSync(destinationFile, "existing destination");
@@ -853,10 +708,7 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
           "read origin",
         ]);
         assert.deepEqual(placementCalls, expectedPlacement);
-        assert.equal(
-          readFileSync(destinationFile, "utf8"),
-          "existing destination",
-        );
+        assert.equal(readFileSync(destinationFile, "utf8"), "existing destination");
         assert.equal(statSync(sourceCheckout).ino, sourceStat.ino);
         assert.equal(readFileSync(sourceFile, "utf8"), "source-only changes");
         assert.ok(!existsSync(join(repository, "uncommitted.txt")));
@@ -866,10 +718,7 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         return;
       }
       if (scenario === "missing integration") {
-        await assert.rejects(
-          start(),
-          /Required Herdr Pi integration is missing/,
-        );
+        await assert.rejects(start(), /Required Herdr Pi integration is missing/);
         assert.deepEqual(placementCalls, []);
         return;
       }
@@ -908,9 +757,7 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
           piSessionFile: file,
         });
       }
-      const first = await (scenario === "uncertain resume"
-        ? resume()
-        : start());
+      const first = await (scenario === "uncertain resume" ? resume() : start());
       if (scenario === "denied") {
         assert.equal(first.status, "partial_failure");
         assert.equal(launches, 0);
@@ -945,24 +792,18 @@ test("Chief lifecycle uses one exact Pi conversation and preserves uncertain sta
         assert.equal(first.status, "partial_failure");
         assert.equal(existsSync(guardPath), true);
         if (scenario === "uncertain")
-          assert.equal(
-            getManagerStartIntent(runtime, id)?.paneId,
-            pane.pane_id,
-          );
+          assert.equal(getManagerStartIntent(runtime, id)?.paneId, pane.pane_id);
         const guardBefore = readFileSync(guardPath, "utf8");
         process.env.PI_CODING_AGENT_DIR = join(root, "other-profile");
         currentRuntime = supervisionRuntime(join(root, "socket"));
         try {
           assert.equal(
-            managerDescriptorPath(currentRuntime, canonicalRepoKey) +
-              ".unsettled",
+            managerDescriptorPath(currentRuntime, canonicalRepoKey) + ".unsettled",
             guardPath,
           );
           for (const retry of [start, resume]) {
             const blocked = await retry();
-            assert.ok(
-              "stage" in blocked && blocked.stage === "unsettled_launch",
-            );
+            assert.ok("stage" in blocked && blocked.stage === "unsettled_launch");
             assert.match(blocked.reason, /another Pi profile/);
             assert.ok(!blocked.reason.includes(id));
           }

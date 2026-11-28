@@ -1,9 +1,5 @@
 import { readFile } from "node:fs/promises";
-import type {
-  ExtensionAPI,
-  Skill,
-  ToolExposure,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, Skill, ToolExposure } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 const TOOL = "load_skill";
@@ -29,9 +25,7 @@ export function registerSkillLoader(
       .getAllTools()
       .some(
         ({ name, sourceInfo }) =>
-          READERS.has(name) &&
-          sourceInfo?.source === "builtin" &&
-          active.includes(name),
+          READERS.has(name) && sourceInfo?.source === "builtin" && active.includes(name),
       );
   }
 
@@ -65,10 +59,7 @@ export function registerSkillLoader(
       ),
       prepareLoadout(loadout) {
         const active = loadout.declared.map(({ name }) => name);
-        if (
-          loadout.getExposure(TOOL) !== "direct" ||
-          !eligibleSkills(active).length
-        ) {
+        if (loadout.getExposure(TOOL) !== "direct" || !eligibleSkills(active).length) {
           return { hiddenDeclarations: [TOOL] };
         }
       },
@@ -112,10 +103,7 @@ export function registerSkillLoader(
     const active = pi.getActiveTools();
     const eligible = eligibleSkills(active);
     const catalog = eligible
-      .map(
-        ({ name, description }) =>
-          `- ${JSON.stringify(name)}: ${JSON.stringify(description)}`,
-      )
+      .map(({ name, description }) => `- ${JSON.stringify(name)}: ${JSON.stringify(description)}`)
       .join("\n");
     const next = eligible.length
       ? {
@@ -124,10 +112,7 @@ export function registerSkillLoader(
         }
       : { description: DESCRIPTION, exposure: "model-only" as ToolExposure };
 
-    if (
-      next.description === advertised.description &&
-      next.exposure === advertised.exposure
-    ) {
+    if (next.description === advertised.description && next.exposure === advertised.exposure) {
       return;
     }
 
@@ -135,10 +120,7 @@ export function registerSkillLoader(
       register(next);
     } finally {
       const after = pi.getActiveTools();
-      if (
-        after.length !== active.length ||
-        after.some((name, i) => name !== active[i])
-      ) {
+      if (after.length !== active.length || after.some((name, i) => name !== active[i])) {
         pi.setActiveTools(active);
       }
     }
@@ -167,11 +149,7 @@ export function registerSkillLoader(
   // ponytail: refresh metadata at model boundaries; execution guards enforce current availability between refreshes.
   pi.on("turn_end", (_event, ctx) => {
     const sessionId = ctx.sessionManager.getSessionId();
-    if (
-      !current ||
-      current.sessionId !== sessionId ||
-      !isSessionAuthorized(sessionId)
-    ) {
+    if (!current || current.sessionId !== sessionId || !isSessionAuthorized(sessionId)) {
       current = undefined;
     }
     refreshRegistration();

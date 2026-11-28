@@ -15,11 +15,7 @@ import {
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import {
-  isRuntimeBuild,
-  runtimeBuild,
-  sameRuntimeBuild,
-} from "../extension/compatibility.ts";
+import { isRuntimeBuild, runtimeBuild, sameRuntimeBuild } from "../extension/compatibility.ts";
 import { nodeOnlyAgentDir, herdsmanDataRoot } from "../extension/storage.ts";
 import {
   listPeerLeadRecords,
@@ -88,9 +84,7 @@ if (
 
 const agentDir = nodeOnlyAgentDir();
 if (!isAbsolute(agentDir)) {
-  console.error(
-    "PI_CODING_AGENT_DIR must resolve to an absolute path for remote probing",
-  );
+  console.error("PI_CODING_AGENT_DIR must resolve to an absolute path for remote probing");
   process.exit(1);
 }
 
@@ -109,9 +103,7 @@ const bridgeDirectory = dirname(fileURLToPath(import.meta.url));
 const packageRoot = dirname(bridgeDirectory);
 const compatible = (peer: { build?: unknown }): boolean => {
   try {
-    const metadata = JSON.parse(
-      readFileSync(join(packageRoot, "package.json"), "utf8"),
-    );
+    const metadata = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
     const build = runtimeBuild(
       metadata.version,
       basename(bridgeDirectory) === "bin"
@@ -119,9 +111,7 @@ const compatible = (peer: { build?: unknown }): boolean => {
         : join(packageRoot, "dist", "index.js"),
     );
     return (
-      isRuntimeBuild(build) &&
-      isRuntimeBuild(peer.build) &&
-      sameRuntimeBuild(build, peer.build)
+      isRuntimeBuild(build) && isRuntimeBuild(peer.build) && sameRuntimeBuild(build, peer.build)
     );
   } catch {
     return false;
@@ -143,9 +133,7 @@ if (action === "probe") {
   let eligibleLeads: typeof peers = [];
   try {
     const assignments = globalProjectAssignmentSnapshot();
-    eligibleLeads = peers.filter((peer) =>
-      isRemoteOrdinaryLead(peer, assignments),
-    );
+    eligibleLeads = peers.filter((peer) => isRemoteOrdinaryLead(peer, assignments));
   } catch {
     ordinaryLeadsComplete = false;
   }
@@ -153,10 +141,7 @@ if (action === "probe") {
   console.log(
     JSON.stringify({
       dataRoot: herdsmanDataRoot(),
-      peers: [
-        ...peers.filter((peer) => peer.role === "manager"),
-        ...eligibleLeads,
-      ],
+      peers: [...peers.filter((peer) => peer.role === "manager"), ...eligibleLeads],
       ordinaryLeadsComplete,
     }),
   );
@@ -195,8 +180,7 @@ if (action === "probe") {
     digest?: string;
   };
   if (action === "status") {
-    const { id, originSession, recipientSession, digest, expectedDataRoot } =
-      envelope;
+    const { id, originSession, recipientSession, digest, expectedDataRoot } = envelope;
     assertPeerDataRoot(herdsmanDataRoot(), expectedDataRoot ?? "");
     if (
       !process.env.SSH_CONNECTION ||
@@ -207,9 +191,7 @@ if (action === "probe") {
       !/^[0-9a-f]{64}$/u.test(digest)
     )
       throw new Error("invalid peer acceptance status request");
-    const key = createHash("sha256")
-      .update(`${originSession}\0${id}`)
-      .digest("hex");
+    const key = createHash("sha256").update(`${originSession}\0${id}`).digest("hex");
     const marker = join(runtime.root, "peer-acceptances", `${key}.json`);
     try {
       const prior = JSON.parse(readFileSync(marker, "utf8")) as {
@@ -233,9 +215,7 @@ if (action === "probe") {
         action = "accept";
         recoveringStatus = true;
       } else {
-        console.log(
-          JSON.stringify({ dataRoot: herdsmanDataRoot(), id, digest, status }),
-        );
+        console.log(JSON.stringify({ dataRoot: herdsmanDataRoot(), id, digest, status }));
         process.exit(0);
       }
     } catch (error) {
@@ -272,21 +252,15 @@ if (action === "probe") {
       throw new Error("invalid peer correspondence request");
     assertPeerDataRoot(herdsmanDataRoot(), envelope.expectedDataRoot ?? "");
     const liveRecipientGeneration =
-      action === "recover-recipient"
-        ? envelope.newRecipientGeneration
-        : recipientGeneration;
+      action === "recover-recipient" ? envelope.newRecipientGeneration : recipientGeneration;
     const runCorrespondenceOperation = (
-      assignments?: Map<
-        string,
-        import("../extension/supervision.ts").GlobalProjectAssignment[]
-      >,
+      assignments?: Map<string, import("../extension/supervision.ts").GlobalProjectAssignment[]>,
     ) => {
       const correspondence = readPeerCorrespondence(id);
       const correspondenceRole = correspondence?.role ?? "manager";
       const live = listPeerLeadRecords(runtime).find(
         (peer) =>
-          peer.piSessionId === recipientSession &&
-          peer.claim.id === liveRecipientGeneration,
+          peer.piSessionId === recipientSession && peer.claim.id === liveRecipientGeneration,
       );
       const recipientIsLive =
         !!live &&
@@ -304,9 +278,7 @@ if (action === "probe") {
         correspondence.recipientSession !== recipientSession ||
         correspondence.capability !== capability
       )
-        throw new Error(
-          "exact correspondence recipient is not live or authorized",
-        );
+        throw new Error("exact correspondence recipient is not live or authorized");
       if (action === "recover") {
         if (typeof previousOriginGeneration !== "string")
           throw new Error("invalid peer correspondence recovery");
@@ -365,8 +337,7 @@ if (action === "probe") {
           }),
         );
       } else if (action === "ack") {
-        if (typeof envelope.replyId !== "string")
-          throw new Error("invalid reply acknowledgement");
+        if (typeof envelope.replyId !== "string") throw new Error("invalid reply acknowledgement");
         acknowledgePeerReply(
           id,
           capability,
@@ -376,9 +347,7 @@ if (action === "probe") {
           recipientSession,
           recipientGeneration,
         );
-        console.log(
-          JSON.stringify({ acknowledged: true, replyId: envelope.replyId }),
-        );
+        console.log(JSON.stringify({ acknowledged: true, replyId: envelope.replyId }));
       } else {
         finalizePeerCorrespondence(
           id,
@@ -396,9 +365,7 @@ if (action === "probe") {
     // after the check but before an ACK discards the durable reply.
     const role = readPeerCorrespondence(id)?.role ?? "manager";
     if (role === "lead") {
-      withProjectAssignmentAuthority((assignments) =>
-        runCorrespondenceOperation(assignments),
-      );
+      withProjectAssignmentAuthority((assignments) => runCorrespondenceOperation(assignments));
     } else {
       runCorrespondenceOperation();
     }
@@ -422,16 +389,14 @@ if (action === "probe") {
     Object.keys(record.peerSource).length === 2;
   if (
     (correspondenceRole !== "manager" && correspondenceRole !== "lead") ||
-    (correspondenceRole === "manager" &&
-      record.peerSource.role !== "manager") ||
+    (correspondenceRole === "manager" && record.peerSource.role !== "manager") ||
     (correspondenceRole === "lead" && !remoteOrdinarySource)
   )
     throw new Error("peer source role does not match correspondence role");
   if (!Array.isArray(envelope.attachments) || envelope.attachments.length > 32)
     throw new Error("invalid peer transfer evidence");
   const connection = process.env.SSH_CONNECTION;
-  if (!connection)
-    throw new Error("authenticated SSH connection identity is unavailable");
+  if (!connection) throw new Error("authenticated SSH connection identity is unavailable");
   if (
     !envelope.correspondence ||
     envelope.correspondence.recipientSession !== record.toSessionId ||
@@ -445,9 +410,7 @@ if (action === "probe") {
     attachments: envelope.attachments,
   });
   const markerDir = join(runtime.root, "peer-acceptances");
-  const key = createHash("sha256")
-    .update(`${record.fromSessionId}\0${record.id}`)
-    .digest("hex");
+  const key = createHash("sha256").update(`${record.fromSessionId}\0${record.id}`).digest("hex");
   const marker = join(markerDir, `${key}.json`);
   let acceptedRace = false;
   try {
@@ -457,10 +420,7 @@ if (action === "probe") {
       recipientSession?: unknown;
       transfer?: typeof envelope;
     };
-    if (
-      prior.digest !== digest ||
-      prior.recipientSession !== record.toSessionId
-    )
+    if (prior.digest !== digest || prior.recipientSession !== record.toSessionId)
       throw new Error("conflicting peer message identity");
     if (prior.status === "accepted") {
       console.log(JSON.stringify({ accepted: true, id: record.id }));
@@ -472,26 +432,21 @@ if (action === "probe") {
       prior.transfer.record?.id !== record.id ||
       prior.transfer.record?.fromSessionId !== record.fromSessionId ||
       prior.transfer.record?.toSessionId !== record.toSessionId ||
-      (prior.transfer.correspondence?.role ?? "manager") !==
-        correspondenceRole ||
+      (prior.transfer.correspondence?.role ?? "manager") !== correspondenceRole ||
       peerPayloadDigest({
         record: prior.transfer.record,
         attachments: prior.transfer.attachments ?? [],
       }) !== prior.digest
     )
       throw new Error("invalid pending peer message transfer");
-    if (
-      !Array.isArray(prior.transfer.attachments) ||
-      prior.transfer.attachments.length > 32
-    )
+    if (!Array.isArray(prior.transfer.attachments) || prior.transfer.attachments.length > 32)
       throw new Error("invalid peer transfer evidence");
     envelope = prior.transfer;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     const liveRecipient = listPeerLeadRecords(runtime).find(
       (peer) =>
-        peer.piSessionId === record.toSessionId &&
-        peer.claim.id === envelope.recipientClaimId,
+        peer.piSessionId === record.toSessionId && peer.claim.id === envelope.recipientClaimId,
     );
     const authorized =
       liveRecipient &&
@@ -501,9 +456,7 @@ if (action === "probe") {
             isRemoteOrdinaryLead(liveRecipient, assignments),
           ));
     if (!authorized || !compatible(liveRecipient))
-      throw new Error(
-        "exact correspondence recipient is not live or authorized",
-      );
+      throw new Error("exact correspondence recipient is not live or authorized");
     mkdirSync(markerDir, { recursive: true, mode: 0o700 });
     syncDirectory(runtime.root);
     const content = `${JSON.stringify({ connection, digest, status: "pending", recipientSession: record.toSessionId, transfer: envelope })}\n`;
@@ -519,14 +472,8 @@ if (action === "probe") {
         if (!Number.isInteger(length) || length <= 0 || length > requested)
           throw new Error("invalid pending peer acceptance write length");
         const written = writeSync(fd, bytes, offset, length);
-        if (
-          !Number.isInteger(written) ||
-          written <= 0 ||
-          written > bytes.length - offset
-        )
-          throw new Error(
-            "unable to write complete pending peer acceptance marker",
-          );
+        if (!Number.isInteger(written) || written <= 0 || written > bytes.length - offset)
+          throw new Error("unable to write complete pending peer acceptance marker");
         offset += written;
         afterPendingMarkerTempWriteForTests();
       }
@@ -554,10 +501,7 @@ if (action === "probe") {
           status?: unknown;
           transfer?: typeof envelope;
         };
-        if (
-          prior.digest !== digest ||
-          prior.recipientSession !== record.toSessionId
-        )
+        if (prior.digest !== digest || prior.recipientSession !== record.toSessionId)
           throw new Error("conflicting peer message identity");
         if (prior.status === "accepted") acceptedRace = true;
         else if (
@@ -566,8 +510,7 @@ if (action === "probe") {
           prior.transfer.record?.id !== record.id ||
           prior.transfer.record?.fromSessionId !== record.fromSessionId ||
           prior.transfer.record?.toSessionId !== record.toSessionId ||
-          (prior.transfer.correspondence?.role ?? "manager") !==
-            correspondenceRole ||
+          (prior.transfer.correspondence?.role ?? "manager") !== correspondenceRole ||
           peerPayloadDigest({
             record: prior.transfer.record,
             attachments: prior.transfer.attachments ?? [],
@@ -593,8 +536,7 @@ if (action === "probe") {
     if (
       !envelope.correspondence ||
       envelope.correspondence.recipientSession !== record.toSessionId ||
-      envelope.correspondence.recipientGeneration !==
-        envelope.recipientClaimId ||
+      envelope.correspondence.recipientGeneration !== envelope.recipientClaimId ||
       envelope.correspondence.originSession !== record.fromSessionId ||
       envelope.correspondence.originGeneration !== record.leaseId
     )
@@ -610,16 +552,11 @@ if (action === "probe") {
         !/^[0-9a-f]{64}$/u.test(attachment.sha256)
       )
         throw new Error("invalid peer attachment metadata");
-      const contentDigest = createHash("sha256")
-        .update(attachment.text, "utf8")
-        .digest("hex");
+      const contentDigest = createHash("sha256").update(attachment.text, "utf8").digest("hex");
       if (contentDigest !== attachment.sha256)
         throw new Error("peer attachment integrity check failed");
       const markerIndex = receivedText.indexOf(attachment.marker);
-      if (
-        markerIndex < 0 ||
-        receivedText.indexOf(attachment.marker, markerIndex + 1) !== -1
-      )
+      if (markerIndex < 0 || receivedText.indexOf(attachment.marker, markerIndex + 1) !== -1)
         throw new Error("peer attachment marker is missing or ambiguous");
       receivedText =
         receivedText.slice(0, markerIndex) +
@@ -656,18 +593,12 @@ if (action === "probe") {
       published = true;
     } catch (error) {
       const cause = error instanceof Error ? error.cause : undefined;
-      if ((cause as NodeJS.ErrnoException | undefined)?.code !== "ENOENT")
-        throw error;
+      if ((cause as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") throw error;
     }
     const acceptedDigest = coordinationMessageDigest(accepted);
     if (
       !published &&
-      hasPeerDeliveryReceipt(
-        runtime,
-        record.toSessionId,
-        record.id,
-        acceptedDigest,
-      )
+      hasPeerDeliveryReceipt(runtime, record.toSessionId, record.id, acceptedDigest)
     )
       published = true;
     if (!published) {
@@ -706,16 +637,8 @@ if (action === "probe") {
         const binding = record.resultBindings?.find(
           (item: { ref?: unknown }) => item.ref === attachment.ref,
         );
-        if (binding)
-          persistPeerResultArtifact(
-            binding.canonicalRef,
-            attachment.text as string,
-          );
-        else
-          persistPeerAttachment(
-            attachment.name as string,
-            attachment.text as string,
-          );
+        if (binding) persistPeerResultArtifact(binding.canonicalRef, attachment.text as string);
+        else persistPeerAttachment(attachment.name as string, attachment.text as string);
       }
     } else {
       for (const attachment of attachments) {
@@ -724,29 +647,15 @@ if (action === "probe") {
         );
         const path = binding
           ? resultPath(binding.canonicalRef.slice("result:".length))
-          : peerAttachmentPath(
-              attachment.name as string,
-              attachment.text as string,
-            );
-        if (
-          !readFileSync(path).equals(
-            Buffer.from(attachment.text as string, "utf8"),
-          )
-        )
+          : peerAttachmentPath(attachment.name as string, attachment.text as string);
+        if (!readFileSync(path).equals(Buffer.from(attachment.text as string, "utf8")))
           throw new Error("peer attachment content identity collision");
       }
       verifyPeerCorrespondence(envelope.correspondence!);
     }
     const publishIfUncommitted = (): boolean => {
       if (published) return true;
-      if (
-        hasPeerDeliveryReceipt(
-          runtime,
-          record.toSessionId,
-          record.id,
-          acceptedDigest,
-        )
-      ) {
+      if (hasPeerDeliveryReceipt(runtime, record.toSessionId, record.id, acceptedDigest)) {
         verifyPeerCorrespondence(envelope.correspondence!);
         return true;
       }
@@ -761,13 +670,10 @@ if (action === "probe") {
       if (published) return true;
       const current = listPeerLeadRecords(runtime).find(
         (peer) =>
-          peer.piSessionId === record.toSessionId &&
-          peer.claim.id === envelope.recipientClaimId,
+          peer.piSessionId === record.toSessionId && peer.claim.id === envelope.recipientClaimId,
       );
       if (!current || current.role !== "manager" || !compatible(current))
-        throw new Error(
-          "exact correspondence recipient is not live or authorized",
-        );
+        throw new Error("exact correspondence recipient is not live or authorized");
       return publishIfUncommitted();
     };
     const canFinalize =
@@ -783,9 +689,7 @@ if (action === "probe") {
               !isRemoteOrdinaryLead(current, assignments) ||
               (!published && !compatible(current))
             )
-              throw new Error(
-                "exact correspondence recipient is not live or authorized",
-              );
+              throw new Error("exact correspondence recipient is not live or authorized");
             return publishIfUncommitted();
           })
         : publishForManager();

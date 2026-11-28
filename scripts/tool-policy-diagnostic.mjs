@@ -39,9 +39,7 @@ if (process.argv.includes("--dispatch-check")) {
   const { runAgentLoop } = await import("@earendil-works/pi-agent-core");
   const { createAssistantMessageEventStream } =
     await import("../node_modules/@earendil-works/pi-ai/dist/index.js");
-  const directory = mkdtempSync(
-    join("/tmp", "pi-herdsman-dispatch-"),
-  ).toString();
+  const directory = mkdtempSync(join("/tmp", "pi-herdsman-dispatch-")).toString();
   const sentinel = join(directory, "executed");
   let executionEnd;
   const message = {
@@ -98,9 +96,7 @@ if (process.argv.includes("--dispatch-check")) {
       undefined,
       streamFn,
     );
-    const text = executionEnd?.result?.content?.find(
-      (part) => part.type === "text",
-    )?.text;
+    const text = executionEnd?.result?.content?.find((part) => part.type === "text")?.text;
     if (
       executionEnd?.toolName !== "exec_command" ||
       !executionEnd.isError ||
@@ -127,18 +123,10 @@ if (process.argv.includes("--dispatch-check")) {
 }
 
 const evidenceFile = process.env.POLICY_EVIDENCE;
-const expectedLaunch = new Set(
-  (process.env.POLICY_LAUNCH ?? "").split(",").filter(Boolean),
-);
-const expectedActive = new Set(
-  (process.env.POLICY_ACTIVE ?? "").split(",").filter(Boolean),
-);
-const expectedProvider = new Set(
-  (process.env.POLICY_PROVIDER ?? "").split(",").filter(Boolean),
-);
-const forbidden = new Set(
-  (process.env.POLICY_FORBIDDEN ?? "").split(",").filter(Boolean),
-);
+const expectedLaunch = new Set((process.env.POLICY_LAUNCH ?? "").split(",").filter(Boolean));
+const expectedActive = new Set((process.env.POLICY_ACTIVE ?? "").split(",").filter(Boolean));
+const expectedProvider = new Set((process.env.POLICY_PROVIDER ?? "").split(",").filter(Boolean));
+const forbidden = new Set((process.env.POLICY_FORBIDDEN ?? "").split(",").filter(Boolean));
 const forbiddenMode = process.env.POLICY_FORBIDDEN_MODE ?? "absent";
 const control = process.env.POLICY_CONTROL;
 
@@ -153,21 +141,15 @@ if (
   );
 
 const names = (tools) =>
-  tools
-    .map((tool) => (typeof tool === "string" ? tool : tool.name))
-    .filter(Boolean);
-const write = (event) =>
-  appendFileSync(evidenceFile, `${JSON.stringify(event)}\n`);
+  tools.map((tool) => (typeof tool === "string" ? tool : tool.name)).filter(Boolean);
+const write = (event) => appendFileSync(evidenceFile, `${JSON.stringify(event)}\n`);
 const fail = (message) => {
   process.exitCode = 1;
   throw new Error(message);
 };
 const check = (kind, values) => {
   if (kind === "tool call") {
-    if (
-      forbiddenMode === "absent" &&
-      values.some((name) => forbidden.has(name))
-    )
+    if (forbiddenMode === "absent" && values.some((name) => forbidden.has(name)))
       fail(`${kind} contains forbidden tool(s): ${values.join(",")}`);
     return;
   }
@@ -180,9 +162,7 @@ const check = (kind, values) => {
 const same = (actual, expected) =>
   actual.length === expected.size && actual.every((name) => expected.has(name));
 const launchTools = () => {
-  const index = process.argv.findIndex(
-    (arg) => arg === "--tools" || arg.startsWith("--tools="),
-  );
+  const index = process.argv.findIndex((arg) => arg === "--tools" || arg.startsWith("--tools="));
   if (index < 0) return [];
   const value = process.argv[index].includes("=")
     ? process.argv[index].split("=", 2)[1]
@@ -195,8 +175,7 @@ export default function (pi) {
     const launch = launchTools();
     const active = names(pi.getActiveTools());
     const all = names(pi.getAllTools());
-    if (!same(launch, expectedLaunch))
-      fail(`launch tools differ: ${launch.join(",")}`);
+    if (!same(launch, expectedLaunch)) fail(`launch tools differ: ${launch.join(",")}`);
     if (forbiddenMode === "absent") check("active", active);
     if (expectedActive.size && !same(active, expectedActive))
       fail(`active tools differ: ${active.join(",")}`);

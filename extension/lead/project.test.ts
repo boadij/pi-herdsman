@@ -38,8 +38,7 @@ const {
   readProjectAssignment,
   writeProjectAssignment,
 } = await import("../supervision.ts");
-const { claimManagerLease, supervisionRuntime } =
-  await import("../supervision.ts");
+const { claimManagerLease, supervisionRuntime } = await import("../supervision.ts");
 const { getAgentDir, ProjectTrustStore, SessionManager, SettingsManager } =
   await import("@earendil-works/pi-coding-agent");
 const {
@@ -58,11 +57,7 @@ test.before(() => {
 });
 
 function removeHerdrIntegrationForTest(t: TestContext) {
-  const integrationPath = join(
-    resolve(getAgentDir()),
-    "extensions",
-    "herdr-agent-state.ts",
-  );
+  const integrationPath = join(resolve(getAgentDir()), "extensions", "herdr-agent-state.ts");
   const savedPath = `${integrationPath}.disabled`;
   realFs.renameSync(integrationPath, savedPath);
   t.after(() => realFs.renameSync(savedPath, integrationPath));
@@ -92,12 +87,7 @@ test("Lead startup attestation requires the exact session and a fresh generation
   };
   fresh.startupAttestation.generation = fresh.instanceId;
   assert.equal(
-    isFreshLeadStartupAttestation(
-      fresh,
-      "assigned-session",
-      priorGeneration,
-      100,
-    ),
+    isFreshLeadStartupAttestation(fresh, "assigned-session", priorGeneration, 100),
     true,
   );
   assert.equal(
@@ -270,10 +260,7 @@ test("repository settings work without Manager and revalidate identity and polic
     for (const field of ["pane_id", "tab_id", "workspace_id"] as const) {
       const malformed = { ...matchingAgent, [field]: undefined };
       proof.setExtraAgents([malformed]);
-      await assert.rejects(
-        runtime.getRemovalPreauthorization(ctx),
-        /identity.*conflicting/,
-      );
+      await assert.rejects(runtime.getRemovalPreauthorization(ctx), /identity.*conflicting/);
       await assert.rejects(
         runtime.setRemovalPreauthorization(true, ctx, policy.identity),
         /identity.*conflicting/,
@@ -282,25 +269,16 @@ test("repository settings work without Manager and revalidate identity and polic
     }
     proof.setExtraAgents([]);
     ctx.hasUI = false;
-    await assert.rejects(
-      runtime.setRemovalPreauthorization(true, ctx),
-      /interactive/,
-    );
+    await assert.rejects(runtime.setRemovalPreauthorization(true, ctx), /interactive/);
     ctx.hasUI = true;
     confirm = async () => false;
-    assert.equal(
-      await runtime.setRemovalPreauthorization(true, ctx, policy.identity),
-      false,
-    );
+    assert.equal(await runtime.setRemovalPreauthorization(true, ctx, policy.identity), false);
     assert.equal(isWorktreeRemovalPreapproved(repoKey), false);
     confirm = async () => {
       checkoutPath = "/changed";
       return true;
     };
-    await assert.rejects(
-      runtime.setRemovalPreauthorization(true, ctx, policy.identity),
-      /changed/,
-    );
+    await assert.rejects(runtime.setRemovalPreauthorization(true, ctx, policy.identity), /changed/);
     assert.equal(isWorktreeRemovalPreapproved(repoKey), false);
     checkoutPath = "/checkout";
     confirm = async () => {
@@ -324,24 +302,14 @@ test("repository settings work without Manager and revalidate identity and polic
     assert.equal(isWorktreeRemovalPreapproved(repoKey), false);
     proof.setAgent(matchingAgent);
     confirm = async () => true;
-    assert.equal(
-      await runtime.setRemovalPreauthorization(true, ctx, policy.identity),
-      true,
-    );
+    assert.equal(await runtime.setRemovalPreauthorization(true, ctx, policy.identity), true);
     const count = confirmations;
-    assert.equal(
-      await runtime.setRemovalPreauthorization(true, ctx, policy.identity),
-      true,
-    );
+    assert.equal(await runtime.setRemovalPreauthorization(true, ctx, policy.identity), true);
     assert.equal(confirmations, count);
-    assert.equal(
-      await runtime.setRemovalPreauthorization(false, ctx, policy.identity),
-      true,
-    );
+    assert.equal(await runtime.setRemovalPreauthorization(false, ctx, policy.identity), true);
     assert.equal(isWorktreeRemovalPreapproved(repoKey), false);
   } finally {
-    if (isWorktreeRemovalPreapproved(repoKey))
-      setWorktreeRemovalPreapproved(repoKey, false);
+    if (isWorktreeRemovalPreapproved(repoKey)) setWorktreeRemovalPreapproved(repoKey, false);
     if (previousWorkspace === undefined) delete process.env.HERDR_WORKSPACE_ID;
     else process.env.HERDR_WORKSPACE_ID = previousWorkspace;
     if (previousPane === undefined) delete process.env.HERDR_PANE_ID;
@@ -386,10 +354,7 @@ test("repository integration grants require confirmation and reject stale policy
     const global = readConfig().managerMergeEnabled;
     setManagerMergeOverride(repoKey, false);
     const expected = { global, override: false as const };
-    assert.equal(
-      await runtime.setRepositoryMergeOverride(true, ctx, identity, expected),
-      false,
-    );
+    assert.equal(await runtime.setRepositoryMergeOverride(true, ctx, identity, expected), false);
     assert.equal(readConfig().managerMergeOverrides[repoKey], false);
     confirm = async () => {
       checkoutPath = "/other";
@@ -548,10 +513,7 @@ test("stop Lead observes liveness after waiting for project-work serialization",
       build: HERDSMAN_BUILD,
     }),
     requireCompatibleBuild: () => {},
-    withProjectWorkLock: async (
-      _key: string,
-      operation: () => Promise<any>,
-    ) => {
+    withProjectWorkLock: async (_key: string, operation: () => Promise<any>) => {
       waitingForProjectWork = true;
       queued();
       await gate;
@@ -574,8 +536,7 @@ test("stop Lead observes liveness after waiting for project-work serialization",
     ) => operation(),
     stopOwnedAgentsForSession: async () => ({ complete: true, closures: [] }),
     stopProjectLeadPane: async () => {},
-    stopProjectLead: (...args: Parameters<typeof runtime.stop>) =>
-      runtime.stop(...args),
+    stopProjectLead: (...args: Parameters<typeof runtime.stop>) => runtime.stop(...args),
   } as any);
 
   const stopping = runtime.executeStaff(
@@ -696,13 +657,8 @@ test("staff handoff reports failure after required evidence retention commits", 
     branch: "feature/assigned",
     text: "task",
   };
-  const retained = persistRequiredEvidenceSnapshot(
-    assignment.id,
-    "proof.md",
-    "retained proof",
-  );
-  let currentAssignment: import("../supervision.ts").ProjectAssignment =
-    assignment;
+  const retained = persistRequiredEvidenceSnapshot(assignment.id, "proof.md", "retained proof");
+  let currentAssignment: import("../supervision.ts").ProjectAssignment = assignment;
   let evidenceCalls = 0;
   const runtime = createLeadProjectRuntime({
     pi,
@@ -713,9 +669,7 @@ test("staff handoff reports failure after required evidence retention commits", 
     sameManagerDescriptor: () => true,
     supervisionRuntime: () => ({}),
     loadSupervisionSnapshot: async () => ({
-      work: [
-        { branch: assignment.branch, session: assignment.id, status: "active" },
-      ],
+      work: [{ branch: assignment.branch, session: assignment.id, status: "active" }],
       incompatible: [],
       leads: [
         {
@@ -798,9 +752,7 @@ test("staff handoff reports failure after required evidence retention commits", 
   assert.equal(evidenceCalls, 2);
   assert.ok(
     currentAssignment.requiredEvidence?.some(
-      (item: any) =>
-        item.name === retained.name &&
-        item.sourceAssignmentId === assignment.id,
+      (item: any) => item.name === retained.name && item.sourceAssignmentId === assignment.id,
     ),
   );
 });
@@ -828,8 +780,7 @@ function projectLifecycle(options: {
   const managerCheckout = repoKey;
   const worktreePath = join(tmpdir(), `project worktree-${randomUUID()}`);
   mkdirSync(worktreePath);
-  if (options.trustTarget)
-    new ProjectTrustStore(getAgentDir()).set(worktreePath, true);
+  if (options.trustTarget) new ProjectTrustStore(getAgentDir()).set(worktreePath, true);
   const workspaceId = `workspace-${randomUUID()}`;
   const assignments = join(tmpdir(), `assignments-${randomUUID()}`);
   const assignmentRoot = join(assignments, "root");
@@ -889,10 +840,7 @@ function projectLifecycle(options: {
           };
         }
         gitCommands.push(args);
-        if (
-          args[0] === "for-each-ref" &&
-          args.some((arg) => arg.startsWith("--points-at="))
-        ) {
+        if (args[0] === "for-each-ref" && args.some((arg) => arg.startsWith("--points-at="))) {
           assert.equal(worktreeCreates, 0);
           const refs = options.pinnedBaseRefs ?? [];
           const failure = options.pinnedBaseLookupFailure;
@@ -921,14 +869,10 @@ function projectLifecycle(options: {
             stdout: ref ? `${ref}\n` : "",
             stderr: "",
             code:
-              ref ||
-              /^[0-9a-f]{40}$/iu.test(input ?? "") ||
-              /^[0-9a-f]{64}$/iu.test(input ?? "")
+              ref || /^[0-9a-f]{40}$/iu.test(input ?? "") || /^[0-9a-f]{64}$/iu.test(input ?? "")
                 ? 0
                 : 1,
-            ...(options.baseLookupFailure
-              ? { [options.baseLookupFailure]: true }
-              : {}),
+            ...(options.baseLookupFailure ? { [options.baseLookupFailure]: true } : {}),
           };
         }
         if (args[0] === "rev-parse" && args.includes("--verify"))
@@ -942,18 +886,14 @@ function projectLifecycle(options: {
             ? { stdout: `${comparisonValues}\0`, stderr: "", code: 0 }
             : { stdout: "", stderr: "", code: 1 };
         if (args[0] === "config" && args.includes("--add")) {
-          if (options.failComparisonWrite)
-            return { stdout: "", stderr: "write denied", code: 1 };
+          if (options.failComparisonWrite) return { stdout: "", stderr: "write denied", code: 1 };
           comparisonValues = args.at(-1);
           return { stdout: "", stderr: "", code: 0 };
         }
         let stdout = "";
-        if (args[0] === "rev-parse" && args.includes("--show-toplevel"))
-          stdout = managerCheckout;
-        else if (args[0] === "rev-parse" && args.includes("--git-dir"))
-          stdout = repoKey;
-        else if (args[0] === "rev-parse" && args.includes("--git-common-dir"))
-          stdout = repoKey;
+        if (args[0] === "rev-parse" && args.includes("--show-toplevel")) stdout = managerCheckout;
+        else if (args[0] === "rev-parse" && args.includes("--git-dir")) stdout = repoKey;
+        else if (args[0] === "rev-parse" && args.includes("--git-common-dir")) stdout = repoKey;
         else if (args[0] === "symbolic-ref") stdout = `${checkoutBranch}\n`;
         return { stdout, stderr: "", code: 0 };
       },
@@ -969,8 +909,7 @@ function projectLifecycle(options: {
       worktrees: topology.worktrees,
     }),
     supervisionRuntime: () => supervision as any,
-    readProjectAssignment: () =>
-      readProjectAssignment(supervision as any, repoKey, branch),
+    readProjectAssignment: () => readProjectAssignment(supervision as any, repoKey, branch),
     listProjectAssignments: () => [],
     reconcileProjectAssignments: async () => {},
     runHerdr: async (_pi: any, _ctx: any, args: string[]) => {
@@ -998,11 +937,7 @@ function projectLifecycle(options: {
         return { process_info: { foreground_processes: [] } };
       if (simulateLaunch && args[0] === "tab" && args[1] === "create") {
         if (options.switchBranchOnTabCreate) checkoutBranch = "feature/other";
-        const id = readProjectAssignment(
-          supervision as any,
-          repoKey,
-          branch,
-        )?.id;
+        const id = readProjectAssignment(supervision as any, repoKey, branch)?.id;
         assert.ok(id);
         assert.deepEqual(args, [
           "tab",
@@ -1048,11 +983,7 @@ function projectLifecycle(options: {
     scanAgentStates: () => ({ states: [] }),
     readLeadCoordinationState: (_runtime: unknown, id: string) =>
       leadState?.piSessionId === id ? leadState : undefined,
-    prepareHerdrCoordinatorPane: async (
-      _pi: unknown,
-      _ctx: unknown,
-      preparation: any,
-    ) => {
+    prepareHerdrCoordinatorPane: async (_pi: unknown, _ctx: unknown, preparation: any) => {
       if (options.switchBranchOnTabCreate) checkoutBranch = "feature/other";
       return {
         workspaceId: preparation.workspaceId,
@@ -1064,11 +995,7 @@ function projectLifecycle(options: {
         createdTab: true,
       };
     },
-    startHerdrCoordinatorInPane: async (
-      _pi: unknown,
-      _ctx: unknown,
-      launch: any,
-    ) => {
+    startHerdrCoordinatorInPane: async (_pi: unknown, _ctx: unknown, launch: any) => {
       options.launch?.(launch);
       const id = launch.session.id;
       const instanceId = randomUUID();
@@ -1120,8 +1047,7 @@ function projectLifecycle(options: {
           },
           verifyProvenance: () => {},
           revalidate: async (operation: () => unknown) => {
-            if (options.rejectEvidence)
-              throw new Error("evidence authority changed");
+            if (options.rejectEvidence) throw new Error("evidence authority changed");
             await operation();
           },
         })
@@ -1146,18 +1072,10 @@ function projectLifecycle(options: {
       sha256: "a".repeat(64),
     }),
     persistRequiredTextFiles: () => [],
-    withProjectWorkLock: (_key: string, operation: () => unknown) =>
+    withProjectWorkLock: (_key: string, operation: () => unknown) => operation(),
+    withProjectAssignmentLock: async (_repo: string, _branch: string, operation: () => unknown) =>
       operation(),
-    withProjectAssignmentLock: async (
-      _repo: string,
-      _branch: string,
-      operation: () => unknown,
-    ) => operation(),
-    writeProjectAssignment: (
-      _runtime: unknown,
-      assignment: any,
-      verify?: () => void,
-    ) => {
+    writeProjectAssignment: (_runtime: unknown, assignment: any, verify?: () => void) => {
       verify?.();
     },
     appendDurableError: () => {},
@@ -1224,10 +1142,7 @@ test("fresh delegation launches the named profile in a Manager-trusted undecided
     managerTrusted: true,
     launch: (options) => {
       assert.equal(lifecycle.published?.definition, definition);
-      const intent = getCoordinatorStartIntent(
-        lifecycle.supervision,
-        lifecycle.published!.id,
-      );
+      const intent = getCoordinatorStartIntent(lifecycle.supervision, lifecycle.published!.id);
       assert.equal(intent?.role, "assigned-lead");
       assert.equal(intent?.assignmentRepoKey, lifecycle.manager.repoKey);
       assert.equal(intent?.branch, lifecycle.branch);
@@ -1235,33 +1150,20 @@ test("fresh delegation launches the named profile in a Manager-trusted undecided
         pid: process.pid,
         id: intent?.admission?.id,
       });
-      assert.equal(
-        coordinatorAdmissionClaimIsCurrent(intent!.admission!),
-        true,
-      );
+      assert.equal(coordinatorAdmissionClaimIsCurrent(intent!.admission!), true);
       assert.ok(options.agentArgs.includes("--approve"));
       assert.equal(options.agentArgs.includes("--no-approve"), false);
-      assert.equal(
-        options.agentArgs[options.agentArgs.indexOf("--thinking") + 1],
-        "high",
-      );
+      assert.equal(options.agentArgs[options.agentArgs.indexOf("--thinking") + 1], "high");
       throw new Error("named launch observed");
     },
   });
-  const profileDir = join(
-    lifecycle.worktreePath,
-    ".pi",
-    "coordinators",
-    "leads",
-  );
+  const profileDir = join(lifecycle.worktreePath, ".pi", "coordinators", "leads");
   realFs.mkdirSync(profileDir, { recursive: true });
   realFs.writeFileSync(
     join(profileDir, `${definition}.md`),
     `---\nname: ${definition}\nthinking: high\n---\n`,
   );
-  t.after(() =>
-    new ProjectTrustStore(getAgentDir()).set(lifecycle.worktreePath, null),
-  );
+  t.after(() => new ProjectTrustStore(getAgentDir()).set(lifecycle.worktreePath, null));
   await assert.rejects(lifecycle.activate(), /named launch observed/);
 });
 
@@ -1277,18 +1179,12 @@ test("fresh delegation launches in the profile-aware worktree tab", async () => 
       assert.equal(options.paneId, "lead-pane");
       assert.equal(options.agentArgs.includes("--no-extensions"), true);
       assert.ok(options.agentArgs.includes("--no-approve"));
-      assert.equal(
-        options.agentArgs[options.agentArgs.indexOf("--provider") + 1],
-        model.provider,
-      );
+      assert.equal(options.agentArgs[options.agentArgs.indexOf("--provider") + 1], model.provider);
       assert.equal(
         options.agentArgs[options.agentArgs.indexOf("--model") + 1],
         `${model.provider}/${model.id}`,
       );
-      assert.deepEqual(options.agentArgs.slice(-2), [
-        "--session-id",
-        lifecycle.published?.id,
-      ]);
+      assert.deepEqual(options.agentArgs.slice(-2), ["--session-id", lifecycle.published?.id]);
       throw new Error("launch observed");
     },
   });
@@ -1311,10 +1207,7 @@ test("fresh assigned Lead launch does not reserve startup if session directory p
   assert.equal(create.mock.callCount(), 1);
   assert.equal(launch.mock.callCount(), 0);
   assert.ok(lifecycle.published);
-  assert.deepEqual(
-    listCoordinatorStartIntents(lifecycle.supervision).intents,
-    [],
-  );
+  assert.deepEqual(listCoordinatorStartIntents(lifecycle.supervision).intents, []);
 });
 
 test("fresh delegation initializes comparison metadata from an unambiguous creation base", async () => {
@@ -1327,13 +1220,8 @@ test("fresh delegation initializes comparison metadata from an unambiguous creat
   const writeIndex = created.gitCommands.findIndex(
     (args) => args[0] === "config" && args.includes("--add"),
   );
-  const checkoutCheckIndex = created.gitCommands.findIndex(
-    (args) => args[0] === "symbolic-ref",
-  );
-  assert.ok(
-    writeIndex > checkoutCheckIndex,
-    "write follows checkout verification",
-  );
+  const checkoutCheckIndex = created.gitCommands.findIndex((args) => args[0] === "symbolic-ref");
+  assert.ok(writeIndex > checkoutCheckIndex, "write follows checkout verification");
 
   const existingBranch = projectLifecycle({
     base: "feature/parent",
@@ -1398,9 +1286,7 @@ test("fresh delegation initializes comparison metadata from an unambiguous creat
     const lifecycle = projectLifecycle({
       base: pinnedBase,
       pinnedBaseRefs: scenario.refs,
-      ...(scenario.existingComparison
-        ? { existingComparison: scenario.existingComparison }
-        : {}),
+      ...(scenario.existingComparison ? { existingComparison: scenario.existingComparison } : {}),
       ...(scenario.existingBranch ? { existingBranch: true } : {}),
       ...(scenario.pinnedBaseLookupFailure
         ? { pinnedBaseLookupFailure: scenario.pinnedBaseLookupFailure }
@@ -1438,11 +1324,7 @@ test("fresh delegation initializes comparison metadata from an unambiguous creat
     const rendered = JSON.parse(result.content[0].text);
     for (const response of [result.details, rendered]) {
       assert.equal(response.ok, true);
-      assert.equal(
-        response.comparison_warning,
-        warning,
-        JSON.stringify(scenario),
-      );
+      assert.equal(response.comparison_warning, warning, JSON.stringify(scenario));
     }
   }
 });
@@ -1452,9 +1334,7 @@ test("fresh delegation rejects missing Herdr integration before creating worktre
   const lifecycle = projectLifecycle({});
   const evidenceDir = join(herdsmanDataRoot(), "evidence");
   const evidenceEntries = () =>
-    realFs.existsSync(evidenceDir)
-      ? realFs.readdirSync(evidenceDir).sort()
-      : [];
+    realFs.existsSync(evidenceDir) ? realFs.readdirSync(evidenceDir).sort() : [];
   const priorEvidence = evidenceEntries();
 
   await assert.rejects(lifecycle.activate(), missingIntegration);
@@ -1476,32 +1356,20 @@ test("fresh delegation refuses to launch after the checkout branch changes durin
 });
 
 test("delegation copies retained evidence under the destination and rejects stale authority", async () => {
-  const source = persistRequiredEvidenceSnapshot(
-    randomUUID(),
-    "source.md",
-    "selected content",
-  );
+  const source = persistRequiredEvidenceSnapshot(randomUUID(), "source.md", "selected content");
   const accepted = projectLifecycle({
     retained: source,
   });
   await assert.rejects(accepted.activate(), new RegExp(lifecycleStop));
   const published = accepted.published;
   assert.ok(published?.requiredEvidence);
-  const copy = published.requiredEvidence.find(
-    (entry: any) => entry.name === source.name,
-  );
+  const copy = published.requiredEvidence.find((entry: any) => entry.name === source.name);
   assert.ok(copy);
   assert.ok(!("result" in copy));
   assert.equal(copy.sourceAssignmentId, published.id);
   assert.notEqual(copy.ref, source.ref);
-  assert.equal(
-    readRequiredEvidenceSnapshot(copy.sourceAssignmentId, copy),
-    "selected content",
-  );
-  assert.equal(
-    readRequiredEvidenceSnapshot(source.sourceAssignmentId, source),
-    "selected content",
-  );
+  assert.equal(readRequiredEvidenceSnapshot(copy.sourceAssignmentId, copy), "selected content");
+  assert.equal(readRequiredEvidenceSnapshot(source.sourceAssignmentId, source), "selected content");
   const denied = projectLifecycle({
     retained: source,
     rejectEvidence: true,
@@ -1512,10 +1380,7 @@ test("delegation copies retained evidence under the destination and rejects stal
     retained: source,
     rejectAtPublication: true,
   });
-  await assert.rejects(
-    stale.activate(),
-    /evidence authority changed at publication/,
-  );
+  await assert.rejects(stale.activate(), /evidence authority changed at publication/);
   assert.equal(stale.published, undefined);
 });
 
@@ -1539,11 +1404,7 @@ test("nested retained provenance is rechecked at the synchronous assignment publ
     workspaceId: WORKSPACE,
     leaseId: randomUUID(),
   } as any;
-  const retained = persistRequiredEvidenceSnapshot(
-    randomUUID(),
-    "source.md",
-    "selected content",
-  );
+  const retained = persistRequiredEvidenceSnapshot(randomUUID(), "source.md", "selected content");
   let current = assignment;
   let nestedProvenance = "nested-parent-original";
   const runtime = createLeadProjectRuntime({
@@ -1583,11 +1444,8 @@ test("nested retained provenance is rechecked at the synchronous assignment publ
       },
     ],
     persistRequiredTextFiles: () => [],
-    withProjectAssignmentLock: async (
-      _repo: string,
-      _branch: string,
-      operation: () => unknown,
-    ) => operation(),
+    withProjectAssignmentLock: async (_repo: string, _branch: string, operation: () => unknown) =>
+      operation(),
     writeProjectAssignment: (_runtime: unknown, next: any) => {
       current = next;
     },
@@ -1604,10 +1462,7 @@ test("nested retained provenance is rechecked at the synchronous assignment publ
     /Manager evidence provenance changed/,
   );
   assert.deepEqual(current, assignment);
-  assert.deepEqual(
-    readProjectAssignment(runtimeDir, repoKey, assignment.branch),
-    assignment,
-  );
+  assert.deepEqual(readProjectAssignment(runtimeDir, repoKey, assignment.branch), assignment);
 });
 
 test("Manager required-evidence removal is exact, assignment-scoped, and fail-closed", async () => {
@@ -1651,11 +1506,7 @@ test("Manager required-evidence removal is exact, assignment-scoped, and fail-cl
   let leaseId = "lease-1";
   let role = "manager";
   let changeRoleUnderLock = false;
-  const storedSnapshots = new Set([
-    "/immutable/a",
-    "/immutable/b",
-    "/immutable/baseline",
-  ]);
+  const storedSnapshots = new Set(["/immutable/a", "/immutable/b", "/immutable/baseline"]);
   const acceptedEvidence = [...assignment.requiredEvidence];
   const runtime = createLeadProjectRuntime({
     leadRuntime: { roleSuspended: false } as any,
@@ -1716,9 +1567,7 @@ test("Manager required-evidence removal is exact, assignment-scoped, and fail-cl
   changeRoleUnderLock = false;
   role = "manager";
   const before = await runtime.inspectRequiredEvidence(assignment.branch, ctx);
-  const inheritedEvidence = before.requiredEvidence?.find(
-    (item) => item.id === "inherited",
-  );
+  const inheritedEvidence = before.requiredEvidence?.find((item) => item.id === "inherited");
   assert.ok(inheritedEvidence && !("result" in inheritedEvidence));
   assert.equal(inheritedEvidence.sourceAssignmentId, "parent-assignment");
 
@@ -1729,38 +1578,19 @@ test("Manager required-evidence removal is exact, assignment-scoped, and fail-cl
   );
 
   // IDs, not duplicate display names, identify the selected requirement.
-  await runtime.removeRequiredEvidence(
-    assignment.branch,
-    "local-b",
-    before,
-    ctx,
-  );
+  await runtime.removeRequiredEvidence(assignment.branch, "local-b", before, ctx);
   assert.deepEqual(
     current.requiredEvidence?.map((item) => item.id),
     ["local-a", "inherited"],
   );
-  assert.deepEqual(
-    [...storedSnapshots],
-    ["/immutable/a", "/immutable/b", "/immutable/baseline"],
-  );
-  const afterRemoval = await runtime.inspectRequiredEvidence(
-    assignment.branch,
-    ctx,
-  );
+  assert.deepEqual([...storedSnapshots], ["/immutable/a", "/immutable/b", "/immutable/baseline"]);
+  const afterRemoval = await runtime.inspectRequiredEvidence(assignment.branch, ctx);
   await assert.rejects(
-    runtime.removeRequiredEvidence(
-      assignment.branch,
-      "inherited",
-      afterRemoval,
-      ctx,
-    ),
+    runtime.removeRequiredEvidence(assignment.branch, "inherited", afterRemoval, ctx),
     /Inherited required evidence cannot be removed/,
   );
 
-  const inspected = await runtime.inspectRequiredEvidence(
-    assignment.branch,
-    ctx,
-  );
+  const inspected = await runtime.inspectRequiredEvidence(assignment.branch, ctx);
   current = {
     ...inspected,
     id: "replacement-assignment",
@@ -1777,12 +1607,7 @@ test("Manager required-evidence removal is exact, assignment-scoped, and fail-cl
   // A confirmation applies to the exact assignment shown, not a replacement
   // that happens to reuse the same branch and evidence ID.
   await assert.rejects(
-    runtime.removeRequiredEvidence(
-      assignment.branch,
-      "local-a",
-      inspected,
-      ctx,
-    ),
+    runtime.removeRequiredEvidence(assignment.branch, "local-a", inspected, ctx),
     /Project assignment changed/,
   );
   assert.deepEqual(
@@ -1793,18 +1618,10 @@ test("Manager required-evidence removal is exact, assignment-scoped, and fail-cl
   await runtime.inspectRequiredEvidence(assignment.branch, ctx);
   leaseId = "lease-replaced";
   await assert.rejects(
-    runtime.removeRequiredEvidence(
-      assignment.branch,
-      "local-a",
-      assignment,
-      ctx,
-    ),
+    runtime.removeRequiredEvidence(assignment.branch, "local-a", assignment, ctx),
     /Manager (?:authority changed|lease is no longer active)/,
   );
-  assert.deepEqual(
-    [...storedSnapshots],
-    ["/immutable/a", "/immutable/b", "/immutable/baseline"],
-  );
+  assert.deepEqual([...storedSnapshots], ["/immutable/a", "/immutable/b", "/immutable/baseline"]);
   assert.deepEqual(
     acceptedEvidence.map(({ id }) => id),
     ["local-a", "local-b", "inherited"],
@@ -1883,23 +1700,14 @@ test("new project worktree creation gets an extended Herdr timeout", async () =>
   } as any);
 
   for (const [params, expected] of [
-    [
-      { action: "delegate", task: "work", branch: " \t" },
-      /Project branch must not be empty/,
-    ],
+    [{ action: "delegate", task: "work", branch: " \t" }, /Project branch must not be empty/],
     [{ action: "resume", branch: " \n" }, /Project branch must not be empty/],
     [
       { action: "resume", branch: "feature/existing", message: " \t\n" },
       /Resume instruction must not be empty/,
     ],
-    [
-      { action: "resume", branch: "feature/existing" },
-      /Resume instruction must not be empty/,
-    ],
-    [
-      { action: "delegate", task: "work", base: " \t" },
-      /Base ref must not be empty/,
-    ],
+    [{ action: "resume", branch: "feature/existing" }, /Resume instruction must not be empty/],
+    [{ action: "delegate", task: "work", base: " \t" }, /Base ref must not be empty/],
   ] as const) {
     await assert.rejects(
       Reflect.apply(runtime.activateProjectLead, runtime, [params, {}, signal]),
@@ -1930,9 +1738,7 @@ test("new project worktree creation gets an extended Herdr timeout", async () =>
 
 test("resume revalidates checkout placement after async preparation", async () => {
   const repoKey = realFs.realpathSync(process.cwd());
-  const checkout = realFs.realpathSync.native(
-    realFs.mkdtempSync(join(tmpdir(), "resume-")),
-  );
+  const checkout = realFs.realpathSync.native(realFs.mkdtempSync(join(tmpdir(), "resume-")));
   const movedCheckout = join(tmpdir(), `resume-moved-${randomUUID()}`);
   mkdirSync(movedCheckout);
   const assignmentRoot = join(tmpdir(), `resume-assignments-${randomUUID()}`);
@@ -2052,14 +1858,9 @@ test("resume revalidates checkout placement after async preparation", async () =
       reconciliations++;
     },
     withProjectWorkLock: (_key: string, op: () => unknown) => op(),
-    withProjectAssignmentLock: async (
-      _repo: string,
-      _branch: string,
-      op: () => unknown,
-    ) => op(),
+    withProjectAssignmentLock: async (_repo: string, _branch: string, op: () => unknown) => op(),
     herdrSessionSnapshot: async () => ({ agents: [] }),
-    liveAgent: async () =>
-      liveLead ? [{ workspace_id: "resume-workspace" }] : [],
+    liveAgent: async () => (liveLead ? [{ workspace_id: "resume-workspace" }] : []),
     readLeadCoordinationState: () => ({ role: "lead", piSessionId: id }),
     requireCompatibleBuild: () => {},
     supervisedSessionFile: () => undefined,
@@ -2069,15 +1870,10 @@ test("resume revalidates checkout placement after async preparation", async () =
       inline: { bytes: 1000 },
       mailbox: { bytes: 1000 },
     }),
-    prepareCoordinationInput: async (
-      _ctx: unknown,
-      message: string,
-      files: unknown[],
-    ) => {
+    prepareCoordinationInput: async (_ctx: unknown, message: string, files: unknown[]) => {
       preparedFiles = files;
       if (failPreparation) throw new Error("resume preparation failed");
-      if (message === "retain then fail revalidation")
-        failPostPrepareManagerRevalidation = true;
+      if (message === "retain then fail revalidation") failPostPrepareManagerRevalidation = true;
       if (message === "placement race") placementRaceRequested = true;
       return {
         text: `${message} ${files.join(" ")}`,
@@ -2100,11 +1896,7 @@ test("resume revalidates checkout placement after async preparation", async () =
     writeChiefMessage: () => {
       if (++writes === 1) throw new Error("disk write failed");
     },
-    prepareHerdrCoordinatorPane: async (
-      _pi: unknown,
-      _ctx: unknown,
-      options: any,
-    ) => ({
+    prepareHerdrCoordinatorPane: async (_pi: unknown, _ctx: unknown, options: any) => ({
       workspaceId: options.workspaceId,
       tabId: "lead-tab",
       paneId: "lead-pane",
@@ -2204,15 +1996,8 @@ test("resume revalidates checkout placement after async preparation", async () =
   assert.equal(retainedResult.details.message_queued, false);
   assert.equal(retainedResult.details.recovery_verified, false);
   assert.equal(retainedResult.details.status, "handoff_incomplete");
-  assert.match(
-    retainedResult.content[0].text,
-    /not prepared, queued, or recovered/,
-  );
-  const retainedAssignment = readProjectAssignment(
-    supervision as any,
-    repoKey,
-    assignment.branch,
-  )!;
+  assert.match(retainedResult.content[0].text, /not prepared, queued, or recovered/);
+  const retainedAssignment = readProjectAssignment(supervision as any, repoKey, assignment.branch)!;
   assert.equal(retainedAssignment.id, assignment.id);
   assert.equal(retainedAssignment.text, assignment.text);
   assert.ok(
@@ -2262,9 +2047,7 @@ test("resume revalidates checkout placement after async preparation", async () =
 
 test("exact assigned Lead resume settles definite refusal and retains uncertain dispatch", async (t) => {
   const repoKey = realFs.realpathSync(process.cwd());
-  const checkout = realFs.realpathSync.native(
-    realFs.mkdtempSync(join(tmpdir(), "resume-")),
-  );
+  const checkout = realFs.realpathSync.native(realFs.mkdtempSync(join(tmpdir(), "resume-")));
   const trustStore = new ProjectTrustStore(getAgentDir());
   trustStore.set(checkout, null);
   assert.equal(trustStore.get(checkout), null);
@@ -2272,8 +2055,7 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
   const previousSessionDirectory = process.env.PI_CODING_AGENT_SESSION_DIR;
   process.env.PI_CODING_AGENT_SESSION_DIR = "custom-sessions";
   t.after(() => {
-    if (previousSessionDirectory === undefined)
-      delete process.env.PI_CODING_AGENT_SESSION_DIR;
+    if (previousSessionDirectory === undefined) delete process.env.PI_CODING_AGENT_SESSION_DIR;
     else process.env.PI_CODING_AGENT_SESSION_DIR = previousSessionDirectory;
   });
   const customSessionDirectory = join(checkout, "custom-sessions");
@@ -2450,10 +2232,7 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
         topologyCalls.push(args);
         return {
           source: {
-            repo_key:
-              args[2] === "--cwd" && args[3] === repoKey
-                ? repoKey
-                : unrelatedRepo,
+            repo_key: args[2] === "--cwd" && args[3] === repoKey ? repoKey : unrelatedRepo,
             source_checkout_path: repoKey,
           },
           worktrees: [
@@ -2484,8 +2263,7 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
             workspace_id: "resume-workspace",
             tab_id: "lead-tab",
             pane_id: "lead-pane",
-            terminal_id:
-              tabFailure === "topology" ? undefined : "lead-terminal",
+            terminal_id: tabFailure === "topology" ? undefined : "lead-terminal",
           },
         };
       }
@@ -2494,9 +2272,7 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
           process_info: {
             foreground_processes:
               startingUnverifiedPi ||
-              (tabFailure === "foreground-start" &&
-                tabCreates.length &&
-                args[3] === "pane")
+              (tabFailure === "foreground-start" && tabCreates.length && args[3] === "pane")
                 ? [{ argv0: "pi" }]
                 : [],
           },
@@ -2507,11 +2283,7 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
     listProjectAssignments: () => [assignment],
     reconcileProjectAssignments: async () => {},
     withProjectWorkLock: (_key: string, op: () => unknown) => op(),
-    withProjectAssignmentLock: async (
-      _repo: string,
-      _branch: string,
-      op: () => unknown,
-    ) => op(),
+    withProjectAssignmentLock: async (_repo: string, _branch: string, op: () => unknown) => op(),
     herdrSessionSnapshot: async () => {
       snapshotCalls++;
       return {
@@ -2522,16 +2294,10 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
             ? [
                 {
                   workspace_id: "resume-workspace",
-                  name: herdrAgentAlias(
-                    "resume-workspace",
-                    `lead-${id.slice(0, 8)}`,
-                    id,
-                  ),
+                  name: herdrAgentAlias("resume-workspace", `lead-${id.slice(0, 8)}`, id),
                   pane_id: "lead-pane",
                   tab_id: "lead-tab",
-                  ...(snapshotCalls > 2
-                    ? { agent_session: { value: id } }
-                    : {}),
+                  ...(snapshotCalls > 2 ? { agent_session: { value: id } } : {}),
                 },
               ]
             : [],
@@ -2540,8 +2306,7 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
     isPiAgent: (candidate: any) => Boolean(candidate.agent_session),
     sessionIdentity: (session: any) => session?.value,
     herdrSessionId: (candidate: any) => candidate?.agent_session?.value,
-    liveAgent: async () =>
-      alreadyRunning ? [{ workspace_id: "resume-workspace" }] : [],
+    liveAgent: async () => (alreadyRunning ? [{ workspace_id: "resume-workspace" }] : []),
     liveLead: async () =>
       startedState || startingUnverifiedPi
         ? [
@@ -2555,9 +2320,7 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
         : [],
     readLeadCoordinationState: () =>
       startedState ??
-      (startingUnverifiedPi && snapshotCalls <= 3
-        ? undefined
-        : { role: "lead", piSessionId: id }),
+      (startingUnverifiedPi && snapshotCalls <= 3 ? undefined : { role: "lead", piSessionId: id }),
     requireCompatibleBuild: () => {},
     supervisedSessionFile: () => assignment.piSessionFile,
     scanAgentStates: () => ({ states: [] }),
@@ -2571,11 +2334,7 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
       return { text: message, resultBindings: [] };
     },
     writeChiefMessage: (message: any) => events.push(message),
-    prepareHerdrCoordinatorPane: async (
-      _pi: unknown,
-      _ctx: unknown,
-      options: any,
-    ) => {
+    prepareHerdrCoordinatorPane: async (_pi: unknown, _ctx: unknown, options: any) => {
       tabCreates.push([
         "tab",
         "create",
@@ -2604,11 +2363,7 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
         createdTab: true,
       };
     },
-    startHerdrCoordinatorInPane: async (
-      _pi: unknown,
-      _ctx: unknown,
-      options: any,
-    ) => {
+    startHerdrCoordinatorInPane: async (_pi: unknown, _ctx: unknown, options: any) => {
       assert.equal(options.agentDir, resolve(getAgentDir()));
       launches++;
       launchedArgs = options.agentArgs;
@@ -2618,18 +2373,9 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
             ? [readFileSync(launchedArgs![index + 1]!, "utf8")]
             : [],
         );
-        assert.ok(
-          launchPrompts.some((prompt) =>
-            prompt.includes("RECOVERY_TARGET_OVERLAY"),
-          ),
-        );
+        assert.ok(launchPrompts.some((prompt) => prompt.includes("RECOVERY_TARGET_OVERLAY")));
       }
-      launchPlacement = [
-        options.workspaceId,
-        options.tabId,
-        options.paneId,
-        options.cwd,
-      ];
+      launchPlacement = [options.workspaceId, options.tabId, options.paneId, options.cwd];
       events.push("launch");
       assert.equal(options.session.id, id);
       const intent = getCoordinatorStartIntent(intentRuntime, id);
@@ -2678,10 +2424,7 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
     appendDurableError: () => {},
   } as any);
   for (const [failure, expected] of [
-    [
-      new Error("ENOENT: saved session missing"),
-      /history is unavailable or unreadable/,
-    ],
+    [new Error("ENOENT: saved session missing"), /history is unavailable or unreadable/],
     [undefined, /mismatched session ID/],
   ] as const) {
     sessionOpenError = failure;
@@ -2765,12 +2508,7 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
       "--no-focus",
     ],
   ]);
-  assert.deepEqual(launchPlacement, [
-    "resume-workspace",
-    "lead-tab",
-    "lead-pane",
-    checkout,
-  ]);
+  assert.deepEqual(launchPlacement, ["resume-workspace", "lead-tab", "lead-pane", checkout]);
   assert.ok(launchedArgs);
   assert.equal(launchedArgs!.includes("--model"), false);
   assert.equal(launchedArgs!.includes("--no-extensions"), true);
@@ -2780,17 +2518,11 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
   assert.notEqual(thinkingIndex, -1);
   assert.equal(launchedArgs![thinkingIndex + 1], "high");
   assert.deepEqual(launchedArgs!.slice(-2), ["--session-id", id]);
-  assert.deepEqual(launchedArgs!.slice(-4, -2), [
-    "--session-dir",
-    customSessionDirectory,
-  ]);
+  assert.deepEqual(launchedArgs!.slice(-4, -2), ["--session-dir", customSessionDirectory]);
   assert.equal(result.details.status, "recovery_unverified");
   assert.equal(result.details.message_queued, true);
   assert.equal(result.details.recovery_verified, false);
-  assert.match(
-    result.content[0].text,
-    /workspace checkout changed before launch/,
-  );
+  assert.match(result.content[0].text, /workspace checkout changed before launch/);
   assert.equal(dispatched, 0);
   assert.equal(getCoordinatorStartIntent(intentRuntime, id), undefined);
   assert.equal(
@@ -2831,29 +2563,25 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
   tabFailure = undefined;
   tabCreates.length = 0;
   events.length = 0;
-  await t.test(
-    "missing integration leaves the saved assignment untouched",
-    async (t) => {
-      const missingIntegration = removeHerdrIntegrationForTest(t);
-      const priorPreparations = preparations;
-      const readAssignment = () =>
-        readProjectAssignment(intentRuntime, repoKey, assignment.branch);
-      const priorAssignment = readAssignment();
-      await assert.rejects(
-        runtime.activateProjectLead(
-          { action: "resume", branch: assignment.branch, message: "continue" },
-          ctx,
-          new AbortController().signal,
-        ),
-        missingIntegration,
-      );
-      assert.deepEqual(readAssignment(), priorAssignment);
-      assert.equal(preparations, priorPreparations);
-      assert.equal(events.length, 0);
-      assert.deepEqual(tabCreates, []);
-      assert.equal(launches, 1);
-    },
-  );
+  await t.test("missing integration leaves the saved assignment untouched", async (t) => {
+    const missingIntegration = removeHerdrIntegrationForTest(t);
+    const priorPreparations = preparations;
+    const readAssignment = () => readProjectAssignment(intentRuntime, repoKey, assignment.branch);
+    const priorAssignment = readAssignment();
+    await assert.rejects(
+      runtime.activateProjectLead(
+        { action: "resume", branch: assignment.branch, message: "continue" },
+        ctx,
+        new AbortController().signal,
+      ),
+      missingIntegration,
+    );
+    assert.deepEqual(readAssignment(), priorAssignment);
+    assert.equal(preparations, priorPreparations);
+    assert.equal(events.length, 0);
+    assert.deepEqual(tabCreates, []);
+    assert.equal(launches, 1);
+  });
 
   alreadyRunning = true;
   const runningResult = (await runtime.activateProjectLead(
@@ -2869,9 +2597,7 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
   );
   assert.ok(topologyCalls.length >= 2);
   assert.ok(
-    topologyCalls.every(
-      (args) => args.length === 4 && args[2] === "--cwd" && args[3] === repoKey,
-    ),
+    topologyCalls.every((args) => args.length === 4 && args[2] === "--cwd" && args[3] === repoKey),
   );
 
   alreadyRunning = false;
@@ -2923,9 +2649,7 @@ test("exact assigned Lead resume settles definite refusal and retains uncertain 
   assert.equal(uncertain.details.status, "recovery_unverified");
   const unsettled = getCoordinatorStartIntent(intentRuntime, id);
   assert.ok(unsettled);
-  assert.deepEqual(listCoordinatorStartIntents(intentRuntime).intents, [
-    unsettled,
-  ]);
+  assert.deepEqual(listCoordinatorStartIntents(intentRuntime).intents, [unsettled]);
   const blocked = await resume();
   assert.match(blocked.content[0].text, /startup intent already exists/);
   assert.equal(dispatched, 2, "the unsettled attempt blocks another dispatch");
@@ -2945,10 +2669,7 @@ test("Git worktree porcelain inventory rejects incomplete or ambiguous records",
       { path: linked, head: hash, branch: "topic" },
     ],
   );
-  assert.equal(
-    parseGitWorktreeInventory(`worktree ${root}\0HEAD ${hash}\0`),
-    undefined,
-  );
+  assert.equal(parseGitWorktreeInventory(`worktree ${root}\0HEAD ${hash}\0`), undefined);
   assert.equal(
     parseGitWorktreeInventory(
       `worktree ${root}\0HEAD ${hash}\0branch refs/heads/topic\0\0junk\0\0`,
@@ -2973,10 +2694,9 @@ test("Git worktree porcelain inventory rejects incomplete or ambiguous records",
     ),
     [{ path: linked, head: hash, branch: "topic", prunable: true }],
   );
-  assert.deepEqual(
-    parseGitWorktreeInventory(`worktree ${linked}\0HEAD ${hash}\0detached\0\0`),
-    [{ path: linked, head: hash, detached: true }],
-  );
+  assert.deepEqual(parseGitWorktreeInventory(`worktree ${linked}\0HEAD ${hash}\0detached\0\0`), [
+    { path: linked, head: hash, detached: true },
+  ]);
   assert.deepEqual(
     parseGitWorktreeInventory(
       `worktree ${linked}\0HEAD ${hash}\0detached\0prunable gitdir file points to non-existent location\0\0`,
@@ -3008,10 +2728,7 @@ test("sender environment capture keeps cwd on Git failures and accepts only a un
     cwd,
     git: { worktreeRoot: root, branch: "topic", head: hash },
   });
-  assert.deepEqual(calls, [
-    "rev-parse --show-toplevel",
-    "worktree list --porcelain -z",
-  ]);
+  assert.deepEqual(calls, ["rev-parse --show-toplevel", "worktree list --porcelain -z"]);
   assert.deepEqual(
     await captureSenderEnvironment(
       { exec: async () => ({ code: 1, stderr: "not git" }) } as any,
@@ -3019,8 +2736,5 @@ test("sender environment capture keeps cwd on Git failures and accepts only a un
     ),
     { cwd },
   );
-  assert.equal(
-    await captureSenderEnvironment(pi, { ...ctx, cwd: "x" }),
-    undefined,
-  );
+  assert.equal(await captureSenderEnvironment(pi, { ...ctx, cwd: "x" }), undefined);
 });

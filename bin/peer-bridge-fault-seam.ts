@@ -1,17 +1,12 @@
-export type PeerAcceptanceCutPoint =
-  "pending-marker-durable" | "inbox-publication-durable";
+export type PeerAcceptanceCutPoint = "pending-marker-durable" | "inbox-publication-durable";
 
 let testHook: ((cutPoint: PeerAcceptanceCutPoint) => void) | undefined;
 let pendingMarkerTempWriteHook: (() => void) | undefined;
 let pendingMarkerWriteLimitHook: ((requested: number) => number) | undefined;
-let pendingMarkerPublishHook:
-  ((marker: string, content: string) => void) | undefined;
-let acceptedMarkerTempWriteHook:
-  ((temporary: string, marker: string) => void) | undefined;
+let pendingMarkerPublishHook: ((marker: string, content: string) => void) | undefined;
+let acceptedMarkerTempWriteHook: ((temporary: string, marker: string) => void) | undefined;
 
-export function afterDurablePeerAcceptanceStep(
-  cutPoint: PeerAcceptanceCutPoint,
-): void {
+export function afterDurablePeerAcceptanceStep(cutPoint: PeerAcceptanceCutPoint): void {
   testHook?.(cutPoint);
 }
 
@@ -34,16 +29,11 @@ export function pendingMarkerWriteLimitForTests(requested: number): number {
   return pendingMarkerWriteLimitHook?.(requested) ?? requested;
 }
 
-export function setPendingMarkerWriteLimitForTests(
-  hook: (requested: number) => number,
-): void {
+export function setPendingMarkerWriteLimitForTests(hook: (requested: number) => number): void {
   pendingMarkerWriteLimitHook = hook;
 }
 
-export function beforePendingMarkerPublishForTests(
-  marker: string,
-  content: string,
-): void {
+export function beforePendingMarkerPublishForTests(marker: string, content: string): void {
   pendingMarkerPublishHook?.(marker, content);
 }
 
@@ -53,10 +43,7 @@ export function setPendingMarkerPublishHookForTests(
   pendingMarkerPublishHook = hook;
 }
 
-export function afterAcceptedMarkerTempWriteForTests(
-  temporary: string,
-  marker: string,
-): void {
+export function afterAcceptedMarkerTempWriteForTests(temporary: string, marker: string): void {
   acceptedMarkerTempWriteHook?.(temporary, marker);
 }
 

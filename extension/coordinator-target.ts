@@ -1,14 +1,10 @@
 import { createHash } from "node:crypto";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export type CoordinatorRole = "lead" | "manager";
 
-export const COORDINATOR_TARGET_PATTERN =
-  "^(?:lead|manager):[0-9a-hjkmnp-tv-zA-HJKMNP-TV-Z]{10}$";
+export const COORDINATOR_TARGET_PATTERN = "^(?:lead|manager):[0-9a-hjkmnp-tv-zA-HJKMNP-TV-Z]{10}$";
 
 const TARGET_ENTRY = "pi-herdsman-coordinator-target-v1";
 const TARGET_PATTERN = new RegExp(COORDINATOR_TARGET_PATTERN);
@@ -27,8 +23,7 @@ function isCoordinatorRole(role: unknown): role is CoordinatorRole {
 }
 
 function assertSessionId(sessionId: unknown): asserts sessionId is string {
-  if (typeof sessionId !== "string")
-    throw new Error("Invalid canonical Pi session ID");
+  if (typeof sessionId !== "string") throw new Error("Invalid canonical Pi session ID");
 
   try {
     // Pi keeps its canonical session-ID validation in SessionManager.
@@ -38,10 +33,7 @@ function assertSessionId(sessionId: unknown): asserts sessionId is string {
   }
 }
 
-export function coordinatorTarget(
-  role: CoordinatorRole,
-  sessionId: string,
-): string {
+export function coordinatorTarget(role: CoordinatorRole, sessionId: string): string {
   if (!isCoordinatorRole(role)) throw new Error("Invalid coordinator role");
   assertSessionId(sessionId);
 
@@ -89,10 +81,7 @@ function parseBinding(data: unknown): TargetBinding {
   assertSessionId(data.ownerSessionId);
   assertSessionId(data.sessionId);
   const target = normalizeTarget(data.target);
-  if (
-    target !== data.target ||
-    target !== coordinatorTarget(data.role, data.sessionId)
-  )
+  if (target !== data.target || target !== coordinatorTarget(data.role, data.sessionId))
     throw new Error("Inconsistent coordinator target binding");
 
   return {
@@ -116,8 +105,7 @@ function readBindings(
   const byIdentity = new Map<string, TargetBinding>();
   for (const entry of entries) {
     if (!isRecord(entry) || entry.customType !== TARGET_ENTRY) continue;
-    if (entry.type !== "custom")
-      throw new Error("Malformed coordinator target entry");
+    if (entry.type !== "custom") throw new Error("Malformed coordinator target entry");
 
     const binding = parseBinding(entry.data);
     // Native Pi forks retain custom entries from their source session.
@@ -128,8 +116,7 @@ function readBindings(
     const identityBinding = byIdentity.get(identity);
     if (
       (targetBinding &&
-        (targetBinding.role !== binding.role ||
-          targetBinding.sessionId !== binding.sessionId)) ||
+        (targetBinding.role !== binding.role || targetBinding.sessionId !== binding.sessionId)) ||
       (identityBinding && identityBinding.target !== binding.target)
     )
       throw new Error("Conflicting coordinator target bindings");

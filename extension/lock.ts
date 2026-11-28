@@ -2,11 +2,7 @@ import * as fs from "node:fs";
 import { realpathSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
-import {
-  herdsmanTempRoot,
-  isIncidentalMetadata,
-  nodeOnlyAgentDir,
-} from "./storage.ts";
+import { herdsmanTempRoot, isIncidentalMetadata, nodeOnlyAgentDir } from "./storage.ts";
 
 export class ProcessLockOccupiedError extends Error {
   readonly code = "PROCESS_LOCK_OCCUPIED";
@@ -22,9 +18,7 @@ export function assignmentLockPath(mailbox: string): string {
   );
 }
 
-export function sessionActivationLockPath(
-  canonicalSessionPath: string,
-): string {
+export function sessionActivationLockPath(canonicalSessionPath: string): string {
   return join(
     herdsmanTempRoot(),
     "locks",
@@ -44,10 +38,7 @@ export function coordinatorAdmissionLockPath(
 ): string {
   if (typeof socket !== "string" || !socket.trim() || socket.includes("\0"))
     throw new Error("HERDR_SOCKET_PATH is required for Coordinator admission");
-  const scope = JSON.stringify([
-    canonicalAdmissionProfile(resolve(agentDir)),
-    resolve(socket),
-  ]);
+  const scope = JSON.stringify([canonicalAdmissionProfile(resolve(agentDir)), resolve(socket)]);
   return join(
     herdsmanTempRoot(),
     "locks",
@@ -60,20 +51,15 @@ function canonicalAdmissionProfile(path: string): string {
     return realpathSync.native(path);
   } catch (error) {
     const parent = dirname(path);
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT" || parent === path)
-      throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" || parent === path) throw error;
     return join(canonicalAdmissionProfile(parent), basename(path));
   }
 }
 
-export function acquireCoordinatorAdmission(
-  agentDir?: string,
-  socket?: string,
-): ProcessLockLease {
+export function acquireCoordinatorAdmission(agentDir?: string, socket?: string): ProcessLockLease {
   return acquireProcessLock(coordinatorAdmissionLockPath(agentDir, socket), {
     name: "Coordinator admission",
-    occupiedMessage:
-      "Coordinator admission is busy; no new execution was admitted",
+    occupiedMessage: "Coordinator admission is busy; no new execution was admitted",
   });
 }
 
@@ -86,11 +72,7 @@ export function coordinatorAdmissionClaimIsCurrent(
     coordinatorAdmissionLockPath(agentDir, socket),
     "Coordinator admission",
   );
-  return (
-    current.live &&
-    current.claim.pid === claim.pid &&
-    current.claim.id === claim.id
-  );
+  return current.live && current.claim.pid === claim.pid && current.claim.id === claim.id;
 }
 
 export function claimAssignmentLock(mailbox: string): () => void {
@@ -100,9 +82,7 @@ export function claimAssignmentLock(mailbox: string): () => void {
   });
 }
 
-export function tryClaimAssignmentLock(
-  mailbox: string,
-): (() => void) | undefined {
+export function tryClaimAssignmentLock(mailbox: string): (() => void) | undefined {
   try {
     return claimAssignmentLock(mailbox);
   } catch (error) {
@@ -111,17 +91,14 @@ export function tryClaimAssignmentLock(
   }
 }
 
-export function claimSessionActivationLock(
-  canonicalSessionPath: string,
-): () => void {
+export function claimSessionActivationLock(canonicalSessionPath: string): () => void {
   return claimProcessLock(sessionActivationLockPath(canonicalSessionPath), {
     name: "session activation",
     occupiedMessage: "The exact Pi session is already being activated",
   });
 }
 
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 type ProcessLockLease = { claim: ProcessLockClaim; release: () => void };
 type LockOwner = ProcessLockClaim & {
@@ -183,26 +160,17 @@ function readProcessLockOwner(path: string, owner: string): LockOwner {
   return claim;
 }
 
-function readLinuxBirth(
-  pid: number,
-): NonNullable<LockOwner["linuxBirth"]> | undefined {
-  const bootId = fs
-    .readFileSync("/proc/sys/kernel/random/boot_id", "utf8")
-    .trim();
+function readLinuxBirth(pid: number): NonNullable<LockOwner["linuxBirth"]> | undefined {
+  const bootId = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
   let stat: string;
   try {
     stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
   } catch (error) {
-    if (
-      (error as NodeJS.ErrnoException).code === "ENOENT" &&
-      !processExists(pid)
-    )
-      return undefined;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" && !processExists(pid)) return undefined;
     throw error;
   }
   const end = stat.lastIndexOf(") ");
-  if (end < 0 || !stat.startsWith(`${pid} (`))
-    throw new Error("Invalid Linux process stat");
+  if (end < 0 || !stat.startsWith(`${pid} (`)) throw new Error("Invalid Linux process stat");
   const fields = stat
     .slice(end + 2)
     .trim()
@@ -221,13 +189,11 @@ function readLinuxBirth(
 function processOwnerExists(owner: LockOwner): boolean {
   if (!processExists(owner.pid)) return false;
   if (process.platform !== "linux") return true;
-  if (!owner.linuxBirth)
-    throw new Error("Linux lock owner identity is unverifiable");
+  if (!owner.linuxBirth) throw new Error("Linux lock owner identity is unverifiable");
   const current = readLinuxBirth(owner.pid);
   if (!current) return false;
   return (
-    current.bootId === owner.linuxBirth.bootId &&
-    current.startTicks === owner.linuxBirth.startTicks
+    current.bootId === owner.linuxBirth.bootId && current.startTicks === owner.linuxBirth.startTicks
   );
 }
 
@@ -248,8 +214,7 @@ function ownerMissing(path: string): boolean {
 function lockOwnerEntry(path: string): { owner: string; metadata: string[] } {
   const entries = fs.readdirSync(path, { withFileTypes: true });
   const owners = entries.filter((entry) => !isIncidentalMetadata(entry));
-  if (owners.length !== 1 || !owners[0]!.isFile())
-    throw new Error("Invalid process lock owner");
+  if (owners.length !== 1 || !owners[0]!.isFile()) throw new Error("Invalid process lock owner");
   return {
     owner: owners[0]!.name,
     metadata: entries.filter(isIncidentalMetadata).map((entry) => entry.name),
@@ -266,12 +231,7 @@ function processExists(pid: number): boolean {
   }
 }
 
-function publishClaim(
-  parent: string,
-  claimDir: string,
-  owner: string,
-  payload: string,
-): void {
+function publishClaim(parent: string, claimDir: string, owner: string, payload: string): void {
   // Publish the owner record before the canonical rename so observers never
   // see an empty canonical lock.
   const temporary = join(parent, `.${basename(claimDir)}.${randomUUID()}.tmp`);
@@ -301,10 +261,7 @@ function publishClaim(
   }
 }
 
-export function readLiveProcessLock(
-  path: string,
-  name = "process lock",
-): ProcessLockClaim {
+export function readLiveProcessLock(path: string, name = "process lock"): ProcessLockClaim {
   const { claim, live } = readProcessLockStatus(path, name);
   if (!live) throw new Error(`Unable to verify ${name}`);
   return claim;
@@ -336,8 +293,7 @@ export function acquireProcessLock(
   const name = options.name ?? "process lock";
   const verifyMessage = `Unable to verify ${name}`;
   const occupiedMessage =
-    options.occupiedMessage ??
-    `${name[0].toUpperCase()}${name.slice(1)} is in progress`;
+    options.occupiedMessage ?? `${name[0].toUpperCase()}${name.slice(1)} is in progress`;
   const recoverMessage = `Unable to recover ${name}`;
   const parent = dirname(path);
   fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
@@ -345,9 +301,7 @@ export function acquireProcessLock(
   const claimDir = path;
   const claim: ProcessLockClaim = { pid: process.pid, id: randomUUID() };
   const lockOwner: LockOwner =
-    process.platform === "linux"
-      ? { ...claim, linuxBirth: readLinuxBirth(process.pid)! }
-      : claim;
+    process.platform === "linux" ? { ...claim, linuxBirth: readLinuxBirth(process.pid)! } : claim;
   const owner = `${claim.pid}-${claim.id}`;
   const payload = JSON.stringify(lockOwner);
   const ownerPath = join(claimDir, owner);
@@ -366,8 +320,7 @@ export function acquireProcessLock(
     publishClaim(parent, claimDir, owner, payload);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "EEXIST" && code !== "ENOTEMPTY" && code !== "EPERM")
-      throw error;
+    if (code !== "EEXIST" && code !== "ENOTEMPTY" && code !== "EPERM") throw error;
     let observedOwner: string;
     try {
       ({ owner: observedOwner } = lockOwnerEntry(claimDir));
@@ -403,8 +356,7 @@ export function acquireProcessLock(
       throw new Error(verifyMessage, { cause: error });
     }
     try {
-      if (processOwnerExists(staleOwner))
-        throw new ProcessLockOccupiedError(occupiedMessage);
+      if (processOwnerExists(staleOwner)) throw new ProcessLockOccupiedError(occupiedMessage);
     } catch (error) {
       if (error instanceof ProcessLockOccupiedError) throw error;
       throw new Error(verifyMessage, { cause: error });
@@ -412,14 +364,10 @@ export function acquireProcessLock(
     // Move the complete, verified stale claim out of the canonical name in one
     // operation. Never unlink the owner while leaving an empty canonical
     // directory behind.
-    const quarantine = join(
-      parent,
-      `.${basename(claimDir)}.${randomUUID()}.stale`,
-    );
+    const quarantine = join(parent, `.${basename(claimDir)}.${randomUUID()}.stale`);
     try {
       const { owner: currentOwner } = lockOwnerEntry(claimDir);
-      if (currentOwner !== observedOwner)
-        throw new ProcessLockOccupiedError(occupiedMessage);
+      if (currentOwner !== observedOwner) throw new ProcessLockOccupiedError(occupiedMessage);
       const currentClaim = readProcessLockOwner(claimDir, observedOwner);
       if (JSON.stringify(currentClaim) !== JSON.stringify(staleOwner))
         throw new ProcessLockOccupiedError(occupiedMessage);
@@ -446,8 +394,7 @@ export function acquireProcessLock(
     } catch (error) {
       throw new Error(recoverMessage, { cause: error });
     }
-    if (quarantinedOwner !== observedOwner)
-      throw new ProcessLockOccupiedError(occupiedMessage);
+    if (quarantinedOwner !== observedOwner) throw new ProcessLockOccupiedError(occupiedMessage);
     try {
       const quarantinedClaim = readProcessLockOwner(quarantine, observedOwner);
       if (JSON.stringify(quarantinedClaim) !== JSON.stringify(staleOwner))
@@ -479,10 +426,7 @@ export function acquireProcessLock(
   };
 }
 
-export function claimProcessLock(
-  path: string,
-  options: ProcessLockOptions = {},
-): () => void {
+export function claimProcessLock(path: string, options: ProcessLockOptions = {}): () => void {
   return acquireProcessLock(path, options).release;
 }
 
@@ -512,37 +456,25 @@ function releaseProcessLock(
     } catch (error) {
       throw new Error(`Unable to verify ${name} ownership`, { cause: error });
     }
-    throw new Error(
-      `${name[0].toUpperCase()}${name.slice(1)} ownership changed`,
-    );
+    throw new Error(`${name[0].toUpperCase()}${name.slice(1)} ownership changed`);
   }
   let current: LockOwner;
   try {
     current = readProcessLockOwner(claimDir, basename(ownerPath));
   } catch (error) {
-    if (
-      (error as NodeJS.ErrnoException).code === "ENOENT" &&
-      ownerMissing(ownerPath)
-    )
-      return;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" && ownerMissing(ownerPath)) return;
     throw new Error(`Unable to verify ${name} ownership`, { cause: error });
   }
   if (current.pid !== claim.pid || current.id !== claim.id)
-    throw new Error(
-      `${name[0].toUpperCase()}${name.slice(1)} ownership changed`,
-    );
+    throw new Error(`${name[0].toUpperCase()}${name.slice(1)} ownership changed`);
   // Retire the complete claim before cleanup; a new canonical owner may follow.
-  const retired = join(
-    dirname(claimDir),
-    `.${basename(claimDir)}.${randomUUID()}.released`,
-  );
+  const retired = join(dirname(claimDir), `.${basename(claimDir)}.${randomUUID()}.released`);
   fs.renameSync(claimDir, retired);
   let retiredOwner: string;
   let metadata: string[];
   try {
     ({ owner: retiredOwner, metadata } = lockOwnerEntry(retired));
-    if (retiredOwner !== basename(ownerPath))
-      throw new Error("Process lock owner changed");
+    if (retiredOwner !== basename(ownerPath)) throw new Error("Process lock owner changed");
     const relocated = readProcessLockOwner(retired, retiredOwner);
     if (relocated.pid !== claim.pid || relocated.id !== claim.id)
       throw new Error("Process lock generation changed");

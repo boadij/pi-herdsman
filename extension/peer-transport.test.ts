@@ -88,12 +88,7 @@ test("remote peer outbox survives until acknowledged delivery", () => {
   assert.deepEqual(readRemotePeerOutbound(id), outbound);
   assert.equal(readRemotePeerOutbound("not-a-uuid"), undefined);
 
-  const directory = join(
-    herdsmanDataRoot(),
-    "runtime",
-    "peers-v2",
-    "remote-outbound",
-  );
+  const directory = join(herdsmanDataRoot(), "runtime", "peers-v2", "remote-outbound");
   const symlinkId = randomUUID();
   const oversizedId = randomUUID();
   const recordPath = join(directory, `${id}.json`);
@@ -180,9 +175,7 @@ test("targeted outbound read does not initialize its directory", () => {
   try {
     assert.equal(readRemotePeerOutbound(randomUUID()), undefined);
     assert.equal(
-      existsSync(
-        join(agentDir, "pi-herdsman", "runtime", "peers-v2", "remote-outbound"),
-      ),
+      existsSync(join(agentDir, "pi-herdsman", "runtime", "peers-v2", "remote-outbound")),
       false,
     );
   } finally {
@@ -232,9 +225,7 @@ test("queued transfer retries only after definitive absence and exact-session ge
   };
   const snapshot = {
     dataRoot: outbound.dataRoot,
-    peers: [
-      { role: "manager", piSessionId: recipient, claim: { id: newGeneration } },
-    ],
+    peers: [{ role: "manager", piSessionId: recipient, claim: { id: newGeneration } }],
   };
   const absent = { dataRoot: outbound.dataRoot, id, digest, status: "absent" };
   const retry = resolveRemotePeerOutboundRetry(outbound, absent, snapshot);
@@ -245,11 +236,7 @@ test("queued transfer retries only after definitive absence and exact-session ge
   assert.equal(updated.recipientClaimId, newGeneration);
   assert.equal(updated.correspondence.recipientGeneration, newGeneration);
   assert.deepEqual(
-    resolveRemotePeerOutboundRetry(
-      outbound,
-      { ...absent, status: "accepted" },
-      snapshot,
-    ),
+    resolveRemotePeerOutboundRetry(outbound, { ...absent, status: "accepted" }, snapshot),
     { kind: "accepted" },
   );
   assert.deepEqual(
@@ -266,19 +253,11 @@ test("queued transfer retries only after definitive absence and exact-session ge
     { kind: "pending" },
   );
   assert.deepEqual(
-    resolveRemotePeerOutboundRetry(
-      outbound,
-      { ...absent, status: "pending" },
-      snapshot,
-    ),
+    resolveRemotePeerOutboundRetry(outbound, { ...absent, status: "pending" }, snapshot),
     { kind: "pending" },
   );
   assert.deepEqual(
-    resolveRemotePeerOutboundRetry(
-      outbound,
-      { ...absent, digest: "f".repeat(64) },
-      snapshot,
-    ),
+    resolveRemotePeerOutboundRetry(outbound, { ...absent, digest: "f".repeat(64) }, snapshot),
     { kind: "pending" },
   );
 });
@@ -349,8 +328,7 @@ test("ordinary Lead retry requires complete snapshot and exact ordinary Lead rol
 });
 
 test("remote transport reads live policy and distinguishes bridge denial from SSH errors", async (t) => {
-  if (process.platform === "win32")
-    return t.skip("uses a POSIX fake ssh executable");
+  if (process.platform === "win32") return t.skip("uses a POSIX fake ssh executable");
   const directory = mkdtempSync(join(tmpdir(), "herdsman-peer-policy-"));
   const invoked = join(directory, "invoked");
   const oldPath = process.env.PATH;
@@ -381,10 +359,7 @@ test("remote transport reads live policy and distinguishes bridge denial from SS
       "recover",
       "recover-recipient",
     ] as const) {
-      await assert.rejects(
-        runPeerEndpoint(machine, action),
-        PeerFederationDisabledError,
-      );
+      await assert.rejects(runPeerEndpoint(machine, action), PeerFederationDisabledError);
     }
     assert.equal(existsSync(invoked), false);
     updateConfig("peerFederationEnabled", true);
@@ -402,8 +377,7 @@ test("remote transport reads live policy and distinguishes bridge denial from SS
 });
 
 test("SSH stdin EPIPE rejects the transport without an uncaught process error", async (t) => {
-  if (process.platform === "win32")
-    return t.skip("uses a POSIX fake ssh executable");
+  if (process.platform === "win32") return t.skip("uses a POSIX fake ssh executable");
   const directory = mkdtempSync(join(tmpdir(), "herdsman-peer-ePIPE-"));
   const ssh = join(directory, "ssh");
   writeFileSync(ssh, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
@@ -436,10 +410,7 @@ test("saved SSH targets reject URI paths and option-shaped aliases", () => {
     "-oProxyCommand=evil",
     "buildbox with args",
   ])
-    assert.throws(
-      () => parsePeerSshTarget(target),
-      /Unsupported saved SSH target/,
-    );
+    assert.throws(() => parsePeerSshTarget(target), /Unsupported saved SSH target/);
 });
 
 test("peer recovery carries the verified endpoint root and rejects mismatches", () => {
@@ -459,13 +430,8 @@ test("peer recovery carries the verified endpoint root and rejects mismatches", 
     ),
   );
   assert.equal(request.expectedDataRoot, expectedDataRoot);
-  assert.doesNotThrow(() =>
-    assertPeerDataRoot(expectedDataRoot, request.expectedDataRoot),
-  );
-  assert.throws(
-    () => assertPeerDataRoot("/different/root", request.expectedDataRoot),
-    /data root/,
-  );
+  assert.doesNotThrow(() => assertPeerDataRoot(expectedDataRoot, request.expectedDataRoot));
+  assert.throws(() => assertPeerDataRoot("/different/root", request.expectedDataRoot), /data root/);
 });
 
 test("failed reply polls retain correspondence for a later exactly-once reply", async () => {
@@ -485,10 +451,7 @@ test("failed reply polls retain correspondence for a later exactly-once reply", 
     undefined,
   );
   assert.deepEqual(actions, ["poll"]);
-  assert.equal(
-    listPeerCorrespondences().find((item) => item.id === c.id)?.finalized,
-    undefined,
-  );
+  assert.equal(listPeerCorrespondences().find((item) => item.id === c.id)?.finalized, undefined);
 
   const replyId = randomUUID();
   assert.equal(queuePeerReply(c, replyId, "reply after the outage"), "queued");
@@ -577,10 +540,7 @@ test("one Manager-pair route supports multiple requests and progress/final repli
     ).map((reply) => reply.id),
     [completionId],
   );
-  assert.equal(
-    listPeerCorrespondences().find((item) => item.id === c.id)?.finalized,
-    undefined,
-  );
+  assert.equal(listPeerCorrespondences().find((item) => item.id === c.id)?.finalized, undefined);
   removePeerCorrespondence(c.id);
 });
 
@@ -647,19 +607,12 @@ test("recipient generation recovers only for the exact same session and route", 
     nextGeneration,
   );
   assert.equal(
-    listPeerCorrespondences().find((item) => item.id === c.id)
-      ?.recipientGeneration,
+    listPeerCorrespondences().find((item) => item.id === c.id)?.recipientGeneration,
     nextGeneration,
   );
   assert.throws(
     () =>
-      updatePeerRecipientGeneration(
-        c.id,
-        c.capability,
-        randomUUID(),
-        nextGeneration,
-        randomUUID(),
-      ),
+      updatePeerRecipientGeneration(c.id, c.capability, randomUUID(), nextGeneration, randomUUID()),
     /recipient recovery rejected/,
   );
   removePeerCorrespondence(c.id);

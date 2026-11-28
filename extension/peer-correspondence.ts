@@ -1,9 +1,4 @@
-import {
-  createHash,
-  randomBytes,
-  randomUUID,
-  timingSafeEqual,
-} from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   chmodSync,
   mkdirSync,
@@ -17,10 +12,7 @@ import { join } from "node:path";
 import { acquireProcessLock, ProcessLockOccupiedError } from "./lock.ts";
 import { herdsmanDataRoot } from "./storage.ts";
 import { isResultBinding, type ResultBinding } from "./storage.ts";
-import {
-  PEER_TRANSPORT_FRAME_LIMIT_BYTES,
-  peerPayloadDigest,
-} from "./peer-transport.ts";
+import { PEER_TRANSPORT_FRAME_LIMIT_BYTES, peerPayloadDigest } from "./peer-transport.ts";
 export { peerPayloadDigest } from "./peer-transport.ts";
 
 export type PeerPortableAttachment = Readonly<{
@@ -43,10 +35,7 @@ export function resolvePeerResultBindings(
   const conflicts: ResultBinding[] = [];
   for (const binding of bindings) {
     const existing = existingRefs(binding.ref);
-    if (
-      existing.size > 1 ||
-      (existing.size === 1 && !existing.has(binding.canonicalRef))
-    )
+    if (existing.size > 1 || (existing.size === 1 && !existing.has(binding.canonicalRef)))
       conflicts.push(binding);
     else accepted.push(binding);
   }
@@ -81,12 +70,7 @@ export type PeerOriginDisplay = {
 };
 
 export function validPeerDisplayText(value: unknown): value is string {
-  if (
-    typeof value !== "string" ||
-    value.trim().length === 0 ||
-    value.length > 512
-  )
-    return false;
+  if (typeof value !== "string" || value.trim().length === 0 || value.length > 512) return false;
   for (const character of value) {
     const code = character.codePointAt(0)!;
     if (
@@ -109,9 +93,7 @@ function validOriginDisplay(value: unknown): value is PeerOriginDisplay {
   return (
     fields.length > 0 &&
     fields.every(
-      ([key, text]) =>
-        (key === "name" || key === "workspaceLabel") &&
-        validPeerDisplayText(text),
+      ([key, text]) => (key === "name" || key === "workspaceLabel") && validPeerDisplayText(text),
     )
   );
 }
@@ -158,13 +140,11 @@ function valid(value: unknown): value is PeerCorrespondence {
                 typeof attachment.marker === "string" &&
                 typeof attachment.text === "string" &&
                 /^[0-9a-f]{64}$/u.test(attachment.sha256) &&
-                createHash("sha256")
-                  .update(attachment.text, "utf8")
-                  .digest("hex") === attachment.sha256,
+                createHash("sha256").update(attachment.text, "utf8").digest("hex") ===
+                  attachment.sha256,
             ))) &&
         (reply.resultBindings === undefined ||
-          (Array.isArray(reply.resultBindings) &&
-            reply.resultBindings.every(isResultBinding))) &&
+          (Array.isArray(reply.resultBindings) && reply.resultBindings.every(isResultBinding))) &&
         Number.isFinite(reply.createdAt) &&
         typeof reply.acknowledged === "boolean",
     )
@@ -189,11 +169,7 @@ function mutate<T>(id: string, action: (c: PeerCorrespondence) => T): T {
         name: "peer correspondence mutation",
       });
     } catch (error) {
-      if (
-        !(error instanceof ProcessLockOccupiedError) ||
-        Date.now() >= deadline
-      )
-        throw error;
+      if (!(error instanceof ProcessLockOccupiedError) || Date.now() >= deadline) throw error;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
     }
   }
@@ -232,20 +208,12 @@ export function storePeerCorrespondence(c: PeerCorrespondence): void {
   const existing = listPeerCorrespondences().find((item) => item.id === c.id);
   if (existing) {
     mutate(c.id, (current) => {
-      if (current.finalized)
-        throw new Error("peer correspondence is already finalized");
+      if (current.finalized) throw new Error("peer correspondence is already finalized");
       if ((current.role ?? "manager") !== (c.role ?? "manager"))
         throw new Error("conflicting peer correspondence role");
       if (
-        [
-          "capability",
-          "originSession",
-          "originGeneration",
-          "recipientSession",
-        ].some(
-          (key) =>
-            current[key as keyof PeerCorrespondence] !==
-            c[key as keyof PeerCorrespondence],
+        ["capability", "originSession", "originGeneration", "recipientSession"].some(
+          (key) => current[key as keyof PeerCorrespondence] !== c[key as keyof PeerCorrespondence],
         )
       )
         throw new Error("conflicting peer correspondence");
@@ -261,16 +229,9 @@ export function storePeerCorrespondence(c: PeerCorrespondence): void {
   }
   save({ ...c, role: c.role ?? "manager" });
 }
-export function readPeerCorrespondence(
-  id: string,
-): PeerCorrespondence | undefined {
+export function readPeerCorrespondence(id: string): PeerCorrespondence | undefined {
   if (!ID.test(id)) throw new Error("invalid peer correspondence id");
-  const path = join(
-    herdsmanDataRoot(),
-    "runtime",
-    "peer-correspondences",
-    `${id}.json`,
-  );
+  const path = join(herdsmanDataRoot(), "runtime", "peer-correspondences", `${id}.json`);
   let current: unknown;
   try {
     current = JSON.parse(readFileSync(path, "utf8"));
@@ -278,8 +239,7 @@ export function readPeerCorrespondence(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
-  if (!valid(current) || current.id !== id)
-    throw new Error("invalid peer correspondence");
+  if (!valid(current) || current.id !== id) throw new Error("invalid peer correspondence");
   return current;
 }
 export function verifyPeerCorrespondence(c: PeerCorrespondence): void {
@@ -296,11 +256,7 @@ export function verifyPeerCorrespondence(c: PeerCorrespondence): void {
       "recipientSession",
       "recipientGeneration",
       "acceptanceId",
-    ].some(
-      (key) =>
-        current[key as keyof PeerCorrespondence] !==
-        c[key as keyof PeerCorrespondence],
-    )
+    ].some((key) => current[key as keyof PeerCorrespondence] !== c[key as keyof PeerCorrespondence])
   )
     throw new Error("conflicting peer correspondence");
 }
@@ -333,8 +289,7 @@ export function updatePeerRecipientGeneration(
   oldGeneration: string,
   newGeneration: string,
 ): PeerCorrespondence {
-  if (!newGeneration)
-    throw new Error("peer correspondence recipient recovery rejected");
+  if (!newGeneration) throw new Error("peer correspondence recipient recovery rejected");
   return mutate(id, (c) => {
     if (
       c.finalized ||
@@ -359,12 +314,9 @@ export function removePeerCorrespondence(id: string): void {
 }
 export function listPeerCorrespondences(): PeerCorrespondence[] {
   return readdirSync(directory()).flatMap((name) => {
-    if (!ID.test(name.replace(/\.json$/u, "")) || !name.endsWith(".json"))
-      return [];
+    if (!ID.test(name.replace(/\.json$/u, "")) || !name.endsWith(".json")) return [];
     try {
-      const c: unknown = JSON.parse(
-        readFileSync(join(directory(), name), "utf8"),
-      );
+      const c: unknown = JSON.parse(readFileSync(join(directory(), name), "utf8"));
       return valid(c) ? [c] : [];
     } catch {
       return [];
@@ -372,16 +324,12 @@ export function listPeerCorrespondences(): PeerCorrespondence[] {
   });
 }
 function matchesCapability(actual: string, expected: string): boolean {
-  if (!/^[0-9a-f]{64}$/u.test(expected) || !/^[0-9a-f]{64}$/u.test(actual))
-    return false;
+  if (!/^[0-9a-f]{64}$/u.test(expected) || !/^[0-9a-f]{64}$/u.test(actual)) return false;
   const actualBytes = Buffer.from(actual, "hex");
   const expectedBytes = Buffer.from(expected, "hex");
   if (timingSafeEqual(actualBytes, expectedBytes)) return true;
   return timingSafeEqual(
-    Buffer.from(
-      createHash("sha256").update(expectedBytes).digest("hex"),
-      "hex",
-    ),
+    Buffer.from(createHash("sha256").update(expectedBytes).digest("hex"), "hex"),
     actualBytes,
   );
 }
@@ -393,18 +341,13 @@ export function queuePeerReply(
 ): "queued" | "duplicate" {
   const payload = {
     text,
-    ...(evidence.attachments.length
-      ? { attachments: evidence.attachments }
-      : {}),
-    ...(evidence.resultBindings?.length
-      ? { resultBindings: evidence.resultBindings }
-      : {}),
+    ...(evidence.attachments.length ? { attachments: evidence.attachments } : {}),
+    ...(evidence.resultBindings?.length ? { resultBindings: evidence.resultBindings } : {}),
   };
   if (
     !ID.test(replyId) ||
     !text ||
-    Buffer.byteLength(JSON.stringify(payload), "utf8") >
-      PEER_TRANSPORT_FRAME_LIMIT_BYTES
+    Buffer.byteLength(JSON.stringify(payload), "utf8") > PEER_TRANSPORT_FRAME_LIMIT_BYTES
   )
     throw new Error("invalid peer reply");
   const digest = peerPayloadDigest(payload);
@@ -412,20 +355,15 @@ export function queuePeerReply(
     if (current.finalized) throw new Error("peer correspondence is finalized");
     const prior = current.replies.find((r) => r.id === replyId);
     if (prior) {
-      if (prior.digest !== digest)
-        throw new Error("conflicting peer reply identity");
+      if (prior.digest !== digest) throw new Error("conflicting peer reply identity");
       return "duplicate";
     }
     const reply = {
       id: replyId,
       digest,
       text,
-      ...(evidence.attachments.length
-        ? { attachments: [...evidence.attachments] }
-        : {}),
-      ...(evidence.resultBindings?.length
-        ? { resultBindings: [...evidence.resultBindings] }
-        : {}),
+      ...(evidence.attachments.length ? { attachments: [...evidence.attachments] } : {}),
+      ...(evidence.resultBindings?.length ? { resultBindings: [...evidence.resultBindings] } : {}),
       createdAt: Date.now(),
       acknowledged: false,
     };
@@ -534,13 +472,9 @@ export function finalizePeerCorrespondence(
     )
       throw new Error("peer correspondence authorization failed");
     if (c.replies.some((reply) => !reply.acknowledged))
-      throw new Error(
-        "cannot finalize peer correspondence with pending replies",
-      );
+      throw new Error("cannot finalize peer correspondence with pending replies");
     if (c.finalized) return;
-    c.capability = createHash("sha256")
-      .update(Buffer.from(capability, "hex"))
-      .digest("hex");
+    c.capability = createHash("sha256").update(Buffer.from(capability, "hex")).digest("hex");
     c.replies = [];
     c.finalized = true;
   });

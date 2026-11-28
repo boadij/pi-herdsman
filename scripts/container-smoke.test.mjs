@@ -7,12 +7,8 @@ import test from "node:test";
 
 test("installer, verification, and cleanup share Docker configuration", () => {
   const script = readFileSync("scripts/container-smoke.sh", "utf8");
-  const dockerConfig = script.match(
-    /^# Keep Docker's configuration[\s\S]*?^fi$/m,
-  )?.[0];
-  const setupEnvironment = script.match(
-    /^  setup_environment\(\) \{[\s\S]*?^  \}/m,
-  )?.[0];
+  const dockerConfig = script.match(/^# Keep Docker's configuration[\s\S]*?^fi$/m)?.[0];
+  const setupEnvironment = script.match(/^  setup_environment\(\) \{[\s\S]*?^  \}/m)?.[0];
   assert.ok(dockerConfig);
   assert.ok(setupEnvironment);
   for (const config of ["relative-config", ""]) {

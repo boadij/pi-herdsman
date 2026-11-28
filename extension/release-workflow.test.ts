@@ -1,43 +1,30 @@
 import assert from "node:assert/strict";
-import {
-  chmodSync,
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
 
-const workflow = readFileSync(
-  resolve(".github/workflows/release.yml"),
-  "utf8",
-).replaceAll("\r\n", "\n");
-const previewWorkflow = readFileSync(
-  resolve(".github/workflows/preview.yml"),
-  "utf8",
-).replaceAll("\r\n", "\n");
+const workflow = readFileSync(resolve(".github/workflows/release.yml"), "utf8").replaceAll(
+  "\r\n",
+  "\n",
+);
+const previewWorkflow = readFileSync(resolve(".github/workflows/preview.yml"), "utf8").replaceAll(
+  "\r\n",
+  "\n",
+);
 
 test("release publication recovers with exact identity", () => {
   assert.match(workflow, /queue: max/);
   assert.match(workflow, /googleapis\/release-please-action@v5/);
-  assert.match(
-    workflow,
-    /workflow_dispatch:[\s\S]*tag:[\s\S]*required:\s*true/,
-  );
+  assert.match(workflow, /workflow_dispatch:[\s\S]*tag:[\s\S]*required:\s*true/);
   assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
   assert.match(
     workflow,
     /- id: target\n\s+if: \$\{\{ !cancelled\(\) && steps\.source\.outcome == 'success' \}\}/,
   );
 
-  const target = workflow.slice(
-    workflow.indexOf("- id: target"),
-    workflow.indexOf("- id: node"),
-  );
+  const target = workflow.slice(workflow.indexOf("- id: target"), workflow.indexOf("- id: node"));
   assert.match(target, /RELEASE_CREATED/);
   assert.match(target, /releases\/tags\/\$TAG/);
   assert.match(target, /HTTP 404/);
@@ -69,18 +56,12 @@ test("release publication recovers with exact identity", () => {
     workflow,
     /- name: Publish container\n\s+if: \$\{\{ !cancelled\(\) && steps\.login\.outcome == 'success' \}\}/,
   );
-  assert.match(
-    workflow,
-    /tags: \$\{\{ steps\.target\.outputs\.docker_tags \}\}/,
-  );
+  assert.match(workflow, /tags: \$\{\{ steps\.target\.outputs\.docker_tags \}\}/);
   assert.doesNotMatch(workflow, /steps\.package\./);
 });
 
 test("PR preview publication isolates publish credentials from PR code", () => {
-  assert.match(
-    previewWorkflow,
-    /workflow_dispatch:[\s\S]*pr:[\s\S]*required:\s*true/,
-  );
+  assert.match(previewWorkflow, /workflow_dispatch:[\s\S]*pr:[\s\S]*required:\s*true/);
   assert.match(previewWorkflow, /pull_request_target:\n\s+types: \[closed\]/);
   assert.match(previewWorkflow, /queue: max/);
   assert.match(
@@ -93,16 +74,10 @@ test("PR preview publication isolates publish credentials from PR code", () => {
     /\[ "\$STATE" = "open" \][\s\S]*\[ "\$HEAD_REPO" = "\$GITHUB_REPOSITORY" \]/,
   );
 
-  assert.match(
-    previewWorkflow,
-    /ref:\s*\$\{\{\s*steps\.target\.outputs\.sha\s*\}\}/,
-  );
+  assert.match(previewWorkflow, /ref:\s*\$\{\{\s*steps\.target\.outputs\.sha\s*\}\}/);
 
   assert.match(previewWorkflow, /\[\[ "\$PR" =~ \^\[1-9\]\[0-9\]\*\$ \]\]/);
-  assert.match(
-    previewWorkflow,
-    /VERSION="0\.0\.0-pr\.\$PR\.g\$\{HEAD_SHA:0:12\}"/,
-  );
+  assert.match(previewWorkflow, /VERSION="0\.0\.0-pr\.\$PR\.g\$\{HEAD_SHA:0:12\}"/);
   assert.match(previewWorkflow, /TAG="pr-\$PR"/);
   assert.match(
     previewWorkflow,
@@ -132,10 +107,7 @@ test("PR preview publication isolates publish credentials from PR code", () => {
   assert.match(publish, /\[ "\$CURRENT_SHA" = "\$SHA" \]/);
   assert.match(publish, /npm view "\$PACKAGE" versions --json/);
   assert.match(publish, /npm view "\$PACKAGE@\$VERSION" previewSourceSha/);
-  assert.match(
-    publish,
-    /if type == "array" then index\(\$v\) != null else \. == \$v end/,
-  );
+  assert.match(publish, /if type == "array" then index\(\$v\) != null else \. == \$v end/);
   assert.match(publish, /npm dist-tag add "\$PACKAGE@\$VERSION" "\$TAG"/);
   assert.doesNotMatch(publish, /needs\.prepare\.outputs\.(?:version|tag)/);
   const packageNameCheck = publish.search(
@@ -160,32 +132,21 @@ test("PR preview publication isolates publish credentials from PR code", () => {
   assert.ok(packageVersionCheck < firstNpmView);
   assert.ok(packageNameCheck < firstNpmPublish);
   assert.ok(packageVersionCheck < firstNpmPublish);
-  assert.match(
-    publish,
-    /npm publish[\s\S]*--tag "\$TAG"[\s\S]*--ignore-scripts/,
-  );
+  assert.match(publish, /npm publish[\s\S]*--tag "\$TAG"[\s\S]*--ignore-scripts/);
   assert.match(
     publish,
     /REGISTRY="https:\/\/registry\.npmjs\.org"[\s\S]*npm publish[\s\S]*--registry "\$REGISTRY"/,
   );
 
-  const cleanup = previewWorkflow.slice(
-    previewWorkflow.indexOf("\n  cleanup:\n"),
-  );
+  const cleanup = previewWorkflow.slice(previewWorkflow.indexOf("\n  cleanup:\n"));
   assert.match(cleanup, /github\.event_name == 'pull_request_target'/);
   assert.match(cleanup, /head\.repo\.full_name == github\.repository/);
   assert.match(cleanup, /environment: npm-preview/);
-  assert.match(
-    cleanup,
-    /STATE=\$\(gh api[\s\S]*case "\$STATE" in[\s\S]*open\).*exit 0/,
-  );
+  assert.match(cleanup, /STATE=\$\(gh api[\s\S]*case "\$STATE" in[\s\S]*open\).*exit 0/);
   assert.match(cleanup, /npm view "\$PACKAGE" dist-tags --json/);
   assert.match(cleanup, /"0\.0\.0-pr\.\$PR\."\*/);
   assert.match(cleanup, /npm dist-tag rm "\$PACKAGE" "\$TAG"/);
-  assert.doesNotMatch(
-    cleanup,
-    /actions\/checkout|download-artifact|npm (?:ci|pack)/,
-  );
+  assert.doesNotMatch(cleanup, /actions\/checkout|download-artifact|npm (?:ci|pack)/);
 });
 
 test("an existing preview version cannot be retagged for a different full SHA", () => {
@@ -212,10 +173,7 @@ test("an existing preview version cannot be retagged for a different full SHA", 
     const run = (publishedSha: string) =>
       spawnSync(
         "bash",
-        [
-          "-c",
-          `set -euo pipefail\n${identityGuard}npm dist-tag add "$PACKAGE@$VERSION" "$TAG"`,
-        ],
+        ["-c", `set -euo pipefail\n${identityGuard}npm dist-tag add "$PACKAGE@$VERSION" "$TAG"`],
         {
           env: {
             ...process.env,
@@ -234,14 +192,8 @@ test("an existing preview version cannot be retagged for a different full SHA", 
 
     const collision = run("123456789abcffff0123456789abcdef01234567");
     assert.notEqual(collision.status, 0);
-    assert.equal(
-      collision.stderr.includes("does not identify source commit"),
-      true,
-    );
-    assert.equal(
-      existsSync(log) && readFileSync(log, "utf8").includes("dist-tag add"),
-      false,
-    );
+    assert.equal(collision.stderr.includes("does not identify source commit"), true);
+    assert.equal(existsSync(log) && readFileSync(log, "utf8").includes("dist-tag add"), false);
 
     const sameSource = run("123456789abcdef0123456789abcdef01234567");
     assert.equal(sameSource.status, 0, sameSource.stderr);
@@ -252,20 +204,14 @@ test("an existing preview version cannot be retagged for a different full SHA", 
 });
 
 test("publish verifies the tarball's full source SHA before registry operations", () => {
-  const publish = previewWorkflow.slice(
-    previewWorkflow.indexOf("\n  publish:\n"),
-  );
+  const publish = previewWorkflow.slice(previewWorkflow.indexOf("\n  publish:\n"));
   const sourceShaCheck = publish.indexOf(
     'test "$(node -p "require(\'./manifest/package/package.json\').previewSourceSha")" = "$SHA"',
   );
   const npmInstall = publish.indexOf("npm install -g npm@11.21.0");
   const registryLookup = publish.indexOf('npm view "$PACKAGE" versions');
-  const existingVersionLookup = publish.indexOf(
-    'npm view "$PACKAGE@$VERSION" previewSourceSha',
-  );
-  const distTagAdd = publish.indexOf(
-    'npm dist-tag add "$PACKAGE@$VERSION" "$TAG"',
-  );
+  const existingVersionLookup = publish.indexOf('npm view "$PACKAGE@$VERSION" previewSourceSha');
+  const distTagAdd = publish.indexOf('npm dist-tag add "$PACKAGE@$VERSION" "$TAG"');
   const registryPublish = publish.indexOf('npm publish "${TARBALLS[0]}"');
 
   assert.notEqual(sourceShaCheck, -1);

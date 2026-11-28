@@ -10,10 +10,7 @@ const child = spawn(
   { stdio: "ignore" },
 );
 const temporaryPath = `${outputPath}.${process.pid}.tmp`;
-writeFileSync(
-  temporaryPath,
-  JSON.stringify({ parent: process.pid, child: child.pid }),
-);
+writeFileSync(temporaryPath, JSON.stringify({ parent: process.pid, child: child.pid }));
 renameSync(temporaryPath, outputPath);
 process.on("SIGTERM", () => {});
 setInterval(() => {}, 1000);

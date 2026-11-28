@@ -34,10 +34,7 @@ const sources = [
 ];
 
 function blobHash(bytes) {
-  return createHash("sha1")
-    .update(`blob ${bytes.length}\0`)
-    .update(bytes)
-    .digest("hex");
+  return createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
 }
 
 function isManagedFile(source, path) {
@@ -54,9 +51,7 @@ function isManagedDirectory(source, path) {
   return (
     source.includeReferences &&
     (path === "references" ||
-      /^references\/(?:[a-zA-Z0-9_-][a-zA-Z0-9_.-]*\/)*[a-zA-Z0-9_-][a-zA-Z0-9_.-]*$/u.test(
-        path,
-      ))
+      /^references\/(?:[a-zA-Z0-9_-][a-zA-Z0-9_.-]*\/)*[a-zA-Z0-9_-][a-zA-Z0-9_.-]*$/u.test(path))
   );
 }
 
@@ -69,17 +64,14 @@ function readJson(response, label) {
 async function lookup(source, endpoint, label, { request, token, missing }) {
   let response;
   try {
-    response = await request(
-      `https://api.github.com/repos/${source.repository}/${endpoint}`,
-      {
-        headers: {
-          Accept: "application/vnd.github+json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        redirect: "error",
-        signal: AbortSignal.timeout(15_000),
+    response = await request(`https://api.github.com/repos/${source.repository}/${endpoint}`, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-    );
+      redirect: "error",
+      signal: AbortSignal.timeout(15_000),
+    });
   } catch {
     throw new Error(`Lookup failed: ${label} (request error)`);
   }
@@ -94,28 +86,15 @@ async function lookup(source, endpoint, label, { request, token, missing }) {
 
 function decodeBase64(value, label, size) {
   if (typeof value !== "string") {
-    throw new Error(
-      `Invalid upstream response: ${label} (expected base64 content)`,
-    );
+    throw new Error(`Invalid upstream response: ${label} (expected base64 content)`);
   }
   const compact = value.replace(/\s/gu, "");
-  if (
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(
-      compact,
-    )
-  ) {
-    throw new Error(
-      `Invalid upstream response: ${label} (malformed base64 content)`,
-    );
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(compact)) {
+    throw new Error(`Invalid upstream response: ${label} (malformed base64 content)`);
   }
   const bytes = Buffer.from(compact, "base64");
-  if (
-    bytes.toString("base64") !== compact ||
-    (size !== undefined && size !== bytes.length)
-  ) {
-    throw new Error(
-      `Invalid upstream response: ${label} (invalid content size or encoding)`,
-    );
+  if (bytes.toString("base64") !== compact || (size !== undefined && size !== bytes.length)) {
+    throw new Error(`Invalid upstream response: ${label} (invalid content size or encoding)`);
   }
   return bytes;
 }
@@ -129,12 +108,7 @@ function safeStat(path) {
   }
 }
 
-function checkedPath(
-  root,
-  source,
-  relativePath,
-  { create = false, removed } = {},
-) {
+function checkedPath(root, source, relativePath, { create = false, removed } = {}) {
   if (!isManagedFile(source, relativePath)) {
     throw new Error(`Unsupported managed path: ${source.name}/${relativePath}`);
   }
@@ -157,28 +131,17 @@ function checkedPath(
     current = join(current, segment);
     const stat = safeStat(current);
     if (stat?.isSymbolicLink()) {
-      throw new Error(
-        `Symlink in managed path: ${source.name}/${relativePath}`,
-      );
+      throw new Error(`Symlink in managed path: ${source.name}/${relativePath}`);
     }
     if (stat && current !== fullPath && !stat.isDirectory()) {
-      if (
-        stat.isFile() &&
-        removed?.has(relative(destination, current).split(sep).join("/"))
-      )
+      if (stat.isFile() && removed?.has(relative(destination, current).split(sep).join("/")))
         return fullPath;
-      throw new Error(
-        `Non-directory in managed path: ${source.name}/${relativePath}`,
-      );
+      throw new Error(`Non-directory in managed path: ${source.name}/${relativePath}`);
     }
     if (!stat && create && current !== fullPath) mkdirSync(current);
   }
   const stat = safeStat(fullPath);
-  if (
-    (create || removed) &&
-    stat?.isDirectory() &&
-    isManagedDirectory(source, relativePath)
-  ) {
+  if ((create || removed) && stat?.isDirectory() && isManagedDirectory(source, relativePath)) {
     const directories = [];
     function visit(path, relativePath) {
       for (const name of readdirSync(path)) {
@@ -188,9 +151,7 @@ function checkedPath(
         if (entry?.isDirectory() && isManagedDirectory(source, childRelative)) {
           visit(child, childRelative);
         } else if (!(entry?.isFile() && removed?.has(childRelative))) {
-          throw new Error(
-            `Directory blocks managed write: ${source.name}/${childRelative}`,
-          );
+          throw new Error(`Directory blocks managed write: ${source.name}/${childRelative}`);
         }
       }
       directories.push(path);
@@ -227,10 +188,7 @@ function localSnapshot(root, source) {
   } catch {
     throw new Error(`Invalid vendored provenance: ${source.name}/source.json`);
   }
-  if (
-    typeof provenance?.commit !== "string" ||
-    !shaPattern.test(provenance.commit)
-  ) {
+  if (typeof provenance?.commit !== "string" || !shaPattern.test(provenance.commit)) {
     throw new Error(
       `Invalid vendored provenance: expected reviewed upstream commit SHA (${source.name})`,
     );
@@ -243,21 +201,15 @@ function localSnapshot(root, source) {
       const relativePath = relative(directory, fullPath).split(sep).join("/");
       const stat = safeStat(fullPath);
       if (stat?.isSymbolicLink()) {
-        if (
-          relativePath === "references" ||
-          relativePath.startsWith("references/")
-        ) {
-          throw new Error(
-            `Symlink in managed path: ${source.name}/${relativePath}`,
-          );
+        if (relativePath === "references" || relativePath.startsWith("references/")) {
+          throw new Error(`Symlink in managed path: ${source.name}/${relativePath}`);
         }
         continue;
       }
       if (stat.isDirectory()) {
         if (
           !source.includeReferences ||
-          (relativePath !== "references" &&
-            !relativePath.startsWith("references/"))
+          (relativePath !== "references" && !relativePath.startsWith("references/"))
         ) {
           continue;
         }
@@ -265,19 +217,13 @@ function localSnapshot(root, source) {
       } else if (stat.isFile() && isManagedFile(source, relativePath)) {
         checkedPath(root, source, relativePath);
         files.set(relativePath, blobHash(readFileSync(fullPath)));
-      } else if (
-        relativePath === "SKILL.md" ||
-        relativePath.startsWith("references/")
-      ) {
-        throw new Error(
-          `Unsupported local managed path: ${source.name}/${relativePath}`,
-        );
+      } else if (relativePath === "SKILL.md" || relativePath.startsWith("references/")) {
+        throw new Error(`Unsupported local managed path: ${source.name}/${relativePath}`);
       }
     }
   }
   visit(directory);
-  if (!files.has("SKILL.md"))
-    throw new Error(`Missing vendored file: ${source.name}/SKILL.md`);
+  if (!files.has("SKILL.md")) throw new Error(`Missing vendored file: ${source.name}/SKILL.md`);
   return { commit: provenance.commit, files };
 }
 
@@ -295,33 +241,25 @@ async function resolveCommit(source, options) {
     typeof commit !== "string" ||
     !shaPattern.test(commit)
   ) {
-    throw new Error(
-      `Invalid upstream response: expected ${source.name} ${source.branch} commit`,
-    );
+    throw new Error(`Invalid upstream response: expected ${source.name} ${source.branch} commit`);
   }
   return commit;
 }
 
 async function upstreamLicense(source, commit, options) {
-  const license = await lookup(
-    source,
-    `contents/LICENSE?ref=${commit}`,
-    `${source.name} license`,
-    { ...options, missing: true },
-  );
+  const license = await lookup(source, `contents/LICENSE?ref=${commit}`, `${source.name} license`, {
+    ...options,
+    missing: true,
+  });
   if (
     license?.type !== "file" ||
     license.path !== "LICENSE" ||
     typeof license.sha !== "string" ||
     !shaPattern.test(license.sha)
   ) {
-    throw new Error(
-      `Invalid upstream response: expected ${source.name} LICENSE at ${commit}`,
-    );
+    throw new Error(`Invalid upstream response: expected ${source.name} LICENSE at ${commit}`);
   }
-  const localLicense = readFileSync(
-    join(options.root, source.destination, "LICENSE"),
-  );
+  const localLicense = readFileSync(join(options.root, source.destination, "LICENSE"));
   if (license.sha !== blobHash(localLicense)) {
     throw new Error(
       `Upstream license changed; review ${source.repository}/blob/${commit}/LICENSE before updating`,
@@ -338,9 +276,7 @@ async function enumerateUpstream(source, commit, options) {
     options,
   );
   if (tree?.truncated !== false || !Array.isArray(tree.tree)) {
-    throw new Error(
-      `Invalid upstream response: expected complete ${source.name} tree`,
-    );
+    throw new Error(`Invalid upstream response: expected complete ${source.name} tree`);
   }
   const rootPath = `${source.upstreamPath}/`;
   let rootFound = false;
@@ -350,25 +286,18 @@ async function enumerateUpstream(source, commit, options) {
       throw new Error("Invalid upstream response: expected tree path");
     if (entry.path === source.upstreamPath) {
       if (rootFound || entry.type !== "tree" || entry.mode !== "040000") {
-        throw new Error(
-          `Invalid upstream skill root: ${source.repository}/${entry.path}`,
-        );
+        throw new Error(`Invalid upstream skill root: ${source.repository}/${entry.path}`);
       }
       rootFound = true;
       continue;
     }
     if (!entry.path.startsWith(rootPath)) continue;
     if (paths.has(entry.path))
-      throw new Error(
-        `Invalid upstream response: duplicate tree path ${entry.path}`,
-      );
+      throw new Error(`Invalid upstream response: duplicate tree path ${entry.path}`);
     paths.add(entry.path);
     const relativePath = entry.path.slice(rootPath.length);
     if (entry.type === "tree") {
-      if (
-        entry.mode !== "040000" ||
-        !isManagedDirectory(source, relativePath)
-      ) {
+      if (entry.mode !== "040000" || !isManagedDirectory(source, relativePath)) {
         throw new Error(`Unsupported upstream directory: ${entry.path}`);
       }
       continue;
@@ -389,19 +318,12 @@ async function enumerateUpstream(source, commit, options) {
       `Missing upstream skill root: ${source.repository}/${source.upstreamPath} at ${commit}`,
     );
   if (!result.has("SKILL.md"))
-    throw new Error(
-      `Missing upstream file: ${source.name}/SKILL.md at ${commit}`,
-    );
+    throw new Error(`Missing upstream file: ${source.name}/SKILL.md at ${commit}`);
   return result;
 }
 
 async function downloadBlob(source, sha, path, options) {
-  const blob = await lookup(
-    source,
-    `git/blobs/${sha}`,
-    `${source.name} blob ${path}`,
-    options,
-  );
+  const blob = await lookup(source, `git/blobs/${sha}`, `${source.name} blob ${path}`, options);
   if (blob?.sha !== sha || blob.encoding !== "base64") {
     throw new Error(
       `Invalid upstream response: expected base64 blob ${sha} for ${source.name}/${path}`,
@@ -421,28 +343,18 @@ async function prepare(source, root, options) {
     ...options,
     root,
   });
-  const added = [...upstream.keys()]
-    .filter((path) => !local.files.has(path))
-    .sort();
+  const added = [...upstream.keys()].filter((path) => !local.files.has(path)).sort();
   const modified = [...upstream.keys()]
-    .filter(
-      (path) =>
-        local.files.has(path) && local.files.get(path) !== upstream.get(path),
-    )
+    .filter((path) => local.files.has(path) && local.files.get(path) !== upstream.get(path))
     .sort();
-  const removed = [...local.files.keys()]
-    .filter((path) => !upstream.has(path))
-    .sort();
+  const removed = [...local.files.keys()].filter((path) => !upstream.has(path)).sort();
   const plannedRemovals = new Set(removed);
   for (const path of [...added, ...modified]) {
     checkedPath(root, source, path, { removed: plannedRemovals });
   }
   const writes = new Map();
   for (const path of [...added, ...modified]) {
-    writes.set(
-      path,
-      await downloadBlob(source, upstream.get(path), path, options),
-    );
+    writes.set(path, await downloadBlob(source, upstream.get(path), path, options));
   }
   return {
     source,
@@ -458,12 +370,7 @@ async function prepare(source, root, options) {
 
 function apply(prepared, root) {
   for (const update of prepared) {
-    if (
-      !update.added.length &&
-      !update.modified.length &&
-      !update.removed.length
-    )
-      continue;
+    if (!update.added.length && !update.modified.length && !update.removed.length) continue;
     for (const path of update.removed) {
       const destination = checkedPath(root, update.source, path);
       rmSync(destination);
@@ -485,9 +392,7 @@ function verify(prepared, root) {
   for (const update of prepared) {
     const actual = localSnapshot(root, update.source);
     if (actual.files.size !== update.upstream.size) {
-      throw new Error(
-        `Applied snapshot does not match upstream file set: ${update.source.name}`,
-      );
+      throw new Error(`Applied snapshot does not match upstream file set: ${update.source.name}`);
     }
     for (const [path, sha] of update.upstream) {
       if (actual.files.get(path) !== sha) {
@@ -496,15 +401,10 @@ function verify(prepared, root) {
         );
       }
     }
-    const changed =
-      update.added.length || update.modified.length || update.removed.length;
-    const expectedCommit = changed
-      ? update.upstreamCommit
-      : update.previousCommit;
+    const changed = update.added.length || update.modified.length || update.removed.length;
+    const expectedCommit = changed ? update.upstreamCommit : update.previousCommit;
     if (actual.commit !== expectedCommit) {
-      throw new Error(
-        `Applied provenance does not match expected commit: ${update.source.name}`,
-      );
+      throw new Error(`Applied provenance does not match expected commit: ${update.source.name}`);
     }
   }
 }
@@ -516,11 +416,9 @@ function changedPaths(root) {
     .toString("utf8")
     .split("\0")
     .filter(Boolean);
-  const untracked = execFileSync(
-    "git",
-    ["ls-files", "--others", "--exclude-standard", "-z"],
-    { cwd: root },
-  )
+  const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard", "-z"], {
+    cwd: root,
+  })
     .toString("utf8")
     .split("\0")
     .filter(Boolean);
@@ -532,9 +430,7 @@ export function allowedChange(path) {
     const prefix = `${source.destination}/`;
     if (!path.startsWith(prefix)) return false;
     const relativePath = path.slice(prefix.length);
-    return (
-      relativePath === "source.json" || isManagedFile(source, relativePath)
-    );
+    return relativePath === "source.json" || isManagedFile(source, relativePath);
   });
 }
 
@@ -546,12 +442,8 @@ function reviewBody(prepared) {
   const changes = prepared
     .flatMap((update) => [
       ...update.added.map((path) => `- ${update.source.name}/${path}: added`),
-      ...update.modified.map(
-        (path) => `- ${update.source.name}/${path}: modified`,
-      ),
-      ...update.removed.map(
-        (path) => `- ${update.source.name}/${path}: removed`,
-      ),
+      ...update.modified.map((path) => `- ${update.source.name}/${path}: modified`),
+      ...update.removed.map((path) => `- ${update.source.name}/${path}: removed`),
     ])
     .sort();
   return [
@@ -567,9 +459,7 @@ function reviewBody(prepared) {
     "",
     ...(changes.length
       ? changes
-      : [
-          "- No upstream snapshot changes; this run reconciles any obsolete update PR.",
-        ]),
+      : ["- No upstream snapshot changes; this run reconciles any obsolete update PR."]),
     "",
     "## Validation",
     "",
@@ -592,15 +482,11 @@ export async function updateVendoredSkills({
 } = {}) {
   // Prepare both upstreams completely before applying either one.
   const prepared = [];
-  for (const source of sources)
-    prepared.push(await prepare(source, root, { request, token }));
+  for (const source of sources) prepared.push(await prepare(source, root, { request, token }));
   apply(prepared, root);
   verify(prepared, root);
-  const unexpected = checkGit
-    ? changedPaths(root).filter((path) => !allowedChange(path))
-    : [];
-  if (unexpected.length)
-    throw new Error(`Unexpected changed path(s): ${unexpected.join(", ")}`);
+  const unexpected = checkGit ? changedPaths(root).filter((path) => !allowedChange(path)) : [];
+  if (unexpected.length) throw new Error(`Unexpected changed path(s): ${unexpected.join(", ")}`);
   const body = reviewBody(prepared);
   if (prBodyPath) writeFileSync(prBodyPath, body);
   if (summaryPath) {

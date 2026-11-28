@@ -36,10 +36,7 @@ test("post-checkout installs dependencies only in new linked worktrees", (t) => 
     mkdirSync(repo);
     mkdirSync(hooks);
     mkdirSync(bin);
-    copyFileSync(
-      join(repoRoot, ".githooks/post-checkout"),
-      join(hooks, "post-checkout"),
-    );
+    copyFileSync(join(repoRoot, ".githooks/post-checkout"), join(hooks, "post-checkout"));
     const fakeNpm = join(bin, "npm");
     writeFileSync(
       fakeNpm,
@@ -101,25 +98,14 @@ test("post-checkout installs dependencies only in new linked worktrees", (t) => 
     assert.equal(readFileSync(log, "utf8").trim().split("\n").length, 2);
 
     const failedPath = join(root, "failed-worktree");
-    const failure = spawnSync(
-      "git",
-      ["worktree", "add", "-b", "failed", failedPath],
-      {
-        cwd: repo,
-        env: { ...env, FAIL_NPM: "1" },
-        encoding: "utf8",
-      },
-    );
+    const failure = spawnSync("git", ["worktree", "add", "-b", "failed", failedPath], {
+      cwd: repo,
+      env: { ...env, FAIL_NPM: "1" },
+      encoding: "utf8",
+    });
     assert.notEqual(failure.status, 0);
-    assert.match(
-      failure.stderr,
-      /Run npm ci in this checkout before reusing it/,
-    );
-    assert.equal(
-      existsSync(failedPath),
-      true,
-      "failed install retains checkout",
-    );
+    assert.match(failure.stderr, /Run npm ci in this checkout before reusing it/);
+    assert.equal(existsSync(failedPath), true, "failed install retains checkout");
     assert.deepEqual(
       readFileSync(log, "utf8").trim().split("\n").at(-1),
       `${realpathSync(failedPath)}\tci`,
@@ -135,13 +121,7 @@ test("post-checkout installs dependencies only in new linked worktrees", (t) => 
     writeFileSync(join(unconfigured, "tracked.txt"), "initial\n");
     runUnconfigured("add", "tracked.txt");
     runUnconfigured("commit", "-m", "initial");
-    runUnconfigured(
-      "worktree",
-      "add",
-      "-b",
-      "not-enabled",
-      join(root, "not-enabled"),
-    );
+    runUnconfigured("worktree", "add", "-b", "not-enabled", join(root, "not-enabled"));
     assert.equal(readFileSync(log, "utf8").trim().split("\n").length, 3);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -160,8 +140,7 @@ test("setup:hooks enables hooks without replacing existing hooks", () => {
       GIT_CONFIG_GLOBAL: globalConfig,
       GIT_CONFIG_NOSYSTEM: "1",
     };
-    const git = (...args) =>
-      execFileSync("git", args, { cwd: repo, env, encoding: "utf8" }).trim();
+    const git = (...args) => execFileSync("git", args, { cwd: repo, env, encoding: "utf8" }).trim();
     git("init", "-b", "main");
     git("config", "user.name", "Test");
     git("config", "user.email", "test@example.invalid");
@@ -205,22 +184,13 @@ test("setup:hooks enables hooks without replacing existing hooks", () => {
     git("worktree", "add", "-b", "linked", linked);
     const refused = setup(linked);
     assert.notEqual(refused.status, 0);
-    assert.match(
-      refused.stderr,
-      /Run setup from the primary repository checkout/,
-    );
+    assert.match(refused.stderr, /Run setup from the primary repository checkout/);
 
     git("config", "--local", "core.hooksPath", join(root, "other-hooks"));
     const conflict = setup();
     assert.notEqual(conflict.status, 0);
-    assert.match(
-      conflict.stderr,
-      /Refusing to replace existing core\.hooksPath/,
-    );
-    assert.equal(
-      git("config", "--get", "core.hooksPath"),
-      join(root, "other-hooks"),
-    );
+    assert.match(conflict.stderr, /Refusing to replace existing core\.hooksPath/);
+    assert.equal(git("config", "--get", "core.hooksPath"), join(root, "other-hooks"));
 
     const customHooks = join(root, "custom", ".githooks");
     mkdirSync(customHooks, { recursive: true });
@@ -233,21 +203,12 @@ test("setup:hooks enables hooks without replacing existing hooks", () => {
     git("config", "--local", "--unset", "core.hooksPath");
     execFileSync(
       "git",
-      [
-        "config",
-        "--file",
-        globalConfig,
-        "core.hooksPath",
-        join(copied, ".githooks"),
-      ],
+      ["config", "--file", globalConfig, "core.hooksPath", join(copied, ".githooks")],
       { env },
     );
     const global = setup();
     assert.notEqual(global.status, 0);
-    assert.equal(
-      git("config", "--get", "core.hooksPath"),
-      join(copied, ".githooks"),
-    );
+    assert.equal(git("config", "--get", "core.hooksPath"), join(copied, ".githooks"));
     writeFileSync(globalConfig, "");
     if (process.platform !== "win32") {
       const existingHook = join(repo, ".git", "hooks", "pre-commit");

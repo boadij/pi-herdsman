@@ -32,15 +32,7 @@ import fs, {
 } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import {
-  basename,
-  delimiter,
-  dirname,
-  isAbsolute,
-  join,
-  resolve,
-  sep,
-} from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   assistantResultForSession,
@@ -180,9 +172,7 @@ import {
   assertDescendantVisibility,
 } from "../scripts/smoke.mjs";
 
-function assertErrorWithCode(
-  error: unknown,
-): asserts error is Error & { code: unknown } {
+function assertErrorWithCode(error: unknown): asserts error is Error & { code: unknown } {
   assert.ok(error instanceof Error);
   assert.ok("code" in error);
 }
@@ -199,16 +189,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function hasOnlyKeys(
-  value: Record<string, unknown>,
-  keys: readonly string[],
-): boolean {
+function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return Object.keys(value).every((key) => keys.includes(key));
 }
 
 function isJsonValue(value: unknown): boolean {
-  if (value === null || typeof value === "string" || typeof value === "boolean")
-    return true;
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
   if (typeof value === "number") return Number.isFinite(value);
   if (Array.isArray(value)) return value.every(isJsonValue);
   return (
@@ -225,8 +211,7 @@ function isTextContent(value: unknown): boolean {
     hasOnlyKeys(value, ["type", "text", "textSignature"]) &&
     value.type === "text" &&
     typeof value.text === "string" &&
-    (value.textSignature === undefined ||
-      typeof value.textSignature === "string")
+    (value.textSignature === undefined || typeof value.textSignature === "string")
   );
 }
 
@@ -245,15 +230,9 @@ function isAssistantContent(value: unknown): boolean {
   if (value.type === "text") return isTextContent(value);
   if (value.type === "thinking")
     return (
-      hasOnlyKeys(value, [
-        "type",
-        "thinking",
-        "thinkingSignature",
-        "redacted",
-      ]) &&
+      hasOnlyKeys(value, ["type", "thinking", "thinkingSignature", "redacted"]) &&
       typeof value.thinking === "string" &&
-      (value.thinkingSignature === undefined ||
-        typeof value.thinkingSignature === "string") &&
+      (value.thinkingSignature === undefined || typeof value.thinkingSignature === "string") &&
       (value.redacted === undefined || typeof value.redacted === "boolean")
     );
   return (
@@ -271,11 +250,9 @@ function isAssistantContent(value: unknown): boolean {
     typeof value.name === "string" &&
     isRecord(value.arguments) &&
     isJsonValue(value.arguments) &&
-    (value.thoughtSignature === undefined ||
-      typeof value.thoughtSignature === "string") &&
+    (value.thoughtSignature === undefined || typeof value.thoughtSignature === "string") &&
     (value.namespace === undefined || typeof value.namespace === "string") &&
-    (value.argumentsError === undefined ||
-      typeof value.argumentsError === "string")
+    (value.argumentsError === undefined || typeof value.argumentsError === "string")
   );
 }
 
@@ -283,22 +260,14 @@ function isUsage(value: unknown): boolean {
   if (!isRecord(value)) return false;
   const cost = value.cost;
   if (!isRecord(cost)) return false;
-  const numericFields = [
-    "input",
-    "output",
-    "cacheRead",
-    "cacheWrite",
-    "totalTokens",
-  ];
+  const numericFields = ["input", "output", "cacheRead", "cacheWrite", "totalTokens"];
   return (
     numericFields.every((field) => typeof value[field] === "number") &&
     ["input", "output", "cacheRead", "cacheWrite", "total"].every(
       (field) => typeof cost[field] === "number",
     ) &&
-    (cost.totalFromProvider === undefined ||
-      typeof cost.totalFromProvider === "boolean") &&
-    (value.cacheWrite1h === undefined ||
-      typeof value.cacheWrite1h === "number") &&
+    (cost.totalFromProvider === undefined || typeof cost.totalFromProvider === "boolean") &&
+    (value.cacheWrite1h === undefined || typeof value.cacheWrite1h === "number") &&
     (value.reasoning === undefined || typeof value.reasoning === "number")
   );
 }
@@ -344,9 +313,7 @@ function isSessionMessage(value: unknown): value is Message {
       typeof value.timestamp === "number" &&
       (typeof value.content === "string" ||
         (Array.isArray(value.content) &&
-          value.content.every(
-            (part: unknown) => isTextContent(part) || isImageContent(part),
-          )))
+          value.content.every((part: unknown) => isTextContent(part) || isImageContent(part))))
     );
   if (value.role === "assistant")
     return (
@@ -376,10 +343,8 @@ function isSessionMessage(value: unknown): value is Message {
       typeof value.provider === "string" &&
       typeof value.model === "string" &&
       isUsage(value.usage) &&
-      (value.responseModel === undefined ||
-        typeof value.responseModel === "string") &&
-      (value.responseId === undefined ||
-        typeof value.responseId === "string") &&
+      (value.responseModel === undefined || typeof value.responseModel === "string") &&
+      (value.responseId === undefined || typeof value.responseId === "string") &&
       (value.providerThinkingLevel === undefined ||
         typeof value.providerThinkingLevel === "string") &&
       (value.thinkingLevel === undefined ||
@@ -396,11 +361,7 @@ function isSessionMessage(value: unknown): value is Message {
               typeof diagnostic.timestamp !== "number"
             )
               return false;
-            if (
-              diagnostic.details !== undefined &&
-              !isJsonValue(diagnostic.details)
-            )
-              return false;
+            if (diagnostic.details !== undefined && !isJsonValue(diagnostic.details)) return false;
             if (diagnostic.error === undefined) return true;
             const error = diagnostic.error;
             return (
@@ -423,25 +384,15 @@ function isSessionMessage(value: unknown): value is Message {
             typeof value.deferred.expiresAt === "number") &&
           (value.deferred.pollAfterMs === undefined ||
             typeof value.deferred.pollAfterMs === "number") &&
-          (value.deferred.data === undefined ||
-            isJsonValue(value.deferred.data)))) &&
-      (value.errorMessage === undefined ||
-        typeof value.errorMessage === "string") &&
-      (value.rawStopReason === undefined ||
-        typeof value.rawStopReason === "string") &&
+          (value.deferred.data === undefined || isJsonValue(value.deferred.data)))) &&
+      (value.errorMessage === undefined || typeof value.errorMessage === "string") &&
+      (value.rawStopReason === undefined || typeof value.rawStopReason === "string") &&
       (value.endTurn === undefined || typeof value.endTurn === "boolean") &&
-      (value.durationMs === undefined ||
-        typeof value.durationMs === "number") &&
+      (value.durationMs === undefined || typeof value.durationMs === "number") &&
       typeof value.stopReason === "string" &&
-      [
-        "pending",
-        "stop",
-        "length",
-        "toolUse",
-        "error",
-        "aborted",
-        "deferred",
-      ].includes(value.stopReason) &&
+      ["pending", "stop", "length", "toolUse", "error", "aborted", "deferred"].includes(
+        value.stopReason,
+      ) &&
       typeof value.timestamp === "number" &&
       (value.usage === undefined || isUsage(value.usage))
     );
@@ -463,14 +414,11 @@ function isSessionMessage(value: unknown): value is Message {
       typeof value.toolCallId === "string" &&
       typeof value.isError === "boolean" &&
       Array.isArray(value.content) &&
-      value.content.every(
-        (part: unknown) => isTextContent(part) || isImageContent(part),
-      ) &&
+      value.content.every((part: unknown) => isTextContent(part) || isImageContent(part)) &&
       typeof value.timestamp === "number" &&
       (value.details === undefined || isJsonValue(value.details)) &&
       (value.usage === undefined || isUsage(value.usage)) &&
-      (value.durationMs === undefined ||
-        typeof value.durationMs === "number") &&
+      (value.durationMs === undefined || typeof value.durationMs === "number") &&
       (value.nestedCalls === undefined ||
         (isRecord(value.nestedCalls) &&
           hasOnlyKeys(value.nestedCalls, ["calls", "complete"]) &&
@@ -494,10 +442,8 @@ function isSessionMessage(value: unknown): value is Message {
               ["ok", "error", "unfinished"].includes(call.status) &&
               (call.arguments === undefined ||
                 (isRecord(call.arguments) && isJsonValue(call.arguments))) &&
-              (call.argumentsBytes === undefined ||
-                typeof call.argumentsBytes === "number") &&
-              (call.durationMs === undefined ||
-                typeof call.durationMs === "number") &&
+              (call.argumentsBytes === undefined || typeof call.argumentsBytes === "number") &&
+              (call.durationMs === undefined || typeof call.durationMs === "number") &&
               (call.error === undefined || typeof call.error === "string"),
           )))
     );
@@ -518,9 +464,7 @@ test("session message guard accepts persisted Pi system messages", () => {
       role: "system",
       content: "Persisted instructions",
       sections: { task: "Do the work" },
-      toolsAdded: [
-        { name: "test", description: "A test tool", parameters: {} },
-      ],
+      toolsAdded: [{ name: "test", description: "A test tool", parameters: {} }],
       toolsRemoved: [{ name: "old-test" }],
       timestamp: 1,
     }),
@@ -538,10 +482,7 @@ test("session message guard rejects malformed tool-result fields and extras", ()
     timestamp: 1,
   };
   assert.equal(isSessionMessage(toolResult), true);
-  assert.equal(
-    isSessionMessage({ ...toolResult, details: { ok: undefined } }),
-    false,
-  );
+  assert.equal(isSessionMessage({ ...toolResult, details: { ok: undefined } }), false);
   assert.equal(isSessionMessage({ ...toolResult, usage: "bad" }), false);
   assert.equal(
     isSessionMessage({
@@ -579,23 +520,16 @@ test("session message guard rejects malformed tool-result fields and extras", ()
       ...toolResult,
       nestedCalls: {
         complete: true,
-        calls: [
-          { id: "1", name: "x", status: "ok", arguments: { x: () => {} } },
-        ],
+        calls: [{ id: "1", name: "x", status: "ok", arguments: { x: () => {} } }],
       },
     }),
     false,
   );
-  assert.equal(
-    isSessionMessage({ ...toolResult, unexpected: "unchecked" }),
-    false,
-  );
+  assert.equal(isSessionMessage({ ...toolResult, unexpected: "unchecked" }), false);
   assert.equal(
     isSessionMessage({
       role: "assistant",
-      content: [
-        { type: "toolCall", id: "1", name: "x", arguments: { x: undefined } },
-      ],
+      content: [{ type: "toolCall", id: "1", name: "x", arguments: { x: undefined } }],
       api: "test",
       provider: "test",
       model: "test",
@@ -608,10 +542,8 @@ test("preflight uses worktree Pi instead of a conflicting PATH executable", asyn
   const dir = await mkdtemp(join(tmpdir(), "smoke-path-"));
   const originalPath = process.env.PATH;
   try {
-    if (process.platform === "win32")
-      await copyFile(process.execPath, join(dir, "pi.exe"));
-    else
-      await writeFile(join(dir, "pi"), "#!/bin/sh\nexit 99\n", { mode: 0o755 });
+    if (process.platform === "win32") await copyFile(process.execPath, join(dir, "pi.exe"));
+    else await writeFile(join(dir, "pi"), "#!/bin/sh\nexit 99\n", { mode: 0o755 });
     const pi = resolve(
       dirname(fileURLToPath(import.meta.url)),
       "../node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
@@ -629,10 +561,7 @@ test("preflight uses worktree Pi instead of a conflicting PATH executable", asyn
       },
       async (file: string, args: string[]) => {
         if (file === "herdr") return { stdout: "1.0.0" };
-        assert.deepEqual(
-          [file, ...args],
-          [...candidate.slice(0, 2), "--version"],
-        );
+        assert.deepEqual([file, ...args], [...candidate.slice(0, 2), "--version"]);
         return { stdout: execFileSync(file, args, { encoding: "utf8" }) };
       },
     );
@@ -711,16 +640,8 @@ test("manager bootstrap failure projection distinguishes delegation boundaries s
   for (const [name, input, resultState] of cases) {
     const result = managerBootstrapDelegationProjection(input);
     assert.equal(result.resultState, resultState, name);
-    assert.equal(
-      result.expectedBranchDelegateCalls,
-      input.expectedBranchDelegateCalls,
-      name,
-    );
-    assert.equal(
-      result.linkedWorktreeObserved,
-      input.linkedWorktreeObserved === true,
-      name,
-    );
+    assert.equal(result.expectedBranchDelegateCalls, input.expectedBranchDelegateCalls, name);
+    assert.equal(result.linkedWorktreeObserved, input.linkedWorktreeObserved === true, name);
     assert.deepEqual(Object.keys(result).sort(), [
       "childSessionSaved",
       "correlatedChild",
@@ -889,11 +810,7 @@ test("crash-recovery failure evidence bounds continuation category and recovery 
 });
 
 test("core correlation summary retains bounded membership and match counts without session IDs", () => {
-  const observed = new Set([
-    42,
-    43,
-    ...Array.from({ length: 45 }, (_, i) => i + 100),
-  ]);
+  const observed = new Set([42, 43, ...Array.from({ length: 45 }, (_, i) => i + 100)]);
   const summary = coreCorrelationSummary(
     {
       sessionIds: new Set(["PRIVATE-1", "PRIVATE-2", "PRIVATE-3"]),
@@ -912,10 +829,7 @@ test("core correlation summary retains bounded membership and match counts witho
   assert.equal(summary.matchedCount, 1);
   assert.equal(summary.ready, false);
   assert.doesNotMatch(JSON.stringify(summary), /PRIVATE/);
-  assert.equal(
-    coreCorrelationSummary(undefined, observed, false).evaluated,
-    false,
-  );
+  assert.equal(coreCorrelationSummary(undefined, observed, false).evaluated, false);
 });
 
 test("failure projections retain prior core and current candidate process observations", () => {
@@ -969,9 +883,7 @@ test("failure projections retain prior core and current candidate process observ
         smoke: {
           stage: "candidate-start",
           lastEvidence: {
-            processRecords: [
-              { ...record, argv: ["PRIVATE"], cmdline: "PRIVATE" },
-            ],
+            processRecords: [{ ...record, argv: ["PRIVATE"], cmdline: "PRIVATE" }],
           },
         },
       },
@@ -980,9 +892,7 @@ test("failure projections retain prior core and current candidate process observ
     "PASS",
   );
   assert.ok(candidate.candidateStartObservation);
-  assert.deepEqual(candidate.candidateStartObservation.processRecords, [
-    record,
-  ]);
+  assert.deepEqual(candidate.candidateStartObservation.processRecords, [record]);
   assert.doesNotMatch(JSON.stringify(candidate), /PRIVATE/);
   for (const [input, expected] of [
     [-1, 0],
@@ -1026,13 +936,12 @@ test("manager bootstrap run reference resolves to its exact retained artifact", 
   assert.match(reference, /^pi-herdsman-smoke-evidence-[^/]+\/result\.json$/);
   assert.equal(isAbsolute(reference), false);
   const ownedDirectory = join(tmpdir(), evidence.runReference);
-  const [directoryInfo, realDirectory, artifactPath, retained] =
-    await Promise.all([
-      stat(ownedDirectory),
-      realpath(ownedDirectory),
-      realpath(artifact),
-      readFile(join(tmpdir(), reference), "utf8"),
-    ]);
+  const [directoryInfo, realDirectory, artifactPath, retained] = await Promise.all([
+    stat(ownedDirectory),
+    realpath(ownedDirectory),
+    realpath(artifact),
+    readFile(join(tmpdir(), reference), "utf8"),
+  ]);
   assert.ok(directoryInfo.isDirectory());
   assert.equal(artifactPath, join(realDirectory, "result.json"));
   assert.deepEqual(JSON.parse(retained), evidence);
@@ -1107,9 +1016,7 @@ test("consumer receives only the finalized failure artifact through process outp
   const output: string[] = [];
   try {
     assert.equal(
-      await reportFinalFailureEvidence(artifact, (line: string) =>
-        output.push(line),
-      ),
+      await reportFinalFailureEvidence(artifact, (line: string) => output.push(line)),
       false,
     );
     assert.deepEqual([...output], []);
@@ -1117,9 +1024,7 @@ test("consumer receives only the finalized failure artifact through process outp
     evidence.cleanup = "PASS";
     await preserveFailureEvidence(evidence, artifact);
     assert.equal(
-      await reportFinalFailureEvidence(artifact, (line: string) =>
-        output.push(line),
-      ),
+      await reportFinalFailureEvidence(artifact, (line: string) => output.push(line)),
       true,
     );
 
@@ -1128,10 +1033,7 @@ test("consumer receives only the finalized failure artifact through process outp
     assert.ok(output[0].startsWith(prefix));
     const consumed = JSON.parse(output[0].slice(prefix.length));
     assert.equal(consumed.runReference, basename(dirname(artifact)));
-    assert.equal(
-      consumed.artifactReference,
-      `${consumed.runReference}/result.json`,
-    );
+    assert.equal(consumed.artifactReference, `${consumed.runReference}/result.json`);
     assert.equal(consumed.scenario, "manager-bootstrap");
     assert.equal(consumed.outcome, "EVIDENCE_FAIL");
     assert.equal(consumed.cleanup, "PASS");
@@ -1178,12 +1080,9 @@ test("evidence write failure reporting omits raw filesystem paths", () => {
   console.error = (message) => errors.push(String(message));
   try {
     reportFailureEvidenceWriteError(
-      Object.assign(
-        new Error(`EACCES: permission denied, open '${sentinel}'`),
-        {
-          code: "EACCES",
-        },
-      ),
+      Object.assign(new Error(`EACCES: permission denied, open '${sentinel}'`), {
+        code: "EACCES",
+      }),
     );
     reportFailureEvidenceWriteError(
       Object.assign(new Error(`EIO writing '${sentinel}'`), { code: "EIO" }),
@@ -1213,10 +1112,9 @@ test("scenario failure evidence save catch reports code without its path", async
       ctx,
       { scenario: "test", outcome: "FAIL" },
       async () => {
-        throw Object.assign(
-          new Error(`EACCES: permission denied, open '${sentinel}'`),
-          { code: "EACCES" },
-        );
+        throw Object.assign(new Error(`EACCES: permission denied, open '${sentinel}'`), {
+          code: "EACCES",
+        });
       },
     );
   } finally {
@@ -1224,13 +1122,8 @@ test("scenario failure evidence save catch reports code without its path", async
   }
   assert.equal(result, null);
   assert.equal(ctx.evidenceSaveFailed, true);
-  assert.deepEqual(errors, [
-    "failure evidence: could not save (filesystem error EACCES)",
-  ]);
-  assert.doesNotMatch(
-    errors.join("\n"),
-    /private\/fixture|result\.json|EACCES: permission denied/,
-  );
+  assert.deepEqual(errors, ["failure evidence: could not save (filesystem error EACCES)"]);
+  assert.doesNotMatch(errors.join("\n"), /private\/fixture|result\.json|EACCES: permission denied/);
 });
 
 test("cleanup evidence retry records and reports a recovered artifact", async () => {
@@ -1298,15 +1191,11 @@ test("cleanup retry artifact is delivered after its initial save failed", async 
     await updateFailureEvidenceAfterCleanup(ctx, evidence);
     assert.ok(ctx.failureArtifact);
     assert.equal(
-      await reportFinalFailureEvidence(ctx.failureArtifact, (line) =>
-        output.push(line),
-      ),
+      await reportFinalFailureEvidence(ctx.failureArtifact, (line) => output.push(line)),
       true,
     );
     assert.equal(output.length, 1);
-    const payload = JSON.parse(
-      output[0].replace("SMOKE_FAILURE_ARTIFACT_JSON ", ""),
-    );
+    const payload = JSON.parse(output[0].replace("SMOKE_FAILURE_ARTIFACT_JSON ", ""));
     assert.equal(payload.outcome, "SCENARIO_FAIL");
     assert.equal(payload.cleanup, "PASS");
   } finally {
@@ -1327,16 +1216,11 @@ test("cleanup evidence retry failure reports sanitized error without undefined r
   console.error = (message) => errors.push(String(message));
   try {
     await assert.doesNotReject(
-      updateFailureEvidenceAfterCleanup(
-        ctx,
-        { scenario: "test", cleanup: "PASS" },
-        async () => {
-          throw Object.assign(
-            new Error(`EACCES: permission denied, open '${sentinel}'`),
-            { code: "EACCES" },
-          );
-        },
-      ),
+      updateFailureEvidenceAfterCleanup(ctx, { scenario: "test", cleanup: "PASS" }, async () => {
+        throw Object.assign(new Error(`EACCES: permission denied, open '${sentinel}'`), {
+          code: "EACCES",
+        });
+      }),
     );
   } finally {
     console.error = originalError;
@@ -1440,9 +1324,7 @@ test("root delegation diagnostics correlate results and exclude private data", a
   };
   const project = (messages: unknown[]) =>
     rootDelegationDiagnostics(
-      messages
-        .map((message) => JSON.stringify({ type: "message", message }))
-        .join("\n"),
+      messages.map((message) => JSON.stringify({ type: "message", message })).join("\n"),
     );
   for (const [messages, expected] of [
     [[], "absent"],
@@ -1505,16 +1387,12 @@ test("root delegation diagnostics correlate results and exclude private data", a
   );
   assert.doesNotThrow(() =>
     assertNoFailedAgentDelegation(
-      [call]
-        .map((message) => JSON.stringify({ type: "message", message }))
-        .join("\n"),
+      [call].map((message) => JSON.stringify({ type: "message", message })).join("\n"),
     ),
   );
   assert.doesNotThrow(() =>
     assertNoFailedAgentDelegation(
-      [call, result]
-        .map((message) => JSON.stringify({ type: "message", message }))
-        .join("\n"),
+      [call, result].map((message) => JSON.stringify({ type: "message", message })).join("\n"),
     ),
   );
   const labeledCall = {
@@ -1553,34 +1431,19 @@ test("root delegation diagnostics correlate results and exclude private data", a
     },
   };
   const labeledTranscript = (messages: unknown[]) =>
-    messages
-      .map((message) => JSON.stringify({ type: "message", message }))
-      .join("\n");
+    messages.map((message) => JSON.stringify({ type: "message", message })).join("\n");
   assert.doesNotThrow(() =>
     assertNoFailedAgentDelegation(
-      labeledTranscript([
-        labeledCall,
-        result,
-        unrelatedFailedCall,
-        unrelatedFailure,
-      ]),
+      labeledTranscript([labeledCall, result, unrelatedFailedCall, unrelatedFailure]),
       "expected-agent",
     ),
   );
   const successfulDiagnostics = rootDelegationDiagnostics(
-    labeledTranscript([
-      labeledCall,
-      result,
-      unrelatedFailedCall,
-      unrelatedFailure,
-    ]),
+    labeledTranscript([labeledCall, result, unrelatedFailedCall, unrelatedFailure]),
     "expected-agent",
   );
   assert.equal(successfulDiagnostics.matchingResult, "success");
-  assert.equal(
-    JSON.stringify(successfulDiagnostics).includes("PRIVATE"),
-    false,
-  );
+  assert.equal(JSON.stringify(successfulDiagnostics).includes("PRIVATE"), false);
   const expectedFailure = {
     ...result,
     details: {
@@ -1642,10 +1505,7 @@ test("root delegation diagnostics correlate results and exclude private data", a
       errorCategory: "invalid_request",
       diagnosticOutcome: "definition_not_allowed",
     });
-    assert.doesNotMatch(
-      JSON.stringify(persisted),
-      /PRIVATE|expected-agent|PRIVATE_ID/,
-    );
+    assert.doesNotMatch(JSON.stringify(persisted), /PRIVATE|expected-agent|PRIVATE_ID/);
   } finally {
     await rm(dirname(artifact), { recursive: true, force: true });
   }
@@ -1772,8 +1632,7 @@ test("Chief Manager failure artifact persists sanitized root delegation diagnost
   assert.ok(projection.rootDelegation);
   const rootDelegation = projection.rootDelegation;
   assert.equal(
-    "expectedLabelMatched" in rootDelegation &&
-      rootDelegation.expectedLabelMatched,
+    "expectedLabelMatched" in rootDelegation && rootDelegation.expectedLabelMatched,
     true,
   );
   assert.equal(rootDelegation.matchingResult, "error");
@@ -1808,10 +1667,7 @@ test("Chief Manager failure artifact persists sanitized root delegation diagnost
       errorCategory: "invalid_request",
       diagnosticOutcome: "definition_not_allowed",
     });
-    assert.doesNotMatch(
-      JSON.stringify(saved),
-      /PRIVATE|definition_not_allowed.+PRIVATE/u,
-    );
+    assert.doesNotMatch(JSON.stringify(saved), /PRIVATE|definition_not_allowed.+PRIVATE/u);
   } finally {
     await rm(dirname(artifact), { recursive: true, force: true });
   }
@@ -1934,8 +1790,7 @@ test("core failure diagnostics correlate accepted delegation without exposing id
         toolName: "delegate_agent",
         toolCallId: "private-call-id",
         isError: false,
-        content:
-          "Session: private-child-session\nRequest: 00000000-0000-4000-8000-000000000001",
+        content: "Session: private-child-session\nRequest: 00000000-0000-4000-8000-000000000001",
       },
     },
   ];
@@ -1996,8 +1851,7 @@ test("core failure diagnostics correlate accepted delegation without exposing id
         rootToImplementer: {
           delegation: "accepted",
           session: "not_observed",
-          terminalResult:
-            expectedDelivery === "observed" ? "delivered" : "not_observed",
+          terminalResult: expectedDelivery === "observed" ? "delivered" : "not_observed",
           terminalStatus: "unknown",
           resultDelivered: expectedDelivery,
         },
@@ -2010,9 +1864,7 @@ test("core failure diagnostics correlate accepted delegation without exposing id
         },
         rootCompletionMarker: false,
         firstUnverifiedBoundary:
-          expectedDelivery === "observed"
-            ? "root_completion"
-            : "implementer_session",
+          expectedDelivery === "observed" ? "root_completion" : "implementer_session",
       });
       assert.doesNotMatch(JSON.stringify(projection), /private|PRIVATE/u);
       const failureEvidence = sanitizedFailureEvidence(
@@ -2035,22 +1887,13 @@ test("core failure diagnostics correlate accepted delegation without exposing id
           },
         },
       );
-      assert.deepEqual(
-        failureEvidence.coreDelegation,
-        projection.coreDelegation,
-      );
+      assert.deepEqual(failureEvidence.coreDelegation, projection.coreDelegation);
       assert.ok(failureEvidence.diagnostics);
-      assert.deepEqual(
-        failureEvidence.diagnostics.coreDelegation,
-        projection.coreDelegation,
-      );
+      assert.deepEqual(failureEvidence.diagnostics.coreDelegation, projection.coreDelegation);
       const artifact = await preserveFailureEvidence(failureEvidence);
       try {
         const saved = await readFile(artifact, "utf8");
-        assert.deepEqual(
-          JSON.parse(saved).coreDelegation,
-          projection.coreDelegation,
-        );
+        assert.deepEqual(JSON.parse(saved).coreDelegation, projection.coreDelegation);
         assert.doesNotMatch(saved, /private|PRIVATE/u);
       } finally {
         await rm(dirname(artifact), { recursive: true, force: true });
@@ -2064,18 +1907,9 @@ test("core failure diagnostics correlate accepted delegation without exposing id
 test("core failure diagnostics distinguish nested result publication from delivery", async () => {
   const root = await mkdtemp(join(tmpdir(), "smoke-core-nested-diagnostics-"));
   const piSessions = join(root, "sessions");
-  const mailboxRoot = join(
-    root,
-    "agent",
-    "pi-herdsman",
-    "runtime",
-    "mailboxes-v5",
-  );
+  const mailboxRoot = join(root, "agent", "pi-herdsman", "runtime", "mailboxes-v5");
   const piAgent = join(root, "agent");
-  await Promise.all([
-    mkdir(piSessions),
-    mkdir(mailboxRoot, { recursive: true }),
-  ]);
+  await Promise.all([mkdir(piSessions), mkdir(mailboxRoot, { recursive: true })]);
   const requestId = "00000000-0000-4000-8000-000000000002";
   const intermediateRequestId = "00000000-0000-4000-8000-000000000003";
   const entries = (
@@ -2234,9 +2068,7 @@ test("core failure diagnostics distinguish nested result publication from delive
           snapshot: async () => ({
             path: "private-root-path",
             status: "saved",
-            contents: rootEntries
-              .map((entry) => JSON.stringify(entry))
-              .join("\n"),
+            contents: rootEntries.map((entry) => JSON.stringify(entry)).join("\n"),
           }),
         },
       );
@@ -2244,21 +2076,15 @@ test("core failure diagnostics distinguish nested result publication from delive
       assert.deepEqual(projection.coreDelegation.implementerToScout, {
         delegation: "accepted",
         session: "observed",
-        terminalResult:
-          expectedReceipt === "observed" ? "delivered" : "published",
+        terminalResult: expectedReceipt === "observed" ? "delivered" : "published",
         terminalStatus: "completed",
         resultDelivered: expectedReceipt,
       });
       assert.equal(
         projection.coreDelegation.firstUnverifiedBoundary,
-        expectedReceipt === "observed"
-          ? "implementer_result_delivery"
-          : "scout_result_delivery",
+        expectedReceipt === "observed" ? "implementer_result_delivery" : "scout_result_delivery",
       );
-      assert.doesNotMatch(
-        JSON.stringify(projection),
-        /PRIVATE_TASK|PRIVATE_RESULT/u,
-      );
+      assert.doesNotMatch(JSON.stringify(projection), /PRIVATE_TASK|PRIVATE_RESULT/u);
     }
 
     await rm(join(mailbox, `result-${requestId}.json`));
@@ -2281,9 +2107,7 @@ test("core failure diagnostics distinguish nested result publication from delive
     };
     await writeFile(
       join(piSessions, "implementer.jsonl"),
-      [...implementerEntries, failedReceipt]
-        .map((entry) => JSON.stringify(entry))
-        .join("\n"),
+      [...implementerEntries, failedReceipt].map((entry) => JSON.stringify(entry)).join("\n"),
     );
     const projection = await collectDiagnostics(
       {
@@ -2301,9 +2125,7 @@ test("core failure diagnostics distinguish nested result publication from delive
         snapshot: async () => ({
           path: "PRIVATE_PATH",
           status: "saved",
-          contents: rootEntries
-            .map((entry) => JSON.stringify(entry))
-            .join("\n"),
+          contents: rootEntries.map((entry) => JSON.stringify(entry)).join("\n"),
         }),
       },
     );
@@ -2317,14 +2139,8 @@ test("core failure diagnostics distinguish nested result publication from delive
     const artifact = await preserveFailureEvidence(evidence);
     try {
       const saved = JSON.parse(await readFile(artifact, "utf8"));
-      assert.equal(
-        saved.diagnostics.coreDelegation.implementerToScout.terminalStatus,
-        "failed",
-      );
-      assert.equal(
-        saved.diagnostics.coreDelegation.implementerToScout.resultDelivered,
-        "observed",
-      );
+      assert.equal(saved.diagnostics.coreDelegation.implementerToScout.terminalStatus, "failed");
+      assert.equal(saved.diagnostics.coreDelegation.implementerToScout.resultDelivered, "observed");
       assert.doesNotMatch(JSON.stringify(saved), /PRIVATE/u);
     } finally {
       await rm(dirname(artifact), { recursive: true, force: true });
@@ -2575,9 +2391,7 @@ test("core failure diagnostics distinguish nested result publication from delive
         snapshot: async () => ({
           path: "private-root-path",
           status: "saved",
-          contents: rootEntries
-            .map((entry) => JSON.stringify(entry))
-            .join("\n"),
+          contents: rootEntries.map((entry) => JSON.stringify(entry)).join("\n"),
         }),
       });
     const handoffProjection = await collectHandoffProjection();
@@ -2589,97 +2403,44 @@ test("core failure diagnostics distinguish nested result publication from delive
       corePrompt,
       /reply with exactly one JSON object containing the package "name" and "version" as strings, with no prose/u,
     );
-    assert.equal(
-      handoffProjection.coreHandoff.intermediate.sessionId,
-      "private-implementer",
-    );
-    assert.equal(
-      handoffProjection.coreHandoff.intermediate.sessionPath,
-      "implementer.jsonl",
-    );
-    assert.equal(
-      handoffProjection.coreHandoff.intermediate.requestId,
-      intermediateRequestId,
-    );
-    assert.equal(
-      handoffProjection.coreHandoff.intermediate.mailbox.candidates,
-      0,
-    );
+    assert.equal(handoffProjection.coreHandoff.intermediate.sessionId, "private-implementer");
+    assert.equal(handoffProjection.coreHandoff.intermediate.sessionPath, "implementer.jsonl");
+    assert.equal(handoffProjection.coreHandoff.intermediate.requestId, intermediateRequestId);
+    assert.equal(handoffProjection.coreHandoff.intermediate.mailbox.candidates, 0);
     assert.equal(handoffProjection.coreHandoff.scout.mailbox.candidates, 0);
     assert.equal(handoffProjection.coreHandoff.scoutReference.ref, scoutRef);
-    assert.equal(
-      handoffProjection.coreHandoff.scoutReference.canonicalRef,
-      canonicalRef,
-    );
-    assert.equal(
-      handoffProjection.coreHandoff.scoutReference.artifact.readableUtf8,
-      true,
-    );
+    assert.equal(handoffProjection.coreHandoff.scoutReference.canonicalRef, canonicalRef);
+    assert.equal(handoffProjection.coreHandoff.scoutReference.artifact.readableUtf8, true);
     assert.equal(handoffProjection.coreHandoff.scoutReference.valid, true);
-    assert.deepEqual(
-      handoffProjection.coreHandoff.attachHandoff.calls[0].files,
-      [scoutRef],
-    );
+    assert.deepEqual(handoffProjection.coreHandoff.attachHandoff.calls[0].files, [scoutRef]);
     assert.equal(
-      handoffProjection.coreHandoff.attachHandoff.calls[0].results[0]
-        .toolCallId,
+      handoffProjection.coreHandoff.attachHandoff.calls[0].results[0].toolCallId,
       "attach-call",
     );
-    assert.equal(
-      handoffProjection.coreHandoff.attachHandoff.selectionMatches,
-      true,
-    );
-    assert.equal(
-      handoffProjection.coreHandoff.attachHandoff.calls[0].results[0].isError,
-      false,
-    );
-    assert.equal(
-      handoffProjection.coreHandoff.ownerImport.successfullyImported,
-      true,
-    );
+    assert.equal(handoffProjection.coreHandoff.attachHandoff.selectionMatches, true);
+    assert.equal(handoffProjection.coreHandoff.attachHandoff.calls[0].results[0].isError, false);
+    assert.equal(handoffProjection.coreHandoff.ownerImport.successfullyImported, true);
     assert.equal(handoffProjection.coreHandoff.ownerImport.status, "completed");
-    assert.deepEqual(
-      handoffProjection.coreHandoff.ownerImport.forwardableRefs,
-      [scoutRef],
-    );
-    assert.deepEqual(
-      handoffProjection.coreHandoff.ownerImport.importedBindings,
-      [{ ref: scoutRef, canonicalRef }],
-    );
-    assert.equal(
-      handoffProjection.coreHandoff.nextAgent.sessionId,
-      "private-next",
-    );
-    assert.equal(
-      handoffProjection.coreHandoff.nextAgent.requestId,
-      nextRequestId,
-    );
+    assert.deepEqual(handoffProjection.coreHandoff.ownerImport.forwardableRefs, [scoutRef]);
+    assert.deepEqual(handoffProjection.coreHandoff.ownerImport.importedBindings, [
+      { ref: scoutRef, canonicalRef },
+    ]);
+    assert.equal(handoffProjection.coreHandoff.nextAgent.sessionId, "private-next");
+    assert.equal(handoffProjection.coreHandoff.nextAgent.requestId, nextRequestId);
     assert.deepEqual(handoffProjection.coreHandoff.nextAgent.files, [scoutRef]);
-    assert.equal(
-      handoffProjection.coreHandoff.nextAgent.assignmentMatches,
-      true,
-    );
+    assert.equal(handoffProjection.coreHandoff.nextAgent.assignmentMatches, true);
     assert.equal(handoffProjection.coreHandoff.nextAgent.mailbox.candidates, 0);
-    assert.equal(
-      handoffProjection.coreHandoff.nextAgent.artifact.received,
-      true,
-    );
-    assert.deepEqual(
-      handoffProjection.coreHandoff.nextAgent.artifact.attachedPackage,
-      { name: "pi-herdsman", version: "0.25.1" },
-    );
-    assert.equal(
-      handoffProjection.coreHandoff.nextAgent.artifact.provenanceMatches,
-      true,
-    );
-    assert.equal(
-      handoffProjection.coreHandoff.nextAgent.artifact.responseMatchesArtifact,
-      true,
-    );
-    assert.deepEqual(
-      handoffProjection.coreHandoff.nextAgent.artifact.readback,
-      { name: "pi-herdsman", version: "0.25.1" },
-    );
+    assert.equal(handoffProjection.coreHandoff.nextAgent.artifact.received, true);
+    assert.deepEqual(handoffProjection.coreHandoff.nextAgent.artifact.attachedPackage, {
+      name: "pi-herdsman",
+      version: "0.25.1",
+    });
+    assert.equal(handoffProjection.coreHandoff.nextAgent.artifact.provenanceMatches, true);
+    assert.equal(handoffProjection.coreHandoff.nextAgent.artifact.responseMatchesArtifact, true);
+    assert.deepEqual(handoffProjection.coreHandoff.nextAgent.artifact.readback, {
+      name: "pi-herdsman",
+      version: "0.25.1",
+    });
     const handoffEvidence = sanitizedFailureEvidence(
       { scenario: "core", simulated: true, stage: "core-delegation" },
       { error: new Error("PRIVATE_FAILURE") },
@@ -2690,32 +2451,25 @@ test("core failure diagnostics distinguish nested result publication from delive
     const handoffArtifact = await preserveFailureEvidence(handoffEvidence);
     try {
       const saved = await readFile(handoffArtifact, "utf8");
+      assert.equal(JSON.parse(saved).diagnostics.coreHandoff.scoutReference.valid, true);
       assert.equal(
-        JSON.parse(saved).diagnostics.coreHandoff.scoutReference.valid,
+        JSON.parse(saved).diagnostics.coreHandoff.ownerImport.successfullyImported,
         true,
       );
       assert.equal(
-        JSON.parse(saved).diagnostics.coreHandoff.ownerImport
-          .successfullyImported,
+        JSON.parse(saved).diagnostics.coreHandoff.nextAgent.artifact.responseMatchesArtifact,
         true,
       );
-      assert.equal(
-        JSON.parse(saved).diagnostics.coreHandoff.nextAgent.artifact
-          .responseMatchesArtifact,
-        true,
-      );
+      assert.deepEqual(JSON.parse(saved).diagnostics.coreHandoff.nextAgent.artifact.readback, {
+        name: "pi-herdsman",
+        version: "0.25.1",
+      });
       assert.deepEqual(
-        JSON.parse(saved).diagnostics.coreHandoff.nextAgent.artifact.readback,
-        { name: "pi-herdsman", version: "0.25.1" },
-      );
-      assert.deepEqual(
-        JSON.parse(saved).diagnostics.coreHandoff.nextAgent.artifact
-          .attachedPackage,
+        JSON.parse(saved).diagnostics.coreHandoff.nextAgent.artifact.attachedPackage,
         { name: "pi-herdsman", version: "0.25.1" },
       );
       assert.equal(
-        JSON.parse(saved).diagnostics.coreHandoff.nextAgent.artifact
-          .provenanceMatches,
+        JSON.parse(saved).diagnostics.coreHandoff.nextAgent.artifact.provenanceMatches,
         true,
       );
       assert.doesNotMatch(
@@ -2758,10 +2512,7 @@ test("core failure diagnostics distinguish nested result publication from delive
       await writeNextSession(artifactContent, responseText);
       const projection = await collectHandoffProjection();
       assert.ok(projection.coreHandoff);
-      assert.equal(
-        projection.coreHandoff.nextAgent.artifact.responseMatchesArtifact,
-        false,
-      );
+      assert.equal(projection.coreHandoff.nextAgent.artifact.responseMatchesArtifact, false);
       assert.deepEqual(
         projection.coreHandoff.nextAgent.artifact.attachedPackage,
         expectedAttachedPackage,
@@ -2845,10 +2596,7 @@ test("failure artifact propagates only fixed cleanup substep categories", async 
   const evidence = sanitizedFailureEvidence(
     {
       ...ctx,
-      cleanupFailureCategories: [
-        ...ctx.cleanupFailureCategories,
-        "PRIVATE /tmp/path and error",
-      ],
+      cleanupFailureCategories: [...ctx.cleanupFailureCategories, "PRIVATE /tmp/path and error"],
       privateError: "PRIVATE cleanup error text",
     },
     {},
@@ -2858,9 +2606,7 @@ test("failure artifact propagates only fixed cleanup substep categories", async 
   const artifact = await preserveFailureEvidence(evidence);
   try {
     const persisted = await readFile(artifact, "utf8");
-    assert.deepEqual(JSON.parse(persisted).cleanupFailureCategories, [
-      "host_tab",
-    ]);
+    assert.deepEqual(JSON.parse(persisted).cleanupFailureCategories, ["host_tab"]);
     assert.doesNotMatch(persisted, /PRIVATE|\/tmp\/path|error text/u);
   } finally {
     await rm(dirname(artifact), { recursive: true, force: true });
@@ -2988,18 +2734,9 @@ test("terminal failure stall artifact retains only allowlisted report progress",
     "PASS",
   );
   assert.ok(pendingWithoutAttempt.terminalFailureProgress);
-  assert.equal(
-    pendingWithoutAttempt.terminalFailureProgress.reportPending,
-    "observed",
-  );
-  assert.equal(
-    pendingWithoutAttempt.terminalFailureProgress.publicationAttempt,
-    "not_observed",
-  );
-  assert.doesNotMatch(
-    JSON.stringify(pendingWithoutAttempt),
-    /PRIVATE|session id|report body/u,
-  );
+  assert.equal(pendingWithoutAttempt.terminalFailureProgress.reportPending, "observed");
+  assert.equal(pendingWithoutAttempt.terminalFailureProgress.publicationAttempt, "not_observed");
+  assert.doesNotMatch(JSON.stringify(pendingWithoutAttempt), /PRIVATE|session id|report body/u);
   const unrelated = sanitizedFailureEvidence(
     { scenario: "core", simulated: true },
     { error: { smoke: { stage: "core-delegation", lastProgress: progress } } },
@@ -3093,15 +2830,9 @@ test("failure artifact retains allowlisted parent routing identity across cleanu
   assert.match(persisted, /"waitAfterSigkill": "exited"/);
   assert.match(persisted, /"running": false/);
   assert.match(persisted, /"cleanupErrorCode": "PARENT_SHUTDOWN_UNVERIFIED"/);
-  assert.doesNotMatch(
-    persisted,
-    /private post-cleanup stderr|environment|TOKEN|\/tmp\/phs-owned/,
-  );
+  assert.doesNotMatch(persisted, /private post-cleanup stderr|environment|TOKEN|\/tmp\/phs-owned/);
   assert.match(persisted, /"session": "phs-a1b2c3d4e5f6"/);
-  assert.doesNotMatch(
-    persisted,
-    /TOKEN|must-not-leak|private server output|private prompt/,
-  );
+  assert.doesNotMatch(persisted, /TOKEN|must-not-leak|private server output|private prompt/);
   await rm(directory, { recursive: true, force: true });
 });
 
@@ -3141,16 +2872,12 @@ test("exact core and continuation tool evidence is enforced only in simulated mo
       result: '{"name": "pi-herdsman", "version": "0.25.1"}',
     },
   ];
-  assert.doesNotThrow(() =>
-    assertCoreToolEvidence(true, exactCoreEvidence, "pi-herdsman@0.25.1"),
-  );
+  assert.doesNotThrow(() => assertCoreToolEvidence(true, exactCoreEvidence, "pi-herdsman@0.25.1"));
   assert.throws(
     () => assertCoreToolEvidence(true, [], "pi-herdsman@0.25.1"),
     /select and forward nested result evidence/,
   );
-  assert.doesNotThrow(() =>
-    assertCoreToolEvidence(false, [], "pi-herdsman@0.25.1"),
-  );
+  assert.doesNotThrow(() => assertCoreToolEvidence(false, [], "pi-herdsman@0.25.1"));
 
   const successfulRead = {
     message: { content: [{ type: "text", text: "pi-herdsman" }] },
@@ -3162,9 +2889,7 @@ test("exact core and continuation tool evidence is enforced only in simulated mo
     () => assertContinuationReadEvidence(true, [], undefined, "pi-herdsman"),
     /must not reread package.json/,
   );
-  assert.doesNotThrow(() =>
-    assertContinuationReadEvidence(false, [], undefined, "pi-herdsman"),
-  );
+  assert.doesNotThrow(() => assertContinuationReadEvidence(false, [], undefined, "pi-herdsman"));
 });
 
 test("smoke runtime baseline accepts matching and newer stable versions", () => {
@@ -3175,10 +2900,7 @@ test("smoke runtime baseline accepts matching and newer stable versions", () => 
     () => requireTestedBaseline("Pi", "1.0.0", "1.0.1"),
     /below tested baseline 1\.0\.1/,
   );
-  assert.throws(
-    () => requireTestedBaseline("Pi", "not-a-version", "1.0.1"),
-    /invalid Pi version/,
-  );
+  assert.throws(() => requireTestedBaseline("Pi", "not-a-version", "1.0.1"), /invalid Pi version/);
   assert.throws(
     () => requireTestedBaseline("Pi", "1.0.1", undefined),
     /invalid Pi tested baseline/,
@@ -3207,10 +2929,7 @@ test("smoke verifies the isolated Herdr server", () => {
   assert.equal(verify({ version: "0.9.6" }), "0.9.6");
 
   assert.throws(() => verify({ version: "0.9.3" }), /below tested baseline/);
-  assert.throws(
-    () => verify({ version: undefined }),
-    /invalid Herdr server version/,
-  );
+  assert.throws(() => verify({ version: undefined }), /invalid Herdr server version/);
   assert.throws(() => verify({ session: "default" }), /session mismatch/);
   assert.throws(() => verify({ compatible: false }), /incompatible/);
   assert.throws(() => verify({ running: false }), /not running/);
@@ -3254,21 +2973,15 @@ test("saved-session evidence separates header identity from continuation task in
     sessionHeaderFound: true,
     sessionIdMatches: false,
   });
-  assert.deepEqual(
-    continuationSessionEvidence(contents, "expected-session", followup),
-    {
-      sessionHeaderFound: true,
-      sessionIdMatches: false,
-      continuationTaskFound: true,
-      taskInstructionFound: true,
-    },
-  );
+  assert.deepEqual(continuationSessionEvidence(contents, "expected-session", followup), {
+    sessionHeaderFound: true,
+    sessionIdMatches: false,
+    continuationTaskFound: true,
+    taskInstructionFound: true,
+  });
   assert.equal(
-    continuationSessionEvidence(
-      contents,
-      "actual-session",
-      "missing instruction",
-    ).taskInstructionFound,
+    continuationSessionEvidence(contents, "actual-session", "missing instruction")
+      .taskInstructionFound,
     false,
   );
 });
@@ -3276,14 +2989,9 @@ test("saved-session evidence separates header identity from continuation task in
 test("continuation task evidence accepts the paraphrased task only in child user text", () => {
   const task =
     "Recall the exact package name from your previous assignment; do not reread package.json. Return PI_HERDSMAN_CONTINUATION_SECOND.";
-  const rootPrompt =
-    "Without rereading package.json, return the remembered package name.";
+  const rootPrompt = "Without rereading package.json, return the remembered package name.";
   for (const [role, content, expected] of [
-    [
-      "user",
-      `Assignment:\n${task.toLowerCase().replaceAll(" ", "\n")}\nEnd assignment.`,
-      true,
-    ],
+    ["user", `Assignment:\n${task.toLowerCase().replaceAll(" ", "\n")}\nEnd assignment.`, true],
     ["user", rootPrompt, false],
     ["assistant", task, false],
   ] as const) {
@@ -3299,16 +3007,11 @@ test("continuation task evidence accepts the paraphrased task only in child user
     ]
       .map((entry) => JSON.stringify(entry))
       .join("\n");
-    const evidence = continuationSessionEvidence(
-      contents,
-      "saved-session",
-      task,
-    );
+    const evidence = continuationSessionEvidence(contents, "saved-session", task);
     assert.equal(evidence.sessionIdMatches, true);
     assert.equal(evidence.taskInstructionFound, expected);
     assert.equal(
-      continuationSessionEvidence(contents, "saved-session", null)
-        .taskInstructionFound,
+      continuationSessionEvidence(contents, "saved-session", null).taskInstructionFound,
       false,
     );
   }
@@ -3367,37 +3070,18 @@ test("continuation task parser correlates tool call, successful session result a
       },
     },
   ];
-  const encode = (value: unknown[]) =>
-    value.map((entry) => JSON.stringify(entry)).join("\n");
+  const encode = (value: unknown[]) => value.map((entry) => JSON.stringify(entry)).join("\n");
+  assert.equal(correlatedContinuationTask(encode(entries), "response", "child", prompt), task);
   assert.equal(
-    correlatedContinuationTask(encode(entries), "response", "child", prompt),
-    task,
-  );
-  assert.equal(
-    correlatedContinuationTask(
-      encode(entries),
-      "response",
-      "wrong-child",
-      prompt,
-    ),
+    correlatedContinuationTask(encode(entries), "response", "wrong-child", prompt),
     null,
   );
   assert.equal(
-    correlatedContinuationTask(
-      encode(entries),
-      "missing-response",
-      "child",
-      prompt,
-    ),
+    correlatedContinuationTask(encode(entries), "missing-response", "child", prompt),
     null,
   );
   assert.equal(
-    correlatedContinuationTask(
-      encode(entries),
-      "response",
-      "child",
-      "another prompt",
-    ),
+    correlatedContinuationTask(encode(entries), "response", "child", "another prompt"),
     null,
   );
   for (const mutation of [
@@ -3434,10 +3118,7 @@ test("continuation task parser correlates tool call, successful session result a
   ]) {
     const copy = structuredClone(entries);
     mutation(copy);
-    assert.equal(
-      correlatedContinuationTask(encode(copy), "response", "child", prompt),
-      null,
-    );
+    assert.equal(correlatedContinuationTask(encode(copy), "response", "child", prompt), null);
   }
   const child = encode([
     { type: "session", id: "wrong-child" },
@@ -3447,10 +3128,7 @@ test("continuation task parser correlates tool call, successful session result a
   assert.equal(evidence.sessionIdMatches, false);
   assert.equal(evidence.taskInstructionFound, true);
   assert.doesNotMatch(JSON.stringify(evidence), /wrong-child|Recall/);
-  assert.equal(
-    continuationSessionEvidence(child, "child", null).continuationTaskFound,
-    false,
-  );
+  assert.equal(continuationSessionEvidence(child, "child", null).continuationTaskFound, false);
 });
 
 test("manager readiness evidence includes a workspace child's mismatched session header", async () => {
@@ -3564,18 +3242,12 @@ test("root pane command removes inherited managed identity before Pi only", asyn
     }),
     "startup prompt",
   ];
-  const expectedCommand = [
-    "env",
-    ...Object.keys(identity).flatMap((key) => ["-u", key]),
-    ...args,
-  ]
+  const expectedCommand = ["env", ...Object.keys(identity).flatMap((key) => ["-u", key]), ...args]
     .map((arg) => `'${arg.replaceAll("'", "'\\''")}'`)
     .join(" ");
   const command = rootCandidateCommand(args);
   assert.equal(command, expectedCommand);
-  assert.ok(
-    command.indexOf("'-u' 'PI_SUBAGENT_CHILD'") < command.indexOf("'pi'"),
-  );
+  assert.ok(command.indexOf("'-u' 'PI_SUBAGENT_CHILD'") < command.indexOf("'pi'"));
   assert.match(
     command,
     /'--approve'.*'--extension' '\/smoke\/dist\/index\.js'.*'--model' 'provider\/model:high'.*'startup prompt'/,
@@ -3587,16 +3259,11 @@ test("root pane command removes inherited managed identity before Pi only", asyn
   };
   let paneArgs: string[] | undefined;
   let paneOptions: Record<string, unknown> | undefined;
-  await submitPaneCommand(
-    ctx,
-    "w1:p1",
-    command,
-    async (_file, callArgs, options) => {
-      paneArgs = callArgs;
-      paneOptions = options;
-      return { stdout: "", stderr: "", pid: 123 };
-    },
-  );
+  await submitPaneCommand(ctx, "w1:p1", command, async (_file, callArgs, options) => {
+    paneArgs = callArgs;
+    paneOptions = options;
+    return { stdout: "", stderr: "", pid: 123 };
+  });
   assert.ok(paneOptions);
   const paneEnv = paneOptions.env;
   assert.ok(paneEnv && typeof paneEnv === "object");
@@ -3646,14 +3313,9 @@ test("nested Herdr hashes the API socket while checking both socket limits", () 
   );
   const directory = join(paths.xdgConfig, "herdr", "sessions");
   const clientOnlyTooLong = "x".repeat(
-    99 -
-      Buffer.byteLength(join(directory, "herdr.sock")) -
-      Buffer.byteLength(sep),
+    99 - Buffer.byteLength(join(directory, "herdr.sock")) - Buffer.byteLength(sep),
   );
-  assert.ok(
-    Buffer.byteLength(join(directory, clientOnlyTooLong, "herdr.sock")) + 1 <=
-      100,
-  );
+  assert.ok(Buffer.byteLength(join(directory, clientOnlyTooLong, "herdr.sock")) + 1 <= 100);
   assert.throws(
     () => nestedHerdrApiSocketPath(paths, clientOnlyTooLong),
     /herdr-client\.sock path is too long/,
@@ -3680,30 +3342,24 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
     "terminal-failure",
   ])
     assert.equal(parseSmokeArgs([scenario]).scenario, scenario);
-  assert.deepEqual(
-    parseSmokeArgs(["chief-tree", "--model", "provider/model:high"]),
-    {
-      scenario: "chief-tree",
-      model: "provider/model:high",
-      simulated: false,
-      managerReadyTimeoutMs: undefined,
-      managerRecoveryDiagnostics: false,
-      managerExternalRemoval: false,
-      managerRemovalAcceptance: false,
-    },
-  );
-  assert.deepEqual(
-    parseSmokeArgs(["--model", "provider/model:xhigh", "continuation"]),
-    {
-      scenario: "continuation",
-      model: "provider/model:xhigh",
-      simulated: false,
-      managerReadyTimeoutMs: undefined,
-      managerRecoveryDiagnostics: false,
-      managerExternalRemoval: false,
-      managerRemovalAcceptance: false,
-    },
-  );
+  assert.deepEqual(parseSmokeArgs(["chief-tree", "--model", "provider/model:high"]), {
+    scenario: "chief-tree",
+    model: "provider/model:high",
+    simulated: false,
+    managerReadyTimeoutMs: undefined,
+    managerRecoveryDiagnostics: false,
+    managerExternalRemoval: false,
+    managerRemovalAcceptance: false,
+  });
+  assert.deepEqual(parseSmokeArgs(["--model", "provider/model:xhigh", "continuation"]), {
+    scenario: "continuation",
+    model: "provider/model:xhigh",
+    simulated: false,
+    managerReadyTimeoutMs: undefined,
+    managerRecoveryDiagnostics: false,
+    managerExternalRemoval: false,
+    managerRemovalAcceptance: false,
+  });
   assert.throws(() => parseSmokeArgs(["core", "extra"]));
   assert.throws(() => parseSmokeArgs(["--unknown"]));
   assert.throws(() => parseSmokeArgs(["wat"]), /unknown smoke scenario/);
@@ -3731,11 +3387,7 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
   assert.equal(initialPromptForScenario("manager-bootstrap", {}), undefined);
   for (const scenario of ["core", "continuation"])
     assert.equal(parseSmokeArgs([scenario, "--simulated"]).simulated, true);
-  for (const scenario of [
-    "agent-terminal-failure",
-    "manager-handoff",
-    "deep-chain",
-  ]) {
+  for (const scenario of ["agent-terminal-failure", "manager-handoff", "deep-chain"]) {
     assert.equal(parseSmokeArgs([scenario, "--simulated"]).scenario, scenario);
     assert.throws(() => parseSmokeArgs([scenario]), /requires --simulated/);
   }
@@ -3777,10 +3429,7 @@ test("simulated Agent failure decision requires the exact correlated failed hand
         ...(delivered ? [delivered] : []),
       ],
     });
-  assert.match(
-    firstTextContent(decideWith(handoff)).text,
-    /SMOKE_AGENT_FAILURE_DELIVERED/,
-  );
+  assert.match(firstTextContent(decideWith(handoff)).text, /SMOKE_AGENT_FAILURE_DELIVERED/);
   assert.match(
     firstTextContent(
       decideWith({
@@ -3809,21 +3458,11 @@ test("failed Agent runner handoff requires the persisted custom-message identity
       "Agent result · agent=smoke-terminal-agent · definition=smoke-failure-agent · session=child-session · status=failed\n\nDelegation status: failed",
   };
   assert.equal(
-    acceptsFailedAgentHandoff(
-      handoff,
-      "request-1",
-      "child-session",
-      "expected-owner",
-    ),
+    acceptsFailedAgentHandoff(handoff, "request-1", "child-session", "expected-owner"),
     true,
   );
   assert.equal(
-    failedAgentHandoff(
-      [handoff],
-      "request-1",
-      "child-session",
-      "expected-owner",
-    ),
+    failedAgentHandoff([handoff], "request-1", "child-session", "expected-owner"),
     handoff,
   );
   for (const invalid of [
@@ -3843,18 +3482,10 @@ test("failed Agent runner handoff requires the persisted custom-message identity
     },
   ])
     assert.equal(
-      acceptsFailedAgentHandoff(
-        invalid,
-        "request-1",
-        "child-session",
-        "expected-owner",
-      ),
+      acceptsFailedAgentHandoff(invalid, "request-1", "child-session", "expected-owner"),
       false,
     );
-  assert.equal(
-    failedAgentHandoff([], "request-1", "child-session", "expected-owner"),
-    null,
-  );
+  assert.equal(failedAgentHandoff([], "request-1", "child-session", "expected-owner"), null);
   assert.throws(
     () =>
       failedAgentHandoff(
@@ -3879,13 +3510,7 @@ test("failed Agent runner handoff requires the persisted custom-message identity
     },
   ])
     assert.throws(
-      () =>
-        failedAgentHandoff(
-          [invalid],
-          "request-1",
-          "child-session",
-          "expected-owner",
-        ),
+      () => failedAgentHandoff([invalid], "request-1", "child-session", "expected-owner"),
       /wrong terminal outcome/,
     );
 });
@@ -3898,14 +3523,8 @@ test("failed Agent retirement requires absent process, pane, registration, and m
     mailboxPending: false,
   };
   assert.equal(agentRetirementConverged(converged), true);
-  assert.equal(
-    agentRetirementConverged({ ...converged, processAlive: true }),
-    false,
-  );
-  assert.equal(
-    agentRetirementConverged({ ...converged, mailboxPending: true }),
-    false,
-  );
+  assert.equal(agentRetirementConverged({ ...converged, processAlive: true }), false);
+  assert.equal(agentRetirementConverged({ ...converged, mailboxPending: true }), false);
 });
 
 test("manager-handoff faux Lead only calls offered message_manager tool", () => {
@@ -3918,10 +3537,7 @@ test("manager-handoff faux Lead only calls offered message_manager tool", () => 
       required: ["message"],
     },
   };
-  const system = (
-    toolsAdded?: (typeof tool)[],
-    toolsRemoved?: { name: string }[],
-  ) => ({
+  const system = (toolsAdded?: (typeof tool)[], toolsRemoved?: { name: string }[]) => ({
     role: "system" as const,
     content: "",
     ...(toolsAdded ? { toolsAdded } : {}),
@@ -3946,10 +3562,7 @@ test("manager-handoff faux Lead only calls offered message_manager tool", () => 
   );
 
   const unavailableMessages = [system(), prompt];
-  assert.equal(
-    managerHandoffSupervisorToolAvailable(unavailableMessages),
-    false,
-  );
+  assert.equal(managerHandoffSupervisorToolAvailable(unavailableMessages), false);
   assert.throws(
     () =>
       decideSmokeFaux("manager-handoff-lead", {
@@ -3957,11 +3570,7 @@ test("manager-handoff faux Lead only calls offered message_manager tool", () => 
       }),
     { message: "MANAGER_HANDOFF_SUPERVISOR_TOOL_NOT_OFFERED" },
   );
-  const removedMessages = [
-    system([tool]),
-    system(undefined, [{ name: tool.name }]),
-    prompt,
-  ];
+  const removedMessages = [system([tool]), system(undefined, [{ name: tool.name }]), prompt];
   assert.equal(managerHandoffSupervisorToolAvailable(removedMessages), false);
 });
 
@@ -4026,41 +3635,23 @@ test("Manager assignment diagnostics are bounded and reject a mismatched branch 
       content: "SECRET",
     },
   });
+  assert.equal(supervisorMessageCallStatus("", "MANAGER_HANDOFF_READY"), "not_called");
+  assert.equal(supervisorMessageCallStatus(session(assistant), "MANAGER_HANDOFF_READY"), "pending");
   assert.equal(
-    supervisorMessageCallStatus("", "MANAGER_HANDOFF_READY"),
-    "not_called",
-  );
-  assert.equal(
-    supervisorMessageCallStatus(session(assistant), "MANAGER_HANDOFF_READY"),
-    "pending",
-  );
-  assert.equal(
-    supervisorMessageCallStatus(
-      session(assistant, result(true)),
-      "MANAGER_HANDOFF_READY",
-    ),
+    supervisorMessageCallStatus(session(assistant, result(true)), "MANAGER_HANDOFF_READY"),
     "error",
   );
   assert.equal(
-    supervisorMessageCallStatus(
-      session(assistant, result(false)),
-      "MANAGER_HANDOFF_READY",
-    ),
+    supervisorMessageCallStatus(session(assistant, result(false)), "MANAGER_HANDOFF_READY"),
     "success",
   );
   assert.equal(managerAssignmentBranchMismatch(null, "expected-branch"), false);
   assert.equal(
-    managerAssignmentBranchMismatch(
-      { branch: "expected-branch" },
-      "expected-branch",
-    ),
+    managerAssignmentBranchMismatch({ branch: "expected-branch" }, "expected-branch"),
     false,
   );
   assert.equal(
-    managerAssignmentBranchMismatch(
-      { branch: "unexpected-branch" },
-      "expected-branch",
-    ),
+    managerAssignmentBranchMismatch({ branch: "unexpected-branch" }, "expected-branch"),
     true,
   );
   assert.equal(
@@ -4068,8 +3659,7 @@ test("Manager assignment diagnostics are bounded and reject a mismatched branch 
     "not_observed",
   );
   assert.equal(
-    managerAssignmentDiagnostics({ result: "false" })
-      .successfulCorrelatedDelegateProjectResult,
+    managerAssignmentDiagnostics({ result: "false" }).successfulCorrelatedDelegateProjectResult,
     "false",
   );
   assert.equal(
@@ -4101,10 +3691,7 @@ test("Manager assignment diagnostics are bounded and reject a mismatched branch 
     provenanceMatch: "not_evaluated",
     errorCategory: "none",
   });
-  assert.equal(
-    projection.assignmentIdentitySessionWorkspaceBranchMatch,
-    "false",
-  );
+  assert.equal(projection.assignmentIdentitySessionWorkspaceBranchMatch, "false");
   assert.equal(projection.candidateProcessCount, 0);
   assert.equal(projection.candidateProcessProvenanceMatch, "not_evaluated");
   assert.equal(projection.matchedLead, "not_yet_evaluated");
@@ -4117,10 +3704,7 @@ test("Manager assignment diagnostics are bounded and reject a mismatched branch 
     ),
     false,
   );
-  assert.doesNotMatch(
-    JSON.stringify(projection),
-    /unexpected-branch|expected-branch/,
-  );
+  assert.doesNotMatch(JSON.stringify(projection), /unexpected-branch|expected-branch/);
 });
 
 test("manager handoff failure artifact preserves early-poll defaults and safe timing", async () => {
@@ -4222,20 +3806,11 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     supervisorPersistedErrorCategoryPresent: true,
     supervisorPersistedErrorCategory: "internal_failure",
   });
-  assert.doesNotMatch(
-    JSON.stringify(correlated),
-    /PRIVATE_ERROR|PRIVATE_CAUSE/u,
-  );
+  assert.doesNotMatch(JSON.stringify(correlated), /PRIVATE_ERROR|PRIVATE_CAUSE/u);
   const failedProgress = managerAssignmentDiagnostics({ ...correlated });
-  assert.equal(
-    failedProgress.supervisorHandlerBranchStatus,
-    "operation_error_returned",
-  );
+  assert.equal(failedProgress.supervisorHandlerBranchStatus, "operation_error_returned");
   assert.equal(failedProgress.supervisorPersistedErrorCategoryPresent, true);
-  assert.equal(
-    failedProgress.supervisorPersistedErrorCategory,
-    "internal_failure",
-  );
+  assert.equal(failedProgress.supervisorPersistedErrorCategory, "internal_failure");
   assert.throws(
     () => assertNoFailedManagerHandoff(failedProgress),
     (error) => {
@@ -4256,22 +3831,13 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
         "PASS",
       );
       assert.ok(artifact.managerHandoffProgress);
-      assert.equal(
-        artifact.managerHandoffProgress.supervisorResultState,
-        "error",
-      );
-      assert.equal(
-        artifact.managerHandoffProgress.supervisorErrorCategory,
-        "internal_failure",
-      );
+      assert.equal(artifact.managerHandoffProgress.supervisorResultState, "error");
+      assert.equal(artifact.managerHandoffProgress.supervisorErrorCategory, "internal_failure");
       assert.equal(
         artifact.managerHandoffProgress.supervisorHandlerBranchStatus,
         "operation_error_returned",
       );
-      assert.equal(
-        artifact.managerHandoffProgress.supervisorPersistedErrorCategoryPresent,
-        true,
-      );
+      assert.equal(artifact.managerHandoffProgress.supervisorPersistedErrorCategoryPresent, true);
       assert.equal(
         artifact.managerHandoffProgress.supervisorPersistedErrorCategory,
         "internal_failure",
@@ -4285,9 +3851,7 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
   );
   for (const state of ["missing", "pending", "success"]) {
     assert.doesNotThrow(() =>
-      assertNoFailedManagerHandoff(
-        managerAssignmentDiagnostics({ supervisorResultState: state }),
-      ),
+      assertNoFailedManagerHandoff(managerAssignmentDiagnostics({ supervisorResultState: state })),
     );
   }
   const unknownCategory = await diagnose(
@@ -4295,32 +3859,17 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
   );
   assert.equal(unknownCategory.supervisorErrorCategory, "tool_error");
   assert.equal(unknownCategory.supervisorPersistedErrorCategoryPresent, true);
-  assert.equal(
-    unknownCategory.supervisorPersistedErrorCategory,
-    "not_observed",
-  );
-  assert.doesNotMatch(
-    JSON.stringify(unknownCategory),
-    /PRIVATE_ERROR|PRIVATE_UNLISTED/u,
-  );
+  assert.equal(unknownCategory.supervisorPersistedErrorCategory, "not_observed");
+  assert.doesNotMatch(JSON.stringify(unknownCategory), /PRIVATE_ERROR|PRIVATE_UNLISTED/u);
   const unsupportedBranchStatus = await diagnose(
     contents.replace(
       '"branchStatus":"operation_error_returned"',
       '"branchStatus":"non_operation_error_throw"',
     ),
   );
-  assert.equal(
-    unsupportedBranchStatus.supervisorHandlerBranchStatus,
-    "not_observed",
-  );
-  assert.equal(
-    unsupportedBranchStatus.supervisorPersistedErrorCategoryPresent,
-    true,
-  );
-  assert.equal(
-    unsupportedBranchStatus.supervisorPersistedErrorCategory,
-    "internal_failure",
-  );
+  assert.equal(unsupportedBranchStatus.supervisorHandlerBranchStatus, "not_observed");
+  assert.equal(unsupportedBranchStatus.supervisorPersistedErrorCategoryPresent, true);
+  assert.equal(unsupportedBranchStatus.supervisorPersistedErrorCategory, "internal_failure");
   assert.doesNotMatch(
     JSON.stringify(unsupportedBranchStatus),
     /PRIVATE_CALL_ID|PRIVATE_PROMPT|PRIVATE_ERROR|PRIVATE_CAUSE|PRIVATE_RESULT_BODY/u,
@@ -4328,10 +3877,7 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
   const mappedSupervisorError = await diagnose(
     contents.replace('"internal_failure"', '"invalid_request"'),
   );
-  assert.equal(
-    mappedSupervisorError.supervisorErrorCategory,
-    "invalid_request",
-  );
+  assert.equal(mappedSupervisorError.supervisorErrorCategory, "invalid_request");
   assert.doesNotMatch(JSON.stringify(mappedSupervisorError), /PRIVATE_ERROR/u);
   const noCall = await diagnose("");
   assert.deepEqual(noCall, {
@@ -4398,26 +3944,11 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
     "PASS",
   );
   assert.ok(earlyEvidence.managerHandoffProgress);
-  assert.equal(
-    earlyEvidence.managerHandoffProgress.supervisorCallObserved,
-    false,
-  );
-  assert.equal(
-    earlyEvidence.managerHandoffProgress.supervisorResultState,
-    "not_observed",
-  );
-  assert.equal(
-    earlyEvidence.managerHandoffProgress.supervisorErrorCategory,
-    "none",
-  );
-  assert.equal(
-    earlyEvidence.managerHandoffProgress.readinessDeliveryObserved,
-    false,
-  );
-  assert.equal(
-    earlyEvidence.managerHandoffProgress.fauxSupervisorToolAvailability,
-    "not_observed",
-  );
+  assert.equal(earlyEvidence.managerHandoffProgress.supervisorCallObserved, false);
+  assert.equal(earlyEvidence.managerHandoffProgress.supervisorResultState, "not_observed");
+  assert.equal(earlyEvidence.managerHandoffProgress.supervisorErrorCategory, "none");
+  assert.equal(earlyEvidence.managerHandoffProgress.readinessDeliveryObserved, false);
+  assert.equal(earlyEvidence.managerHandoffProgress.fauxSupervisorToolAvailability, "not_observed");
   const resolvedProgress = managerAssignmentDiagnostics({
     worktree: "true",
     result: "true",
@@ -4434,8 +3965,7 @@ test("manager handoff failure artifact preserves early-poll defaults and safe ti
       }),
     ),
     ...successfulSupervisor,
-    supervisorUnstructuredErrorClass:
-      unknownCategory.supervisorUnstructuredErrorClass,
+    supervisorUnstructuredErrorClass: unknownCategory.supervisorUnstructuredErrorClass,
     readinessDeliveryObserved: true,
     worktreeIdentityState: "verified",
     candidateProcessCount: 1,
@@ -4579,11 +4109,7 @@ test("manager readiness correlates one active-branch call with its following res
 
     const sourceSessionFile = source.getSessionFile();
     assert.ok(sourceSessionFile);
-    const fork = SessionManager.forkFrom(
-      sourceSessionFile,
-      process.cwd(),
-      sessionDir,
-    );
+    const fork = SessionManager.forkFrom(sourceSessionFile, process.cwd(), sessionDir);
     fork.appendMessage({
       role: "assistant",
       ...assistantMessageMetadata,
@@ -4643,10 +4169,7 @@ test("manager readiness correlates one active-branch call with its following res
     assert.equal(mismatchedHeader.supervisorSessionHeaderMatches, false);
     assert.equal(mismatchedHeader.supervisorCallObserved, false);
     assert.equal(mismatchedHeader.supervisorResultState, "not_observed");
-    assert.doesNotMatch(
-      JSON.stringify(mismatchedHeader),
-      /WRONG_EXPECTED_SESSION_ID/u,
-    );
+    assert.doesNotMatch(JSON.stringify(mismatchedHeader), /WRONG_EXPECTED_SESSION_ID/u);
   } finally {
     await rm(sessionDir, { recursive: true, force: true });
   }
@@ -4683,10 +4206,7 @@ test("manager readiness rejects preceding, duplicate, and ambiguous tool evidenc
     );
   };
   try {
-    const precedingResult = await diagnose([
-      result("CALL_ID"),
-      call("CALL_ID"),
-    ]);
+    const precedingResult = await diagnose([result("CALL_ID"), call("CALL_ID")]);
     assert.equal(precedingResult.supervisorCallObserved, true);
     assert.equal(precedingResult.supervisorResultState, "not_observed");
 
@@ -4743,10 +4263,7 @@ test("Manager handoff cleanup owns the worktree before Lead readiness", async ()
     open_workspace_id: "workspace-2",
   };
   // A readiness timeout after creation still leaves cleanup exact ownership.
-  assert.equal(
-    captureManagerHandoffWorktree(ctx, [worktree], branch),
-    worktree,
-  );
+  assert.equal(captureManagerHandoffWorktree(ctx, [worktree], branch), worktree);
   assert.equal(ctx.owned.managerWorktreePath, worktree.path);
   assert.equal(ctx.owned.managerWorkspaceId, worktree.open_workspace_id);
   assert.equal(
@@ -4778,8 +4295,7 @@ test("Manager handoff cleanup owns the worktree before Lead readiness", async ()
       throw error;
     },
     herdrCommand: async (args) => {
-      if (args[0] === "worktree" && args[1] === "list")
-        return { worktrees: [worktree] };
+      if (args[0] === "worktree" && args[1] === "list") return { worktrees: [worktree] };
       if (args[0] === "worktree" && args[1] === "remove") removals.push(args);
       return {};
     },
@@ -4789,25 +4305,18 @@ test("Manager handoff cleanup owns the worktree before Lead readiness", async ()
     },
   });
   assert.equal(result, null);
-  assert.deepEqual(removals, [
-    ["worktree", "remove", "--workspace", "workspace-2"],
-  ]);
+  assert.deepEqual(removals, [["worktree", "remove", "--workspace", "workspace-2"]]);
 
-  const unregistered = await cleanup(
-    paths,
-    { managerBranch: branch },
-    cleanupCtx,
-    {
-      remove: async () => {},
-      removeFile: async () => {
-        const error = Object.assign(new Error("missing auth link"), {
-          code: "ENOENT",
-        });
-        throw error;
-      },
-      herdrCommand: async () => ({ worktrees: [worktree] }),
+  const unregistered = await cleanup(paths, { managerBranch: branch }, cleanupCtx, {
+    remove: async () => {},
+    removeFile: async () => {
+      const error = Object.assign(new Error("missing auth link"), {
+        code: "ENOENT",
+      });
+      throw error;
     },
-  );
+    herdrCommand: async () => ({ worktrees: [worktree] }),
+  });
   assert.match(unregistered ?? "", /captured worktree path is unavailable/);
 });
 
@@ -4887,11 +4396,7 @@ test("Manager handoff retries incomplete exact worktree identity and fails close
   ]) {
     assert.throws(
       () =>
-        captureManagerHandoffWorktree(
-          { owned: { managerBranch: branch } },
-          [malformed],
-          branch,
-        ),
+        captureManagerHandoffWorktree({ owned: { managerBranch: branch } }, [malformed], branch),
       /identity is malformed/u,
     );
   }
@@ -4924,10 +4429,7 @@ test("Manager handoff retries incomplete exact worktree identity and fails close
       assert.equal(error.code, "SMOKE_STALLED");
       const lastProgress = error.smoke.lastProgress;
       assert.ok(lastProgress && typeof lastProgress === "object");
-      assert.ok(
-        "worktreeIdentityState" in lastProgress &&
-          "errorCategory" in lastProgress,
-      );
+      assert.ok("worktreeIdentityState" in lastProgress && "errorCategory" in lastProgress);
       assert.equal(lastProgress.worktreeIdentityState, "incomplete");
       assert.equal(lastProgress.errorCategory, "worktree_identity_incomplete");
       const artifact = sanitizedFailureEvidence(
@@ -4937,28 +4439,14 @@ test("Manager handoff retries incomplete exact worktree identity and fails close
         "FAIL",
       );
       assert.ok(artifact.managerHandoffProgress);
-      assert.equal(
-        artifact.managerHandoffProgress.worktreeIdentityState,
-        "incomplete",
-      );
-      assert.equal(
-        artifact.managerHandoffProgress.errorCategory,
-        "worktree_identity_incomplete",
-      );
-      assert.doesNotMatch(
-        JSON.stringify(artifact),
-        /smoke\/manager|workspace-2/u,
-      );
+      assert.equal(artifact.managerHandoffProgress.worktreeIdentityState, "incomplete");
+      assert.equal(artifact.managerHandoffProgress.errorCategory, "worktree_identity_incomplete");
+      assert.doesNotMatch(JSON.stringify(artifact), /smoke\/manager|workspace-2/u);
       return true;
     },
   );
   assert.throws(
-    () =>
-      captureManagerHandoffWorktree(
-        persistent,
-        [incomplete, incomplete],
-        branch,
-      ),
+    () => captureManagerHandoffWorktree(persistent, [incomplete, incomplete], branch),
     /one worktree/u,
   );
 });
@@ -5047,14 +4535,10 @@ test("Agent failure observation resolves the managed Pi session identity", async
     agent.agent_session.value === "herdr-agent-id"
       ? "child-session"
       : null;
-  assert.deepEqual(
-    await agentsForPiSession({}, [child], "child-session", resolveSessionId),
-    [child],
-  );
-  assert.deepEqual(
-    await agentsForPiSession({}, [child], "herdr-agent-id", resolveSessionId),
-    [],
-  );
+  assert.deepEqual(await agentsForPiSession({}, [child], "child-session", resolveSessionId), [
+    child,
+  ]);
+  assert.deepEqual(await agentsForPiSession({}, [child], "herdr-agent-id", resolveSessionId), []);
   assert.deepEqual(
     await agentsForPiSession(
       {},
@@ -5086,11 +4570,7 @@ test("manager-recovery timeout is bounded and scoped to its ready handshake", ()
   );
   for (const timeout of ["0", "-1", "1.5", "600001", "many"])
     assert.throws(
-      () =>
-        parseSmokeArgs([
-          "manager-recovery",
-          `--manager-ready-timeout-ms=${timeout}`,
-        ]),
+      () => parseSmokeArgs(["manager-recovery", `--manager-ready-timeout-ms=${timeout}`]),
       /positive integer no greater than 600000/,
     );
   assert.throws(
@@ -5102,8 +4582,7 @@ test("manager-recovery timeout is bounded and scoped to its ready handshake", ()
     /only valid for manager-recovery/,
   );
   assert.equal(
-    parseSmokeArgs(["manager-recovery", "--manager-removal-acceptance"])
-      .managerRemovalAcceptance,
+    parseSmokeArgs(["manager-recovery", "--manager-removal-acceptance"]).managerRemovalAcceptance,
     true,
   );
   assert.throws(
@@ -5175,9 +4654,7 @@ test("federation Lead correlates discovery and sends only within the current tur
     { role: "user", content: "previous request" },
     {
       role: "assistant",
-      content: [
-        { type: "toolCall", id: "old-list", name: "list_peers", arguments: {} },
-      ],
+      content: [{ type: "toolCall", id: "old-list", name: "list_peers", arguments: {} }],
     },
     {
       role: "toolResult",
@@ -5215,10 +4692,7 @@ test("federation Lead correlates discovery and sends only within the current tur
       messages: [...history, { role: "user", content }],
     });
 
-  assert.equal(
-    firstToolCall(discover("PEER_E2E_A_DISCOVER")).name,
-    "list_peers",
-  );
+  assert.equal(firstToolCall(discover("PEER_E2E_A_DISCOVER")).name, "list_peers");
   assert.equal(
     firstToolCall(discover("PEER_E2E_A_LEAD_SEND result:researcher#1")).name,
     "list_peers",
@@ -5226,9 +4700,7 @@ test("federation Lead correlates discovery and sends only within the current tur
 
   const listed = {
     role: "assistant",
-    content: [
-      { type: "toolCall", id: "fresh-list", name: "list_peers", arguments: {} },
-    ],
+    content: [{ type: "toolCall", id: "fresh-list", name: "list_peers", arguments: {} }],
   };
   const listedResult = {
     role: "toolResult",
@@ -5289,9 +4761,7 @@ test("federation Lead handles inbound request after its capture prompt and impor
   );
 
   const providerProjection = messages.filter(
-    (message) =>
-      message.type !== "custom" ||
-      message.customType !== "pi-herdsman-result-ref",
+    (message) => message.type !== "custom" || message.customType !== "pi-herdsman-result-ref",
   );
   const contextBinding = {
     messages: providerProjection,
@@ -5339,8 +4809,7 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
       role: "system",
       content: "You are a helpful assistant.",
       sections: {
-        pi_herdsman_role:
-          "<pi_herdsman_role>\n## Lead role\n</pi_herdsman_role>",
+        pi_herdsman_role: "<pi_herdsman_role>\n## Lead role\n</pi_herdsman_role>",
       },
       timestamp: Date.now(),
     },
@@ -5352,17 +4821,13 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     result("delegate_agent"),
   ];
   const pendingRoot = decide("core", { messages: rootStarted });
-  assert.doesNotMatch(
-    firstTextContent(pendingRoot).text,
-    /PI_HERDSMAN_SMOKE_OK/,
-  );
+  assert.doesNotMatch(firstTextContent(pendingRoot).text, /PI_HERDSMAN_SMOKE_OK/);
   const managerRoleRoot = rootStarted.map((message, index) =>
     index === 0
       ? {
           ...message,
           sections: {
-            pi_herdsman_role:
-              "<pi_herdsman_role>\n## Manager role\n</pi_herdsman_role>",
+            pi_herdsman_role: "<pi_herdsman_role>\n## Manager role\n</pi_herdsman_role>",
           },
         }
       : message,
@@ -5391,10 +4856,10 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     role: "user",
     content: `<file name="${scoutRef}" bytes="49">\n{"name":"pi-herdsman","version":"0.25.1"}\n</file>\n\nTask:\nSMOKE_CORE_NEXT_AGENT: verify ${scoutRef}`,
   };
-  assert.deepEqual(
-    JSON.parse(firstTextContent(decide("core", { messages: [nextTask] })).text),
-    { name: "pi-herdsman", version: "0.25.1" },
-  );
+  assert.deepEqual(JSON.parse(firstTextContent(decide("core", { messages: [nextTask] })).text), {
+    name: "pi-herdsman",
+    version: "0.25.1",
+  });
   const rootAfterNext = [
     ...rootStarted,
     implementerDelivery,
@@ -5431,15 +4896,13 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
       toolName: "read",
       toolCallId: "read-1",
       isError: false,
-      content: [
-        { type: "text", text: '{"name":"pi-herdsman","version":"0.25.1"}' },
-      ],
+      content: [{ type: "text", text: '{"name":"pi-herdsman","version":"0.25.1"}' }],
     },
   ];
-  assert.deepEqual(
-    JSON.parse(firstTextContent(decide("core", { messages: scoutRead })).text),
-    { name: "pi-herdsman", version: "0.25.1" },
-  );
+  assert.deepEqual(JSON.parse(firstTextContent(decide("core", { messages: scoutRead })).text), {
+    name: "pi-herdsman",
+    version: "0.25.1",
+  });
   const nestedPackage = [
     { role: "user", content: "SMOKE_CORE_IMPLEMENTER: delegate one scout." },
     call(
@@ -5448,11 +4911,7 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
       "notify-owner-1",
     ),
     result("notify_owner", "notify-owner-1"),
-    call(
-      "delegate_agent",
-      { definition: "scout", label: "smoke-core-scout" },
-      "scout-1",
-    ),
+    call("delegate_agent", { definition: "scout", label: "smoke-core-scout" }, "scout-1"),
     result("delegate_agent", "scout-1"),
     delivered(
       "smoke-core-scout",
@@ -5482,11 +4941,7 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
   assert.throws(
     () =>
       decide("core", {
-        messages: [
-          scoutTask,
-          call("read", { path: "other.json" }, "wrong"),
-          wrongReadResult,
-        ],
+        messages: [scoutTask, call("read", { path: "other.json" }, "wrong"), wrongReadResult],
       }),
     /Package read result missing|Unexpected core transcript/,
   );
@@ -5502,8 +4957,7 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     result("delegate_agent"),
   ];
   assert.doesNotMatch(
-    firstTextContent(decide("continuation", { messages: continuationStarted }))
-      .text,
+    firstTextContent(decide("continuation", { messages: continuationStarted })).text,
     /PI_HERDSMAN_CONTINUATION_FIRST/,
   );
   assert.equal(
@@ -5531,9 +4985,7 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     { role: "user", content: "delegation guidance" },
   ];
   assert.equal(
-    firstTextContent(
-      decide("continuation", { messages: firstWithLaterMessage }),
-    ).text,
+    firstTextContent(decide("continuation", { messages: firstWithLaterMessage })).text,
     "PI_HERDSMAN_CONTINUATION_FIRST",
   );
   assert.doesNotMatch(
@@ -5586,9 +5038,7 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     { role: "user", content: "delegation guidance" },
   ];
   assert.equal(
-    firstTextContent(
-      decide("continuation", { messages: completedWithLaterMessage }),
-    ).text,
+    firstTextContent(decide("continuation", { messages: completedWithLaterMessage })).text,
     "pi-herdsman PI_HERDSMAN_CONTINUATION_SECOND",
   );
   assert.doesNotMatch(
@@ -5648,14 +5098,10 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
       toolName: "read",
       toolCallId: "read-1",
       isError: false,
-      content: [
-        { type: "text", text: '{"name":"pi-herdsman","version":"0.25.1"}' },
-      ],
+      content: [{ type: "text", text: '{"name":"pi-herdsman","version":"0.25.1"}' }],
     },
   ];
-  const evidenceCall = firstToolCall(
-    decide("continuation", { messages: resumed }),
-  );
+  const evidenceCall = firstToolCall(decide("continuation", { messages: resumed }));
   assert.equal(evidenceCall.name, "read_evidence");
   assert.deepEqual(evidenceCall.arguments, {
     ref: "evidence:work-assignment#1",
@@ -5665,9 +5111,7 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     call("read_evidence", evidenceCall.arguments, "evidence-1"),
     {
       ...result("read_evidence", "evidence-1"),
-      content: [
-        { type: "text", text: "SMOKE_CONTINUATION_FIRST: read package.json" },
-      ],
+      content: [{ type: "text", text: "SMOKE_CONTINUATION_FIRST: read package.json" }],
     },
   ];
   assert.throws(
@@ -5682,8 +5126,7 @@ test("core and continuation faux decisions wait for correlated delivered Agent r
     /Continued task could not read its prior work assignment/,
   );
   assert.equal(
-    firstTextContent(decide("continuation", { messages: resumedWithEvidence }))
-      .text,
+    firstTextContent(decide("continuation", { messages: resumedWithEvidence })).text,
     "pi-herdsman PI_HERDSMAN_CONTINUATION_SECOND",
   );
 });
@@ -5723,10 +5166,7 @@ test("supervisor-agent accepts only its current-format completed result", () => 
   const accept = decideSmokeFaux("supervisor-agent", {
     messages: [prompt, call, delegated, completed],
   });
-  assert.equal(
-    firstTextContent(accept).text,
-    "PI_HERDSMAN_SUPERVISOR_AGENT_DELIVERED",
-  );
+  assert.equal(firstTextContent(accept).text, "PI_HERDSMAN_SUPERVISOR_AGENT_DELIVERED");
   const unrelated = decideSmokeFaux("supervisor-agent", {
     messages: [
       prompt,
@@ -5734,17 +5174,11 @@ test("supervisor-agent accepts only its current-format completed result", () => 
       delegated,
       {
         ...completed,
-        content: completed.content.replace(
-          "smoke-supervisor-agent",
-          "unrelated-agent",
-        ),
+        content: completed.content.replace("smoke-supervisor-agent", "unrelated-agent"),
       },
     ],
   });
-  assert.match(
-    firstTextContent(unrelated).text,
-    /Waiting for the completed Agent result/,
-  );
+  assert.match(firstTextContent(unrelated).text, /Waiting for the completed Agent result/);
 });
 
 test("supervisor completion harness accepts semantic and exact-session headers only with matching details", () => {
@@ -5767,14 +5201,8 @@ test("supervisor completion harness accepts semantic and exact-session headers o
     ...semantic,
     content: `Agent result · agent=smoke-supervisor-agent · definition=smoke-agent · session=${childSessionId} · status=completed\n\nSMOKE_SUPERVISOR_AGENT_COMPLETED`,
   };
-  assert.equal(
-    supervisorAgentCompletionMatches(semantic, requestId, childSessionId),
-    true,
-  );
-  assert.equal(
-    supervisorAgentCompletionMatches(fallback, requestId, childSessionId),
-    true,
-  );
+  assert.equal(supervisorAgentCompletionMatches(semantic, requestId, childSessionId), true);
+  assert.equal(supervisorAgentCompletionMatches(fallback, requestId, childSessionId), true);
   for (const [field, value] of Object.entries({
     requestId: "other-request",
     piSessionId: "other-session",
@@ -5835,14 +5263,8 @@ test("crash recovery faux performs only authorized stop or settled continuation"
     });
   const steer = firstToolCall(decide(messages));
   assert.equal(steer.name, "steer_agent");
-  const pendingSteer = decide([
-    ...messages,
-    { role: "assistant", content: [steer] },
-  ]);
-  assert.match(
-    firstTextContent(pendingSteer).text,
-    /Waiting for steer acknowledgement outcome/,
-  );
+  const pendingSteer = decide([...messages, { role: "assistant", content: [steer] }]);
+  assert.match(firstTextContent(pendingSteer).text, /Waiting for steer acknowledgement outcome/);
   const afterSteer = [
     ...messages,
     { role: "assistant", content: [steer] },
@@ -5877,9 +5299,7 @@ test("crash recovery faux performs only authorized stop or settled continuation"
   assert.equal(firstToolCall(settled).name, "resume_agent");
   assert.equal(firstToolCall(settled).arguments.session, session);
   assert.equal(
-    settled.content.some(
-      (part) => part.type === "toolCall" && part.name === "stop_agent",
-    ),
+    settled.content.some((part) => part.type === "toolCall" && part.name === "stop_agent"),
     false,
   );
   const stop = decide([
@@ -5905,10 +5325,7 @@ test("crash recovery faux performs only authorized stop or settled continuation"
       details: { closed_assignment: { session_path: session } },
     },
   ];
-  assert.equal(
-    firstTextContent(decide(closed)).text,
-    "PI_HERDSMAN_CRASH_RECOVERY_CLOSED",
-  );
+  assert.equal(firstTextContent(decide(closed)).text, "PI_HERDSMAN_CRASH_RECOVERY_CLOSED");
   const prompt = {
     role: "user",
     content: "PI_HERDSMAN_CRASH_RECOVERY_CONTINUE",
@@ -5930,14 +5347,9 @@ test("crash recovery faux performs only authorized stop or settled continuation"
     { role: "assistant", content: [call] },
     continuationResult,
   ]);
-  assert.match(
-    firstTextContent(pending).text,
-    /Waiting for the continued exact session result/,
-  );
+  assert.match(firstTextContent(pending).text, /Waiting for the continued exact session result/);
   assert.equal(
-    pending.content.some(
-      (part) => part.type === "toolCall" && part.name === "resume_agent",
-    ),
+    pending.content.some((part) => part.type === "toolCall" && part.name === "resume_agent"),
     false,
   );
   const done = decide([
@@ -5951,17 +5363,11 @@ test("crash recovery faux performs only authorized stop or settled continuation"
         "Agent result · agent=smoke-crash-target · definition=implementer · status=completed\n\nPI_HERDSMAN_CRASH_RECOVERY_CONTINUED",
     },
   ]);
-  assert.equal(
-    firstTextContent(done).text,
-    "PI_HERDSMAN_CRASH_RECOVERY_CONTINUED",
-  );
+  assert.equal(firstTextContent(done).text, "PI_HERDSMAN_CRASH_RECOVERY_CONTINUED");
 });
 
 test("crash-recovery preserves server restart without local Herdr PID signaling", async () => {
-  const source = await readFile(
-    new URL("../scripts/smoke.mjs", import.meta.url),
-    "utf8",
-  );
+  const source = await readFile(new URL("../scripts/smoke.mjs", import.meta.url), "utf8");
   const start = source.indexOf("async function runAgentCrashRecoverySmoke");
   const end = source.indexOf("\nasync function ", start + 1);
   assert.ok(start >= 0 && end > start, "crash-recovery scenario body missing");
@@ -5974,10 +5380,7 @@ test("crash-recovery preserves server restart without local Herdr PID signaling"
 
   const restartStart = source.indexOf("async function restartNestedHerdr");
   const restartEnd = source.indexOf("\nasync function ", restartStart + 1);
-  assert.ok(
-    restartStart >= 0 && restartEnd > restartStart,
-    "nested Herdr restart helper missing",
-  );
+  assert.ok(restartStart >= 0 && restartEnd > restartStart, "nested Herdr restart helper missing");
   const restart = source.slice(restartStart, restartEnd);
   assert.match(restart, /"crash-recovery-server-stopped"/);
   assert.match(restart, /await waitForNestedHerdr\(ctx\)/);
@@ -6011,9 +5414,7 @@ test("crash-recovery uses the latest successful list_agents result after restart
     },
   ];
   assert.equal(
-    firstToolCall(
-      decideSmokeFaux("agent-crash-root", { messages: staleHistory }),
-    ).name,
+    firstToolCall(decideSmokeFaux("agent-crash-root", { messages: staleHistory })).name,
     "list_agents",
   );
   const entries = staleHistory.map((entry) => ({
@@ -6044,9 +5445,7 @@ test("installed faux provider requeues decisions and emits its terminal failure 
   await mkdir(evidenceDir, { recursive: true });
   process.env.PI_CODING_AGENT_DIR = agentDir;
   delete process.env.PI_HERDSMAN_AGENT_DEFINITION;
-  process.argv[1] = resolve(
-    "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
-  );
+  process.argv[1] = resolve("node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js");
   try {
     let registeredProvider: Provider<Api> | undefined;
     const handlers = new Map();
@@ -6138,10 +5537,7 @@ test("installed faux provider requeues decisions and emits its terminal failure 
       ),
     );
     const error = failure.find((event: any) => event.type === "error");
-    assert.equal(
-      error?.error.errorMessage,
-      "503 Service Unavailable (controlled smoke failure)",
-    );
+    assert.equal(error?.error.errorMessage, "503 Service Unavailable (controlled smoke failure)");
     assert.ok(
       failure
         .filter((event: any) => event.type === "text_delta")
@@ -6151,33 +5547,23 @@ test("installed faux provider requeues decisions and emits its terminal failure 
     );
     assert.ok(
       error?.error.content.some(
-        (part: any) =>
-          part.type === "text" && part.text === "CONTROLLED_PARTIAL_RESPONSE",
+        (part: any) => part.type === "text" && part.text === "CONTROLLED_PARTIAL_RESPONSE",
       ),
     );
     assert.deepEqual(
-      JSON.parse(
-        (
-          await readFile(join(evidenceDir, "smoke-faux-attempts.jsonl"), "utf8")
-        ).trim(),
-      ),
+      JSON.parse((await readFile(join(evidenceDir, "smoke-faux-attempts.jsonl"), "utf8")).trim()),
       {
         model: "terminal-error",
         hasRoster: true,
         sessionId: "faux-test-session",
       },
     );
-    const provenance = (
-      await readFile(join(evidenceDir, "smoke-faux-provenance.jsonl"), "utf8")
-    )
+    const provenance = (await readFile(join(evidenceDir, "smoke-faux-provenance.jsonl"), "utf8"))
       .trim()
       .split(/\r?\n/)
       .map((line) => JSON.parse(line));
     const piPackage = JSON.parse(
-      await readFile(
-        resolve("node_modules/@earendil-works/pi-coding-agent/package.json"),
-        "utf8",
-      ),
+      await readFile(resolve("node_modules/@earendil-works/pi-coding-agent/package.json"), "utf8"),
     );
     assert.deepEqual(provenance, [
       {
@@ -6205,8 +5591,7 @@ test("installed faux provider requeues decisions and emits its terminal failure 
       ),
     );
     assert.equal(
-      missingRoleSection.find((event: any) => event.type === "error")?.error
-        .errorMessage,
+      missingRoleSection.find((event: any) => event.type === "error")?.error.errorMessage,
       "Provider request omitted the Lead role contract",
     );
     handlers.get("session_start")?.(
@@ -6220,16 +5605,11 @@ test("installed faux provider requeues decisions and emits its terminal failure 
     const missingManagerRoleSection = await collect(
       provider.streamSimple(
         model("manager-handoff"),
-        context(
-          "Reply exactly MANAGER_HANDOFF_ROOT_READY.",
-          {},
-          "Base system prompt.",
-        ),
+        context("Reply exactly MANAGER_HANDOFF_ROOT_READY.", {}, "Base system prompt."),
       ),
     );
     assert.equal(
-      missingManagerRoleSection.find((event: any) => event.type === "error")
-        ?.error.errorMessage,
+      missingManagerRoleSection.find((event: any) => event.type === "error")?.error.errorMessage,
       "Provider request omitted the manager role section",
     );
     handlers.get("session_start")?.(
@@ -6251,16 +5631,14 @@ test("installed faux provider requeues decisions and emits its terminal failure 
       ),
     );
     assert.equal(
-      missingManagedLeadIdentity.find((event: any) => event.type === "error")
-        ?.error.errorMessage,
+      missingManagedLeadIdentity.find((event: any) => event.type === "error")?.error.errorMessage,
       "Provider request omitted or contradicted the Managed Lead role contract",
     );
     assert.equal(handlers.has("agent_settled"), true);
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-    if (previousAgentDefinition === undefined)
-      delete process.env.PI_HERDSMAN_AGENT_DEFINITION;
+    if (previousAgentDefinition === undefined) delete process.env.PI_HERDSMAN_AGENT_DEFINITION;
     else process.env.PI_HERDSMAN_AGENT_DEFINITION = previousAgentDefinition;
     process.argv[1] = previousEntryPoint;
     await rm(agentDir, { recursive: true, force: true });
@@ -6374,9 +5752,7 @@ test("manager drain checkpoints are allowlisted, deduplicated and bounded withou
           payload: "secret",
         }),
       ),
-      ...Array.from({ length: 40 }, () =>
-        encode({ event: "inbox_candidates", count: 0 }),
-      ),
+      ...Array.from({ length: 40 }, () => encode({ event: "inbox_candidates", count: 0 })),
     ].join("\n"),
   );
   assert.deepEqual(
@@ -6395,14 +5771,9 @@ test("manager drain checkpoints are allowlisted, deduplicated and bounded withou
     { event: "inbox_peer_presence", reason: "pass" },
     { event: "inbox_candidates", count: 0 },
     { event: "inbox_drain_complete", count: 0, sessionStable: false },
-    ...[
-      "cleanup",
-      "authorization",
-      "send",
-      "reconcile",
-      "candidate_scan",
-      "transaction",
-    ].map((category) => ({ event: "inbox_catch", category })),
+    ...["cleanup", "authorization", "send", "reconcile", "candidate_scan", "transaction"].map(
+      (category) => ({ event: "inbox_catch", category }),
+    ),
   ])
     assert.deepEqual(managerDiagnosticLines(encode(event)), [encode(event)]);
 });
@@ -6416,22 +5787,18 @@ test("successful manager recovery projects opt-in Lead diagnostics without chang
       sessionId: "lead-session",
     },
   };
-  await captureManagerLeadDiagnostics(
-    ctx,
-    "lead-pane",
-    async (context, paneId, source) => {
-      assert.equal(context, ctx);
-      assert.equal(paneId, "lead-pane");
-      assert.equal(source, "recent-unwrapped");
-      return [
-        "private pane text",
-        `${prefix}{"event":"session_start_reached","payload":"private"}`,
-        `${prefix}{"event":"session_start_reached"}`,
-        `${prefix}{"event":"inbox_preflight","reason":"pass"}`,
-        `${prefix}{"event":"unknown","payload":"private"}`,
-      ].join("\n");
-    },
-  );
+  await captureManagerLeadDiagnostics(ctx, "lead-pane", async (context, paneId, source) => {
+    assert.equal(context, ctx);
+    assert.equal(paneId, "lead-pane");
+    assert.equal(source, "recent-unwrapped");
+    return [
+      "private pane text",
+      `${prefix}{"event":"session_start_reached","payload":"private"}`,
+      `${prefix}{"event":"session_start_reached"}`,
+      `${prefix}{"event":"inbox_preflight","reason":"pass"}`,
+      `${prefix}{"event":"unknown","payload":"private"}`,
+    ].join("\n");
+  });
   assert.deepEqual(JSON.parse(JSON.stringify(ctx.managerRecovery)), {
     stage: "lead-ready-handshake",
     sessionId: "lead-session",
@@ -6444,10 +5811,7 @@ test("successful manager recovery projects opt-in Lead diagnostics without chang
   await captureManagerLeadDiagnostics(ctx, "lead-pane", async () => {
     throw new Error("pane unavailable");
   });
-  assert.deepEqual(
-    JSON.parse(JSON.stringify(ctx.managerRecovery)).leadDiagnostics,
-    [],
-  );
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.managerRecovery)).leadDiagnostics, []);
   const disabled = { managerRecoveryDiagnostics: false, managerRecovery: {} };
   await captureManagerLeadDiagnostics(disabled, "lead-pane", async () => {
     assert.fail("diagnostics must remain opt-in");
@@ -6457,10 +5821,7 @@ test("successful manager recovery projects opt-in Lead diagnostics without chang
 
 test("smoke failure report separates stage from error details", () => {
   assert.equal(
-    formatSmokeFailure(
-      new TypeError("leave wait timed out"),
-      "manager-leave-output-wait",
-    ),
+    formatSmokeFailure(new TypeError("leave wait timed out"), "manager-leave-output-wait"),
     "stage: manager-leave-output-wait\nerror: TypeError: leave wait timed out",
   );
   const stalled = Object.assign(new Error("control: no meaningful progress"), {
@@ -6524,12 +5885,11 @@ test("evidence wait returns completion and distinguishes stalls from deadlines",
     },
   );
   await assert.rejects(
-    waitForEvidence(
-      ctx,
-      "deadline",
-      async () => ({ done: false, progress: { count: 1 } }),
-      { timeoutMs: 12, stallMs: 1000, pollMs: 2 },
-    ),
+    waitForEvidence(ctx, "deadline", async () => ({ done: false, progress: { count: 1 } }), {
+      timeoutMs: 12,
+      stallMs: 1000,
+      pollMs: 2,
+    }),
     (error) => {
       assertErrorWithCode(error);
       return error.code === "SMOKE_TIMEOUT";
@@ -6565,21 +5925,12 @@ test("evidence wait returns completion and distinguishes stalls from deadlines",
 });
 
 test("continuation first-generation stalls if completed child retires before observation", async (t) => {
-  const source = await readFile(
-    new URL("../scripts/smoke.mjs", import.meta.url),
-    "utf8",
-  );
+  const source = await readFile(new URL("../scripts/smoke.mjs", import.meta.url), "utf8");
   const start = source.indexOf("async function runContinuationSmoke(ctx) {");
-  const end = source.indexOf(
-    "\nasync function runManagerBootstrapSmoke(ctx) {",
-    start,
-  );
+  const end = source.indexOf("\nasync function runManagerBootstrapSmoke(ctx) {", start);
   assert.ok(start >= 0 && end > start);
   const exactFunction = source.slice(start, end).trim();
-  assert.equal(
-    source.match(/async function runContinuationSmoke\(ctx\)/g)?.length,
-    1,
-  );
+  assert.equal(source.match(/async function runContinuationSmoke\(ctx\)/g)?.length, 1);
   assert.ok(exactFunction.endsWith("\n}"));
   assert.match(source, /const MODEL_STALL_MS = 120_000;/);
 
@@ -6641,21 +5992,11 @@ test("continuation first-generation stalls if completed child retires before obs
       .map((entry) => JSON.stringify(entry))
       .join("\n"),
   };
-  assert.equal(
-    rootDelegationDiagnostics(root.contents).matchingResult,
-    "success",
-  );
-  assert.ok(
-    assistantResultForSession(root, prompt, "PI_HERDSMAN_CONTINUATION_FIRST"),
-  );
+  assert.equal(rootDelegationDiagnostics(root.contents).matchingResult, "success");
+  assert.ok(assistantResultForSession(root, prompt, "PI_HERDSMAN_CONTINUATION_FIRST"));
 
   // Controlled schedule: completion, delivery, marker, and normal removal precede all polls.
-  const order = [
-    "child_completed",
-    "result_delivered",
-    "root_marker",
-    "child_removed",
-  ];
+  const order = ["child_completed", "result_delivered", "root_marker", "child_removed"];
   let polls = 0;
   let rootReads = 0;
   t.mock.timers.enable({ apis: ["Date"], now: 0 });
@@ -6682,8 +6023,7 @@ test("continuation first-generation stalls if completed child retires before obs
       rootReads++;
       return root;
     },
-    async () =>
-      assert.fail("retired child must not be read through a live Agent"),
+    async () => assert.fail("retired child must not be read through a live Agent"),
     120_000,
   );
   await assert.rejects(
@@ -6713,35 +6053,22 @@ test("continuation first-generation stalls if completed child retires before obs
 });
 
 test("simulated continuation releases completion only after full live evidence", async () => {
-  const { waitForContinuationObservation } =
-    await import("../scripts/smoke-faux.mjs");
+  const { waitForContinuationObservation } = await import("../scripts/smoke-faux.mjs");
   assert.equal(typeof waitForContinuationObservation, "function");
   const directory = await mkdtemp(join(tmpdir(), "smoke-continuation-gate-"));
   const runtime = join(directory, "pi-herdsman", "runtime");
   await mkdir(runtime, { recursive: true });
   const controller = new AbortController();
   let completed = false;
-  const completion = waitForContinuationObservation(
-    runtime,
-    controller.signal,
-  ).then(() => {
+  const completion = waitForContinuationObservation(runtime, controller.signal).then(() => {
     completed = true;
   });
   try {
-    const source = await readFile(
-      new URL("../scripts/smoke.mjs", import.meta.url),
-      "utf8",
-    );
+    const source = await readFile(new URL("../scripts/smoke.mjs", import.meta.url), "utf8");
     const start = source.indexOf("async function runContinuationSmoke(ctx) {");
-    const end = source.indexOf(
-      "\nasync function runManagerBootstrapSmoke(ctx) {",
-      start,
-    );
+    const end = source.indexOf("\nasync function runManagerBootstrapSmoke(ctx) {", start);
     assert.ok(start >= 0 && end > start);
-    assert.equal(
-      source.match(/async function runContinuationSmoke\(ctx\)/g)?.length,
-      1,
-    );
+    assert.equal(source.match(/async function runContinuationSmoke\(ctx\)/g)?.length, 1);
     const exactFunction = source.slice(start, end).trim();
     assert.ok(exactFunction.endsWith("\n}"));
     const stop = new Error("first stage checked");
@@ -6777,9 +6104,7 @@ test("simulated continuation releases completion only after full live evidence",
             assert.equal(completed, false);
           }
         }
-        assert.ok(
-          (await stat(join(runtime, "continuation-first-observed"))).isFile(),
-        );
+        assert.ok((await stat(join(runtime, "continuation-first-observed"))).isFile());
         await completion;
         assert.equal(completed, true);
         throw stop;
@@ -6788,8 +6113,7 @@ test("simulated continuation releases completion only after full live evidence",
         ok: true,
         value: args[0] === "agent" ? { agents: [{ pane_id: "child" }] } : {},
       }),
-      async () =>
-        inspection === 0 ? undefined : { id: "fixture", contents: "saved" },
+      async () => (inspection === 0 ? undefined : { id: "fixture", contents: "saved" }),
       () => (inspection === 2 ? [{ pid: 123 }] : []),
       writeFile,
       120_000,
@@ -6811,25 +6135,21 @@ test("simulated continuation releases completion only after full live evidence",
 });
 
 test("continuation completion wait tears down on abort, timeout, and filesystem failure", async (t) => {
-  const { waitForContinuationObservation } =
-    await import("../scripts/smoke-faux.mjs");
+  const { waitForContinuationObservation } = await import("../scripts/smoke-faux.mjs");
   const directory = await mkdtemp(join(tmpdir(), "smoke-continuation-abort-"));
   try {
     const controller = new AbortController();
-    const aborted = assert.rejects(
-      waitForContinuationObservation(directory, controller.signal),
-      { name: "AbortError" },
-    );
+    const aborted = assert.rejects(waitForContinuationObservation(directory, controller.signal), {
+      name: "AbortError",
+    });
     controller.abort();
     await aborted;
-    await assert.rejects(
-      waitForContinuationObservation(directory, controller.signal),
-      { name: "AbortError" },
-    );
-    await assert.rejects(
-      waitForContinuationObservation(join(directory, "absent")),
-      { code: "ENOENT" },
-    );
+    await assert.rejects(waitForContinuationObservation(directory, controller.signal), {
+      name: "AbortError",
+    });
+    await assert.rejects(waitForContinuationObservation(join(directory, "absent")), {
+      code: "ENOENT",
+    });
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const timedOut = assert.rejects(
       waitForContinuationObservation(directory),
@@ -6838,10 +6158,7 @@ test("continuation completion wait tears down on abort, timeout, and filesystem 
     t.mock.timers.tick(120_000);
     await timedOut;
     t.mock.timers.reset();
-    await writeFile(
-      join(directory, "continuation-first-observed"),
-      "observed\n",
-    );
+    await writeFile(join(directory, "continuation-first-observed"), "observed\n");
     await waitForContinuationObservation(directory);
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -6866,10 +6183,7 @@ test("smoke observation polling acknowledges a file created after the initial ch
 });
 
 test("continuation root prompt waits for a session-backed idle or done Agent", async () => {
-  const source = await readFile(
-    new URL("../scripts/smoke.mjs", import.meta.url),
-    "utf8",
-  );
+  const source = await readFile(new URL("../scripts/smoke.mjs", import.meta.url), "utf8");
   const start = source.indexOf("export async function promptContinuationRoot(");
   const end = source.indexOf("\nasync function waitForNestedHerdr", start);
   assert.ok(start >= 0 && end > start);
@@ -6976,35 +6290,26 @@ test("evidence progress changes reset inactivity, identical evidence and read er
 });
 
 test("Herdr API output requires the current JSON envelope", () => {
-  assert.deepEqual(
-    parseHerdrOutput('{"id":"1","result":{"panes":[]}}', ["pane", "list"]),
-    { panes: [] },
-  );
-  assert.deepEqual(
-    parseHerdrOutput('{"client":{},"server":{}}', ["status", "--json"]),
-    { client: {}, server: {} },
-  );
-  for (const stdout of [
-    'noise {"id":"1","result":{}}',
-    '{"result":{}}',
-    '{"id":"1"}',
-    "no json",
-  ])
+  assert.deepEqual(parseHerdrOutput('{"id":"1","result":{"panes":[]}}', ["pane", "list"]), {
+    panes: [],
+  });
+  assert.deepEqual(parseHerdrOutput('{"client":{},"server":{}}', ["status", "--json"]), {
+    client: {},
+    server: {},
+  });
+  for (const stdout of ['noise {"id":"1","result":{}}', '{"result":{}}', '{"id":"1"}', "no json"])
     assert.throws(() => parseHerdrOutput(stdout, ["pane", "list"]), {
       code: "SMOKE_PROTOCOL",
     });
 });
 
 test("candidate start treats only a structured missing-pane error as impossible", () => {
-  assert.equal(
-    herdrErrorCode({ stderr: '{"error":{"code":"pane_not_found"}}' }),
-    "pane_not_found",
-  );
+  assert.equal(herdrErrorCode({ stderr: '{"error":{"code":"pane_not_found"}}' }), "pane_not_found");
   assert.equal(herdrErrorCode({ stderr: "not json" }), undefined);
-  assert.deepEqual(
-    candidateStartObservationError({ ok: false, error: "timed out" }, "pane-1"),
-    { done: false, observationError: "timed out" },
-  );
+  assert.deepEqual(candidateStartObservationError({ ok: false, error: "timed out" }, "pane-1"), {
+    done: false,
+    observationError: "timed out",
+  });
   assert.throws(
     () =>
       candidateStartObservationError(
@@ -7062,17 +6367,10 @@ test("old execution classifies exact session panes as quiescent, active, or unkn
       (paneId) => (paneId === "pane-2" ? "active" : "clear"),
       [target.paneId, "pane-2"],
     ],
-    [
-      { agents: [] },
-      "unknown",
-      () => assert.fail("incomplete snapshot inspected"),
-      [],
-    ],
+    [{ agents: [] }, "unknown", () => assert.fail("incomplete snapshot inspected"), []],
     [
       {
-        agents: [
-          { agent_session: { kind: "path", value: target.sessionPath } },
-        ],
+        agents: [{ agent_session: { kind: "path", value: target.sessionPath } }],
         panes: [],
       },
       "unknown",
@@ -7083,14 +6381,10 @@ test("old execution classifies exact session panes as quiescent, active, or unkn
   ];
   for (const [snapshot, expected, inspect, expectedPanes] of cases) {
     const inspected: string[] = [];
-    const state = await classifyOldExecution(
-      snapshot,
-      target,
-      async (paneId) => {
-        inspected.push(paneId);
-        return inspect(paneId);
-      },
-    );
+    const state = await classifyOldExecution(snapshot, target, async (paneId) => {
+      inspected.push(paneId);
+      return inspect(paneId);
+    });
     assert.equal(state, expected);
     assert.deepEqual(inspected, expectedPanes);
   }
@@ -7138,13 +6432,10 @@ test("smoke model requires configuration when no override exists", async () => {
 test("simulated model selection never reads Git smoke configuration", async () => {
   const calls: string[] = [];
   assert.equal(
-    await selectSmokeModel(
-      { scenario: "chief-tree", simulated: true },
-      async (...args: any[]) => {
-        calls.push(args.join(" "));
-        throw new Error("must not read Git configuration");
-      },
-    ),
+    await selectSmokeModel({ scenario: "chief-tree", simulated: true }, async (...args: any[]) => {
+      calls.push(args.join(" "));
+      throw new Error("must not read Git configuration");
+    }),
     "smoke-faux/chief-tree",
   );
   assert.deepEqual(calls, []);
@@ -7170,14 +6461,10 @@ test("smoke auth resolves credentials from the configured model", async () => {
     authLink: "/smoke/pi-agent/auth.json",
   };
   const calls: [string, string[], unknown?][] = [];
-  const mechanism = await preparePi(
-    paths,
-    "provider/model:high",
-    async (file, args) => {
-      calls.push([file, args]);
-      return { stdout: "", stderr: "", pid: 1 };
-    },
-  );
+  const mechanism = await preparePi(paths, "provider/model:high", async (file, args) => {
+    calls.push([file, args]);
+    return { stdout: "", stderr: "", pid: 1 };
+  });
   assert.equal(mechanism, "ambient");
   assert.deepEqual(calls, [
     ["pi", ["auth", "check", "--model", "provider/model:high", "--no-refresh"]],
@@ -7194,10 +6481,7 @@ test("simulated core and continuation overlays preserve bundled Agent extension 
     await prepareFauxAgentOverlays({ piAgent }, provider, names);
     for (const name of names) {
       const definition = discoverAgent(name);
-      assert.deepEqual(definition.frontmatter.extensions, [
-        "builtin:codemode",
-        provider,
-      ]);
+      assert.deepEqual(definition.frontmatter.extensions, ["builtin:codemode", provider]);
       const args = agentLaunchArgs(definition, {
         managedAgent: true,
         bodyPromptPath: join(piAgent, "body.md"),
@@ -7205,9 +6489,7 @@ test("simulated core and continuation overlays preserve bundled Agent extension 
       });
       assert.ok(args.includes("--no-extensions"));
       assert.deepEqual(
-        args.flatMap((arg, index) =>
-          arg === "--extension" ? [args[index + 1]] : [],
-        ),
+        args.flatMap((arg, index) => (arg === "--extension" ? [args[index + 1]] : [])),
         ["builtin:codemode", provider],
       );
     }
@@ -7227,32 +6509,17 @@ test("continuation requires configured faux extension and provider evidence for 
     pid,
     model: "continuation",
   }));
-  assert.doesNotThrow(() =>
-    assertContinuationFauxEvidence(starts, provenance, sessionId, pids),
-  );
+  assert.doesNotThrow(() => assertContinuationFauxEvidence(starts, provenance, sessionId, pids));
   assert.throws(
-    () =>
-      assertContinuationFauxEvidence(
-        starts.slice(0, 1),
-        provenance,
-        sessionId,
-        pids,
-      ),
+    () => assertContinuationFauxEvidence(starts.slice(0, 1), provenance, sessionId, pids),
     /missing faux session_start evidence/,
   );
   assert.throws(
-    () =>
-      assertContinuationFauxEvidence(
-        starts,
-        provenance.slice(0, 1),
-        sessionId,
-        pids,
-      ),
+    () => assertContinuationFauxEvidence(starts, provenance.slice(0, 1), sessionId, pids),
     /missing faux continuation provider request/,
   );
   assert.throws(
-    () =>
-      assertContinuationFauxEvidence(starts, provenance, sessionId, [101, 101]),
+    () => assertContinuationFauxEvidence(starts, provenance, sessionId, [101, 101]),
     /distinct PIDs/,
   );
 });
@@ -7269,15 +6536,10 @@ test("continuation provider evidence wait polls until the second-generation requ
     async () => {
       inspections++;
       if (inspections === 1)
-        setTimeout(
-          () => provenance.push({ sessionId, pid, model: "continuation" }),
-          5,
-        );
+        setTimeout(() => provenance.push({ sessionId, pid, model: "continuation" }), 5);
       const found = provenance.some(
         (record) =>
-          record.sessionId === sessionId &&
-          record.pid === pid &&
-          record.model === "continuation",
+          record.sessionId === sessionId && record.pid === pid && record.model === "continuation",
       );
       return { done: found, value: pid, progress: { found } };
     },
@@ -7304,10 +6566,7 @@ test("active-stop preflights startup and verifies interactive stop cleanup", asy
     initialPromptForScenario("active-stop", {}),
     "Reply exactly PI_HERDSMAN_ACTIVE_STOP_READY",
   );
-  const source = await readFile(
-    new URL("../scripts/smoke.mjs", import.meta.url),
-    "utf8",
-  );
+  const source = await readFile(new URL("../scripts/smoke.mjs", import.meta.url), "utf8");
   const manager = source.indexOf("async function runManagerRecoverySmoke");
   const active = source.indexOf("async function runActiveStopSmoke");
   const next = source.indexOf("async function runChiefTreeSmoke");
@@ -7321,33 +6580,23 @@ test("active-stop preflights startup and verifies interactive stop cleanup", asy
   const agentReady = markerIndex(/"active-stop-agent-ready"/);
   const agentReadiness = body.slice(
     agentReady,
-    body.indexOf(
-      "const { agent, session, mailbox, pid } = initial;",
-      agentReady,
-    ),
+    body.indexOf("const { agent, session, mailbox, pid } = initial;", agentReady),
   );
   assert.match(
     agentReadiness,
     /mailbox\?\.state\.ownerSessionId === ownerId\s*&&\s*mailbox\.state\.activeRequestId/,
   );
   assert.match(agentReadiness, /mailbox\.state\.agentLabel === label/);
-  assert.match(
-    agentReadiness,
-    /const \{ agent, session, mailbox \} = matches\[0\]/,
-  );
+  assert.match(agentReadiness, /const \{ agent, session, mailbox \} = matches\[0\]/);
   assert.match(agentReadiness, /"process-info",\s*"--pane",\s*agent\.pane_id/);
   assert.doesNotMatch(agentReadiness, /isolatedSessionDetails\(ctx, agent\)/);
   assert.match(
     agentReadiness,
     /listed: listed\.value\.agents\?\.length \?\? 0,\s*owned: owned\.length,\s*delegation: root \? rootDelegationDiagnostics\(root\.contents\) : null/,
   );
-  const stopInput = markerIndex(
-    /submitPaneCommand\(ctx,\s*ctx\.rootPaneId,\s*"\/herdsman-stop"\)/,
-  );
+  const stopInput = markerIndex(/submitPaneCommand\(ctx,\s*ctx\.rootPaneId,\s*"\/herdsman-stop"\)/);
   const confirmation = markerIndex(/"active-stop-confirmation"/);
-  const confirmEnter = markerIndex(
-    /"pane",\s*"send-keys",\s*ctx\.rootPaneId,\s*"enter"/,
-  );
+  const confirmEnter = markerIndex(/"pane",\s*"send-keys",\s*ctx\.rootPaneId,\s*"enter"/);
   const beforeConfirmEnter = body.slice(0, confirmEnter);
   assert.ok(
     rootReady >= 0 && agentReady >= 0 && stopInput >= 0,
@@ -7358,10 +6607,7 @@ test("active-stop preflights startup and verifies interactive stop cleanup", asy
     "root snapshot and candidate readiness must precede terminal input",
   );
   assert.match(body, /rootSessionSnapshot\(ctx\)/);
-  assert.match(
-    body,
-    /const label = `stop-\$\{randomUUID\(\)\.slice\(0, 12\)\}`/,
-  );
+  assert.match(body, /const label = `stop-\$\{randomUUID\(\)\.slice\(0, 12\)\}`/);
   assert.match(
     body,
     /assistantResultForSession\(\s*snapshot,\s*startupPrompt,\s*"PI_HERDSMAN_ACTIVE_STOP_READY"/,
@@ -7369,19 +6615,13 @@ test("active-stop preflights startup and verifies interactive stop cleanup", asy
   assert.match(body, /terminalTail/);
   assert.match(
     body,
-    /const processObservationError = sanitizeManagerBootstrapText\(\s*observed\.error,\s*ctx,?\s*\)\.slice\(0,\s*300\)/,
+    /const processObservationError = sanitizeManagerBootstrapText\(\s*observed\.error,\s*ctx,?\s*\)\.slice\(\s*0,\s*300,?\s*\)/,
   );
   assert.match(body, /observationError: processObservationError/);
   assert.match(body, /candidateProcess: processObservationError/);
-  assert.match(
-    body,
-    /sanitizeManagerBootstrapText\(error\.message,\s*ctx\)\.slice\(0,\s*300\)/,
-  );
+  assert.match(body, /sanitizeManagerBootstrapText\(error\.message,\s*ctx\)\.slice\(0,\s*300\)/);
   assert.match(body, /candidateProcess:/);
-  assert.match(
-    body,
-    /typeof\s+header\?\.id\s*!==\s*"string"\s*\|\|\s*!header\.id\.trim\(\)/,
-  );
+  assert.match(body, /typeof\s+header\?\.id\s*!==\s*"string"\s*\|\|\s*!header\.id\.trim\(\)/);
   assert.match(body, /"pane",\s*"process-info",\s*"--pane",\s*ctx\.rootPaneId/);
   assert.match(body, /matches\.length !== 1/);
   assert.match(
@@ -7395,10 +6635,7 @@ test("active-stop preflights startup and verifies interactive stop cleanup", asy
   );
   assert.match(body, /pid: processes\[0\]\.pid/);
   assert.doesNotMatch(body, /smoke-faux-provenance\.jsonl|matchPiProvenance/);
-  assert.ok(
-    agentReady < stopInput,
-    "active Agent readiness must precede stop input",
-  );
+  assert.ok(agentReady < stopInput, "active Agent readiness must precede stop input");
   assert.ok(
     confirmation >= 0 && confirmEnter >= 0,
     "confirmation marker and confirmation Enter must both exist",
@@ -7407,31 +6644,22 @@ test("active-stop preflights startup and verifies interactive stop cleanup", asy
     stopInput < confirmation && confirmation < confirmEnter,
     "stop input, confirmation evidence, and Enter must occur in order",
   );
-  assert.match(
-    beforeConfirmEnter,
-    /normalized\.includes\("Stop all agents\?"\)/,
-  );
+  assert.match(beforeConfirmEnter, /normalized\.includes\("Stop all agents\?"\)/);
   assert.match(beforeConfirmEnter, /normalized\.includes\("1 working"\)/);
   assert.match(beforeConfirmEnter, /\/discard\/i\.test\(normalized\)/);
   assert.match(beforeConfirmEnter, /selectedYes = \/\(\?:\^\|\\s\)→\\s\*Yes/);
   assert.match(beforeConfirmEnter, /done: exact && selectedYes/);
   assert.match(beforeConfirmEnter, /selectedYes,/);
   assert.match(body, /pi-herdsman-agent-closed-assignment/);
-  assert.match(
-    body,
-    /continuationResultsForPrompt\(snapshot\.contents, followup, marker\)/,
-  );
+  assert.match(body, /continuationResultsForPrompt\(snapshot\.contents, followup, marker\)/);
   assert.match(body, /activeStopContinuationEvidence\(/);
   assert.match(body, /const startupHistory = responseCompleted\s*\? undefined/);
   assert.match(body, /\.slice\(-4\)[\s\S]*?role: entry\.message\.role/);
   assert.match(body, /stopReason: entry\.message\.stopReason/);
+  assert.match(body, /parentId: sanitizeManagerBootstrapText\(entry\.parentId, ctx\)/);
   assert.match(
     body,
-    /parentId: sanitizeManagerBootstrapText\(entry\.parentId, ctx\)/,
-  );
-  assert.match(
-    body,
-    /messageText\(entry\.message\.content\)[\s\S]*?\.slice\(-200\)/,
+    /sanitizeManagerBootstrapText\(\s*messageText\(\s*entry\.message\.content,?\s*\),\s*ctx,?\s*\)\.slice\(\s*-200,?\s*\)/,
   );
   assert.match(body, /\.\.\.\(startupHistory && \{ startupHistory \}\)/);
   assert.match(body, /"pane",\s*"send-keys",\s*ctx\.rootPaneId,\s*"enter"/);
@@ -7439,8 +6667,7 @@ test("active-stop preflights startup and verifies interactive stop cleanup", asy
   assert.match(body, /error\?\.code !== "ESRCH"/);
   assert.match(body, /panePresent/);
   assert.ok(
-    markerIndex(/"active-stop-pane-removed"/) <
-      markerIndex(/process\.kill\(pid, 0\)/),
+    markerIndex(/"active-stop-pane-removed"/) < markerIndex(/process\.kill\(pid, 0\)/),
     "Agent pane absence must be established before checking the captured PID",
   );
   assert.doesNotMatch(body, /"process-info",\s*"--pane",\s*identity\.paneId/);
@@ -7546,8 +6773,7 @@ test("active-stop accepts fast completion only with exact durable identity", () 
       message: { role: "user", content: task },
     },
   ];
-  const encode = (value: unknown[]) =>
-    value.map((entry) => JSON.stringify(entry)).join("\n");
+  const encode = (value: unknown[]) => value.map((entry) => JSON.stringify(entry)).join("\n");
   const boundary = encode(child.slice(0, 3)) + "\n";
   const check = (root = entries, saved = child, before = boundary) =>
     activeStopContinuationEvidence(
@@ -7583,8 +6809,7 @@ test("active-stop accepts fast completion only with exact durable identity", () 
   referenced[2].message.details.request_id = referenced[3].details.requestId =
     "550e8400-e29b-41d4-a716-446655440000";
   referenced[3].details.resultRef = `result:${referenced[3].details.requestId}`;
-  referenced[3].content =
-    "Agent result · agent=agent\n\nResult ref: result:agent#1\n\nDONE";
+  referenced[3].content = "Agent result · agent=agent\n\nResult ref: result:agent#1\n\nDONE";
   assert.ok(check(referenced));
   for (const [index, field, value] of [
     [2, "request_id", "old-request"],
@@ -7602,8 +6827,7 @@ test("active-stop accepts fast completion only with exact durable identity", () 
     [3, "status", "failed"],
   ] as const) {
     const copy = structuredClone(entries);
-    (index === 2 ? copy[index].message.details : copy[index].details)[field] =
-      value;
+    (index === 2 ? copy[index].message.details : copy[index].details)[field] = value;
     assert.equal(check(copy), null, field);
   }
   const missingMarker = structuredClone(entries);
@@ -7620,8 +6844,7 @@ test("active-stop accepts fast completion only with exact durable identity", () 
   status[3].details.delegationStatus = "DONE";
   assert.equal(check(status), null);
   const reference = structuredClone(entries);
-  reference[3].content =
-    "Agent result · agent=agent\n\nResult ref: DONE\n\nnot present";
+  reference[3].content = "Agent result · agent=agent\n\nResult ref: DONE\n\nnot present";
   reference[3].details.resultRef = "result:request";
   assert.equal(check(reference), null);
   for (const value of [undefined, 0, "false", {}, []]) {
@@ -7633,8 +6856,7 @@ test("active-stop accepts fast completion only with exact durable identity", () 
   for (const value of [null, false, "", 0, {}, "result:request"]) {
     const malformed = structuredClone(entries);
     malformed[3].details.resultRef = value;
-    malformed[3].content =
-      "Agent result · agent=agent\n\nResult ref: DONE\n\nnot present";
+    malformed[3].content = "Agent result · agent=agent\n\nResult ref: DONE\n\nnot present";
     assert.equal(check(malformed), null);
   }
   const branched = structuredClone(child);
@@ -7695,35 +6917,21 @@ test("core failure retains only unique root-session provenance", () => {
   };
   const contents = [child, root].map((row) => JSON.stringify(row)).join("\n");
   const proof = rootFailureProvenance(contents, sessionId);
-  assert.deepEqual(
-    scenarioVersionProvenance(contents, [sessionId, child.sessionId], "1.5.0"),
-    [
-      [{ sessionId, pid: 42, piVersion: "1.5.0" }],
-      [{ sessionId: child.sessionId, pid: 43, piVersion: "1.5.0" }],
-    ],
-  );
+  assert.deepEqual(scenarioVersionProvenance(contents, [sessionId, child.sessionId], "1.5.0"), [
+    [{ sessionId, pid: 42, piVersion: "1.5.0" }],
+    [{ sessionId: child.sessionId, pid: 43, piVersion: "1.5.0" }],
+  ]);
   assert.throws(
     () => scenarioVersionProvenance(contents, [sessionId], "1.5.1"),
     /differs from pinned/,
   );
   assert.throws(
-    () =>
-      scenarioVersionProvenance(
-        `${contents}\n${JSON.stringify(root)}`,
-        [sessionId],
-        "1.5.0",
-      ),
+    () => scenarioVersionProvenance(`${contents}\n${JSON.stringify(root)}`, [sessionId], "1.5.0"),
     /missing unique/,
   );
   assert.deepEqual(proof, { sessionId, pid: 42, piVersion: "1.5.0" });
-  assert.equal(
-    rootFailureProvenance(contents, child.sessionId.replace(/^1/u, "2")),
-    null,
-  );
-  assert.equal(
-    rootFailureProvenance(`${contents}\n${JSON.stringify(root)}`, sessionId),
-    null,
-  );
+  assert.equal(rootFailureProvenance(contents, child.sessionId.replace(/^1/u, "2")), null);
+  assert.equal(rootFailureProvenance(`${contents}\n${JSON.stringify(root)}`, sessionId), null);
   assert.equal(rootFailureProvenance(`${contents}\ninvalid`, sessionId), null);
   const evidence = sanitizedFailureEvidence(
     { scenario: "core", simulated: true, coreRootProvenance: proof },
@@ -7746,15 +6954,7 @@ test("Pi provenance requires the exact pinned version and reports the observed v
   };
   const processes = [{ pid: 42 }];
   assert.deepEqual(
-    matchPiProvenance(
-      [record],
-      "session",
-      "lead-pane",
-      processes,
-      "terminal-error",
-      true,
-      "1.4.0",
-    ),
+    matchPiProvenance([record], "session", "lead-pane", processes, "terminal-error", true, "1.4.0"),
     {
       paneId: "lead-pane",
       pid: 42,
@@ -7774,8 +6974,7 @@ test("Pi provenance requires the exact pinned version and reports the observed v
         "1.4.0",
       ),
     (error: Error & { code?: string }) =>
-      error.message.includes("foreground PID match") &&
-      error.code === "SMOKE_EVIDENCE",
+      error.message.includes("foreground PID match") && error.code === "SMOKE_EVIDENCE",
   );
   assert.throws(
     () =>
@@ -7862,10 +7061,7 @@ test("core observation waits for every persisted session PID or fails closed", a
     sessionIds: new Set(["root", "child"]),
   };
   for (const paneCount of [1, 2]) {
-    assert.equal(
-      coreObservationReady({ ...ctx, simulated: false, paneCount }),
-      paneCount === 2,
-    );
+    assert.equal(coreObservationReady({ ...ctx, simulated: false, paneCount }), paneCount === 2);
   }
   assert.equal(
     coreObservationReady({
@@ -7885,9 +7081,7 @@ test("core observation waits for every persisted session PID or fails closed", a
     false,
   );
   for (const provenance of [
-    ctx.provenance.map((row) =>
-      row.sessionId === "root" ? { ...row, pid: 999 } : row,
-    ),
+    ctx.provenance.map((row) => (row.sessionId === "root" ? { ...row, pid: 999 } : row)),
     [...ctx.provenance, ctx.provenance[0]],
   ]) {
     assert.throws(
@@ -7961,8 +7155,7 @@ test("core observation waits for every persisted session PID or fails closed", a
       { timeoutMs: 20, stallMs: 1000, pollMs: 1 },
     ),
     (error: Error & { code?: string; smoke?: { stage?: string } }) =>
-      error.code === "SMOKE_TIMEOUT" &&
-      error.smoke?.stage === "core-delegation",
+      error.code === "SMOKE_TIMEOUT" && error.smoke?.stage === "core-delegation",
   );
 });
 
@@ -7985,10 +7178,7 @@ test("extra core provenance row fails without retaining verified evidence", asyn
   const artifact = await preserveFailureEvidence(
     sanitizedFailureEvidence(ctx, {}, "EVIDENCE_FAIL", "FAIL"),
   );
-  assert.equal(
-    JSON.parse(await readFile(artifact, "utf8")).firstRequestVerified,
-    false,
-  );
+  assert.equal(JSON.parse(await readFile(artifact, "utf8")).firstRequestVerified, false);
   await rm(dirname(artifact), { recursive: true, force: true });
 });
 
@@ -8005,12 +7195,7 @@ test("required core tool-result gaps are evidence failures, not behavior failure
     );
   }
   assert.throws(
-    () =>
-      assertCoreToolEvidence(
-        true,
-        [{ name: "delegate_agent", result: "" }],
-        "pkg@1",
-      ),
+    () => assertCoreToolEvidence(true, [{ name: "delegate_agent", result: "" }], "pkg@1"),
     (error: Error & { code?: string }) =>
       classifySmokeFailure("scenario", error) === "EVIDENCE_FAIL",
   );
@@ -8117,16 +7302,7 @@ test("core Pi provenance matches the core model and role-specific roster", () =>
     /'core'/,
   );
   assert.throws(
-    () =>
-      matchPiProvenance(
-        [leaf],
-        "leaf",
-        "leaf-pane",
-        [{ pid: 43 }],
-        "core",
-        true,
-        "1.2.0",
-      ),
+    () => matchPiProvenance([leaf], "leaf", "leaf-pane", [{ pid: 43 }], "core", true, "1.2.0"),
     /false !== true/,
   );
 });
@@ -8143,13 +7319,7 @@ test("provenance uses retained foreground PID evidence when a pane later disappe
           foreground_processes: [
             {
               pid: 52,
-              argv: [
-                "node",
-                "--extension",
-                "/candidate.js",
-                "--extension",
-                "/herdr.js",
-              ],
+              argv: ["node", "--extension", "/candidate.js", "--extension", "/herdr.js"],
             },
           ],
         },
@@ -8264,16 +7434,13 @@ test("parent shutdown requires both owned child exit and named server stopped ev
   const runningParent: {
     server: { exitCode?: number | null; signalCode?: string | null };
   } = { server: {} };
-  const serverStillRunningWithTerminalChild = await verifyParentShutdown(
-    runningParent,
-    {
-      stop: async () => {},
-      waitForExit: async () => {
-        runningParent.server.exitCode = 0;
-      },
-      status: async () => ({ server: { running: true } }),
+  const serverStillRunningWithTerminalChild = await verifyParentShutdown(runningParent, {
+    stop: async () => {},
+    waitForExit: async () => {
+      runningParent.server.exitCode = 0;
     },
-  );
+    status: async () => ({ server: { running: true } }),
+  });
   assert.match(
     serverStillRunningWithTerminalChild.join("\n"),
     /named Herdr server stop not verified/,
@@ -8311,10 +7478,7 @@ test("parent shutdown requires both owned child exit and named server stopped ev
       status: async () => ({ server: { running: true } }),
     },
   );
-  assert.match(
-    serverStillRunning.join("\n"),
-    /named Herdr server stop not verified/,
-  );
+  assert.match(serverStillRunning.join("\n"), /named Herdr server stop not verified/);
 });
 
 test("cleanup artifact records false child signal results", async () => {
@@ -8363,10 +7527,7 @@ test("cleanup artifact records false child signal results", async () => {
   assert.ok(cleanupDiagnostics);
   assert.equal(cleanupDiagnostics.namedServer.running, false);
   assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
-  assert.equal(
-    cleanupDiagnostics.cleanupErrorCode,
-    "PARENT_SHUTDOWN_UNVERIFIED",
-  );
+  assert.equal(cleanupDiagnostics.cleanupErrorCode, "PARENT_SHUTDOWN_UNVERIFIED");
   assert.equal(cleanupDiagnostics.child.exitObservedAfterSigkill, false);
   assert.equal(cleanupDiagnostics.child.exitCode, null);
   assert.equal(cleanupDiagnostics.child.signalCode, null);
@@ -8406,21 +7567,16 @@ test("cleanup does not SIGKILL when owned child exits after SIGTERM", async () =
     paths: { root },
     owned: { parent },
   };
-  await cleanup(
-    { root, authLink: join(root, "missing-auth-link") },
-    { parent },
-    ctx,
-    {
-      runCommand: async () => ({}),
-      tryHerdrCommand: async () => ({
-        ok: true,
-        value: { server: { running: false } },
-      }),
-      sleepFor: async () => {
-        throw new Error("initial exit wait timed out");
-      },
+  await cleanup({ root, authLink: join(root, "missing-auth-link") }, { parent }, ctx, {
+    runCommand: async () => ({}),
+    tryHerdrCommand: async () => ({
+      ok: true,
+      value: { server: { running: false } },
+    }),
+    sleepFor: async () => {
+      throw new Error("initial exit wait timed out");
     },
-  );
+  });
   assert.deepEqual(signals, ["SIGTERM"]);
   const cleanupDiagnostics = ctx.parentCleanupDiagnostics;
   assert.ok(cleanupDiagnostics);
@@ -8458,11 +7614,7 @@ test("owned parent setup verifies readiness and workspace identity", async () =>
         },
       },
     }),
-    wait: async (
-      _ctx: unknown,
-      _stage: string,
-      observe: () => Promise<any>,
-    ) => {
+    wait: async (_ctx: unknown, _stage: string, observe: () => Promise<any>) => {
       ready = (await observe()).done;
     },
   });
@@ -8554,9 +7706,7 @@ test("cleanup closes and verifies the owned parent through Herdr contracts", asy
     env: parentEnv,
   });
 
-  const retainedRoot = await mkdtemp(
-    join(tmpdir(), "pi-herdsman-parent-failure-"),
-  );
+  const retainedRoot = await mkdtemp(join(tmpdir(), "pi-herdsman-parent-failure-"));
   const marker = join(retainedRoot, "retained");
   await writeFile(marker, "owned state");
   const failed = await cleanup(
@@ -8581,10 +7731,7 @@ test("manager-recovery uses nonblocking messages only when information cannot wa
   const marker = "MANAGER_RECOVERY_CONTEXT_test";
   const leadPrompt = managerRecoveryPostRecoveryPrompt();
   assert.match(leadPrompt, /message_manager/);
-  assert.match(
-    leadPrompt,
-    /must reach the Manager before your normal result boundary/i,
-  );
+  assert.match(leadPrompt, /must reach the Manager before your normal result boundary/i);
   assert.match(leadPrompt, /if information can wait.*do not send it early/i);
   assert.match(leadPrompt, /automatic result handoff/i);
   assert.doesNotMatch(leadPrompt, new RegExp(marker));
@@ -8602,16 +7749,10 @@ test("manager-recovery starts work by task and resumes with fresh instructions",
   const prompt = managerRecoveryFreshPrompt(branch);
   assert.match(prompt, /delegate_work exactly once to start new project work/);
   assert.match(prompt, /`task` argument/);
-  assert.match(
-    prompt,
-    /`branch` argument to exactly herdsman\/smoke-manager-recovery-exact/,
-  );
+  assert.match(prompt, /`branch` argument to exactly herdsman\/smoke-manager-recovery-exact/);
   assert.match(prompt, /Omit `base` and `files`/);
   assert.doesNotMatch(prompt, /`assignment`/);
-  assert.match(
-    prompt,
-    /after delegate_work returns, end this turn immediately/,
-  );
+  assert.match(prompt, /after delegate_work returns, end this turn immediately/);
   assert.match(prompt, /Wait until the exact MANAGER_RECOVERY_READY message/);
   assert.doesNotMatch(prompt, new RegExp(marker));
   assert.doesNotMatch(prompt, /context marker|remember the exact/i);
@@ -8619,9 +7760,7 @@ test("manager-recovery starts work by task and resumes with fresh instructions",
   assert.doesNotMatch(prompt, /MANAGER_RECOVERY_FINISH/);
   const resume = managerRecoveryResumePrompt(branch);
   assert.ok(
-    resume.includes(
-      JSON.stringify({ branch, message: managerRecoveryResumeInstruction() }),
-    ),
+    resume.includes(JSON.stringify({ branch, message: managerRecoveryResumeInstruction() })),
   );
   assert.match(resume, /PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED/);
   assert.doesNotMatch(resume, /supervisor_result|supervisor_ask/);
@@ -8641,9 +7780,7 @@ test("manager-recovery stops and resumes by branch", () => {
   const resume = managerRecoveryResumeOnlyPrompt(branch);
   assert.match(resume, /resume_work exactly once/);
   assert.ok(
-    resume.includes(
-      JSON.stringify({ branch, message: managerRecoveryResumeInstruction() }),
-    ),
+    resume.includes(JSON.stringify({ branch, message: managerRecoveryResumeInstruction() })),
   );
   assert.match(resume, /exact full branch string/);
   assert.match(resume, /Copy that branch string verbatim/);
@@ -8655,9 +7792,7 @@ test("manager-recovery verifies retired assignments cannot be resumed", () => {
   const branch = "herdsman/smoke-manager-recovery-retired";
   const prompt = managerRecoveryRetiredResumePrompt(branch);
   assert.ok(
-    prompt.includes(
-      JSON.stringify({ branch, message: managerRecoveryResumeInstruction() }),
-    ),
+    prompt.includes(JSON.stringify({ branch, message: managerRecoveryResumeInstruction() })),
   );
   assert.match(prompt, /resume_work exactly once/);
   assert.match(prompt, /Do not delegate new work/);
@@ -8677,8 +7812,7 @@ test("manager-recovery seeds continuity only in the Lead conversation, then reca
   ];
 
   assert.match(leadPrompt, new RegExp(marker));
-  for (const prompt of managerPrompts)
-    assert.doesNotMatch(prompt, new RegExp(marker));
+  for (const prompt of managerPrompts) assert.doesNotMatch(prompt, new RegExp(marker));
 
   const recallPrompt = managerRecoveryPostRecoveryPrompt();
   assert.doesNotMatch(recallPrompt, new RegExp(marker));
@@ -8715,21 +7849,11 @@ test("manager-recovery waits for the exact automatic project message turn to set
     .join("\n");
 
   assert.equal(
-    managerProjectMessageSettled(
-      contents,
-      "branch-a",
-      "lead-session",
-      "CONTEXT_MARKER",
-    ),
+    managerProjectMessageSettled(contents, "branch-a", "lead-session", "CONTEXT_MARKER"),
     true,
   );
   assert.equal(
-    managerProjectMessageSettled(
-      contents,
-      "branch-b",
-      "lead-session",
-      "CONTEXT_MARKER",
-    ),
+    managerProjectMessageSettled(contents, "branch-b", "lead-session", "CONTEXT_MARKER"),
     false,
   );
   assert.equal(
@@ -8777,10 +7901,7 @@ test("manager-recovery detects review assistant response completion after messag
     contents: messages.map((entry) => JSON.stringify(entry)).join("\n"),
   });
 
-  assert.equal(
-    assistantResponseCompletedForSession(session(entries), prompt),
-    false,
-  );
+  assert.equal(assistantResponseCompletedForSession(session(entries), prompt), false);
   assert.equal(
     assistantResponseCompletedForSession(
       session([
@@ -8854,10 +7975,7 @@ test("manager-recovery diagnostics capture the resume argument and result", () =
       },
     },
   ]);
-  assert.deepEqual(
-    managerRecoveryResumeDiagnostics(contents, "different prompt"),
-    [],
-  );
+  assert.deepEqual(managerRecoveryResumeDiagnostics(contents, "different prompt"), []);
 });
 
 test("manager-recovery post-recovery prompt recalls the marker from prior context", () => {
@@ -8880,9 +7998,7 @@ test("smoke parses successful stop_lead results only", () => {
   const contents = [
     {
       toolName: "stop_lead",
-      content: [
-        { type: "text", text: "Lead stopped; project work preserved." },
-      ],
+      content: [{ type: "text", text: "Lead stopped; project work preserved." }],
       details: result,
     },
     { toolName: "resume_work", details: resumed },
@@ -8897,9 +8013,7 @@ test("smoke parses successful stop_lead results only", () => {
     )
     .join("\n");
   assert.deepEqual(staffActionResults(contents, "stop_lead", "stop"), [result]);
-  assert.deepEqual(staffActionResults(contents, "resume_work", "resume"), [
-    resumed,
-  ]);
+  assert.deepEqual(staffActionResults(contents, "resume_work", "resume"), [resumed]);
 });
 
 test("manager-recovery selects the resume result descended from its exact prompt", () => {
@@ -8980,20 +8094,15 @@ test("manager-recovery selects the resume result descended from its exact prompt
   const contents = entries.map((entry) => JSON.stringify(entry)).join("\n");
 
   assert.equal(staffActionResults(contents, "resume_work", "resume").length, 2);
-  assert.deepEqual(
-    staffActionResults(contents, "resume_work", "resume", recoveryPrompt),
-    [{ ok: true, action: "resume", session: "lead" }],
-  );
+  assert.deepEqual(staffActionResults(contents, "resume_work", "resume", recoveryPrompt), [
+    { ok: true, action: "resume", session: "lead" },
+  ]);
   const recoveryResult = assistantResultForSession(
     { contents },
     recoveryPrompt,
     "PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED",
   );
-  assert.ok(
-    recoveryResult &&
-      typeof recoveryResult === "object" &&
-      "id" in recoveryResult,
-  );
+  assert.ok(recoveryResult && typeof recoveryResult === "object" && "id" in recoveryResult);
   assert.equal(recoveryResult.id, "recovery-answer");
 });
 
@@ -9013,8 +8122,7 @@ test("delegate project results retain only valid successful delegation payloads 
     },
     {
       toolName: "delegate_work",
-      content:
-        '{"ok":true,"action":"delegate","branch":"feat/fresh","session":"fresh"}',
+      content: '{"ok":true,"action":"delegate","branch":"feat/fresh","session":"fresh"}',
     },
     {
       toolName: "delegate_work",
@@ -9066,9 +8174,7 @@ test("failed project delegation is correlated, sanitized, and preserves topology
       toolName: "delegate_work",
       toolCallId: "call-1",
       isError: true,
-      content: [
-        { type: "text", text: "Project assignment lock is in progress" },
-      ],
+      content: [{ type: "text", text: "Project assignment lock is in progress" }],
       ...fields,
     },
   });
@@ -9086,18 +8192,11 @@ test("failed project delegation is correlated, sanitized, and preserves topology
       );
     },
   );
+  assert.doesNotThrow(() => assertNoFailedProjectDelegation(failed, "smoke/other"));
   assert.doesNotThrow(() =>
-    assertNoFailedProjectDelegation(failed, "smoke/other"),
+    assertNoFailedProjectDelegation(transcript(call, result({ toolCallId: "other-call" })), branch),
   );
-  assert.doesNotThrow(() =>
-    assertNoFailedProjectDelegation(
-      transcript(call, result({ toolCallId: "other-call" })),
-      branch,
-    ),
-  );
-  assert.doesNotThrow(() =>
-    assertNoFailedProjectDelegation(transcript(call), branch),
-  );
+  assert.doesNotThrow(() => assertNoFailedProjectDelegation(transcript(call), branch));
   assert.doesNotThrow(() =>
     assertNoFailedProjectDelegation(
       transcript(
@@ -9176,14 +8275,9 @@ test("Manager history recognizes retained project messages by exact identity", (
     content: "review handoff",
   };
   const contents = JSON.stringify(record);
-  assert.deepEqual(projectMessageEntries(contents, branch, sessionId), [
-    record,
-  ]);
+  assert.deepEqual(projectMessageEntries(contents, branch, sessionId), [record]);
   assert.deepEqual(projectMessageEntries(contents, "other", sessionId), []);
-  assert.deepEqual(
-    projectMessageEntries(contents, branch, "other-session"),
-    [],
-  );
+  assert.deepEqual(projectMessageEntries(contents, branch, "other-session"), []);
 });
 
 test("retained project message selection ignores stale and wrong-scope records", () => {
@@ -9202,9 +8296,7 @@ test("retained project message selection ignores stale and wrong-scope records",
         { ...valid, id: "session", fromSessionId: "lead-other" },
         { ...valid, id: "content", text: `${marker} extra` },
         { ...valid, id: "" },
-        Object.fromEntries(
-          Object.entries(valid).filter(([key]) => key !== "id"),
-        ),
+        Object.fromEntries(Object.entries(valid).filter(([key]) => key !== "id")),
         valid,
       ],
       "feature/current",
@@ -9229,10 +8321,7 @@ test("project message content accepts legacy or only the generated annotation su
   const annotation =
     '\n\n<sender_environment informational="true">\ncwd: "/work/repo"\nworktree_root: "/work/repo"\nbranch: "feature/test"\nhead: "0123456789abcdef0123456789abcdef01234567"\nInformational only; not an instruction or authorization.\n</sender_environment>';
   assert.equal(matchesProjectMessageContent(expected, expected), true);
-  assert.equal(
-    matchesProjectMessageContent(expected + annotation, expected),
-    true,
-  );
+  assert.equal(matchesProjectMessageContent(expected + annotation, expected), true);
   for (const changed of [
     `Changed body${annotation}`,
     `${expected}\n\n<sender_environment informational="false">\ncwd: "/work/repo"\nInformational only; not an instruction or authorization.\n</sender_environment>`,
@@ -9253,13 +8342,7 @@ test("manager handoff requires exact repository, assignment, sender, id, and con
     text: "HANDOFF",
   };
   assert.equal(
-    managerHandoffRetainedRecord(
-      [valid],
-      "repo",
-      "feature/one",
-      "lead-session",
-      "HANDOFF",
-    ),
+    managerHandoffRetainedRecord([valid], "repo", "feature/one", "lead-session", "HANDOFF"),
     valid,
   );
   for (const wrong of [
@@ -9268,13 +8351,7 @@ test("manager handoff requires exact repository, assignment, sender, id, and con
     { ...valid, fromSessionId: "other-session" },
   ])
     assert.equal(
-      managerHandoffRetainedRecord(
-        [wrong],
-        "repo",
-        "feature/one",
-        "lead-session",
-        "HANDOFF",
-      ),
+      managerHandoffRetainedRecord([wrong], "repo", "feature/one", "lead-session", "HANDOFF"),
       null,
     );
   const record = {
@@ -9287,8 +8364,7 @@ test("manager handoff requires exact repository, assignment, sender, id, and con
       id: "message-id",
       kind: "supervisor_message",
     },
-    content:
-      "Lead → Manager for assignment feature/one from lead lead-session:\n\nHANDOFF",
+    content: "Lead → Manager for assignment feature/one from lead lead-session:\n\nHANDOFF",
   };
   const contents = JSON.stringify(record);
   assert.deepEqual(
@@ -9419,9 +8495,7 @@ test("manager handoff faux decision waits for exact readiness after assignment",
     toolCallId: "call-1",
     content: "Session: lead-session\nWorkspace: workspace",
   };
-  const delegation = firstToolCall(
-    decide("manager-handoff", { messages: [prompt] }),
-  );
+  const delegation = firstToolCall(decide("manager-handoff", { messages: [prompt] }));
   assert.equal(delegation.name, "delegate_work");
   assert.deepEqual(delegation.arguments, call.content[0]!.arguments);
   const assigned = [prompt, call, result];
@@ -9432,8 +8506,7 @@ test("manager handoff faux decision waits for exact readiness after assignment",
       "resume_work",
       {
         branch: "smoke/branch",
-        message:
-          "MANAGER_HANDOFF_RESUME_INSTRUCTION: End the turn without calling tools.",
+        message: "MANAGER_HANDOFF_RESUME_INSTRUCTION: End the turn without calling tools.",
       },
     ],
   ] as const) {
@@ -9457,9 +8530,7 @@ test("manager handoff faux decision waits for exact readiness after assignment",
       "Lead → Manager for assignment smoke/branch from lead lead-session:\n\nMANAGER_HANDOFF_READY",
   };
   assert.match(
-    firstTextContent(
-      decide("manager-handoff", { messages: [...assigned, ready] }),
-    ).text,
+    firstTextContent(decide("manager-handoff", { messages: [...assigned, ready] })).text,
     /MANAGER_HANDOFF_READY_RECEIVED/,
   );
   const annotatedReady = {
@@ -9527,12 +8598,7 @@ test("Manager cleanup selects the recreated workspace only for exact branch and 
   );
   assert.throws(
     () =>
-      managerCleanupTarget(
-        [worktree],
-        worktree.branch,
-        "/other/path",
-        worktree.open_workspace_id,
-      ),
+      managerCleanupTarget([worktree], worktree.branch, "/other/path", worktree.open_workspace_id),
     /path does not match/,
   );
   assert.throws(
@@ -9546,23 +8612,11 @@ test("Manager cleanup selects the recreated workspace only for exact branch and 
     /no workspace identity/,
   );
   assert.throws(
-    () =>
-      managerCleanupTarget(
-        [],
-        worktree.branch,
-        worktree.path,
-        worktree.open_workspace_id,
-      ),
+    () => managerCleanupTarget([], worktree.branch, worktree.path, worktree.open_workspace_id),
     /one worktree/,
   );
   assert.equal(
-    managerCleanupTarget(
-      [],
-      worktree.branch,
-      worktree.path,
-      worktree.open_workspace_id,
-      true,
-    ),
+    managerCleanupTarget([], worktree.branch, worktree.path, worktree.open_workspace_id, true),
     null,
   );
   assert.throws(
@@ -9587,13 +8641,7 @@ test("Manager cleanup selects the recreated workspace only for exact branch and 
     /workspace identity does not match captured identity/,
   );
   assert.throws(
-    () =>
-      managerCleanupTarget(
-        [worktree],
-        worktree.branch,
-        worktree.path,
-        undefined,
-      ),
+    () => managerCleanupTarget([worktree], worktree.branch, worktree.path, undefined),
     /captured workspace identity is unavailable/,
   );
 });
@@ -9615,11 +8663,7 @@ test("collectDiagnostics reads the host pane through the parent Herdr environmen
       { hostPaneId: "host-pane" },
       null,
       {
-        execute: async (
-          file: string,
-          args: string[],
-          options?: Record<string, unknown>,
-        ) => {
+        execute: async (file: string, args: string[], options?: Record<string, unknown>) => {
           calls.push([file, args, options]);
           return { stdout: "host output" };
         },
@@ -9641,15 +8685,7 @@ test("collectDiagnostics reads the host pane through the parent Herdr environmen
     calls.find(([, args]) => args.includes("host-pane")),
     [
       "herdr",
-      [
-        "pane",
-        "read",
-        "host-pane",
-        "--source",
-        "recent-unwrapped",
-        "--lines",
-        "80",
-      ],
+      ["pane", "read", "host-pane", "--source", "recent-unwrapped", "--lines", "80"],
       { env: parentEnv, timeout: 5_000 },
     ],
   );
@@ -9738,10 +8774,7 @@ test("collectDiagnostics projects supervisor-agent evidence without private sess
       matchingMailboxes: 0,
     },
   });
-  assert.doesNotMatch(
-    JSON.stringify(projection),
-    /PRIVATE_PROMPT|PRIVATE_TOKEN|PRIVATE_PATH/u,
-  );
+  assert.doesNotMatch(JSON.stringify(projection), /PRIVATE_PROMPT|PRIVATE_TOKEN|PRIVATE_PATH/u);
   const evidence = sanitizedFailureEvidence(
     { scenario: "supervisor-agent", simulated: true, stage: "verification" },
     { error: { code: "SCENARIO_FAIL" } },
@@ -9787,9 +8820,7 @@ test("terminal-failure assignment polling captures topology before assignment su
     },
   );
   assert.equal(result.done, false);
-  assert.deepEqual(calls, [
-    [ctx, ["worktree", "list", "--workspace", "parent-workspace"]],
-  ]);
+  assert.deepEqual(calls, [[ctx, ["worktree", "list", "--workspace", "parent-workspace"]]]);
   // No successful assignment is required to retain identity exposed by topology.
   assert.equal(ctx.owned.managerWorktreePath, worktree.path);
   assert.equal(ctx.owned.managerWorkspaceId, worktree.open_workspace_id);
@@ -9814,12 +8845,7 @@ test("terminal-failure assignment polling captures topology before assignment su
     /workspace identity does not match captured identity/,
   );
   assert.throws(
-    () =>
-      captureTerminalFailureWorktree(
-        ctx,
-        [worktree, worktree],
-        worktree.branch,
-      ),
+    () => captureTerminalFailureWorktree(ctx, [worktree, worktree], worktree.branch),
     /one worktree/,
   );
 });
@@ -9867,13 +8893,7 @@ test("terminal-failure retains the assigned Lead PID while its pane is live", as
           foreground_processes: [
             {
               pid: 91,
-              argv: [
-                "node",
-                "--extension",
-                "/candidate.js",
-                "--extension",
-                "/herdr.js",
-              ],
+              argv: ["node", "--extension", "/candidate.js", "--extension", "/herdr.js"],
             },
           ],
         },
@@ -9925,12 +8945,7 @@ test("terminal-failure assignment polling preserves the first workspace identity
   assert.equal(ctx.owned.managerWorktreePath, worktree.path);
   assert.equal(ctx.owned.managerWorkspaceId, "workspace-2");
   assert.throws(
-    () =>
-      captureTerminalFailureAssignment(
-        ctx,
-        worktree.path,
-        "replacement-workspace",
-      ),
+    () => captureTerminalFailureAssignment(ctx, worktree.path, "replacement-workspace"),
     /conflicts with captured identity/,
   );
   assert.equal(ctx.owned.managerWorktreePath, worktree.path);
@@ -9962,12 +8977,7 @@ test("Manager smoke creates a fresh Git primary without pre-opening a worktree",
       calls.map((call) => call[1][0]),
       ["init", "-c"],
     );
-    assert.deepEqual(calls[1][1].slice(-4), [
-      "commit",
-      "--allow-empty",
-      "-m",
-      "Smoke root",
-    ]);
+    assert.deepEqual(calls[1][1].slice(-4), ["commit", "--allow-empty", "-m", "Smoke root"]);
     assertManagerFreshPrimary(
       "root",
       checkout,
@@ -10032,11 +9042,7 @@ test("smoke branch cleanup treats only a proven absent local branch as already c
   assert.equal(
     await deleteBranchIfPresent(
       "herdsman/smoke-exact",
-      async (
-        file: string,
-        args: string[],
-        options?: Record<string, unknown>,
-      ) => {
+      async (file: string, args: string[], options?: Record<string, unknown>) => {
         calls.push([file, args, options]);
         throw absent;
       },
@@ -10055,11 +9061,7 @@ test("smoke branch cleanup treats only a proven absent local branch as already c
   assert.equal(
     await deleteBranchIfPresent(
       "herdsman/smoke-exact",
-      async (
-        file: string,
-        args: string[],
-        options?: Record<string, unknown>,
-      ) => {
+      async (file: string, args: string[], options?: Record<string, unknown>) => {
         calls.push([file, args, options]);
         return { stdout: "", stderr: "", pid: 1 };
       },
@@ -10110,36 +9112,18 @@ test("Manager recovery READY requires a successful message_manager tool result",
       },
     });
   assert.equal(hasSuccessfulSupervisorMessage(promptOnly, ready), false);
-  assert.equal(
-    hasSuccessfulSupervisorMessage(`${call}\n${result(true)}`, ready),
-    false,
-  );
+  assert.equal(hasSuccessfulSupervisorMessage(`${call}\n${result(true)}`, ready), false);
   assert.equal(hasSuccessfulSupervisorMessage(call, ready), false);
-  assert.equal(
-    hasSuccessfulSupervisorMessage(`${call}\n${result()}`, ready),
-    true,
-  );
+  assert.equal(hasSuccessfulSupervisorMessage(`${call}\n${result()}`, ready), true);
   assert.equal(leadReadyCompleted(`${call}\n${result()}`, ready), false);
   const stopped = JSON.stringify({
     type: "message",
     message: { role: "assistant", stopReason: "stop", content: "Waiting." },
   });
-  assert.equal(
-    leadReadyCompleted(`${call}\n${stopped}\n${result()}`, ready),
-    false,
-  );
-  assert.equal(
-    leadReadyCompleted(`${result()}\n${call}\n${stopped}`, ready),
-    false,
-  );
-  assert.equal(
-    leadReadyCompleted(`${call}\n${result(true)}\n${stopped}`, ready),
-    false,
-  );
-  assert.equal(
-    leadReadyCompleted(`${call}\n${result()}\n${stopped}`, ready),
-    true,
-  );
+  assert.equal(leadReadyCompleted(`${call}\n${stopped}\n${result()}`, ready), false);
+  assert.equal(leadReadyCompleted(`${result()}\n${call}\n${stopped}`, ready), false);
+  assert.equal(leadReadyCompleted(`${call}\n${result(true)}\n${stopped}`, ready), false);
+  assert.equal(leadReadyCompleted(`${call}\n${result()}\n${stopped}`, ready), true);
 });
 
 test("Manager recovery READY never matches missing session identities", () => {
@@ -10203,29 +9187,21 @@ test("Manager READY answer follows delivered message even on a separate followUp
     },
   ];
   const contents = (items: Record<string, unknown>[]) =>
-    items
-      .map((entry: Record<string, unknown>) => JSON.stringify(entry))
-      .join("\n");
-  assert.deepEqual(
-    managerReadyAnswer(contents(entries.slice(0, 3)), branch, lead),
-    {
-      receipt: false,
-      answer: entries[2],
-      answerAfterReceipt: null,
-      prematureReady: true,
-      prematureFinish: false,
-    },
-  );
-  assert.deepEqual(
-    managerReadyAnswer(contents(entries.slice(0, 5)), branch, lead),
-    {
-      receipt: true,
-      answer: entries[2],
-      answerAfterReceipt: null,
-      prematureReady: true,
-      prematureFinish: false,
-    },
-  );
+    items.map((entry: Record<string, unknown>) => JSON.stringify(entry)).join("\n");
+  assert.deepEqual(managerReadyAnswer(contents(entries.slice(0, 3)), branch, lead), {
+    receipt: false,
+    answer: entries[2],
+    answerAfterReceipt: null,
+    prematureReady: true,
+    prematureFinish: false,
+  });
+  assert.deepEqual(managerReadyAnswer(contents(entries.slice(0, 5)), branch, lead), {
+    receipt: true,
+    answer: entries[2],
+    answerAfterReceipt: null,
+    prematureReady: true,
+    prematureFinish: false,
+  });
   const annotatedEntries = entries.map((entry) =>
     entry.id === "receipt"
       ? {
@@ -10234,31 +9210,17 @@ test("Manager READY answer follows delivered message even on a separate followUp
         }
       : entry,
   );
-  assert.equal(
-    managerReadyAnswer(contents(annotatedEntries), branch, lead).receipt,
-    true,
-  );
+  assert.equal(managerReadyAnswer(contents(annotatedEntries), branch, lead).receipt, true);
   const noPrematureAnswer = entries.filter((entry) => entry.id !== "premature");
-  assert.deepEqual(
-    managerReadyAnswer(contents(noPrematureAnswer.slice(0, 3)), branch, lead),
-    {
-      receipt: true,
-      answer: null,
-      answerAfterReceipt: null,
-      prematureReady: false,
-      prematureFinish: false,
-    },
-  );
-  const completeAnswer = managerReadyAnswer(
-    contents(noPrematureAnswer),
-    branch,
-    lead,
-  ).answer;
-  assert.ok(
-    completeAnswer &&
-      typeof completeAnswer === "object" &&
-      "id" in completeAnswer,
-  );
+  assert.deepEqual(managerReadyAnswer(contents(noPrematureAnswer.slice(0, 3)), branch, lead), {
+    receipt: true,
+    answer: null,
+    answerAfterReceipt: null,
+    prematureReady: false,
+    prematureFinish: false,
+  });
+  const completeAnswer = managerReadyAnswer(contents(noPrematureAnswer), branch, lead).answer;
+  assert.ok(completeAnswer && typeof completeAnswer === "object" && "id" in completeAnswer);
   assert.equal(completeAnswer.id, "answer");
   const missingReceipt = managerReadyAnswer(
     contents(noPrematureAnswer.filter((entry) => entry.id !== "receipt")),
@@ -10272,13 +9234,9 @@ test("Manager READY answer follows delivered message even on a separate followUp
   );
   assert.equal(missingReceipt.answer.id, "answer");
   assert.equal(missingReceipt.answerAfterReceipt, null);
+  assert.equal(managerReadyAnswer(contents(entries), branch, lead).prematureReady, true);
   assert.equal(
-    managerReadyAnswer(contents(entries), branch, lead).prematureReady,
-    true,
-  );
-  assert.equal(
-    managerReadyAnswer(contents(entries), branch, "wrong-lead")
-      .answerAfterReceipt,
+    managerReadyAnswer(contents(entries), branch, "wrong-lead").answerAfterReceipt,
     null,
   );
   const prematureFinish = [
@@ -10300,10 +9258,7 @@ test("Manager READY answer follows delivered message even on a separate followUp
     },
     ...noPrematureAnswer.slice(4),
   ];
-  assert.equal(
-    managerReadyAnswer(contents(prematureFinish), branch, lead).prematureFinish,
-    true,
-  );
+  assert.equal(managerReadyAnswer(contents(prematureFinish), branch, lead).prematureFinish, true);
 });
 
 test("Manager READY timeout diagnostics recognize exact project-message receipts", () => {
@@ -10337,10 +9292,7 @@ test("Manager READY timeout diagnostics recognize exact project-message receipts
     [
       {
         ...annotatedReceipt,
-        content: annotatedReceipt.content.replace(
-          "MANAGER_RECOVERY_READY",
-          "CHANGED",
-        ),
+        content: annotatedReceipt.content.replace("MANAGER_RECOVERY_READY", "CHANGED"),
       },
       false,
     ],
@@ -10395,10 +9347,7 @@ test("Manager READY receipts require exact branch and non-empty expected Lead ID
       .join("\n");
     const answer = managerReadyAnswer(contents, branch, leadSessionId);
     assert.equal(answer.receipt, false);
-    assert.ok(
-      answer.answer,
-      "marker detection must not depend on receipt identity",
-    );
+    assert.ok(answer.answer, "marker detection must not depend on receipt identity");
     assert.equal(answer.answerAfterReceipt, null);
     assert.equal(
       managerReadyEntryEvidence(contents, branch, leadSessionId).some(
@@ -10415,19 +9364,12 @@ test("ID-only Lead identity resolves only exact bounded isolated session", async
     const contents = JSON.stringify({ type: "session", id: "lead-id" });
     await writeFile(join(piSessions, "opaque.jsonl"), contents);
     assert.equal(
-      (await exactIsolatedSession({ paths: { piSessions } }, "lead-id"))
-        ?.contents,
+      (await exactIsolatedSession({ paths: { piSessions } }, "lead-id"))?.contents,
       contents,
     );
-    assert.equal(
-      await exactIsolatedSession({ paths: { piSessions } }, "other"),
-      undefined,
-    );
+    assert.equal(await exactIsolatedSession({ paths: { piSessions } }, "other"), undefined);
     await writeFile(join(piSessions, "duplicate.jsonl"), contents);
-    await assert.rejects(
-      exactIsolatedSession({ paths: { piSessions } }, "lead-id"),
-      /ambiguous/,
-    );
+    await assert.rejects(exactIsolatedSession({ paths: { piSessions } }, "lead-id"), /ambiguous/);
   } finally {
     await rm(piSessions, { recursive: true, force: true });
   }
@@ -10466,58 +9408,37 @@ test("managed Pi session isolation accepts a temp parent alias but rejects symli
   }
 
   const outsideSession = join(outside, "session.jsonl");
-  await writeFile(
-    outsideSession,
-    JSON.stringify({ type: "session", id: "foreign" }),
-  );
+  await writeFile(outsideSession, JSON.stringify({ type: "session", id: "foreign" }));
   await assert.rejects(sessionAt(outsideSession), /path is outside/);
   const escape = join(piSessions, "escape");
   await symlink(outside, escape, "junction");
   await assert.rejects(sessionAt(escape), /not a bounded regular/);
-  await assert.rejects(
-    sessionAt(join(escape, "session.jsonl")),
-    /resolves outside isolation/,
-  );
+  await assert.rejects(sessionAt(join(escape, "session.jsonl")), /resolves outside isolation/);
   await rm(escape, { recursive: true });
   await rm(sdkSessions, { recursive: true });
   await symlink(outside, sdkSessions, "junction");
-  await assert.rejects(
-    sessionAt(join(sdkSessions, "session.jsonl")),
-    /resolves outside isolation/,
-  );
-  await assert.rejects(
-    exactIsolatedSession(ctx, "foreign"),
-    /resolves outside isolation/,
-  );
+  await assert.rejects(sessionAt(join(sdkSessions, "session.jsonl")), /resolves outside isolation/);
+  await assert.rejects(exactIsolatedSession(ctx, "foreign"), /resolves outside isolation/);
 });
 
 test("managed Pi session isolation rejects a session root redirected after inspection", async (t) => {
   for (const replacement of ["junction", "directory"] as const) {
     await t.test(replacement, async (t) => {
-      const root = await realpath(
-        await mkdtemp(join(tmpdir(), "pi-herdsman-session-swap-")),
-      );
+      const root = await realpath(await mkdtemp(join(tmpdir(), "pi-herdsman-session-swap-")));
       t.after(() => rm(root, { recursive: true, force: true }));
       const piSessions = join(root, "sessions");
       const outside = join(root, "outside");
       const name = "session.jsonl";
       await mkdir(piSessions);
       await mkdir(outside);
-      await writeFile(
-        join(piSessions, name),
-        JSON.stringify({ type: "session", id: "owned" }),
-      );
-      await writeFile(
-        join(outside, name),
-        JSON.stringify({ type: "session", id: "foreign" }),
-      );
+      await writeFile(join(piSessions, name), JSON.stringify({ type: "session", id: "owned" }));
+      await writeFile(join(outside, name), JSON.stringify({ type: "session", id: "foreign" }));
       let swapped = false;
       const resolvePath = realpath;
       t.mock.method(fs, "realpath", async (path: string) => {
         if (path === piSessions && !swapped) {
           await rename(piSessions, join(root, "original"));
-          if (replacement === "junction")
-            await symlink(outside, piSessions, "junction");
+          if (replacement === "junction") await symlink(outside, piSessions, "junction");
           else await rename(outside, piSessions);
           swapped = true;
         }
@@ -10743,15 +9664,7 @@ test("nested pane text reads bounded Herdr stdout without JSON parsing", async (
     "visible",
     async (file: string, args: string[], options?: Record<string, unknown>) => {
       assert.equal(file, "herdr");
-      assert.deepEqual(args, [
-        "pane",
-        "read",
-        "w1:p2",
-        "--source",
-        "visible",
-        "--lines",
-        "120",
-      ]);
+      assert.deepEqual(args, ["pane", "read", "w1:p2", "--source", "visible", "--lines", "120"]);
       assert.ok(options && options.env && typeof options.env === "object");
       assert.ok("HERDR_SESSION" in options.env);
       assert.equal(options.env.HERDR_SESSION, ctx.sessionName);
@@ -10856,10 +9769,7 @@ test("Chief tree snapshots accept identical duplicate events but reject conflict
   assert.ok(treeTools);
   assert.deepEqual([...treeTools], ["a"]);
   assert.throws(
-    () =>
-      parseToolSnapshots(
-        '{"label":"tree","tools":["a"]}\n{"label":"tree","tools":["b"]}',
-      ),
+    () => parseToolSnapshots('{"label":"tree","tools":["a"]}\n{"label":"tree","tools":["b"]}'),
     /conflicting tree/,
   );
 });
@@ -10875,12 +9785,7 @@ test("Chief tree branch wait requires an event added after the baseline", () => 
   const delayedCount = countChiefTreeEvents(baselineContents, treeEventsBefore);
   assert.equal(delayedCount, 0);
   assert.deepEqual(
-    chiefTreeBranchTransition(
-      "branch opening",
-      snapshots,
-      treeEventsBefore,
-      delayedCount,
-    ),
+    chiefTreeBranchTransition("branch opening", snapshots, treeEventsBefore, delayedCount),
     {
       done: false,
       value: undefined,
@@ -10888,12 +9793,7 @@ test("Chief tree branch wait requires an event added after the baseline", () => 
     },
   );
   assert.deepEqual(
-    chiefTreeBranchTransition(
-      "Summarize branch?",
-      snapshots,
-      treeEventsBefore,
-      delayedCount,
-    ),
+    chiefTreeBranchTransition("Summarize branch?", snapshots, treeEventsBefore, delayedCount),
     {
       done: true,
       value: { state: "summary-dialog", treeEventsBefore, treeEvents: 0 },
@@ -10904,12 +9804,7 @@ test("Chief tree branch wait requires an event added after the baseline", () => 
   const freshCount = countChiefTreeEvents(afterSelection, treeEventsBefore);
   assert.equal(freshCount, 1);
   assert.deepEqual(
-    chiefTreeBranchTransition(
-      "branch opened",
-      snapshots,
-      treeEventsBefore,
-      freshCount,
-    ),
+    chiefTreeBranchTransition("branch opened", snapshots, treeEventsBefore, freshCount),
     {
       done: true,
       value: { state: "tree-loaded", treeEvents: 1 },
@@ -11054,9 +9949,7 @@ test("core counts distinct non-root pane/PID processes with both extension paths
     },
     "unrelated-pane": {
       process_info: {
-        foreground_processes: [
-          { pid: 31, cmdline: "pi --extension /candidate/dist/index.js" },
-        ],
+        foreground_processes: [{ pid: 31, cmdline: "pi --extension /candidate/dist/index.js" }],
       },
     },
   };
@@ -11077,9 +9970,7 @@ test("core counts distinct non-root pane/PID processes with both extension paths
   assert.equal(result.verified.length, 2);
   assert.equal(result.verified[0].parentPid, 7);
   assert.ok(
-    result.verified.every(
-      (record) => !("identity" in record) && !("definition" in record),
-    ),
+    result.verified.every((record) => !("identity" in record) && !("definition" in record)),
   );
 });
 
@@ -11129,9 +10020,7 @@ test("process evidence requires both exact extension paths and excludes root pan
       if (paneId === "missing-pane") throw new Error("pane disappeared");
       return {
         process_info: {
-          foreground_processes: [
-            { pid: 42, cmdline: "pi --extension /candidate/dist/index.js" },
-          ],
+          foreground_processes: [{ pid: 42, cmdline: "pi --extension /candidate/dist/index.js" }],
         },
       };
     },
@@ -11140,11 +10029,7 @@ test("process evidence requires both exact extension paths and excludes root pan
   );
   assert.deepEqual(result.verified, []);
   assert.deepEqual(
-    result.records.map(({ paneId, processMatch, error }) => [
-      paneId,
-      processMatch,
-      error,
-    ]),
+    result.records.map(({ paneId, processMatch, error }) => [paneId, processMatch, error]),
     [
       ["missing-extension", false, null],
       ["missing-pane", false, "pane disappeared"],
@@ -11184,10 +10069,7 @@ test("Linux Pi process-title evidence requires an exact title and valid PID", as
   );
 
   assert.deepEqual(
-    result.verified.map(({ pid, processMatchSource }) => [
-      pid,
-      processMatchSource,
-    ]),
+    result.verified.map(({ pid, processMatchSource }) => [pid, processMatchSource]),
     [[42, "process-title"]],
   );
 });
@@ -11197,11 +10079,7 @@ test("process-info protocol violations escape pane inspection immediately", asyn
     inspectPaneProcesses(
       ["child"],
       "root",
-      async () =>
-        parseHerdrOutput('{"result":{"process_info":{}}}', [
-          "pane",
-          "process-info",
-        ]),
+      async () => parseHerdrOutput('{"result":{"process_info":{}}}', ["pane", "process-info"]),
       "/candidate/dist/index.js",
       "/isolated/herdr-agent-state.ts",
     ),
@@ -11214,11 +10092,7 @@ test("best-effort process diagnostics retain protocol failures as evidence", asy
     await bestEffortProcessDiagnostics(
       ["child"],
       "root",
-      async () =>
-        parseHerdrOutput('{"result":{"process_info":{}}}', [
-          "pane",
-          "process-info",
-        ]),
+      async () => parseHerdrOutput('{"result":{"process_info":{}}}', ["pane", "process-info"]),
       "/candidate/dist/index.js",
       "/isolated/herdr-agent-state.ts",
     ),
@@ -11248,10 +10122,7 @@ test("passive retirement evidence matches exact identity and rejects duplicate o
   const before = transcript([previous]);
   const after = transcript([previous, notice]);
   assert.deepEqual(retirementNoticeEntries(after, ...identity), [notice]);
-  assert.deepEqual(
-    assertPassiveRetirementEvidence(before, after, ...identity),
-    notice,
-  );
+  assert.deepEqual(assertPassiveRetirementEvidence(before, after, ...identity), notice);
   for (const details of [
     { ...notice.details, repoKey: "elsewhere" },
     { ...notice.details, branch: "other" },
@@ -11259,9 +10130,7 @@ test("passive retirement evidence matches exact identity and rejects duplicate o
   ]) {
     const wrong = transcript([previous, { ...notice, details }]);
     assert.deepEqual(retirementNoticeEntries(wrong, ...identity), []);
-    assert.throws(() =>
-      assertPassiveRetirementEvidence(before, wrong, ...identity),
-    );
+    assert.throws(() => assertPassiveRetirementEvidence(before, wrong, ...identity));
   }
   for (const entries of [
     [previous, notice, notice],
@@ -11273,19 +10142,13 @@ test("passive retirement evidence matches exact identity and rejects duplicate o
       { type: "message", message: { role } },
     ]),
   ])
-    assert.throws(() =>
-      assertPassiveRetirementEvidence(before, transcript(entries), ...identity),
-    );
+    assert.throws(() => assertPassiveRetirementEvidence(before, transcript(entries), ...identity));
 });
 
 test("external removal variant is smoke-only and scoped to manager-recovery", () => {
+  assert.equal(parseSmokeArgs(["manager-recovery"]).managerExternalRemoval, false);
   assert.equal(
-    parseSmokeArgs(["manager-recovery"]).managerExternalRemoval,
-    false,
-  );
-  assert.equal(
-    parseSmokeArgs(["manager-recovery", "--manager-external-removal"])
-      .managerExternalRemoval,
+    parseSmokeArgs(["manager-recovery", "--manager-external-removal"]).managerExternalRemoval,
     true,
   );
   assert.throws(
@@ -11293,20 +10156,13 @@ test("external removal variant is smoke-only and scoped to manager-recovery", ()
     /only valid for manager-recovery/,
   );
   assert.throws(
-    () =>
-      parseSmokeArgs([
-        "manager-recovery",
-        "--simulated",
-        "--manager-external-removal",
-      ]),
+    () => parseSmokeArgs(["manager-recovery", "--simulated", "--manager-external-removal"]),
     /does not support --simulated/,
   );
 });
 
 test("Manager removal variants target only the exact owned checkout without force", async () => {
-  const root = await realpath(
-    await mkdtemp(join(tmpdir(), "smoke-removal-contract-")),
-  );
+  const root = await realpath(await mkdtemp(join(tmpdir(), "smoke-removal-contract-")));
   try {
     const primary = join(root, "project");
     const checkout = join(root, "checkout");
@@ -11340,20 +10196,14 @@ test("Manager removal variants target only the exact owned checkout without forc
         },
       };
       const mutations: unknown[] = [];
-      const execute = async (
-        file: string,
-        args: string[],
-        options: { cwd: string },
-      ) => {
+      const execute = async (file: string, args: string[], options: { cwd: string }) => {
         assert.equal(file, "git");
         if (args[0] === "worktree") {
           mutations.push({ file, args, options });
-          if (scenario === "remove failure")
-            throw new Error("Git refused removal");
+          if (scenario === "remove failure") throw new Error("Git refused removal");
           return { stdout: "" };
         }
-        if (args.includes("--show-toplevel"))
-          return { stdout: `${checkout}\n` };
+        if (args.includes("--show-toplevel")) return { stdout: `${checkout}\n` };
         if (args[0] === "branch")
           return {
             stdout: `${scenario === "wrong branch" ? "other" : branch}\n`,
@@ -11369,12 +10219,10 @@ test("Manager removal variants target only the exact owned checkout without forc
         {
           branch,
           path: checkout,
-          open_workspace_id:
-            scenario === "wrong topology" ? "unowned" : workspaceId,
+          open_workspace_id: scenario === "wrong topology" ? "unowned" : workspaceId,
         },
       ];
-      const remove = () =>
-        removeManagerRecoveryWorktree(ctx, topology, execute, control);
+      const remove = () => removeManagerRecoveryWorktree(ctx, topology, execute, control);
       if (scenario === "herdr" || scenario === "git") {
         await remove();
         assert.equal(mutations.length, 1);
@@ -11391,11 +10239,7 @@ test("Manager removal variants target only the exact owned checkout without forc
         assert.equal(ctx.owned.managerWorktreeRetirementRequested, true);
       } else {
         await assert.rejects(remove);
-        assert.equal(
-          mutations.length,
-          scenario === "remove failure" ? 1 : 0,
-          scenario,
-        );
+        assert.equal(mutations.length, scenario === "remove failure" ? 1 : 0, scenario);
         assert.equal(
           ctx.owned.managerWorktreeRetirementRequested,
           scenario === "remove failure",
@@ -11419,16 +10263,12 @@ const deepMessages = (task: string, withTool: boolean) => [
   { role: "user" as const, content: task, timestamp: 2 },
 ];
 const firstToolCall = (message: AssistantMessage): ToolCall => {
-  const call = message.content.find(
-    (part): part is ToolCall => part.type === "toolCall",
-  );
+  const call = message.content.find((part): part is ToolCall => part.type === "toolCall");
   assert.ok(call);
   return call;
 };
 const firstTextContent = (message: AssistantMessage): TextContent => {
-  const text = message.content.find(
-    (part): part is TextContent => part.type === "text",
-  );
+  const text = message.content.find((part): part is TextContent => part.type === "text");
   assert.ok(text);
   return text;
 };
@@ -11436,8 +10276,7 @@ const firstTextContent = (message: AssistantMessage): TextContent => {
 test("deep-chain faux requires delegation below the limit and a leaf at it", () => {
   const level2 = deepMessages("SMOKE_DEEP_LEVEL_2: go", true);
   assert.equal(
-    firstToolCall(decideSmokeFaux("deep-chain", { messages: level2 })).arguments
-      .label,
+    firstToolCall(decideSmokeFaux("deep-chain", { messages: level2 })).arguments.label,
     "smoke-deep-3",
   );
   assert.throws(
@@ -11553,18 +10392,13 @@ const deepSession = (
     : [{ type: "session", id }, ...extra],
 });
 
-const deepAsk = () =>
-  deepCall("await_owner", { question: "SMOKE_DEEP_QUESTION" });
+const deepAsk = () => deepCall("await_owner", { question: "SMOKE_DEEP_QUESTION" });
 const deepReply = () =>
   deepCall("reply_agent", {
     agent: "smoke-deep-4",
     message: "SMOKE_DEEP_ANSWER",
   });
-const deepGood = (
-  leafResult = "L4:SMOKE_DEEP_LEAF",
-  reply = true,
-  ask = true,
-) => [
+const deepGood = (leafResult = "L4:SMOKE_DEEP_LEAF", reply = true, ask = true) => [
   deepSession("s0", {
     label: "smoke-deep-1",
     result: "L1:L2:L3:L4:SMOKE_DEEP_LEAF",
@@ -11577,11 +10411,7 @@ const deepGood = (
     label: "smoke-deep-3",
     result: "L3:L4:SMOKE_DEEP_LEAF",
   }),
-  deepSession(
-    "s3",
-    { label: "smoke-deep-4", result: leafResult },
-    reply ? deepReply() : [],
-  ),
+  deepSession("s3", { label: "smoke-deep-4", result: leafResult }, reply ? deepReply() : []),
   deepSession("s4", undefined, ask ? deepAsk() : []),
 ];
 
@@ -11592,10 +10422,7 @@ test("deep-chain evidence needs one delegation per level, the escalation and the
     "smoke-deep-3",
     "smoke-deep-4",
   ]);
-  assert.throws(
-    () => assertDeepChainEvidence(deepGood().slice(0, 4)),
-    /expected 5 Pi sessions/,
-  );
+  assert.throws(() => assertDeepChainEvidence(deepGood().slice(0, 4)), /expected 5 Pi sessions/);
   assert.throws(
     () => assertDeepChainEvidence(deepGood("L4:WRONG")),
     /leaf result must reach its owner/,
@@ -11624,9 +10451,7 @@ test("deep-chain evidence needs one delegation per level, the escalation and the
 
 test("descendant visibility check requires every level to be seen in the root tree", () => {
   const labels = ["a", "b", "c"];
-  assert.doesNotThrow(() =>
-    assertDescendantVisibility(labels, new Set(["a", "b", "c"])),
-  );
+  assert.doesNotThrow(() => assertDescendantVisibility(labels, new Set(["a", "b", "c"])));
   assert.throws(
     () => assertDescendantVisibility(labels, new Set(["a"])),
     /never shown in the root status tree.*: b, c/,
