@@ -19,14 +19,7 @@ import {
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
-import {
-  basename,
-  dirname,
-  isAbsolute,
-  join,
-  normalize,
-  resolve,
-} from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
   acquireProcessLock,
@@ -47,15 +40,8 @@ import {
   type RequiredEvidence,
   type ResultBinding,
 } from "./storage.ts";
-import {
-  isRuntimeBuild,
-  sameRuntimeBuild,
-  type RuntimeBuild,
-} from "./compatibility.ts";
-import type {
-  ExtensionActions,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import { isRuntimeBuild, sameRuntimeBuild, type RuntimeBuild } from "./compatibility.ts";
+import type { ExtensionActions, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   isAssignedLeadDefinitionName,
   isDefinitionName,
@@ -113,8 +99,7 @@ export function readSessionKind(
   return identity;
 }
 
-export const COORDINATOR_DEFINITION_ENTRY =
-  "pi-herdsman-coordinator-definition";
+export const COORDINATOR_DEFINITION_ENTRY = "pi-herdsman-coordinator-definition";
 export const EXPECTED_ASSIGNED_LEAD_DEFINITION_ENV =
   "PI_HERDSMAN_EXPECTED_ASSIGNED_LEAD_DEFINITION";
 
@@ -132,10 +117,7 @@ export function readCoordinatorDefinitionBinding(
 ): CoordinatorDefinitionBinding | undefined {
   let binding: CoordinatorDefinitionBinding | undefined;
   for (const candidate of entries as readonly any[]) {
-    if (
-      candidate?.type !== "custom" ||
-      candidate.customType !== COORDINATOR_DEFINITION_ENTRY
-    )
+    if (candidate?.type !== "custom" || candidate.customType !== COORDINATOR_DEFINITION_ENTRY)
       continue;
     const data = candidate.data;
     if (validSession(data?.sessionId) && data.sessionId !== sessionId) continue;
@@ -162,13 +144,9 @@ export function verifyAssignedLeadDefinition(
   established: boolean,
 ): void {
   if (binding && (binding.category !== "lead" || binding.name !== name))
-    throw new Error(
-      `Saved Lead session definition conflicts with assignment definition ${name}`,
-    );
+    throw new Error(`Saved Lead session definition conflicts with assignment definition ${name}`);
   if (!binding && established && name !== MANAGED_LEAD_DEFINITION_NAME)
-    throw new Error(
-      `Saved Lead session has no binding for assignment definition ${name}`,
-    );
+    throw new Error(`Saved Lead session has no binding for assignment definition ${name}`);
 }
 
 export type LeadRoleState = Readonly<{
@@ -196,13 +174,9 @@ export function sessionLeadRoleState(
       Object.keys(data).length !== 3 ||
       !Object.hasOwn(data, "role") ||
       !Object.hasOwn(data, "leadTools") ||
-      (data.role !== "lead" &&
-        data.role !== "manager" &&
-        data.role !== "chief") ||
+      (data.role !== "lead" && data.role !== "manager" && data.role !== "chief") ||
       !Array.isArray(data.leadTools) ||
-      data.leadTools.some(
-        (name: unknown) => typeof name !== "string" || name.length === 0,
-      ) ||
+      data.leadTools.some((name: unknown) => typeof name !== "string" || name.length === 0) ||
       new Set(data.leadTools).size !== data.leadTools.length
     )
       throw new Error("invalid pi-herdsman-role entry");
@@ -224,10 +198,7 @@ export type ChiefDescriptor = {
   createdAt: number;
 };
 
-export type ChiefIdentity = Omit<
-  ChiefDescriptor,
-  "version" | "leaseId" | "claim" | "createdAt"
-> & {
+export type ChiefIdentity = Omit<ChiefDescriptor, "version" | "leaseId" | "claim" | "createdAt"> & {
   build: RuntimeBuild;
   createdAt?: number;
 };
@@ -287,9 +258,7 @@ export type SenderEnvironment = Readonly<{
   git?: Readonly<{ worktreeRoot: string; branch: string | null; head: string }>;
 }>;
 
-export function validSenderEnvironment(
-  value: unknown,
-): value is SenderEnvironment {
+export function validSenderEnvironment(value: unknown): value is SenderEnvironment {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const env = value as Record<string, unknown>;
   if (
@@ -301,22 +270,17 @@ export function validSenderEnvironment(
   )
     return false;
   if (env.git === undefined) return true;
-  if (!env.git || typeof env.git !== "object" || Array.isArray(env.git))
-    return false;
+  if (!env.git || typeof env.git !== "object" || Array.isArray(env.git)) return false;
   const git = env.git as Record<string, unknown>;
   return (
     Object.keys(git).length === 3 &&
-    Object.keys(git).every((key) =>
-      ["worktreeRoot", "branch", "head"].includes(key),
-    ) &&
+    Object.keys(git).every((key) => ["worktreeRoot", "branch", "head"].includes(key)) &&
     typeof git.worktreeRoot === "string" &&
     !!git.worktreeRoot &&
     isAbsolute(git.worktreeRoot) &&
     Buffer.byteLength(git.worktreeRoot) <= 1024 &&
     (git.branch === null ||
-      (typeof git.branch === "string" &&
-        !!git.branch &&
-        Buffer.byteLength(git.branch) <= 1024)) &&
+      (typeof git.branch === "string" && !!git.branch && Buffer.byteLength(git.branch) <= 1024)) &&
     typeof git.head === "string" &&
     /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(git.head)
   );
@@ -346,10 +310,7 @@ export function senderEnvironmentAnnotation(value: unknown): string {
 }
 
 type OverflowBodyRef = { bytes: number; sha256: string };
-type StoredChiefMessage = Omit<
-  ChiefMessageRecord,
-  "text" | "resultBindings"
-> & {
+type StoredChiefMessage = Omit<ChiefMessageRecord, "text" | "resultBindings"> & {
   text: string;
   resultBindings?: ResultBinding[];
   bodyRef?: OverflowBodyRef;
@@ -362,8 +323,7 @@ export type PeerGroup = Readonly<{
 type LocalPeerSource =
   | { role: "manager" }
   | { role: "lead"; socket: string; group: PeerGroup | null; managed: boolean };
-export type PeerSource =
-  LocalPeerSource | { role: "lead"; remoteOrdinary: true };
+export type PeerSource = LocalPeerSource | { role: "lead"; remoteOrdinary: true };
 export type PeerContext = LocalPeerSource;
 
 export function canMessagePeer(a: PeerContext, b: PeerContext): boolean {
@@ -408,17 +368,11 @@ export type ChiefInboxDrainOptions = {
   isDelivered: (id: string) => boolean;
   deliveryMode?: (
     record: ChiefMessageRecord,
-  ) =>
-    | "steer"
-    | "followUp"
-    | undefined
-    | Promise<"steer" | "followUp" | undefined>;
+  ) => "steer" | "followUp" | undefined | Promise<"steer" | "followUp" | undefined>;
   isPeerDeliveryEnabled?: () => boolean;
   forceNonTriggering?: boolean;
   maxDeliveries?: number;
-  senderTarget?: (
-    record: ChiefMessageRecord,
-  ) => string | undefined | Promise<string | undefined>;
+  senderTarget?: (record: ChiefMessageRecord) => string | undefined | Promise<string | undefined>;
   sendMessage: (
     message: ChiefInboxSendMessage,
     options: {
@@ -445,8 +399,7 @@ export const COORDINATION_INBOX_SCAN_LIMIT = 32;
 const CHIEF_DESCRIPTOR_MAX_BYTES = 2048;
 const COORDINATION_BODY_MAX_BYTES = 1024 * 1024;
 
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MESSAGE_KINDS = new Set<ChiefMessageKind>(COORDINATION_MESSAGE_KINDS);
 
 function validOverflowBodyRef(value: unknown): value is OverflowBodyRef {
@@ -474,9 +427,7 @@ function sameRuntimeBuildEvidence(
 }
 
 function validNativeIdentity(value: unknown): value is string {
-  return (
-    typeof value === "string" && value.trim().length > 0 && value.length <= 512
-  );
+  return typeof value === "string" && value.trim().length > 0 && value.length <= 512;
 }
 
 function validMessage(value: unknown): value is ChiefMessageRecord {
@@ -502,9 +453,7 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     "bodyRef",
   ];
   if (
-    Object.keys(record).some(
-      (key) => !keys.includes(key) && !optional.includes(key),
-    ) ||
+    Object.keys(record).some((key) => !keys.includes(key) && !optional.includes(key)) ||
     Object.keys(record).length < keys.length ||
     keys.some((key) => !Object.hasOwn(record, key))
   )
@@ -529,9 +478,7 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
               : !!source.group &&
                 typeof source.group === "object" &&
                 Object.keys(source.group).length === 2 &&
-                validNativeIdentity(
-                  (source.group as Record<string, unknown>).repoKey,
-                ) &&
+                validNativeIdentity((source.group as Record<string, unknown>).repoKey) &&
                 validNativeIdentity(
                   (source.group as Record<string, unknown>).primaryWorkspaceId,
                 )))));
@@ -539,16 +486,14 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     projectMessage
       ? !validNativeIdentity(record.branch)
       : record.branch !== undefined &&
-        (record.kind !== "manager_message" ||
-          !validNativeIdentity(record.branch))
+        (record.kind !== "manager_message" || !validNativeIdentity(record.branch))
   ) {
     return false;
   }
   return (
     record.version === 2 &&
     (peerMessage ? !!validPeerSource : record.peerSource === undefined) &&
-    (record.senderEnvironment === undefined ||
-      validSenderEnvironment(record.senderEnvironment)) &&
+    (record.senderEnvironment === undefined || validSenderEnvironment(record.senderEnvironment)) &&
     (record.build === undefined || isRuntimeBuild(record.build)) &&
     typeof record.id === "string" &&
     UUID.test(record.id) &&
@@ -566,8 +511,7 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
         record.resultBindings === undefined &&
         validOverflowBodyRef(record.bodyRef)) &&
     (record.resultBindings === undefined ||
-      (Array.isArray(record.resultBindings) &&
-        record.resultBindings.every(isResultBinding))) &&
+      (Array.isArray(record.resultBindings) && record.resultBindings.every(isResultBinding))) &&
     Number.isInteger(record.createdAt) &&
     (record.createdAt as number) >= 0
   );
@@ -583,33 +527,22 @@ function assertMessage(value: unknown): asserts value is ChiefMessageRecord {
     throw new Error("Chief message record is too large");
 }
 
-function compactChiefMessage(
-  record: ChiefMessageRecord,
-  path: string,
-): StoredChiefMessage {
-  if (chiefMessageBytes(record) <= COORDINATION_MESSAGE_MAX_BYTES)
-    return record;
+function compactChiefMessage(record: ChiefMessageRecord, path: string): StoredChiefMessage {
+  if (chiefMessageBytes(record) <= COORDINATION_MESSAGE_MAX_BYTES) return record;
   const bodyRef = writeOverflowBody(`${path}.body`, {
     text: record.text,
     ...(record.resultBindings ? { resultBindings: record.resultBindings } : {}),
   });
   const stored: StoredChiefMessage = { ...record, text: "", bodyRef };
   delete stored.resultBindings;
-  if (
-    chiefMessageBytes(stored as ChiefMessageRecord) >
-    COORDINATION_MESSAGE_MAX_BYTES
-  )
+  if (chiefMessageBytes(stored as ChiefMessageRecord) > COORDINATION_MESSAGE_MAX_BYTES)
     throw new Error("Chief message routing metadata is too large");
   return stored;
 }
 
 function inboxFor(runtime: SupervisionRuntime, toSessionId: string): string {
-  if (!validSession(toSessionId))
-    throw new Error("Invalid Chief message target");
-  return join(
-    runtime.inbox,
-    createHash("sha256").update(toSessionId).digest("hex"),
-  );
+  if (!validSession(toSessionId)) throw new Error("Invalid Chief message target");
+  return join(runtime.inbox, createHash("sha256").update(toSessionId).digest("hex"));
 }
 
 export function chiefMessagePath(
@@ -660,9 +593,7 @@ export function coordinationMessageDigest(record: ChiefMessageRecord): string {
     text: record.text,
     resultBindings: record.resultBindings,
     peerSource: record.peerSource,
-    ...(record.senderEnvironment
-      ? { senderEnvironment: record.senderEnvironment }
-      : {}),
+    ...(record.senderEnvironment ? { senderEnvironment: record.senderEnvironment } : {}),
     createdAt: record.createdAt,
   };
   return createHash("sha256")
@@ -715,8 +646,7 @@ export function writePeerDeliveryReceipt(
   const content = `${JSON.stringify(receipt)}\n`;
   try {
     const existing = JSON.parse(readFileSync(path, "utf8"));
-    if (!isDeepStrictEqual(existing, receipt))
-      throw new Error("Conflicting peer delivery receipt");
+    if (!isDeepStrictEqual(existing, receipt)) throw new Error("Conflicting peer delivery receipt");
     return;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -736,11 +666,7 @@ export function hasPeerDeliveryReceipt(
     const receipt = JSON.parse(
       readFileSync(peerDeliveryReceiptPath(runtime, sessionId, id), "utf8"),
     ) as { sessionId?: unknown; id?: unknown; digest?: unknown };
-    if (
-      receipt.sessionId !== sessionId ||
-      receipt.id !== id ||
-      receipt.digest !== digest
-    )
+    if (receipt.sessionId !== sessionId || receipt.id !== id || receipt.digest !== digest)
       throw new Error("Conflicting peer delivery receipt");
     return true;
   } catch (error) {
@@ -817,28 +743,16 @@ function writeOverflowBody(
       existing = Buffer.alloc(current.size);
       let offset = 0;
       while (offset < existing.length) {
-        const count = readSync(
-          fd,
-          existing,
-          offset,
-          existing.length - offset,
-          offset,
-        );
-        if (!count)
-          throw new Error("Existing coordination message body is truncated");
+        const count = readSync(fd, existing, offset, existing.length - offset, offset);
+        if (!count) throw new Error("Existing coordination message body is truncated");
         offset += count;
       }
       if (fstatSync(fd).size !== current.size)
-        throw new Error(
-          "Existing coordination message body changed while reading",
-        );
+        throw new Error("Existing coordination message body changed while reading");
     } finally {
       closeSync(fd);
     }
-    if (
-      existing.length !== bytes ||
-      createHash("sha256").update(existing).digest("hex") !== sha256
-    )
+    if (existing.length !== bytes || createHash("sha256").update(existing).digest("hex") !== sha256)
       throw new Error("Coordination message ID already has a different body");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -864,10 +778,7 @@ function readOverflowBody(
     throw new Error("Invalid coordination message body reference");
   let fd: number | undefined;
   try {
-    fd = openSync(
-      path,
-      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | constants.O_NONBLOCK,
-    );
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | constants.O_NONBLOCK);
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.size !== ref.bytes)
       throw new Error("Coordination message body size mismatch");
@@ -880,16 +791,12 @@ function readOverflowBody(
     }
     if (createHash("sha256").update(bytes).digest("hex") !== ref.sha256)
       throw new Error("Coordination message body integrity check failed");
-    const parsed: unknown = JSON.parse(
-      new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-    );
+    const parsed: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
     if (
       !parsed ||
       typeof parsed !== "object" ||
       Array.isArray(parsed) ||
-      Object.keys(parsed).some(
-        (key) => !["text", "resultBindings"].includes(key),
-      ) ||
+      Object.keys(parsed).some((key) => !["text", "resultBindings"].includes(key)) ||
       typeof (parsed as any).text !== "string" ||
       !(parsed as any).text.length ||
       ((parsed as any).resultBindings !== undefined &&
@@ -951,10 +858,7 @@ function removeMalformedChiefMessageUnlocked(
     return errors;
   }
   try {
-    const claimed = join(
-      dirname(path),
-      `.${basename(path, ".json")}.${randomUUID()}.cleanup`,
-    );
+    const claimed = join(dirname(path), `.${basename(path, ".json")}.${randomUUID()}.cleanup`);
     renameSync(path, claimed);
     fsyncDirectory(dirname(path));
     try {
@@ -973,9 +877,7 @@ function removeMalformedChiefMessageUnlocked(
       // The marker still applies back-pressure until its removal is durable.
       try {
         statSync(path);
-        errors.push(
-          new Error("Unable to confirm malformed Chief message removal"),
-        );
+        errors.push(new Error("Unable to confirm malformed Chief message removal"));
         return errors;
       } catch (confirmationError) {
         if ((confirmationError as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -991,11 +893,7 @@ function removeMalformedChiefMessageUnlocked(
         removeChiefMessageQuarantineUnlocked(runtime, toSessionId, id);
       } catch (markerError) {
         if ((markerError as NodeJS.ErrnoException).code !== "ENOENT")
-          errors.push(
-            markerError instanceof Error
-              ? markerError
-              : new Error(String(markerError)),
-          );
+          errors.push(markerError instanceof Error ? markerError : new Error(String(markerError)));
       }
       return errors;
     }
@@ -1006,11 +904,7 @@ function removeMalformedChiefMessageUnlocked(
       removeChiefMessageQuarantineUnlocked(runtime, toSessionId, id);
     } catch (markerError) {
       if ((markerError as NodeJS.ErrnoException).code !== "ENOENT")
-        errors.push(
-          markerError instanceof Error
-            ? markerError
-            : new Error(String(markerError)),
-        );
+        errors.push(markerError instanceof Error ? markerError : new Error(String(markerError)));
     }
   }
   return errors;
@@ -1047,13 +941,11 @@ export function writeChiefMessage(
   runtime = supervisionRuntime(),
   clearQuarantine = true,
 ): string {
-  if (!record.build)
-    throw new Error("Coordination message build identity is required");
+  if (!record.build) throw new Error("Coordination message build identity is required");
   if (!validMessage(record) || Reflect.get(record, "bodyRef") !== undefined)
     throw new Error("Invalid Chief message record");
-  return withChiefMessageLock(
-    chiefMessagePath(runtime, record.toSessionId, record.id),
-    () => writeChiefMessageUnlocked(record, runtime, clearQuarantine),
+  return withChiefMessageLock(chiefMessagePath(runtime, record.toSessionId, record.id), () =>
+    writeChiefMessageUnlocked(record, runtime, clearQuarantine),
   );
 }
 
@@ -1075,9 +967,7 @@ function writeChiefMessageUnlocked(
       statSync(path);
       const existing = readChiefMessage(path);
       if (!isDeepStrictEqual(existing, record))
-        throw new Error(
-          "Chief message ID already exists with a different payload",
-        );
+        throw new Error("Chief message ID already exists with a different payload");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
@@ -1100,11 +990,7 @@ function writeChiefMessageUnlocked(
     // Replacing a quarantined ID is an explicit retry/reconciliation. Keep
     // the marker fail-closed until the replacement is durable, then release it.
     if (clearQuarantine) {
-      const hadQuarantine = chiefMessageQuarantined(
-        runtime,
-        record.toSessionId,
-        record.id,
-      );
+      const hadQuarantine = chiefMessageQuarantined(runtime, record.toSessionId, record.id);
       try {
         unlinkSync(`${path}.quarantine`);
       } catch (error) {
@@ -1115,11 +1001,7 @@ function writeChiefMessageUnlocked(
       } catch (error) {
         if (hadQuarantine) {
           try {
-            quarantineChiefMessageUnlocked(
-              runtime,
-              record.toSessionId,
-              record.id,
-            );
+            quarantineChiefMessageUnlocked(runtime, record.toSessionId, record.id);
           } catch (recoveryError) {
             throw new Error("Unable to restore Chief message quarantine", {
               cause: recoveryError,
@@ -1175,15 +1057,13 @@ function readStoredChiefMessage(path: string): StoredChiefMessage {
   } catch (error) {
     throw new Error("Unable to read Chief message", { cause: error });
   }
-  if (size > COORDINATION_MESSAGE_MAX_BYTES)
-    throw new Error("Chief message record is too large");
+  if (size > COORDINATION_MESSAGE_MAX_BYTES) throw new Error("Chief message record is too large");
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
     assertMessage(parsed);
     return parsed as StoredChiefMessage;
   } catch (error) {
-    if (error instanceof Error && /Chief message record/.test(error.message))
-      throw error;
+    if (error instanceof Error && /Chief message record/.test(error.message)) throw error;
     throw new Error("Invalid Chief message record", { cause: error });
   }
 }
@@ -1200,10 +1080,7 @@ export function readChiefMessage(path: string): ChiefMessageRecord {
   return parsed as ChiefMessageRecord;
 }
 
-function allChiefMessagePaths(
-  runtime: SupervisionRuntime,
-  toSessionId: string,
-): string[] {
+function allChiefMessagePaths(runtime: SupervisionRuntime, toSessionId: string): string[] {
   const directory = inboxFor(runtime, toSessionId);
   let entries: string[];
   try {
@@ -1229,10 +1106,7 @@ function allChiefMessagePaths(
     })
     .sort((a, b) => {
       if (!a.record || !b.record) return a.record ? -1 : b.record ? 1 : 0;
-      return (
-        a.record.createdAt - b.record.createdAt ||
-        a.record.id.localeCompare(b.record.id)
-      );
+      return a.record.createdAt - b.record.createdAt || a.record.id.localeCompare(b.record.id);
     })
     .map(({ path }) => path);
 }
@@ -1242,8 +1116,7 @@ export function listChiefMessagePaths(
   toSessionId: string,
   limit = COORDINATION_INBOX_SCAN_LIMIT,
 ): string[] {
-  if (!Number.isInteger(limit) || limit < 0)
-    throw new Error("Invalid inbox limit");
+  if (!Number.isInteger(limit) || limit < 0) throw new Error("Invalid inbox limit");
   return allChiefMessagePaths(runtime, toSessionId).slice(
     0,
     Math.min(limit, COORDINATION_INBOX_SCAN_LIMIT),
@@ -1257,9 +1130,7 @@ export function removeChiefMessage(
   expected?: ChiefMessageRecord,
 ): void {
   const path = chiefMessagePath(runtime, toSessionId, id);
-  withChiefMessageLock(path, () =>
-    removeChiefMessageUnlocked(runtime, toSessionId, id, expected),
-  );
+  withChiefMessageLock(path, () => removeChiefMessageUnlocked(runtime, toSessionId, id, expected));
 }
 
 function removeChiefMessageUnlocked(
@@ -1274,25 +1145,19 @@ function removeChiefMessageUnlocked(
     if (!expected) return true;
     try {
       const stored = readStoredChiefMessage(path);
-      if ((expected as StoredChiefMessage).bodyRef)
-        return isDeepStrictEqual(stored, expected);
+      if ((expected as StoredChiefMessage).bodyRef) return isDeepStrictEqual(stored, expected);
       return isDeepStrictEqual(readChiefMessage(path), expected);
     } catch {
       return false;
     }
   };
-  if (!matchesExpected())
-    throw new Error("Chief message changed during removal");
+  if (!matchesExpected()) throw new Error("Chief message changed during removal");
   // Establish recovery before making any record disappear. This also covers
   // direct callers, not only the inbox drain fallback.
   quarantineChiefMessageUnlocked(runtime, toSessionId, id);
-  if (!matchesExpected())
-    throw new Error("Chief message changed during removal");
+  if (!matchesExpected()) throw new Error("Chief message changed during removal");
   try {
-    const claimed = join(
-      directory,
-      `.${basename(path, ".json")}.${randomUUID()}.cleanup`,
-    );
+    const claimed = join(directory, `.${basename(path, ".json")}.${randomUUID()}.cleanup`);
     // Detach the exact path atomically. All same-ID writers use the same
     // narrow lock, so a replacement cannot become the object we delete.
     renameSync(path, claimed);
@@ -1329,9 +1194,7 @@ export function quarantineChiefMessage(
   id: string,
 ): void {
   const path = chiefMessagePath(runtime, toSessionId, id);
-  withChiefMessageLock(path, () =>
-    quarantineChiefMessageUnlocked(runtime, toSessionId, id),
-  );
+  withChiefMessageLock(path, () => quarantineChiefMessageUnlocked(runtime, toSessionId, id));
 }
 
 function quarantineChiefMessageUnlocked(
@@ -1378,10 +1241,7 @@ export function chiefMessageQuarantined(
   }
 }
 
-function deliveredMessageContent(
-  record: CoordinationMessageRecord,
-  senderTarget?: string,
-): string {
+function deliveredMessageContent(record: CoordinationMessageRecord, senderTarget?: string): string {
   const prefix =
     record.kind === "chief_message"
       ? "From your Chief: "
@@ -1397,10 +1257,7 @@ function deliveredMessageContent(
   return content + senderEnvironmentAnnotation(record.senderEnvironment);
 }
 
-function peerDeliveryPaused(
-  record: ChiefMessageRecord,
-  options: ChiefInboxDrainOptions,
-): boolean {
+function peerDeliveryPaused(record: ChiefMessageRecord, options: ChiefInboxDrainOptions): boolean {
   if (record.kind !== "peer_message") return false;
   try {
     return options.isPeerDeliveryEnabled?.() === false;
@@ -1411,25 +1268,15 @@ function peerDeliveryPaused(
 }
 
 /** Drain only this session's inbox. Files remain when Pi rejects delivery. */
-export async function drainCoordinationInbox(
-  options: ChiefInboxDrainOptions,
-): Promise<number> {
+export async function drainCoordinationInbox(options: ChiefInboxDrainOptions): Promise<number> {
   let delivered = 0;
   let examined = 0;
   for (const path of allChiefMessagePaths(options.runtime, options.sessionId)) {
-    if (
-      options.maxDeliveries !== undefined &&
-      delivered >= options.maxDeliveries
-    )
-      break;
+    if (options.maxDeliveries !== undefined && delivered >= options.maxDeliveries) break;
     if (examined >= COORDINATION_INBOX_SCAN_LIMIT) break;
     if (options.signal?.aborted) break;
     const id = basename(path, ".json");
-    if (
-      UUID.test(id) &&
-      chiefMessageQuarantined(options.runtime, options.sessionId, id)
-    )
-      continue;
+    if (UUID.test(id) && chiefMessageQuarantined(options.runtime, options.sessionId, id)) continue;
     let stored: StoredChiefMessage;
     let record: ChiefMessageRecord;
     try {
@@ -1469,9 +1316,7 @@ export async function drainCoordinationInbox(
     }
     let deliverAs: "steer" | "followUp" | undefined;
     try {
-      deliverAs = options.deliveryMode
-        ? await options.deliveryMode(record)
-        : "followUp";
+      deliverAs = options.deliveryMode ? await options.deliveryMode(record) : "followUp";
     } catch {
       await clearTransaction();
       continue;
@@ -1492,11 +1337,7 @@ export async function drainCoordinationInbox(
       try {
         await options.transaction?.revalidate(token, "before-rejection");
         await options.rejected?.(record);
-        assertChiefMessageNotQuarantined(
-          options.runtime,
-          options.sessionId,
-          record.id,
-        );
+        assertChiefMessageNotQuarantined(options.runtime, options.sessionId, record.id);
         await options.transaction?.revalidate(token, "before-rejected-remove");
         if (peerDeliveryPaused(record, options)) {
           await clearTransaction();
@@ -1509,12 +1350,7 @@ export async function drainCoordinationInbox(
       }
       try {
         quarantineChiefMessage(options.runtime, options.sessionId, record.id);
-        removeChiefMessage(
-          options.runtime,
-          options.sessionId,
-          record.id,
-          record,
-        );
+        removeChiefMessage(options.runtime, options.sessionId, record.id, record);
         await options.transaction?.clear(token);
       } catch (cleanupError) {
         try {
@@ -1527,11 +1363,7 @@ export async function drainCoordinationInbox(
     if (!options.isDelivered(record.id)) {
       try {
         await options.transaction?.revalidate(token, "before-send");
-        assertChiefMessageNotQuarantined(
-          options.runtime,
-          options.sessionId,
-          record.id,
-        );
+        assertChiefMessageNotQuarantined(options.runtime, options.sessionId, record.id);
         // Authorization may have yielded while Pi persisted an earlier send.
         if (!options.isDelivered(record.id)) {
           if (stored.bodyRef) {
@@ -1541,9 +1373,7 @@ export async function drainCoordinationInbox(
             } catch {
               examined--;
               await options.cleanupError?.(
-                new Error(
-                  `Unable to read overflow body for Chief message ${id}`,
-                ),
+                new Error(`Unable to read overflow body for Chief message ${id}`),
               );
               await clearTransaction();
               continue;
@@ -1559,10 +1389,7 @@ export async function drainCoordinationInbox(
           let hasResumeInstruction = false;
           let authorizationUnavailable = false;
           if (record.kind === "project_assignment") {
-            for (const candidatePath of allChiefMessagePaths(
-              options.runtime,
-              options.sessionId,
-            )) {
+            for (const candidatePath of allChiefMessagePaths(options.runtime, options.sessionId)) {
               try {
                 const candidate = readChiefMessage(candidatePath);
                 if (
@@ -1575,13 +1402,7 @@ export async function drainCoordinationInbox(
                   candidate.createdAt !== record.createdAt + 1
                 )
                   continue;
-                if (
-                  chiefMessageQuarantined(
-                    options.runtime,
-                    options.sessionId,
-                    candidate.id,
-                  )
-                )
+                if (chiefMessageQuarantined(options.runtime, options.sessionId, candidate.id))
                   continue;
                 let candidateAuthorized: boolean;
                 try {
@@ -1650,11 +1471,7 @@ export async function drainCoordinationInbox(
       if (!wasAlreadyDelivered) delivered += 1;
       try {
         await options.transaction?.revalidate(token, "before-accepted");
-        assertChiefMessageNotQuarantined(
-          options.runtime,
-          options.sessionId,
-          record.id,
-        );
+        assertChiefMessageNotQuarantined(options.runtime, options.sessionId, record.id);
         await options.accepted?.(record);
         await options.transaction?.revalidate(token, "after-accepted");
       } catch {
@@ -1665,11 +1482,7 @@ export async function drainCoordinationInbox(
       try {
         if (!wasAlreadyDelivered) delivered += 1;
         await options.transaction?.revalidate(token, "already-delivered");
-        assertChiefMessageNotQuarantined(
-          options.runtime,
-          options.sessionId,
-          record.id,
-        );
+        assertChiefMessageNotQuarantined(options.runtime, options.sessionId, record.id);
         await options.accepted?.(record);
       } catch {
         await clearTransaction();
@@ -1677,11 +1490,7 @@ export async function drainCoordinationInbox(
       }
     }
     try {
-      assertChiefMessageNotQuarantined(
-        options.runtime,
-        options.sessionId,
-        record.id,
-      );
+      assertChiefMessageNotQuarantined(options.runtime, options.sessionId, record.id);
       await options.transaction?.revalidate(token, "before-remove");
     } catch {
       await clearTransaction();
@@ -1723,19 +1532,14 @@ function socketPath(): string {
 function managerAccountHome(): string {
   const { homedir, uid } = os.userInfo();
   if (!isAbsolute(homedir))
-    throw new Error(
-      "Unable to verify the OS account home for Manager authority",
-    );
+    throw new Error("Unable to verify the OS account home for Manager authority");
   const home = realpathSync.native(homedir);
   const stat = lstatSync(home);
   if (
     !stat.isDirectory() ||
-    (process.platform !== "win32" &&
-      (stat.uid !== uid || (stat.mode & 0o022) !== 0))
+    (process.platform !== "win32" && (stat.uid !== uid || (stat.mode & 0o022) !== 0))
   )
-    throw new Error(
-      "Unable to verify the OS account home for Manager authority",
-    );
+    throw new Error("Unable to verify the OS account home for Manager authority");
   return home;
 }
 
@@ -1744,8 +1548,7 @@ function canonicalProfileDirectory(path = resolve(nodeOnlyAgentDir())): string {
     return realpathSync.native(path);
   } catch (error) {
     const parent = dirname(path);
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT" || parent === path)
-      throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" || parent === path) throw error;
     return join(canonicalProfileDirectory(parent), basename(path));
   }
 }
@@ -1765,12 +1568,7 @@ export function supervisionRuntime(socket = socketPath()): SupervisionRuntime {
     leads: join(root, "coordinators"),
     // Ordinary coordination does not depend on the account-level authority tree.
     get managers() {
-      return join(
-        managerAccountHome(),
-        ".pi-herdsman",
-        "manager-authority-v1",
-        "managers",
-      );
+      return join(managerAccountHome(), ".pi-herdsman", "manager-authority-v1", "managers");
     },
     managerRecovery: join(
       profile,
@@ -1801,9 +1599,7 @@ function withProjectAssignmentLock<T>(operation: () => T): T {
   try {
     const result = operation();
     if (result && typeof (result as { then?: unknown }).then === "function")
-      throw new Error(
-        "Project assignment authority operation must be synchronous",
-      );
+      throw new Error("Project assignment authority operation must be synchronous");
     return result;
   } finally {
     lease.release();
@@ -1849,9 +1645,7 @@ export async function withProjectAssignmentAuthorityWait<T>(
     try {
       const result = operation();
       if (result && typeof (result as { then?: unknown }).then === "function")
-        throw new Error(
-          "Project assignment authority operation must be synchronous",
-        );
+        throw new Error("Project assignment authority operation must be synchronous");
       return result;
     } finally {
       lease.release();
@@ -1923,10 +1717,7 @@ function peerDirectory(runtime: PeerRuntime): string {
   return runtime.peers;
 }
 
-export function peerLeadRecordPath(
-  runtime: PeerRuntime,
-  piSessionId: string,
-): string {
+export function peerLeadRecordPath(runtime: PeerRuntime, piSessionId: string): string {
   if (!validSession(piSessionId)) throw new Error("Invalid peer session ID");
   return join(runtime.peers, peerLeadRecordFilename(piSessionId));
 }
@@ -1936,10 +1727,7 @@ function peerLeadRecordFilename(piSessionId: string): string {
   return `${createHash("sha256").update(piSessionId).digest("hex")}.json`;
 }
 
-export function peerLeadLockPath(
-  runtime: PeerRuntime,
-  piSessionId: string,
-): string {
+export function peerLeadLockPath(runtime: PeerRuntime, piSessionId: string): string {
   return `${peerLeadRecordPath(runtime, piSessionId)}.lock`;
 }
 
@@ -1977,9 +1765,7 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
     ].every((key) => Object.hasOwn(record, key)) &&
     record.version === 2 &&
     (record.build === undefined || isRuntimeBuild(record.build)) &&
-    (record.role === undefined ||
-      record.role === "lead" ||
-      record.role === "manager") &&
+    (record.role === undefined || record.role === "lead" || record.role === "manager") &&
     (record.sessionKind === "ordinary" || record.sessionKind === "managed") &&
     validSession(record.piSessionId) &&
     validNativeIdentity(record.paneId) &&
@@ -1993,32 +1779,20 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
       (!!record.group &&
         typeof record.group === "object" &&
         Object.keys(record.group).length === 2 &&
-        validNativeIdentity(
-          (record.group as Record<string, unknown>).repoKey,
-        ) &&
-        validNativeIdentity(
-          (record.group as Record<string, unknown>).primaryWorkspaceId,
-        ))) &&
-    metadata.every(
-      (key) => !Object.hasOwn(record, key) || validNativeIdentity(record[key]),
-    ) &&
+        validNativeIdentity((record.group as Record<string, unknown>).repoKey) &&
+        validNativeIdentity((record.group as Record<string, unknown>).primaryWorkspaceId))) &&
+    metadata.every((key) => !Object.hasOwn(record, key) || validNativeIdentity(record[key])) &&
     isProcessLockClaim(record.claim) &&
     Number.isInteger(record.updatedAt) &&
     (record.updatedAt as number) >= 0
   );
 }
 
-function livePeerClaim(
-  runtime: PeerRuntime,
-  piSessionId: string,
-): ProcessLockClaim {
+function livePeerClaim(runtime: PeerRuntime, piSessionId: string): ProcessLockClaim {
   return readLiveProcessLock(peerLeadLockPath(runtime, piSessionId));
 }
 
-export function samePeerLeadRecord(
-  actual: PeerLeadRecord,
-  expected: PeerLeadRecord,
-): boolean {
+export function samePeerLeadRecord(actual: PeerLeadRecord, expected: PeerLeadRecord): boolean {
   return (
     actual.version === expected.version &&
     sameRuntimeBuildEvidence(actual.build, expected.build) &&
@@ -2041,10 +1815,7 @@ export function samePeerLeadRecord(
   );
 }
 
-export function samePeerLeadGeneration(
-  actual: PeerLeadRecord,
-  expected: PeerLeadRecord,
-): boolean {
+export function samePeerLeadGeneration(actual: PeerLeadRecord, expected: PeerLeadRecord): boolean {
   return (
     actual.piSessionId === expected.piSessionId &&
     sameRuntimeBuildEvidence(actual.build, expected.build) &&
@@ -2054,10 +1825,7 @@ export function samePeerLeadGeneration(
 }
 
 /** Authorization provenance, excluding presentation metadata. */
-export function samePeerLeadAuthority(
-  actual: PeerLeadRecord,
-  expected: PeerLeadRecord,
-): boolean {
+export function samePeerLeadAuthority(actual: PeerLeadRecord, expected: PeerLeadRecord): boolean {
   return (
     samePeerLeadGeneration(actual, expected) &&
     actual.sessionKind === expected.sessionKind &&
@@ -2091,10 +1859,7 @@ export function readPeerLeadRecord(
   return value;
 }
 
-export function writePeerLeadRecord(
-  runtime: PeerRuntime,
-  record: PeerLeadRecord,
-): string {
+export function writePeerLeadRecord(runtime: PeerRuntime, record: PeerLeadRecord): string {
   if (!record.build) throw new Error("Peer lead build identity is required");
   if (!validPeerLeadRecord(record)) throw new Error("Invalid peer lead record");
   const live = livePeerClaim(runtime, record.piSessionId);
@@ -2126,9 +1891,7 @@ export function removePeerLeadRecord(
   }
 }
 
-export function listPeerLeadRecords(
-  runtime: PeerRuntime = peerRuntime(),
-): PeerLeadRecord[] {
+export function listPeerLeadRecords(runtime: PeerRuntime = peerRuntime()): PeerLeadRecord[] {
   let entries: string[];
   try {
     entries = readdirSync(runtime.peers);
@@ -2145,10 +1908,7 @@ export function listPeerLeadRecords(
         if (statSync(path).size > PEER_LEAD_RECORD_MAX_BYTES) return [];
         const text = readFileSync(path, "utf8");
         const value = JSON.parse(text);
-        if (
-          !validPeerLeadRecord(value) ||
-          peerLeadRecordFilename(value.piSessionId) !== entry
-        )
+        if (!validPeerLeadRecord(value) || peerLeadRecordFilename(value.piSessionId) !== entry)
           return [];
         const record = readPeerLeadRecord(runtime, value.piSessionId);
         return record ? [record] : [];
@@ -2161,20 +1921,10 @@ export function listPeerLeadRecords(
 function validDescriptor(value: unknown): value is ChiefDescriptor {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
-  const keys = [
-    "version",
-    "leaseId",
-    "claim",
-    "piSessionId",
-    "paneId",
-    "workspaceId",
-    "createdAt",
-  ];
+  const keys = ["version", "leaseId", "claim", "piSessionId", "paneId", "workspaceId", "createdAt"];
   const optional = ["tabId", "piSessionFile", "build"];
   return (
-    Object.keys(record).every(
-      (key) => keys.includes(key) || optional.includes(key),
-    ) &&
+    Object.keys(record).every((key) => keys.includes(key) || optional.includes(key)) &&
     Object.keys(record).length >= keys.length &&
     keys.every((key) => Object.hasOwn(record, key)) &&
     record.version === 1 &&
@@ -2188,8 +1938,7 @@ function validDescriptor(value: unknown): value is ChiefDescriptor {
     record.piSessionId.length > 0 &&
     record.piSessionId.length <= 512 &&
     (record.piSessionFile === undefined ||
-      (typeof record.piSessionFile === "string" &&
-        record.piSessionFile.length > 0)) &&
+      (typeof record.piSessionFile === "string" && record.piSessionFile.length > 0)) &&
     typeof record.paneId === "string" &&
     record.paneId.length > 0 &&
     record.paneId.length <= 512 &&
@@ -2206,9 +1955,7 @@ function validDescriptor(value: unknown): value is ChiefDescriptor {
   );
 }
 
-export function readChiefDescriptor(
-  path = supervisionRuntime().descriptor,
-): ChiefDescriptor {
+export function readChiefDescriptor(path = supervisionRuntime().descriptor): ChiefDescriptor {
   let parsed: unknown;
   try {
     const content = readFileSync(path, "utf8");
@@ -2218,8 +1965,7 @@ export function readChiefDescriptor(
   } catch (error) {
     throw new Error("Unable to verify Chief descriptor", { cause: error });
   }
-  if (!validDescriptor(parsed))
-    throw new Error("Unable to verify Chief descriptor");
+  if (!validDescriptor(parsed)) throw new Error("Unable to verify Chief descriptor");
   return parsed;
 }
 
@@ -2227,22 +1973,14 @@ export function chiefLeaseIsHeld(runtime: SupervisionRuntime): boolean {
   try {
     const claim = readLiveProcessLock(runtime.lock, "Chief supervision lease");
     const descriptor = readChiefDescriptor(runtime.descriptor);
-    return (
-      descriptor.claim.pid === claim.pid && descriptor.claim.id === claim.id
-    );
+    return descriptor.claim.pid === claim.pid && descriptor.claim.id === claim.id;
   } catch {
     return false;
   }
 }
 
-function writeDescriptor(
-  path: string,
-  descriptor: ChiefDescriptor | ManagerDescriptor,
-): void {
-  const temporary = join(
-    dirname(path),
-    `.${basename(path)}.${randomUUID()}.tmp`,
-  );
+function writeDescriptor(path: string, descriptor: ChiefDescriptor | ManagerDescriptor): void {
+  const temporary = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
   const content = `${JSON.stringify(descriptor)}\n`;
   let fd: number | undefined;
   let cleanupError: unknown;
@@ -2271,10 +2009,7 @@ function writeDescriptor(
   if (cleanupFailed) throw cleanupError;
 }
 
-export function sameChiefDescriptor(
-  actual: ChiefDescriptor,
-  expected: ChiefDescriptor,
-): boolean {
+export function sameChiefDescriptor(actual: ChiefDescriptor, expected: ChiefDescriptor): boolean {
   return (
     actual.leaseId === expected.leaseId &&
     sameRuntimeBuildEvidence(actual.build, expected.build) &&
@@ -2297,15 +2032,12 @@ export function claimChiefLease(identity: ChiefIdentity): ChiefLease {
     !identity.piSessionId ||
     identity.piSessionId.length > 512 ||
     (identity.piSessionFile !== undefined &&
-      (typeof identity.piSessionFile !== "string" ||
-        !identity.piSessionFile)) ||
+      (typeof identity.piSessionFile !== "string" || !identity.piSessionFile)) ||
     typeof identity.paneId !== "string" ||
     !identity.paneId ||
     identity.paneId.length > 512 ||
     (identity.tabId !== undefined &&
-      (typeof identity.tabId !== "string" ||
-        !identity.tabId ||
-        identity.tabId.length > 512)) ||
+      (typeof identity.tabId !== "string" || !identity.tabId || identity.tabId.length > 512)) ||
     typeof identity.workspaceId !== "string" ||
     !identity.workspaceId ||
     identity.workspaceId.length > 512 ||
@@ -2329,9 +2061,7 @@ export function claimChiefLease(identity: ChiefIdentity): ChiefLease {
     leaseId: randomUUID(),
     claim: lease.claim,
     piSessionId: identity.piSessionId,
-    ...(identity.piSessionFile !== undefined
-      ? { piSessionFile: identity.piSessionFile }
-      : {}),
+    ...(identity.piSessionFile !== undefined ? { piSessionFile: identity.piSessionFile } : {}),
     paneId: identity.paneId,
     ...(identity.tabId ? { tabId: identity.tabId } : {}),
     workspaceId: identity.workspaceId,
@@ -2351,12 +2081,7 @@ export function claimChiefLease(identity: ChiefIdentity): ChiefLease {
       if (released) return;
       released = true;
       try {
-        if (
-          sameChiefDescriptor(
-            readChiefDescriptor(runtime.descriptor),
-            descriptor,
-          )
-        )
+        if (sameChiefDescriptor(readChiefDescriptor(runtime.descriptor), descriptor))
           unlinkSync(runtime.descriptor);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -2420,16 +2145,10 @@ function validCanonicalRepoKey(value: unknown): value is string {
 }
 
 function managerIdentityPath(directory: string, key: string): string {
-  return join(
-    directory,
-    `${createHash("sha256").update(key).digest("hex")}.json`,
-  );
+  return join(directory, `${createHash("sha256").update(key).digest("hex")}.json`);
 }
 
-function checkManagerAuthorityDirectory(
-  runtime: SupervisionRuntime,
-  create = false,
-): void {
+function checkManagerAuthorityDirectory(runtime: SupervisionRuntime, create = false): void {
   const authority = dirname(runtime.managers);
   for (const path of [dirname(authority), authority, runtime.managers]) {
     let stat = lstatSync(path, { throwIfNoEntry: false });
@@ -2444,8 +2163,7 @@ function checkManagerAuthorityDirectory(
     if (!stat) return;
     if (
       !stat.isDirectory() ||
-      (process.getuid &&
-        (stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0))
+      (process.getuid && (stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0))
     )
       throw new Error("Unsafe private Manager authority directory");
   }
@@ -2455,8 +2173,7 @@ export function managerDescriptorPath(
   runtime: SupervisionRuntime,
   canonicalRepoKey: string,
 ): string {
-  if (!validCanonicalRepoKey(canonicalRepoKey))
-    throw new Error("Invalid Manager repository key");
+  if (!validCanonicalRepoKey(canonicalRepoKey)) throw new Error("Invalid Manager repository key");
   checkManagerAuthorityDirectory(runtime);
   return managerIdentityPath(runtime.managers, canonicalRepoKey);
 }
@@ -2518,10 +2235,7 @@ function managerLifecyclePath(
 function readManagerLifecycleRecord(path: string): unknown {
   let fd: number;
   try {
-    fd = openSync(
-      path,
-      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | constants.O_NONBLOCK,
-    );
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | constants.O_NONBLOCK);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
@@ -2571,12 +2285,8 @@ function unlinkManagerLifecycleRecord(path: string): void {
   fsyncDirectory(dirname(path));
 }
 
-function managerRecoveryPath(
-  runtime: SupervisionRuntime,
-  canonicalRepoKey: string,
-): string {
-  if (!validCanonicalRepoKey(canonicalRepoKey))
-    throw new Error("Invalid Manager repository key");
+function managerRecoveryPath(runtime: SupervisionRuntime, canonicalRepoKey: string): string {
+  if (!validCanonicalRepoKey(canonicalRepoKey)) throw new Error("Invalid Manager repository key");
   return managerIdentityPath(runtime.managerRecovery, canonicalRepoKey);
 }
 
@@ -2588,15 +2298,12 @@ function checkManagerRecoveryDirectory(directory: string): boolean {
   for (const path of [dirname(runtime), runtime, authority, directory]) {
     const info = lstatSync(path, { throwIfNoEntry: false });
     if (!info) return false;
-    if (!info.isDirectory())
-      throw new Error("Unsafe Manager recovery directory");
+    if (!info.isDirectory()) throw new Error("Unsafe Manager recovery directory");
   }
   return true;
 }
 
-function validManagerRecoveryReference(
-  value: unknown,
-): value is ManagerRecoveryReference {
+function validManagerRecoveryReference(value: unknown): value is ManagerRecoveryReference {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   return (
@@ -2617,10 +2324,7 @@ export function readManagerRecoveryReference(
   if (!checkManagerRecoveryDirectory(runtime.managerRecovery)) return undefined;
   const value = readManagerLifecycleRecord(path);
   if (value === undefined) return undefined;
-  if (
-    !validManagerRecoveryReference(value) ||
-    value.canonicalRepoKey !== canonicalRepoKey
-  )
+  if (!validManagerRecoveryReference(value) || value.canonicalRepoKey !== canonicalRepoKey)
     throw new Error("Invalid Manager recovery reference");
   return value;
 }
@@ -2634,8 +2338,7 @@ export function listManagerRecoveryReferences(
   let complete = true;
   try {
     signal?.throwIfAborted();
-    if (!checkManagerRecoveryDirectory(runtime.managerRecovery))
-      return { references, complete };
+    if (!checkManagerRecoveryDirectory(runtime.managerRecovery)) return { references, complete };
     const directory = opendirSync(runtime.managerRecovery);
     try {
       for (let count = 0; ; count++) {
@@ -2649,8 +2352,7 @@ export function listManagerRecoveryReferences(
         if (!/^[0-9a-f]{64}\.json$/.test(entry.name)) continue;
         const path = join(runtime.managerRecovery, entry.name);
         try {
-          if (!entry.isFile())
-            throw new Error("Unsafe Manager recovery record");
+          if (!entry.isFile()) throw new Error("Unsafe Manager recovery record");
           const value = readManagerLifecycleRecord(path);
           if (
             !validManagerRecoveryReference(value) ||
@@ -2695,10 +2397,7 @@ export function removeManagerRecoveryReference(
   const path = managerRecoveryPath(runtime, reference.canonicalRepoKey);
   if (!lstatSync(path, { throwIfNoEntry: false })) return false;
   return withManagerLifecycleLock(path, () => {
-    const current = readManagerRecoveryReference(
-      runtime,
-      reference.canonicalRepoKey,
-    );
+    const current = readManagerRecoveryReference(runtime, reference.canonicalRepoKey);
     if (
       !current ||
       current.piSessionId !== reference.piSessionId ||
@@ -2710,12 +2409,8 @@ export function removeManagerRecoveryReference(
   });
 }
 
-function managerStartIntentPath(
-  runtime: SupervisionRuntime,
-  sessionId: string,
-): string {
-  if (!validSession(sessionId))
-    throw new Error("Invalid Manager startup session ID");
+function managerStartIntentPath(runtime: SupervisionRuntime, sessionId: string): string {
+  if (!validSession(sessionId)) throw new Error("Invalid Manager startup session ID");
   return managerLifecyclePath(runtime, "manager-start-intents", sessionId);
 }
 
@@ -2764,8 +2459,7 @@ function validManagerStartIntent(value: unknown): value is ManagerStartIntent {
       record.role === "lead" ||
       record.role === "assigned-lead") &&
     (record.role === "assigned-lead" ||
-      (record.assignmentRepoKey === undefined &&
-        record.branch === undefined)) &&
+      (record.assignmentRepoKey === undefined && record.branch === undefined)) &&
     (record.leadMode === undefined ||
       record.leadMode === "flexible" ||
       record.leadMode === "orchestrate") &&
@@ -2782,10 +2476,7 @@ function validManagerStartIntent(value: unknown): value is ManagerStartIntent {
   );
 }
 
-function readManagerStartIntent(
-  path: string,
-  sessionId: string,
-): ManagerStartIntent | undefined {
+function readManagerStartIntent(path: string, sessionId: string): ManagerStartIntent | undefined {
   const value = readManagerLifecycleRecord(path);
   if (value === undefined) return undefined;
   if (!validManagerStartIntent(value) || value.sessionId !== sessionId)
@@ -2796,17 +2487,14 @@ function readManagerStartIntent(
 function assertManagerStartIntentFresh(intent: ManagerStartIntent): void {
   const age = Date.now() - intent.createdAt;
   if (age < 0 || age > MANAGER_START_INTENT_TTL_MS)
-    throw new Error(
-      "Manager startup intent is expired or has an invalid timestamp",
-    );
+    throw new Error("Manager startup intent is expired or has an invalid timestamp");
 }
 
 export function writeManagerStartIntent(
   runtime: SupervisionRuntime,
   intent: ManagerStartIntent,
 ): void {
-  if (!validManagerStartIntent(intent))
-    throw new Error("Invalid Manager startup intent");
+  if (!validManagerStartIntent(intent)) throw new Error("Invalid Manager startup intent");
   assertManagerStartIntentFresh(intent);
   const path = managerStartIntentPath(runtime, intent.sessionId);
   withManagerLifecycleLock(path, () => {
@@ -2821,10 +2509,7 @@ export function getManagerStartIntent(
   runtime: SupervisionRuntime,
   sessionId: string,
 ): ManagerStartIntent | undefined {
-  const intent = readManagerStartIntent(
-    managerStartIntentPath(runtime, sessionId),
-    sessionId,
-  );
+  const intent = readManagerStartIntent(managerStartIntentPath(runtime, sessionId), sessionId);
   if (intent) assertManagerStartIntentFresh(intent);
   return intent;
 }
@@ -2872,8 +2557,7 @@ export function listCoordinatorStartIntents(runtime: SupervisionRuntime): {
       const record = readManagerLifecycleRecord(join(directory, name));
       if (
         !validManagerStartIntent(record) ||
-        managerStartIntentPath(runtime, record.sessionId) !==
-          join(directory, name)
+        managerStartIntentPath(runtime, record.sessionId) !== join(directory, name)
       ) {
         complete = false;
         continue;
@@ -2899,10 +2583,7 @@ export function consumeManagerStartIntent(
   });
 }
 
-export function removeManagerStartIntent(
-  runtime: SupervisionRuntime,
-  sessionId: string,
-): boolean {
+export function removeManagerStartIntent(runtime: SupervisionRuntime, sessionId: string): boolean {
   const path = managerStartIntentPath(runtime, sessionId);
   if (!lstatSync(path, { throwIfNoEntry: false })) return false;
   return withManagerLifecycleLock(path, () => {
@@ -2913,8 +2594,7 @@ export function removeManagerStartIntent(
 }
 
 function validManagerDescriptor(value: unknown): value is ManagerDescriptor {
-  if (!value || typeof value !== "object" || !Object.hasOwn(value, "socketKey"))
-    return false;
+  if (!value || typeof value !== "object" || !Object.hasOwn(value, "socketKey")) return false;
   const { socketKey, profileKey, ...descriptor } = value as ManagerDescriptor;
   return (
     validNativeIdentity(socketKey) &&
@@ -2927,25 +2607,16 @@ function validManagerDescriptor(value: unknown): value is ManagerDescriptor {
 function validRepositoryManagerDescriptor(
   value: unknown,
 ): value is Omit<ManagerDescriptor, "socketKey" | "profileKey"> {
-  if (
-    !value ||
-    typeof value !== "object" ||
-    !Object.hasOwn(value, "canonicalRepoKey")
-  )
+  if (!value || typeof value !== "object" || !Object.hasOwn(value, "canonicalRepoKey"))
     return false;
   const { canonicalRepoKey, ...descriptor } = value as Omit<
     ManagerDescriptor,
     "socketKey" | "profileKey"
   >;
-  return (
-    validCanonicalRepoKey(canonicalRepoKey) &&
-    validLegacyManagerDescriptor(descriptor)
-  );
+  return validCanonicalRepoKey(canonicalRepoKey) && validLegacyManagerDescriptor(descriptor);
 }
 
-function validLegacyManagerDescriptor(
-  value: unknown,
-): value is LegacyManagerDescriptor {
+function validLegacyManagerDescriptor(value: unknown): value is LegacyManagerDescriptor {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const r = value as Record<string, unknown>;
   const keys = [
@@ -3014,18 +2685,14 @@ export function readManagerDescriptorStatus(
   const lockPath = `${path}.lock`;
   let content: string;
   try {
-    if (statSync(path).size > CHIEF_DESCRIPTOR_MAX_BYTES)
-      throw new Error("descriptor too large");
+    if (statSync(path).size > CHIEF_DESCRIPTOR_MAX_BYTES) throw new Error("descriptor too large");
     content = readFileSync(path, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       try {
         if (!statSync(lockPath, { throwIfNoEntry: false })) return undefined;
         if (onPendingPublication) {
-          const { claim, live } = readProcessLockStatus(
-            lockPath,
-            "Manager supervision lease",
-          );
+          const { claim, live } = readProcessLockStatus(lockPath, "Manager supervision lease");
           if (live) {
             onPendingPublication(claim);
             return undefined;
@@ -3045,10 +2712,7 @@ export function readManagerDescriptorStatus(
   } catch (error) {
     throw new Error("Unable to verify Manager descriptor", { cause: error });
   }
-  if (
-    !validManagerDescriptor(descriptor) ||
-    descriptor.canonicalRepoKey !== canonicalRepoKey
-  )
+  if (!validManagerDescriptor(descriptor) || descriptor.canonicalRepoKey !== canonicalRepoKey)
     throw new Error("Unable to verify Manager descriptor");
   let status: ReturnType<typeof readProcessLockStatus>;
   try {
@@ -3056,10 +2720,7 @@ export function readManagerDescriptorStatus(
   } catch (error) {
     throw new Error("Unable to verify Manager descriptor", { cause: error });
   }
-  if (
-    status.claim.pid !== descriptor.claim.pid ||
-    status.claim.id !== descriptor.claim.id
-  ) {
+  if (status.claim.pid !== descriptor.claim.pid || status.claim.id !== descriptor.claim.id) {
     if (onPendingPublication && status.live) {
       onPendingPublication(status.claim);
       return undefined;
@@ -3089,8 +2750,7 @@ export function readManagerDescriptor(
 ): ManagerDescriptor | undefined {
   const status = readManagerDescriptorStatus(runtime, canonicalRepoKey);
   if (!status) return undefined;
-  if (!status.live)
-    throw new Error("Unable to verify Manager supervision lease");
+  if (!status.live) throw new Error("Unable to verify Manager supervision lease");
   return status.descriptor;
 }
 
@@ -3109,21 +2769,10 @@ export function listLiveLegacyManagers(
   runtime: SupervisionRuntime,
   canonicalRepoKey: string,
   workspaceId?: string,
-): Array<
-  LegacyManagerDescriptor & { canonicalRepoKey?: string; localSocket: boolean }
-> {
+): Array<LegacyManagerDescriptor & { canonicalRepoKey?: string; localSocket: boolean }> {
   // Only the selected and native default profiles are known to this process.
-  const defaultRuntimeRoot = join(
-    managerAccountHome(),
-    ".pi",
-    "agent",
-    "pi-herdsman",
-    "runtime",
-  );
-  const profileRoots = new Set([
-    dirname(dirname(runtime.root)),
-    defaultRuntimeRoot,
-  ]);
+  const defaultRuntimeRoot = join(managerAccountHome(), ".pi", "agent", "pi-herdsman", "runtime");
+  const profileRoots = new Set([dirname(dirname(runtime.root)), defaultRuntimeRoot]);
   const socketRoots = [...profileRoots].flatMap((root) => {
     const path = managerIdentityPath(
       join(root, "manager-authority-v1", "managers"),
@@ -3133,8 +2782,7 @@ export function listLiveLegacyManagers(
       new Error(
         "Unable to rule out legacy Manager authority; stop or reconcile the existing Manager before retrying",
       );
-    if (lstatSync(`${path}.unsettled`, { throwIfNoEntry: false }))
-      throw conflict();
+    if (lstatSync(`${path}.unsettled`, { throwIfNoEntry: false })) throw conflict();
     for (const lock of [`${path}.lock`, `${path}.startup.lock`]) {
       if (!lstatSync(lock, { throwIfNoEntry: false })) continue;
       try {
@@ -3147,9 +2795,7 @@ export function listLiveLegacyManagers(
     const parent = join(root, "supervision-v2");
     try {
       return readdirSync(parent, { withFileTypes: true })
-        .filter(
-          (entry) => entry.isDirectory() && /^[0-9a-f]{64}$/.test(entry.name),
-        )
+        .filter((entry) => entry.isDirectory() && /^[0-9a-f]{64}$/.test(entry.name))
         .map((entry) => join(parent, entry.name));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
@@ -3159,15 +2805,11 @@ export function listLiveLegacyManagers(
   return socketRoots.flatMap((root) => {
     const localSocket = root === runtime.root;
     const directory = join(root, "managers");
-    const correlatedPaths = new Set([
-      managerIdentityPath(directory, canonicalRepoKey),
-    ]);
+    const correlatedPaths = new Set([managerIdentityPath(directory, canonicalRepoKey)]);
     if (localSocket && workspaceId !== undefined)
       correlatedPaths.add(managerIdentityPath(directory, workspaceId));
     const paths = new Set([
-      ...managerDescriptorEntries(directory).map((entry) =>
-        join(directory, entry),
-      ),
+      ...managerDescriptorEntries(directory).map((entry) => join(directory, entry)),
       ...correlatedPaths,
     ]);
     return [...paths].flatMap((path) => {
@@ -3176,10 +2818,7 @@ export function listLiveLegacyManagers(
         if (!statSync(lockPath, { throwIfNoEntry: false })) return [];
         let live = true;
         try {
-          live = readProcessLockStatus(
-            lockPath,
-            "Manager supervision lease",
-          ).live;
+          live = readProcessLockStatus(lockPath, "Manager supervision lease").live;
         } catch {
           // An unreadable lock is uncertain. Still check a correlatable descriptor.
         }
@@ -3223,8 +2862,7 @@ export function listManagerDescriptors(
       const candidate: unknown = JSON.parse(readFileSync(path, "utf8"));
       if (
         !validManagerDescriptor(candidate) ||
-        basename(managerDescriptorPath(runtime, candidate.canonicalRepoKey)) !==
-          entry
+        basename(managerDescriptorPath(runtime, candidate.canonicalRepoKey)) !== entry
       )
         throw new Error("Invalid Manager descriptor");
       if (
@@ -3232,10 +2870,7 @@ export function listManagerDescriptors(
         candidate.socketKey !== basename(runtime.root)
       )
         return [];
-      const status = readManagerDescriptorStatus(
-        runtime,
-        candidate.canonicalRepoKey,
-      );
+      const status = readManagerDescriptorStatus(runtime, candidate.canonicalRepoKey);
       return status?.live ? [status.descriptor] : [];
     } catch (error) {
       if (strict) throw error;
@@ -3253,8 +2888,7 @@ export function claimManagerLease(
     !isRuntimeBuild(identity.build) ||
     !validSession(identity.piSessionId) ||
     (identity.piSessionFile !== undefined &&
-      (typeof identity.piSessionFile !== "string" ||
-        !identity.piSessionFile)) ||
+      (typeof identity.piSessionFile !== "string" || !identity.piSessionFile)) ||
     !validNativeIdentity(identity.paneId) ||
     !validNativeIdentity(identity.tabId) ||
     !validNativeIdentity(identity.workspaceId) ||
@@ -3275,9 +2909,7 @@ export function claimManagerLease(
     leaseId: randomUUID(),
     claim: lease.claim,
     piSessionId: identity.piSessionId,
-    ...(identity.piSessionFile !== undefined
-      ? { piSessionFile: identity.piSessionFile }
-      : {}),
+    ...(identity.piSessionFile !== undefined ? { piSessionFile: identity.piSessionFile } : {}),
     paneId: identity.paneId,
     tabId: identity.tabId,
     workspaceId: identity.workspaceId,
@@ -3301,10 +2933,7 @@ export function claimManagerLease(
       if (released) return;
       released = true;
       try {
-        const current = readManagerDescriptor(
-          runtime,
-          identity.canonicalRepoKey,
-        );
+        const current = readManagerDescriptor(runtime, identity.canonicalRepoKey);
         if (current && sameManagerDescriptor(current, descriptor)) {
           unlinkSync(path);
           fsyncDirectory(runtime.managers);
@@ -3370,9 +2999,7 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
   ];
   return (
     required.every((key) => Object.hasOwn(r, key)) &&
-    Object.keys(r).every(
-      (key) => required.includes(key) || optional.includes(key),
-    ) &&
+    Object.keys(r).every((key) => required.includes(key) || optional.includes(key)) &&
     Object.keys(r).length >= required.length &&
     r.version === 2 &&
     UUID.test(String(r.id)) &&
@@ -3381,8 +3008,7 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
     typeof r.text === "string" &&
     r.text.length > 0 &&
     (r.definition === undefined ||
-      (typeof r.definition === "string" &&
-        isAssignedLeadDefinitionName(r.definition))) &&
+      (typeof r.definition === "string" && isAssignedLeadDefinitionName(r.definition))) &&
     (r.gitBaselineSha === undefined ||
       (typeof r.gitBaselineSha === "string" &&
         /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(r.gitBaselineSha))) &&
@@ -3390,20 +3016,16 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
       (typeof r.checkoutPath === "string" &&
         isAbsolute(r.checkoutPath) &&
         normalize(r.checkoutPath) === r.checkoutPath &&
-        ![...r.checkoutPath].some(
-          (character) => character.charCodeAt(0) <= 0x1f,
-        ))) &&
+        ![...r.checkoutPath].some((character) => character.charCodeAt(0) <= 0x1f))) &&
     (r.piSessionFile === undefined ||
       (typeof r.piSessionFile === "string" && r.piSessionFile.length > 0)) &&
     (r.resultBindings === undefined ||
-      (Array.isArray(r.resultBindings) &&
-        r.resultBindings.every(isResultBinding))) &&
+      (Array.isArray(r.resultBindings) && r.resultBindings.every(isResultBinding))) &&
     (r.requiredEvidence === undefined ||
       (Array.isArray(r.requiredEvidence) &&
         r.requiredEvidence.every(isRequiredEvidence) &&
         r.requiredEvidence.every(
-          (evidence) =>
-            "result" in evidence || evidence.sourceAssignmentId === r.id,
+          (evidence) => "result" in evidence || evidence.sourceAssignmentId === r.id,
         ) &&
         new Set(r.requiredEvidence.map((evidence) => evidence.id)).size ===
           r.requiredEvidence.length)) &&
@@ -3442,14 +3064,8 @@ export function writeProjectAssignmentAfter(
   return withProjectAssignmentAuthorityWait(
     () => {
       verifyAuthority?.();
-      const current = readProjectAssignment(
-        runtime,
-        assignment.repoKey,
-        assignment.branch,
-      );
-      if (
-        expected ? !current || !isDeepStrictEqual(current, expected) : !!current
-      )
+      const current = readProjectAssignment(runtime, assignment.repoKey, assignment.branch);
+      if (expected ? !current || !isDeepStrictEqual(current, expected) : !!current)
         throw new Error(
           expected
             ? "Project assignment changed before required evidence was updated"
@@ -3467,19 +3083,14 @@ function writeProjectAssignmentUnlocked(
   assignment: ProjectAssignment,
 ): void {
   assignment = upgradeProjectAssignmentEvidence(assignment);
-  if (!validProjectAssignment(assignment))
-    throw new Error("Invalid project assignment");
+  if (!validProjectAssignment(assignment)) throw new Error("Invalid project assignment");
   const content = `${JSON.stringify(assignment)}\n`;
   if (
     projectAssignmentBytes(assignment) > PROJECT_ASSIGNMENT_MAX_BYTES ||
     Buffer.byteLength(content, "utf8") > PROJECT_ASSIGNMENT_FILE_MAX_BYTES
   )
     throw new Error("Project assignment is too large");
-  const path = projectAssignmentPath(
-    runtime,
-    assignment.repoKey,
-    assignment.branch,
-  );
+  const path = projectAssignmentPath(runtime, assignment.repoKey, assignment.branch);
   const directory = dirname(path);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(runtime.root, 0o700);
@@ -3512,18 +3123,10 @@ function writeProjectAssignmentUnlocked(
   if (cleanupFailed) throw cleanupError;
 }
 
-function upgradeProjectAssignmentEvidence(
-  assignment: ProjectAssignment,
-): ProjectAssignment {
+function upgradeProjectAssignmentEvidence(assignment: ProjectAssignment): ProjectAssignment {
   if (!assignment.requiredEvidence?.length) return assignment;
-  const requiredEvidence = assignment.requiredEvidence.map(
-    upgradeAndVerifyRequiredEvidence,
-  );
-  if (
-    requiredEvidence.every(
-      (evidence, index) => evidence === assignment.requiredEvidence![index],
-    )
-  )
+  const requiredEvidence = assignment.requiredEvidence.map(upgradeAndVerifyRequiredEvidence);
+  if (requiredEvidence.every((evidence, index) => evidence === assignment.requiredEvidence![index]))
     return assignment;
   return {
     ...assignment,
@@ -3540,11 +3143,7 @@ export function migrateProjectAssignmentEvidence(
 ): ProjectAssignment | undefined {
   return withProjectAssignmentLock(() => {
     const current = readProjectAssignment(runtime, repoKey, branch);
-    if (
-      !current ||
-      (expectedAssignmentId && current.id !== expectedAssignmentId)
-    )
-      return undefined;
+    if (!current || (expectedAssignmentId && current.id !== expectedAssignmentId)) return undefined;
     const upgraded = upgradeProjectAssignmentEvidence(current);
     if (upgraded !== current) writeProjectAssignmentUnlocked(runtime, upgraded);
     return upgraded;
@@ -3557,11 +3156,7 @@ export function migrateProjectAssignmentEvidenceAfter(
   signal?: AbortSignal,
 ): Promise<ProjectAssignment | undefined> {
   return withProjectAssignmentAuthorityWait(() => {
-    const current = readProjectAssignment(
-      runtime,
-      expected.repoKey,
-      expected.branch,
-    );
+    const current = readProjectAssignment(runtime, expected.repoKey, expected.branch);
     if (!current || !isDeepStrictEqual(current, expected)) return undefined;
     const upgraded = upgradeProjectAssignmentEvidence(current);
     if (upgraded !== current) writeProjectAssignmentUnlocked(runtime, upgraded);
@@ -3587,10 +3182,8 @@ function readProjectAssignmentFile(
   let value: unknown;
   try {
     const file = lstatSync(path);
-    if (!file.isFile() || file.isSymbolicLink())
-      throw new Error("invalid file");
-    if (file.size > PROJECT_ASSIGNMENT_FILE_MAX_BYTES)
-      throw new Error("file is too large");
+    if (!file.isFile() || file.isSymbolicLink()) throw new Error("invalid file");
+    if (file.size > PROJECT_ASSIGNMENT_FILE_MAX_BYTES) throw new Error("file is too large");
     value = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
@@ -3615,8 +3208,7 @@ function readProjectAssignmentFile(
     throw projectAssignmentReadError(path, "assignment payload is too large");
   if (
     (repoKey !== undefined && value.repoKey !== repoKey) ||
-    basename(dirname(path)) !==
-      createHash("sha256").update(value.repoKey).digest("hex") ||
+    basename(dirname(path)) !== createHash("sha256").update(value.repoKey).digest("hex") ||
     (branch !== undefined && value.branch !== branch) ||
     basename(path) !==
       `${createHash("sha256").update(value.branch).digest("hex")}${pending ? `.${value.id}` : ""}.json`
@@ -3627,9 +3219,7 @@ function readProjectAssignmentFile(
 
 function safeFilesystemCode(error: unknown): string {
   const code = (error as NodeJS.ErrnoException)?.code;
-  return typeof code === "string" && /^[A-Z0-9_]{1,32}$/.test(code)
-    ? ` (${code})`
-    : "";
+  return typeof code === "string" && /^[A-Z0-9_]{1,32}$/.test(code) ? ` (${code})` : "";
 }
 
 function projectAssignmentReadError(path: string, reason: string): Error {
@@ -3651,15 +3241,9 @@ export function listProjectAssignments(
   return entries
     .filter((entry) => /^[a-f0-9]{64}\.json$/.test(entry))
     .map((entry) => {
-      const assignment = readProjectAssignmentFile(
-        join(directory, entry),
-        repoKey,
-      );
+      const assignment = readProjectAssignmentFile(join(directory, entry), repoKey);
       if (!assignment)
-        throw projectAssignmentReadError(
-          join(directory, entry),
-          "file disappeared while listing",
-        );
+        throw projectAssignmentReadError(join(directory, entry), "file disappeared while listing");
       return assignment;
     })
     .sort((a, b) => a.branch.localeCompare(b.branch));
@@ -3680,9 +3264,7 @@ export function removeProjectAssignment(
   repoKey: string,
   branch: string,
 ): void {
-  withProjectAssignmentLock(() =>
-    removeProjectAssignmentUnlocked(runtime, repoKey, branch),
-  );
+  withProjectAssignmentLock(() => removeProjectAssignmentUnlocked(runtime, repoKey, branch));
 }
 
 // Caller holds the exact branch lock; the global lock serializes authority writers.
@@ -3697,22 +3279,12 @@ export function retireProjectAssignment(
       dirname(runtime.root),
       runtime.root,
       runtime.assignments,
-      dirname(
-        projectAssignmentPath(runtime, expected.repoKey, expected.branch),
-      ),
+      dirname(projectAssignmentPath(runtime, expected.repoKey, expected.branch)),
     ])
       assignmentDirectory(directory);
-    const current = readProjectAssignment(
-      runtime,
-      expected.repoKey,
-      expected.branch,
-    );
+    const current = readProjectAssignment(runtime, expected.repoKey, expected.branch);
     if (!current || current.id !== expected.id) return false;
-    const source = projectAssignmentPath(
-      runtime,
-      current.repoKey,
-      current.branch,
-    );
+    const source = projectAssignmentPath(runtime, current.repoKey, current.branch);
     const destination = pendingRetirementPath(runtime, current);
     const root = join(runtime.root, "retirements");
     for (const directory of [root, dirname(destination)]) {
@@ -3735,17 +3307,9 @@ export function retireProjectAssignment(
   });
 }
 
-function pendingRetirementPath(
-  runtime: SupervisionRuntime,
-  expected: ProjectAssignment,
-): string {
-  if (!validProjectAssignment(expected))
-    throw new Error("Invalid project assignment");
-  const active = projectAssignmentPath(
-    runtime,
-    expected.repoKey,
-    expected.branch,
-  );
+function pendingRetirementPath(runtime: SupervisionRuntime, expected: ProjectAssignment): string {
+  if (!validProjectAssignment(expected)) throw new Error("Invalid project assignment");
+  const active = projectAssignmentPath(runtime, expected.repoKey, expected.branch);
   return join(
     runtime.root,
     "retirements",
@@ -3764,9 +3328,7 @@ export function listPendingRetirements(
     onScanned?: (entry: string) => void;
   } = {},
 ): ProjectAssignment[] {
-  const repository = basename(
-    dirname(projectAssignmentPath(runtime, repoKey, "lookup")),
-  );
+  const repository = basename(dirname(projectAssignmentPath(runtime, repoKey, "lookup")));
   const root = join(runtime.root, "retirements");
   const directory = join(root, repository);
   let entries: string[];
@@ -3803,11 +3365,7 @@ export function listPendingRetirements(
     const path = join(directory, entry);
     try {
       const record = readProjectAssignmentFile(path, repoKey, undefined, true);
-      if (!record)
-        throw projectAssignmentReadError(
-          path,
-          "file disappeared while listing",
-        );
+      if (!record) throw projectAssignmentReadError(path, "file disappeared while listing");
       records.push(record);
       if (records.length >= recordLimit) break;
     } catch (error) {
@@ -3816,9 +3374,7 @@ export function listPendingRetirements(
       options.onReadError(failure);
     }
   }
-  return records.sort(
-    (a, b) => a.branch.localeCompare(b.branch) || a.id.localeCompare(b.id),
-  );
+  return records.sort((a, b) => a.branch.localeCompare(b.branch) || a.id.localeCompare(b.id));
 }
 
 export function removePendingRetirement(
@@ -3837,15 +3393,9 @@ export function removePendingRetirement(
       dirname(path),
     ])
       assignmentDirectory(directory);
-    const record = readProjectAssignmentFile(
-      path,
-      expected.repoKey,
-      expected.branch,
-      true,
-    );
+    const record = readProjectAssignmentFile(path, expected.repoKey, expected.branch, true);
     if (!record) return;
-    if (record.id !== expected.id)
-      throw new Error("Pending retirement identity mismatch");
+    if (record.id !== expected.id) throw new Error("Pending retirement identity mismatch");
     unlinkSync(path);
     fsyncDirectory(dirname(path));
   });
@@ -3876,10 +3426,7 @@ function assignmentDirectory(path: string): void {
     throw new Error(`Invalid project assignment authority directory ${path}`);
 }
 
-function scanGlobalProjectAssignments(): Map<
-  string,
-  GlobalProjectAssignment[]
-> {
+function scanGlobalProjectAssignments(): Map<string, GlobalProjectAssignment[]> {
   const dataRoot = herdsmanDataRoot();
   const runtimeRoot = join(dataRoot, "runtime");
   const root = join(runtimeRoot, "supervision-v2");
@@ -3899,13 +3446,9 @@ function scanGlobalProjectAssignments(): Map<
   for (const socket of sockets) {
     if (isIncidentalMetadata(socket)) continue;
     if (!/^[a-f0-9]{64}$/.test(socket.name))
-      throw new Error(
-        `Unexpected project assignment socket entry ${socket.name}`,
-      );
+      throw new Error(`Unexpected project assignment socket entry ${socket.name}`);
     if (!socket.isDirectory() || socket.isSymbolicLink())
-      throw new Error(
-        `Invalid project assignment socket directory ${socket.name}`,
-      );
+      throw new Error(`Invalid project assignment socket directory ${socket.name}`);
     const socketRoot = join(root, socket.name);
     assignmentDirectory(socketRoot);
     const assignmentsRoot = join(socketRoot, "assignments");
@@ -3921,13 +3464,9 @@ function scanGlobalProjectAssignments(): Map<
     for (const repository of repositories) {
       if (isIncidentalMetadata(repository)) continue;
       if (!/^[a-f0-9]{64}$/.test(repository.name))
-        throw new Error(
-          `Unexpected project assignment repository entry ${repository.name}`,
-        );
+        throw new Error(`Unexpected project assignment repository entry ${repository.name}`);
       if (!repository.isDirectory() || repository.isSymbolicLink())
-        throw new Error(
-          `Invalid project assignment repository directory ${repository.name}`,
-        );
+        throw new Error(`Invalid project assignment repository directory ${repository.name}`);
       const directory = join(assignmentsRoot, repository.name);
       assignmentDirectory(directory);
       for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -3945,9 +3484,7 @@ function scanGlobalProjectAssignments(): Map<
         // Atomic writer temporaries are not committed authority records.
         if (/^\..+\.[a-f0-9-]{36}\.tmp$/.test(entry.name)) {
           if (!entry.isFile() || entry.isSymbolicLink())
-            throw new Error(
-              `Invalid project assignment publication temporary ${entry.name}`,
-            );
+            throw new Error(`Invalid project assignment publication temporary ${entry.name}`);
           continue;
         }
         if (!/^[a-f0-9]{64}\.json$/.test(entry.name))
@@ -3955,20 +3492,12 @@ function scanGlobalProjectAssignments(): Map<
         if (!entry.isFile() || entry.isSymbolicLink())
           throw new Error(`Invalid project assignment record ${entry.name}`);
         const path = join(directory, entry.name);
-        const assignment = readProjectAssignmentFile(
-          path,
-          undefined,
-          undefined,
-        );
+        const assignment = readProjectAssignmentFile(path, undefined, undefined);
         if (
           !assignment ||
-          createHash("sha256").update(assignment.repoKey).digest("hex") !==
-            repository.name
+          createHash("sha256").update(assignment.repoKey).digest("hex") !== repository.name
         )
-          throw projectAssignmentReadError(
-            path,
-            "assignment repository hash mismatch",
-          );
+          throw projectAssignmentReadError(path, "assignment repository hash mismatch");
         const matches = bySession.get(assignment.id) ?? [];
         matches.push({ socketHash: socket.name, assignment });
         bySession.set(assignment.id, matches);
@@ -3983,15 +3512,10 @@ function scanGlobalProjectAssignments(): Map<
 export function withProjectAssignmentAuthority<T>(
   operation: (assignments: Map<string, GlobalProjectAssignment[]>) => T,
 ): T {
-  return withProjectAssignmentLock(() =>
-    operation(scanGlobalProjectAssignments()),
-  );
+  return withProjectAssignmentLock(() => operation(scanGlobalProjectAssignments()));
 }
 
-export function globalProjectAssignmentSnapshot(): Map<
-  string,
-  GlobalProjectAssignment[]
-> {
+export function globalProjectAssignmentSnapshot(): Map<string, GlobalProjectAssignment[]> {
   return withProjectAssignmentAuthority((snapshot) => snapshot);
 }
 
@@ -4042,10 +3566,7 @@ export function projectMessageEnvelope(
     : `${projectMessageLabel(kind)} for assignment ${branch} from lead ${sessionId}:\n\n`;
 }
 
-export type ProjectMessageHeader = Omit<
-  ProjectMessage,
-  "text" | "resultBindings"
-> & {
+export type ProjectMessageHeader = Omit<ProjectMessage, "text" | "resultBindings"> & {
   text: string;
   resultBindings?: ResultBinding[];
   bodyRef?: OverflowBodyRef;
@@ -4081,18 +3602,11 @@ function validProjectMessage(value: unknown): value is ProjectMessage {
       ].includes(key),
     ) &&
     Object.keys(r).length >= 7 &&
-    [
-      "version",
-      "id",
-      "repoKey",
-      "branch",
-      "fromSessionId",
-      "text",
-      "createdAt",
-    ].every((key) => Object.hasOwn(r, key)) &&
+    ["version", "id", "repoKey", "branch", "fromSessionId", "text", "createdAt"].every((key) =>
+      Object.hasOwn(r, key),
+    ) &&
     r.version === 2 &&
-    (r.senderEnvironment === undefined ||
-      validSenderEnvironment(r.senderEnvironment)) &&
+    (r.senderEnvironment === undefined || validSenderEnvironment(r.senderEnvironment)) &&
     UUID.test(String(r.id)) &&
     validNativeIdentity(r.repoKey) &&
     validNativeIdentity(r.branch) &&
@@ -4100,9 +3614,7 @@ function validProjectMessage(value: unknown): value is ProjectMessage {
     typeof r.text === "string" &&
     (r.bodyRef === undefined
       ? r.text.length > 0
-      : r.text === "" &&
-        r.resultBindings === undefined &&
-        validOverflowBodyRef(r.bodyRef)) &&
+      : r.text === "" && r.resultBindings === undefined && validOverflowBodyRef(r.bodyRef)) &&
     (r.kind === undefined ||
       [
         "supervisor_message",
@@ -4112,8 +3624,7 @@ function validProjectMessage(value: unknown): value is ProjectMessage {
         "execution_cancelled",
       ].includes(r.kind as ProjectMessageKind)) &&
     (r.resultBindings === undefined ||
-      (Array.isArray(r.resultBindings) &&
-        r.resultBindings.every(isResultBinding))) &&
+      (Array.isArray(r.resultBindings) && r.resultBindings.every(isResultBinding))) &&
     Number.isInteger(r.createdAt) &&
     (r.createdAt as number) >= 0
   );
@@ -4123,32 +3634,20 @@ export function projectMessageBytes(record: ProjectMessage): number {
   return Buffer.byteLength(`${JSON.stringify(record)}\n`, "utf8");
 }
 
-export function writeProjectMessage(
-  record: ProjectMessage,
-  runtime: SupervisionRuntime,
-): void {
+export function writeProjectMessage(record: ProjectMessage, runtime: SupervisionRuntime): void {
   if (!validProjectMessage(record) || (record as any).bodyRef !== undefined)
     throw new Error("Invalid project message");
   const path = join(
     projectMessageDirectory(runtime, record.repoKey, record.branch),
     `${record.id}.json`,
   );
-  withChiefMessageLock(path, () =>
-    writeProjectMessageUnlocked(record, runtime),
-  );
+  withChiefMessageLock(path, () => writeProjectMessageUnlocked(record, runtime));
 }
 
-function writeProjectMessageUnlocked(
-  record: ProjectMessage,
-  runtime: SupervisionRuntime,
-): void {
+function writeProjectMessageUnlocked(record: ProjectMessage, runtime: SupervisionRuntime): void {
   if (!validProjectMessage(record) || (record as any).bodyRef !== undefined)
     throw new Error("Invalid project message");
-  const directory = projectMessageDirectory(
-    runtime,
-    record.repoKey,
-    record.branch,
-  );
+  const directory = projectMessageDirectory(runtime, record.repoKey, record.branch);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(runtime.root, 0o700);
   chmodSync(runtime.assignments, 0o700);
@@ -4159,16 +3658,11 @@ function writeProjectMessageUnlocked(
   if (projectMessageBytes(record) > COORDINATION_MESSAGE_MAX_BYTES) {
     const bodyRef = writeOverflowBody(`${path}.body`, {
       text: record.text,
-      ...(record.resultBindings
-        ? { resultBindings: record.resultBindings }
-        : {}),
+      ...(record.resultBindings ? { resultBindings: record.resultBindings } : {}),
     });
     stored = { ...record, text: "", bodyRef };
     delete (stored as any).resultBindings;
-    if (
-      projectMessageBytes(stored as ProjectMessage) >
-      COORDINATION_MESSAGE_MAX_BYTES
-    )
+    if (projectMessageBytes(stored as ProjectMessage) > COORDINATION_MESSAGE_MAX_BYTES)
       throw new Error("Project message routing metadata is too large");
   }
   const temporary = join(directory, `.${record.id}.${randomUUID()}.tmp`);
@@ -4195,9 +3689,7 @@ function writeProjectMessageUnlocked(
     }
     if (existing !== undefined) {
       if (JSON.stringify(existing) !== JSON.stringify(record))
-        throw new Error(
-          "Project message identity conflicts with durable payload",
-        );
+        throw new Error("Project message identity conflicts with durable payload");
     } else {
       renameSync(temporary, path);
       chmodSync(path, 0o600);
@@ -4238,10 +3730,7 @@ export function listProjectMessages(
         value = readProjectMessageFile(join(directory, entry));
       } catch (error) {
         // Pending records may be consumed after directory enumeration.
-        if (
-          error instanceof Error &&
-          (error.cause as NodeJS.ErrnoException)?.code === "ENOENT"
-        )
+        if (error instanceof Error && (error.cause as NodeJS.ErrnoException)?.code === "ENOENT")
           return [];
         throw error;
       }
@@ -4273,15 +3762,10 @@ export function listProjectMessageHeaders(
       try {
         const value = readStoredProjectMessageFile(join(directory, entry));
         if (value.repoKey !== repoKey || value.branch !== branch)
-          throw new Error(
-            `Project message identity does not match ${directory}`,
-          );
+          throw new Error(`Project message identity does not match ${directory}`);
         return [value];
       } catch (error) {
-        if (
-          error instanceof Error &&
-          (error.cause as NodeJS.ErrnoException)?.code === "ENOENT"
-        )
+        if (error instanceof Error && (error.cause as NodeJS.ErrnoException)?.code === "ENOENT")
           return [];
         if (onReadError) {
           onReadError(error);
@@ -4318,8 +3802,7 @@ export function removeProjectMessage(
   if (!UUID.test(id)) throw new Error("Invalid project message ID");
   const directory = projectMessageDirectory(runtime, repoKey, branch);
   try {
-    if (!statSync(directory).isDirectory())
-      throw new Error("Invalid project message directory");
+    if (!statSync(directory).isDirectory()) throw new Error("Invalid project message directory");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw error;
@@ -4354,10 +3837,7 @@ function readProjectMessageFile(path: string): ProjectMessage {
     }
     return stored as ProjectMessage;
   } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message.startsWith("Unable to read project message ")
-    )
+    if (error instanceof Error && error.message.startsWith("Unable to read project message "))
       throw error;
     throw new Error(`Unable to read project message ${path}`, { cause: error });
   }
@@ -4365,13 +3845,9 @@ function readProjectMessageFile(path: string): ProjectMessage {
 
 function readStoredProjectMessageFile(path: string): StoredProjectMessage {
   try {
-    if (statSync(path).size > COORDINATION_MESSAGE_MAX_BYTES)
-      throw new Error("large");
+    if (statSync(path).size > COORDINATION_MESSAGE_MAX_BYTES) throw new Error("large");
     const stored: unknown = JSON.parse(readFileSync(path, "utf8"));
-    if (
-      !validProjectMessage(stored) ||
-      basename(path) !== `${(stored as ProjectMessage).id}.json`
-    )
+    if (!validProjectMessage(stored) || basename(path) !== `${(stored as ProjectMessage).id}.json`)
       throw new Error("invalid");
     return stored as StoredProjectMessage;
   } catch (error) {
@@ -4383,29 +3859,15 @@ export function removeProjectMessagesForAssignment(
   runtime: SupervisionRuntime,
   assignment: ProjectAssignment,
 ): void {
-  for (const message of listProjectMessageHeaders(
-    runtime,
-    assignment.repoKey,
-    assignment.branch,
-  )) {
+  for (const message of listProjectMessageHeaders(runtime, assignment.repoKey, assignment.branch)) {
     if (message.fromSessionId === assignment.id)
-      removeProjectMessage(
-        runtime,
-        assignment.repoKey,
-        assignment.branch,
-        message.id,
-      );
+      removeProjectMessage(runtime, assignment.repoKey, assignment.branch, message.id);
   }
 }
 
-export function recoverStaleProjectMessages(
-  runtime: SupervisionRuntime,
-  repoKey: string,
-): void {
+export function recoverStaleProjectMessages(runtime: SupervisionRuntime, repoKey: string): void {
   withProjectAssignmentLock(() => {
-    const directory = dirname(
-      projectAssignmentPath(runtime, repoKey, "lookup"),
-    );
+    const directory = dirname(projectAssignmentPath(runtime, repoKey, "lookup"));
     let entries: string[];
     try {
       const dataRoot = herdsmanDataRoot();
@@ -4423,9 +3885,7 @@ export function recoverStaleProjectMessages(
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
       throw error;
     }
-    for (const entry of entries.filter((entry) =>
-      /^[a-f0-9]{64}\.messages$/.test(entry),
-    )) {
+    for (const entry of entries.filter((entry) => /^[a-f0-9]{64}\.messages$/.test(entry))) {
       const messages = join(directory, entry);
       assignmentDirectory(messages);
       for (const file of readdirSync(messages).filter(
@@ -4436,17 +3896,13 @@ export function recoverStaleProjectMessages(
         try {
           message = readStoredProjectMessageFile(path);
         } catch (error) {
-          if (
-            error instanceof Error &&
-            (error.cause as NodeJS.ErrnoException)?.code === "ENOENT"
-          )
+          if (error instanceof Error && (error.cause as NodeJS.ErrnoException)?.code === "ENOENT")
             continue;
           throw error;
         }
         if (
           message.repoKey !== repoKey ||
-          projectMessageDirectory(runtime, message.repoKey, message.branch) !==
-            messages
+          projectMessageDirectory(runtime, message.repoKey, message.branch) !== messages
         )
           throw new Error(`Project message identity does not match ${path}`);
         const current = readProjectAssignment(runtime, repoKey, message.branch);
@@ -4458,10 +3914,7 @@ export function recoverStaleProjectMessages(
 }
 
 /** Advisory only. Delivery must still verify current assignment authority. */
-export function mightHaveProjectMessages(
-  runtime: SupervisionRuntime,
-  repoKey: string,
-): boolean {
+export function mightHaveProjectMessages(runtime: SupervisionRuntime, repoKey: string): boolean {
   const directory = dirname(projectAssignmentPath(runtime, repoKey, "lookup"));
   let entries: import("node:fs").Dirent[];
   try {
@@ -4519,9 +3972,7 @@ export function verifyManagerCoordinationAuthority(
     coordinator.role !== "manager" ||
     coordinator.piSessionId !== descriptor.piSessionId
   )
-    throw new Error(
-      "Manager authority exists but its coordination state could not be verified",
-    );
+    throw new Error("Manager authority exists but its coordination state could not be verified");
   requireCompatibleBuild(
     build,
     descriptor.build,
@@ -4562,12 +4013,7 @@ export async function leadSupervisorState(
       ctx: ExtensionContext,
       sessionId: string,
       workspaceId: string,
-    ): Promise<
-      | { kind: "assigned" }
-      | { kind: "manager" }
-      | { kind: "chief" }
-      | { kind: "none" }
-    >;
+    ): Promise<{ kind: "assigned" } | { kind: "manager" } | { kind: "chief" } | { kind: "none" }>;
     currentManager(ctx: ExtensionContext): Promise<unknown | undefined>;
   },
 ): Promise<{ content: string; destination?: "manager" | "chief" }> {
@@ -4622,9 +4068,7 @@ export function supervisorStateMessage(
   content: string,
   latestContent: string | undefined,
 ): { customType: string; content: string; display: false } | undefined {
-  return latestContent === content
-    ? undefined
-    : { customType, content, display: false };
+  return latestContent === content ? undefined : { customType, content, display: false };
 }
 
 export type SupervisedLead = {
@@ -4647,9 +4091,7 @@ export type SupervisedLead = {
   agents: Array<{ id: string; label: string; state: RuntimeState }>;
 };
 
-export function staffToolName(
-  action: "inspect" | "transcript" | "message",
-): string {
+export function staffToolName(action: "inspect" | "transcript" | "message"): string {
   switch (action) {
     case "inspect":
       return "inspect_staff";
@@ -4740,9 +4182,7 @@ export type ProjectWorkSnapshot = Readonly<{
 export function projectTaskSummary(text: string): string | undefined {
   const task = [...text]
     .map((character) =>
-      character.charCodeAt(0) <= 0x1f || character.charCodeAt(0) === 0x7f
-        ? " "
-        : character,
+      character.charCodeAt(0) <= 0x1f || character.charCodeAt(0) === 0x7f ? " " : character,
     )
     .join("")
     .replace(/\s+/gu, " ")
@@ -4751,9 +4191,7 @@ export function projectTaskSummary(text: string): string | undefined {
   if (!task) return undefined;
 
   const characters = Array.from(task);
-  return characters.length <= 160
-    ? task
-    : `${characters.slice(0, 159).join("")}…`;
+  return characters.length <= 160 ? task : `${characters.slice(0, 159).join("")}…`;
 }
 /** Derive work from one caller-validated Lead inventory and one Herdr worktree list. */
 export function projectWorkSnapshot(options: {
@@ -4773,10 +4211,7 @@ export function projectWorkSnapshot(options: {
       }>;
     }>
   >;
-  leads: readonly Pick<
-    SupervisedLead,
-    "lead" | "workspaceId" | "runtimeState"
-  >[];
+  leads: readonly Pick<SupervisedLead, "lead" | "workspaceId" | "runtimeState">[];
   unverified?: readonly UnverifiedLead[];
 }): ProjectWorkSnapshot[] {
   return options.assignments.map((assignment) => {
@@ -4787,8 +4222,7 @@ export function projectWorkSnapshot(options: {
         : []
       : options.worktrees.filter((item) => item.branch === assignment.branch);
     const exact = options.leads.filter((lead) => lead.lead === assignment.id);
-    const uncertain =
-      options.unverified?.filter((lead) => lead.lead === assignment.id) ?? [];
+    const uncertain = options.unverified?.filter((lead) => lead.lead === assignment.id) ?? [];
     let status: ProjectWorkStatus;
     let runtimeState: RuntimeState | undefined;
     let issue: string | undefined;
@@ -4811,10 +4245,7 @@ export function projectWorkSnapshot(options: {
       issue = uncertain[0]!.issue;
     } else {
       const workspaceId = worktrees[0]?.open_workspace_id ?? undefined;
-      if (
-        exact.length === 1 &&
-        (!workspaceId || exact[0]!.workspaceId !== workspaceId)
-      ) {
+      if (exact.length === 1 && (!workspaceId || exact[0]!.workspaceId !== workspaceId)) {
         status = "conflict";
         issue = "assigned Lead is running outside its branch worktree";
       } else if (exact.length === 1) {
@@ -4842,8 +4273,7 @@ export function projectWorkSnapshot(options: {
     };
   });
 }
-export type SupervisionPresentationSnapshot =
-  SupervisionSnapshot | ChiefManagerReportSnapshot;
+export type SupervisionPresentationSnapshot = SupervisionSnapshot | ChiefManagerReportSnapshot;
 export type RuntimeState =
   | "idle"
   | "working"
@@ -4896,10 +4326,7 @@ export function leadCoordinationStatePath(
   piSessionId: string,
 ): string {
   if (!validSession(piSessionId)) throw new Error("Invalid lead session ID");
-  return join(
-    runtime.leads,
-    createHash("sha256").update(piSessionId).digest("hex") + ".json",
-  );
+  return join(runtime.leads, createHash("sha256").update(piSessionId).digest("hex") + ".json");
 }
 function validLeadState(value: unknown): value is CoordinatorState {
   if (!value || typeof value !== "object") return false;
@@ -4907,11 +4334,7 @@ function validLeadState(value: unknown): value is CoordinatorState {
   const keys = ["version", "instanceId", "piSessionId", "updatedAt"];
   if (
     Object.keys(r).some(
-      (k) =>
-        !keys.includes(k) &&
-        k !== "role" &&
-        k !== "build" &&
-        k !== "startupAttestation",
+      (k) => !keys.includes(k) && k !== "role" && k !== "build" && k !== "startupAttestation",
     ) ||
     keys.some((k) => !Object.hasOwn(r, k))
   )
@@ -4923,27 +4346,15 @@ function validLeadState(value: unknown): value is CoordinatorState {
       typeof attestation === "object" &&
       !Array.isArray(attestation) &&
       Object.keys(attestation).every((key) =>
-        [
-          "kind",
-          "assignmentId",
-          "generation",
-          "result",
-          "launchConfiguration",
-        ].includes(key),
+        ["kind", "assignmentId", "generation", "result", "launchConfiguration"].includes(key),
       ) &&
       (attestation as any).kind === "model_restore" &&
       (attestation as any).assignmentId === r.piSessionId &&
       (attestation as any).generation === r.instanceId &&
-      ["verified", "definition_override", "no_saved_model"].includes(
-        (attestation as any).result,
-      ) &&
-      ((attestation as LeadStartupAttestation).launchConfiguration ===
-        undefined ||
-        (typeof (attestation as LeadStartupAttestation).launchConfiguration ===
-          "string" &&
-          /^[0-9a-f]{64}$/u.test(
-            (attestation as LeadStartupAttestation).launchConfiguration!,
-          ))));
+      ["verified", "definition_override", "no_saved_model"].includes((attestation as any).result) &&
+      ((attestation as LeadStartupAttestation).launchConfiguration === undefined ||
+        (typeof (attestation as LeadStartupAttestation).launchConfiguration === "string" &&
+          /^[0-9a-f]{64}$/u.test((attestation as LeadStartupAttestation).launchConfiguration!))));
   return (
     r.version === 1 &&
     (r.build === undefined || isRuntimeBuild(r.build)) &&
@@ -4967,14 +4378,9 @@ export function readLeadCoordinationState(
     const value: unknown = JSON.parse(text);
     const currentState =
       value && typeof value === "object" && !Array.isArray(value)
-        ? Object.fromEntries(
-            Object.entries(value).filter(([key]) => key !== "pendingAsk"),
-          )
+        ? Object.fromEntries(Object.entries(value).filter(([key]) => key !== "pendingAsk"))
         : value;
-    if (
-      !validLeadState(currentState) ||
-      currentState.piSessionId !== piSessionId
-    )
+    if (!validLeadState(currentState) || currentState.piSessionId !== piSessionId)
       throw new Error("invalid lead state");
     return currentState;
   } catch (e) {
@@ -4986,8 +4392,7 @@ export function writeLeadCoordinationState(
   runtime: SupervisionRuntime,
   state: LeadCoordinationState,
 ): string {
-  if (!state.build || !validLeadState(state))
-    throw new Error("Invalid lead coordination state");
+  if (!state.build || !validLeadState(state)) throw new Error("Invalid lead coordination state");
   leadStateDirectory(runtime);
   const path = leadCoordinationStatePath(runtime, state.piSessionId);
   const content = JSON.stringify(state) + "\n";
@@ -5018,10 +4423,7 @@ export function invalidateLeadCoordinationState(
 
 export function normalizeHerdrLifecycleState(agent: any): RuntimeState {
   const state = agent?.agent_status;
-  return state === "idle" ||
-    state === "working" ||
-    state === "blocked" ||
-    state === "done"
+  return state === "idle" || state === "working" || state === "blocked" || state === "done"
     ? state
     : "unknown";
 }
@@ -5094,9 +4496,7 @@ export function projectSupervision(options: {
       options.excludedSessionIds?.has(agent.sessionId) ||
       options.managerSupervisedLeadSessionIds?.has(agent.sessionId) ||
       options.managedAgentSessionIds?.has(agent.sessionId) ||
-      duplicatePhysical.has(
-        `${agent.workspaceId}\0${agent.tabId}\0${agent.paneId}`,
-      )
+      duplicatePhysical.has(`${agent.workspaceId}\0${agent.tabId}\0${agent.paneId}`)
     )
       continue;
     const stateBuild = state.build;
@@ -5126,9 +4526,7 @@ export function projectSupervision(options: {
       provenance?.repoName && provenance.branch
         ? `${provenance.repoName}/${provenance.branch}`
         : provenance?.workspaceLabel ||
-          (provenance?.workspaceCwd
-            ? basename(provenance.workspaceCwd)
-            : undefined) ||
+          (provenance?.workspaceCwd ? basename(provenance.workspaceCwd) : undefined) ||
           agent.workspaceId;
     const tokensName =
       typeof agent.tokens?.pi_herdsman_name === "string"
@@ -5138,21 +4536,13 @@ export function projectSupervision(options: {
     const tabLabel = agent.tabLabel?.trim();
     const name =
       tokensName ||
-      (herdrName &&
-      herdrName !== agent.sessionId &&
-      !/_[0-9a-f]{16}$/iu.test(herdrName)
+      (herdrName && herdrName !== agent.sessionId && !/_[0-9a-f]{16}$/iu.test(herdrName)
         ? herdrName
         : undefined) ||
       tabLabel ||
       `lead-${agent.sessionId.slice(0, 8)}`;
-    const herdRunStartedAt = metadataInteger(
-      agent.tokens,
-      "pi_herdsman_herd_run_started_at",
-    );
-    const contextPercent = metadataInteger(
-      agent.tokens,
-      "pi_herdsman_context_percent",
-    );
+    const herdRunStartedAt = metadataInteger(agent.tokens, "pi_herdsman_herd_run_started_at");
+    const contextPercent = metadataInteger(agent.tokens, "pi_herdsman_context_percent");
     leads.push({
       lead: agent.sessionId,
       ...(herdRunStartedAt !== undefined ? { herdRunStartedAt } : {}),
@@ -5167,10 +4557,7 @@ export function projectSupervision(options: {
       runtimeState,
       agentCounts: { active: 0, blocked: 0, total: 0 },
       ...(agent.piSessionFile ? { piSessionFile: agent.piSessionFile } : {}),
-      availableActions: [
-        "inspect",
-        ...(agent.piSessionFile ? ["transcript" as const] : []),
-      ],
+      availableActions: ["inspect", ...(agent.piSessionFile ? ["transcript" as const] : [])],
       agents: [],
     });
   }
@@ -5178,8 +4565,7 @@ export function projectSupervision(options: {
   const ambiguousAgents = new Set<string>();
   const byId = new Map<string, ValidatedManagedAgentEvidence>();
   for (const managedAgent of options.managedAgents) {
-    if (byId.has(managedAgent.piSessionId))
-      ambiguousAgents.add(managedAgent.piSessionId);
+    if (byId.has(managedAgent.piSessionId)) ambiguousAgents.add(managedAgent.piSessionId);
     else byId.set(managedAgent.piSessionId, managedAgent);
   }
   for (const managedAgent of options.managedAgents) {
@@ -5214,25 +4600,17 @@ export function projectSupervision(options: {
   for (const lead of leads) {
     lead.availableActions.push("message");
   }
-  leads.sort(
-    (a, b) =>
-      a.displayName.localeCompare(b.displayName) ||
-      a.lead.localeCompare(b.lead),
-  );
+  leads.sort((a, b) => a.displayName.localeCompare(b.displayName) || a.lead.localeCompare(b.lead));
   return {
     leads,
     ...(incompatible.length ? { incompatible } : {}),
-    ...(options.openWorkspaces
-      ? { openWorkspaces: options.openWorkspaces }
-      : {}),
+    ...(options.openWorkspaces ? { openWorkspaces: options.openWorkspaces } : {}),
   };
 }
 
 export function serializeSupervision(snapshot: SupervisionSnapshot) {
   return {
-    ...(snapshot.diagnostics?.length
-      ? { diagnostics: snapshot.diagnostics }
-      : {}),
+    ...(snapshot.diagnostics?.length ? { diagnostics: snapshot.diagnostics } : {}),
     leads: snapshot.leads.map((r) => ({
       session: r.lead,
       display_name: r.displayName,

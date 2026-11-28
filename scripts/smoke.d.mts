@@ -22,11 +22,7 @@ type Scenario =
   | "manager-merge"
   | "agent-crash-recovery"
   | "deep-chain";
-type Command = (
-  file: string,
-  args: string[],
-  options?: OpenRecord,
-) => Promise<OpenRecord>;
+type Command = (file: string, args: string[], options?: OpenRecord) => Promise<OpenRecord>;
 type ProcessRecord = {
   paneId: unknown;
   pid: unknown;
@@ -189,11 +185,7 @@ export function managerDiagnosticLines(contents: unknown): string[];
 export function captureManagerLeadDiagnostics(
   ctx: OpenRecord,
   paneId: string,
-  readPane?: (
-    ctx: OpenRecord,
-    paneId: string,
-    mode: "recent-unwrapped",
-  ) => Promise<unknown>,
+  readPane?: (ctx: OpenRecord, paneId: string, mode: "recent-unwrapped") => Promise<unknown>,
 ): Promise<void>;
 export function formatSmokeFailure(error: unknown, stage?: string): string;
 export function classifyOldExecution(
@@ -201,13 +193,8 @@ export function classifyOldExecution(
   target: { paneId: string; sessionId: string; sessionPath: string },
   inspect: (paneId: string) => string | Promise<string>,
 ): Promise<"quiescent" | "active" | "unknown">;
-export function latestPostRestartListAgentsResult(
-  entries: OpenRecord[],
-): OpenRecord | undefined;
-export function matchesProjectMessageContent(
-  actual: unknown,
-  expected: string,
-): boolean;
+export function latestPostRestartListAgentsResult(entries: OpenRecord[]): OpenRecord | undefined;
+export function matchesProjectMessageContent(actual: unknown, expected: string): boolean;
 export function managerBootstrapDelegationProjection(progress?: OpenRecord): {
   delegateCalls: number;
   expectedBranchDelegateCalls: number;
@@ -230,10 +217,7 @@ export function waitForEvidence<T>(
   inspect: () => T | Promise<T>,
   options: { timeoutMs: number; stallMs: number; pollMs?: number },
 ): Promise<T>;
-export function resolveSmokeModel(
-  override: string | undefined,
-  execute?: Command,
-): Promise<string>;
+export function resolveSmokeModel(override: string | undefined, execute?: Command): Promise<string>;
 export function selectSmokeModel(
   args: { simulated: boolean; scenario: string; model?: string },
   execute?: Command,
@@ -253,10 +237,7 @@ export function parentControlEnv(
   sessionName: string,
 ): Record<string, string | undefined>;
 export function rootCandidateCommand(args: string[]): string[];
-export function nestedHerdrApiSocketPath(
-  paths: OpenRecord,
-  sessionName: string,
-): string;
+export function nestedHerdrApiSocketPath(paths: OpenRecord, sessionName: string): string;
 export function candidateArgs(config: {
   candidateExtension: string;
   herdrStateExtension: string;
@@ -268,26 +249,17 @@ export function chiefTreeProbeSource(resultPath: string): string;
 export function parseToolSnapshots(
   contents: string,
 ): Map<"lead" | "chief" | "tree" | "lead-after", string[]>;
-export function distinctPaneCount(
-  processes: { paneId: unknown; [key: string]: unknown }[],
-): number;
+export function distinctPaneCount(processes: { paneId: unknown; [key: string]: unknown }[]): number;
 export function chiefTreeBranchPlan(
   contents: string,
   startupPrompt: string,
   startupMarker: string,
   chiefPrompt: string,
   chiefMarker: string,
-):
-  | { targetId: unknown; error?: undefined }
-  | { targetId?: undefined; error: string };
-export function chiefTreeFooter(
-  output: string,
-): { selected: number; total: number } | null;
+): { targetId: unknown; error?: undefined } | { targetId?: undefined; error: string };
+export function chiefTreeFooter(output: string): { selected: number; total: number } | null;
 export function chiefTreeSelectedRow(output: string, marker: string): boolean;
-export function countChiefTreeEvents(
-  contents: string,
-  baseline?: number,
-): number;
+export function countChiefTreeEvents(contents: string, baseline?: number): number;
 export function chiefTreeBranchTransition(
   text: string,
   snapshots: { has(key: string): unknown } | null | undefined,
@@ -302,10 +274,7 @@ export function chiefTreeBranchTransition(
   progress: OpenRecord;
 };
 export function staffDelegateResults(contents: string): unknown[];
-export function assertNoFailedProjectDelegation(
-  contents: string,
-  branch: unknown,
-): void;
+export function assertNoFailedProjectDelegation(contents: string, branch: unknown): void;
 export function assertNoFailedManagerHandoff(progress: {
   supervisorResultState?: unknown;
   [key: string]: unknown;
@@ -351,10 +320,7 @@ export function managerAssignmentIdentity(
   worktree: unknown,
   branch: unknown,
 ): "not_observed" | "true" | "false";
-export function managerAssignmentBranchMismatch(
-  row: unknown,
-  branch: unknown,
-): boolean;
+export function managerAssignmentBranchMismatch(row: unknown, branch: unknown): boolean;
 export function staffActionResults(
   contents: string,
   toolName: unknown,
@@ -448,11 +414,7 @@ export function terminalFailureAssignmentPoll(
 }>;
 export function prepareManagerRepository(
   paths: OpenRecord,
-  execute?: (
-    file: string,
-    args: string[],
-    options?: { cwd?: string },
-  ) => Awaitable<unknown>,
+  execute?: (file: string, args: string[], options?: { cwd?: string }) => Awaitable<unknown>,
 ): Promise<string>;
 export function assertManagerFreshPrimary(
   workspaceId: unknown,
@@ -465,19 +427,13 @@ export function deleteBranchIfPresent(
   execute?: Command,
   cwd?: string,
 ): Promise<boolean>;
-export function hasSuccessfulSupervisorMessage(
-  contents: string,
-  text: string,
-): boolean;
+export function hasSuccessfulSupervisorMessage(contents: string, text: string): boolean;
 export function supervisorMessageCallStatus(
   contents: string,
   text: string,
 ): "not_called" | "error" | "success" | "pending";
 export function leadReadyCompleted(contents: string, text: string): boolean;
-export function verifiedLeadSession(
-  childSession: unknown,
-  expectedSession: unknown,
-): boolean;
+export function verifiedLeadSession(childSession: unknown, expectedSession: unknown): boolean;
 export function managerReadyAnswer(
   contents: string,
   branch: unknown,
@@ -575,10 +531,7 @@ export function managerHandoffCanReenter(
   messageId: string,
   text: string,
 ): boolean;
-export function managerHandoffLeadPidContinues(
-  initialPid: unknown,
-  currentPid: unknown,
-): boolean;
+export function managerHandoffLeadPidContinues(initialPid: unknown, currentPid: unknown): boolean;
 export function managerHandoffAssignmentReady(
   ready: unknown,
   readyEntry: unknown,
@@ -633,14 +586,8 @@ export function rootDelegationDiagnostics(
     | "active_session_conflict"
     | "invalid_agent_label";
 };
-export function assertNoFailedAgentDelegation(
-  contents: string,
-  expectedLabel?: string,
-): void;
-export function parseHerdrOutput(
-  stdout: string,
-  args: readonly string[],
-): unknown;
+export function assertNoFailedAgentDelegation(contents: string, expectedLabel?: string): void;
+export function parseHerdrOutput(stdout: string, args: readonly string[]): unknown;
 export function herdrErrorCode(error: unknown): string | undefined;
 export function candidateStartObservationError(
   observed: { ok?: unknown; herdrCode?: unknown; error?: unknown },
@@ -753,10 +700,7 @@ export function managerHandoffLeadProcessProof(
   foregroundProcesses: readonly unknown[],
   expectedPiVersion: string,
 ): { paneId: string; pid: number; sessionId: string; piVersion: string } | null;
-export function requireSmokeEvidence(
-  condition: unknown,
-  message: string,
-): asserts condition;
+export function requireSmokeEvidence(condition: unknown, message: string): asserts condition;
 export function verifyCoreProvenanceEvidence(
   ctx: { firstRequestVerified?: boolean },
   provenance: readonly unknown[],
@@ -863,9 +807,7 @@ export function assertDescendantVisibility(
   labels: readonly unknown[],
   seen: { has(label: unknown): unknown },
 ): void;
-export function assertDeepChainEvidence(
-  sessions: readonly OpenRecord[],
-): string[];
+export function assertDeepChainEvidence(sessions: readonly OpenRecord[]): string[];
 export function descendantCleanupStatus(
   inspection: {
     verified: Map<unknown, OpenRecord>;
@@ -935,10 +877,7 @@ export function cleanup(
       args: string[],
       options?: { env?: Env; timeout?: number },
     ) => Awaitable<{ ok: boolean; error?: string; value?: OpenRecord }>;
-    remove?: (
-      path: string,
-      options: { recursive: true; force: true },
-    ) => Awaitable<unknown>;
+    remove?: (path: string, options: { recursive: true; force: true }) => Awaitable<unknown>;
     removeFile?: (path: string) => Awaitable<unknown>;
     sleepFor?: (milliseconds: number) => Promise<unknown>;
   },
@@ -992,10 +931,7 @@ export function sanitizedFailureEvidence(
   };
   rootProvenance?: OpenRecord | null;
 };
-export function preserveFailureEvidence(
-  evidence: unknown,
-  path?: string,
-): Promise<string>;
+export function preserveFailureEvidence(evidence: unknown, path?: string): Promise<string>;
 export function retainScenarioFailureEvidence(
   ctx: OpenRecord,
   evidence: unknown,
@@ -1010,7 +946,4 @@ export function reportFinalFailureEvidence(
   artifact: unknown,
   output?: (message: string) => void,
 ): Promise<boolean>;
-export function reportFailureEvidenceWriteError(
-  error: unknown,
-  action?: string,
-): void;
+export function reportFailureEvidenceWriteError(error: unknown, action?: string): void;

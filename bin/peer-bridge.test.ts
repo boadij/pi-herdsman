@@ -17,11 +17,7 @@ import { test } from "node:test";
 import { updateConfig } from "../extension/config.ts";
 import { acquireProcessLock } from "../extension/lock.ts";
 import { HERDSMAN_BUILD } from "../extension/support.ts";
-import {
-  herdsmanDataRoot,
-  peerAttachmentPath,
-  resultPath,
-} from "../extension/storage.ts";
+import { herdsmanDataRoot, peerAttachmentPath, resultPath } from "../extension/storage.ts";
 import {
   chiefMessagePath,
   coordinationMessageDelivered,
@@ -90,8 +86,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
     for (const scenario of scenarios) {
       const { cut, consumed } = scenario;
       const replacement = "replacement" in scenario && scenario.replacement;
-      const retargetCrash =
-        "retargetCrash" in scenario && scenario.retargetCrash;
+      const retargetCrash = "retargetCrash" in scenario && scenario.retargetCrash;
       const messageId = id();
       const withAttachments = cut === "inbox-publication-durable";
       const binding = { ref: "result:scout#1", canonicalRef: `result:${id()}` };
@@ -155,9 +150,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
       const markerDir = join(runtime.root, "peer-acceptances");
       const marker = join(
         markerDir,
-        `${createHash("sha256")
-          .update(`${originSession}\0${messageId}`)
-          .digest("hex")}.json`,
+        `${createHash("sha256").update(`${originSession}\0${messageId}`).digest("hex")}.json`,
       );
       if (cut === "pending-marker-durable" && !replacement && !retargetCrash) {
         const peerPath = writePeerLeadRecord(runtime, {
@@ -192,20 +185,12 @@ test("bridge recovers after process death at both durable acceptance cut points"
           );
           assert.notEqual(stale.status, 0);
           assert.equal(existsSync(marker), false);
+          assert.equal(existsSync(join(runtime.root, "received-evidence")), false);
           assert.equal(
-            existsSync(join(runtime.root, "received-evidence")),
+            existsSync(join(herdsmanDataRoot(), "runtime", "peer-correspondences")),
             false,
           );
-          assert.equal(
-            existsSync(
-              join(herdsmanDataRoot(), "runtime", "peer-correspondences"),
-            ),
-            false,
-          );
-          assert.equal(
-            existsSync(chiefMessagePath(runtime, sessionId, messageId)),
-            false,
-          );
+          assert.equal(existsSync(chiefMessagePath(runtime, sessionId, messageId)), false);
         }
         writePeerLeadRecord(runtime, manager);
       }
@@ -253,17 +238,12 @@ test("bridge recovers after process death at both durable acceptance cut points"
       }
       if (cut === "pending-marker-durable")
         assert.throws(
-          () =>
-            readCoordinationMessage(
-              chiefMessagePath(runtime, sessionId, messageId),
-            ),
+          () => readCoordinationMessage(chiefMessagePath(runtime, sessionId, messageId)),
           /Unable to read Chief message/,
         );
       else
         assert.deepEqual(
-          readCoordinationMessage(
-            chiefMessagePath(runtime, sessionId, messageId),
-          ),
+          readCoordinationMessage(chiefMessagePath(runtime, sessionId, messageId)),
           acceptedRecord,
           "inbox publication must be durable before process termination",
         );
@@ -276,9 +256,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
 
       if (cut === "inbox-publication-durable" && consumed) {
         assert.deepEqual(
-          readCoordinationMessage(
-            chiefMessagePath(runtime, sessionId, messageId),
-          ),
+          readCoordinationMessage(chiefMessagePath(runtime, sessionId, messageId)),
           acceptedRecord,
         );
         let submitted = 0;
@@ -298,8 +276,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
           runtime,
           sessionId,
           isAuthorized: () => true,
-          isDelivered: () =>
-            coordinationMessageDelivered(acceptedRecord, sessionId, history),
+          isDelivered: () => coordinationMessageDelivered(acceptedRecord, sessionId, history),
           sendMessage: () => {
             submitted++;
           },
@@ -316,10 +293,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
           true,
         );
         assert.throws(
-          () =>
-            readCoordinationMessage(
-              chiefMessagePath(runtime, sessionId, messageId),
-            ),
+          () => readCoordinationMessage(chiefMessagePath(runtime, sessionId, messageId)),
           /Unable to read Chief message/,
         );
       }
@@ -366,10 +340,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
           }
         }
         assert.equal(readFileSync(marker, "utf8"), before);
-        assert.equal(
-          existsSync(chiefMessagePath(runtime, sessionId, messageId)),
-          false,
-        );
+        assert.equal(existsSync(chiefMessagePath(runtime, sessionId, messageId)), false);
         updateConfig("peerFederationEnabled", true);
         writePeerLeadRecord(runtime, {
           ...manager,
@@ -415,14 +386,9 @@ test("bridge recovers after process death at both durable acceptance cut points"
         const pending = JSON.parse(readFileSync(marker, "utf8"));
         assert.equal(pending.status, "pending");
         assert.equal(pending.transfer.recipientClaimId, manager.claim.id);
-        assert.equal(
-          pending.transfer.correspondence.recipientGeneration,
-          manager.claim.id,
-        );
+        assert.equal(pending.transfer.correspondence.recipientGeneration, manager.claim.id);
         assert.deepEqual(
-          readCoordinationMessage(
-            chiefMessagePath(runtime, sessionId, messageId),
-          ),
+          readCoordinationMessage(chiefMessagePath(runtime, sessionId, messageId)),
           record,
           "inbox publication must be durable before process termination",
         );
@@ -457,18 +423,10 @@ test("bridge recovers after process death at both durable acceptance cut points"
           },
         );
         assert.notEqual(failedPublication.status, 0, failedPublication.stderr);
-        assert.match(
-          failedPublication.stderr,
-          /injected accepted marker publication failure/,
-        );
+        assert.match(failedPublication.stderr, /injected accepted marker publication failure/);
+        assert.equal(JSON.parse(readFileSync(marker, "utf8")).status, "pending");
         assert.equal(
-          JSON.parse(readFileSync(marker, "utf8")).status,
-          "pending",
-        );
-        assert.equal(
-          readdirSync(join(runtime.root, "peer-acceptances")).some((name) =>
-            name.endsWith(".tmp"),
-          ),
+          readdirSync(join(runtime.root, "peer-acceptances")).some((name) => name.endsWith(".tmp")),
           false,
           "failed accepted-marker publication removes its exact temporary file",
         );
@@ -484,9 +442,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
         "peer-correspondences",
         `${correspondence.id}.json`,
       );
-      const correspondenceBefore = withAttachments
-        ? readFileSync(correspondencePath)
-        : undefined;
+      const correspondenceBefore = withAttachments ? readFileSync(correspondencePath) : undefined;
       if (withAttachments) {
         for (const path of [
           peerAttachmentPath("notes.txt", "ordinary evidence"),
@@ -507,14 +463,8 @@ test("bridge recovers after process death at both durable acceptance cut points"
             );
             assert.notEqual(rejected.status, 0);
             assert.equal(readFileSync(path, "utf8"), "corrupt");
-            assert.deepEqual(
-              readFileSync(correspondencePath),
-              correspondenceBefore,
-            );
-            assert.equal(
-              JSON.parse(readFileSync(marker, "utf8")).status,
-              "pending",
-            );
+            assert.deepEqual(readFileSync(correspondencePath), correspondenceBefore);
+            assert.equal(JSON.parse(readFileSync(marker, "utf8")).status, "pending");
           } finally {
             writeFileSync(path, original);
           }
@@ -541,10 +491,7 @@ test("bridge recovers after process death at both durable acceptance cut points"
           );
           assert.notEqual(missing.status, 0);
           assert.equal(existsSync(path), false);
-          assert.equal(
-            JSON.parse(readFileSync(marker, "utf8")).status,
-            "pending",
-          );
+          assert.equal(JSON.parse(readFileSync(marker, "utf8")).status, "pending");
         } finally {
           renameSync(`${path}.saved`, path);
         }
@@ -567,40 +514,26 @@ test("bridge recovers after process death at both durable acceptance cut points"
       if (replacement) {
         assert.notEqual(output.status, 0, output.stderr);
         assert.match(output.stderr, /exact destination Manager is not live/);
-        assert.equal(
-          JSON.parse(readFileSync(marker, "utf8")).status,
-          "pending",
-        );
+        assert.equal(JSON.parse(readFileSync(marker, "utf8")).status, "pending");
         continue;
       }
       assert.equal(output.status, 0, output.stderr);
       if (withAttachments) {
-        assert.deepEqual(
-          readFileSync(correspondencePath),
-          correspondenceBefore,
-        );
+        assert.deepEqual(readFileSync(correspondencePath), correspondenceBefore);
         assert.equal(
-          JSON.parse(readFileSync(correspondencePath, "utf8"))
-            .recipientGeneration,
+          JSON.parse(readFileSync(correspondencePath, "utf8")).recipientGeneration,
           correspondence.recipientGeneration,
         );
         assert.equal(
-          readFileSync(
-            peerAttachmentPath("notes.txt", "ordinary evidence"),
-            "utf8",
-          ),
+          readFileSync(peerAttachmentPath("notes.txt", "ordinary evidence"), "utf8"),
           "ordinary evidence",
         );
         assert.equal(
-          readFileSync(
-            resultPath(binding.canonicalRef.slice("result:".length)),
-            "utf8",
-          ),
+          readFileSync(resultPath(binding.canonicalRef.slice("result:".length)), "utf8"),
           "result evidence",
         );
       }
-      if (cut === "inbox-publication-durable")
-        writePeerLeadRecord(runtime, manager);
+      if (cut === "inbox-publication-durable") writePeerLeadRecord(runtime, manager);
       assert.deepEqual(JSON.parse(output.stdout), {
         dataRoot: herdsmanDataRoot(),
         id: messageId,
@@ -610,25 +543,19 @@ test("bridge recovers after process death at both durable acceptance cut points"
       const savedMarker = JSON.parse(readFileSync(marker, "utf8"));
       assert.equal(savedMarker.status, "accepted", cut);
       assert.deepEqual(
-        listPeerCorrespondences().find((item) => item.id === correspondence.id)
-          ?.originDisplay,
+        listPeerCorrespondences().find((item) => item.id === correspondence.id)?.originDisplay,
         {
           name: "Research Manager",
           workspaceLabel: "project-alpha/main",
         },
         "bridge acceptance persists advisory origin display metadata",
       );
-      assert.equal(
-        savedMarker.digest,
-        digest,
-        "recovery preserves transfer digest",
-      );
+      assert.equal(savedMarker.digest, digest, "recovery preserves transfer digest");
       if (cut === "pending-marker-durable") {
         if (retargetCrash) {
           assert.equal(
-            listPeerCorrespondences().find(
-              (item) => item.acceptanceId === messageId,
-            )?.recipientGeneration,
+            listPeerCorrespondences().find((item) => item.acceptanceId === messageId)
+              ?.recipientGeneration,
             manager.claim.id,
             "published recovery keeps the retargeted generation while offline",
           );
@@ -640,26 +567,19 @@ test("bridge recovers after process death at both durable acceptance cut points"
           continue;
         }
         assert.deepEqual(
-          readCoordinationMessage(
-            chiefMessagePath(runtime, sessionId, messageId),
-          ),
+          readCoordinationMessage(chiefMessagePath(runtime, sessionId, messageId)),
           record,
           cut,
         );
       } else if (consumed) {
         assert.throws(
-          () =>
-            readCoordinationMessage(
-              chiefMessagePath(runtime, sessionId, messageId),
-            ),
+          () => readCoordinationMessage(chiefMessagePath(runtime, sessionId, messageId)),
           /Unable to read Chief message/,
           "recovery must not republish a consumed Pi message",
         );
       } else {
         assert.deepEqual(
-          readCoordinationMessage(
-            chiefMessagePath(runtime, sessionId, messageId),
-          ),
+          readCoordinationMessage(chiefMessagePath(runtime, sessionId, messageId)),
           acceptedRecord,
           "recovery accepts the exact still-published inbox record",
         );
@@ -747,9 +667,7 @@ test("partial pending-marker write leaves no final marker and identical retry su
         process.execPath,
         [
           "--experimental-strip-types",
-          ...(fail
-            ? ["--import=./bin/peer-bridge-write-failure.test-support.mjs"]
-            : []),
+          ...(fail ? ["--import=./bin/peer-bridge-write-failure.test-support.mjs"] : []),
           "bin/peer-bridge.ts",
           "accept",
         ],
@@ -770,10 +688,7 @@ test("partial pending-marker write leaves no final marker and identical retry su
     assert.equal(disabled.status, 1, disabled.stderr);
     assert.equal(disabled.stderr.trim(), "Peer federation is disabled");
     assert.equal(existsSync(marker), false);
-    assert.equal(
-      existsSync(chiefMessagePath(runtime, sessionId, record.id)),
-      false,
-    );
+    assert.equal(existsSync(chiefMessagePath(runtime, sessionId, record.id)), false);
     updateConfig("peerFederationEnabled", true);
 
     const failed = run(true);
@@ -803,11 +718,10 @@ test("partial pending-marker write leaves no final marker and identical retry su
       replyId,
     };
     const correspondenceAction = (action: string) =>
-      spawnSync(
-        process.execPath,
-        ["--experimental-strip-types", "bin/peer-bridge.ts", action],
-        { input: JSON.stringify(request), encoding: "utf8" },
-      );
+      spawnSync(process.execPath, ["--experimental-strip-types", "bin/peer-bridge.ts", action], {
+        input: JSON.stringify(request),
+        encoding: "utf8",
+      });
     assert.equal(correspondenceAction("poll").status, 0);
     updateConfig("peerCommunicationEnabled", false);
     const blockedPoll = correspondenceAction("poll");
@@ -815,8 +729,7 @@ test("partial pending-marker write leaves no final marker and identical retry su
     assert.equal(correspondenceAction("ack").status, 0);
     assert.equal(correspondenceAction("finalize").status, 0);
     assert.equal(
-      listPeerCorrespondences().find((item) => item.id === correspondence.id)
-        ?.finalized,
+      listPeerCorrespondences().find((item) => item.id === correspondence.id)?.finalized,
       true,
     );
   } finally {
@@ -898,9 +811,7 @@ test("bridge accepts a directly addressed ordinary Lead and rejects role-transit
         process.execPath,
         [
           "--experimental-strip-types",
-          ...(hook
-            ? [`--import=data:text/javascript,${encodeURIComponent(hook)}`]
-            : []),
+          ...(hook ? [`--import=data:text/javascript,${encodeURIComponent(hook)}`] : []),
           "bin/peer-bridge.ts",
           "accept",
         ],
@@ -945,23 +856,16 @@ test("bridge accepts a directly addressed ordinary Lead and rejects role-transit
     const buildHook = `import { setPeerAcceptanceFaultHookForTests } from ${JSON.stringify(new URL("./peer-bridge-fault-seam.ts", import.meta.url).href)}; import { writePeerLeadRecord, peerRuntime } from ${JSON.stringify(new URL("../extension/supervision.ts", import.meta.url).href)}; setPeerAcceptanceFaultHookForTests((cutPoint) => { if (cutPoint === "pending-marker-durable") writePeerLeadRecord(peerRuntime(), ${JSON.stringify(staleLead)}); });`;
     const buildRace = run(buildRaceTransfer, buildHook);
     assert.notEqual(buildRace.status, 0);
+    assert.equal(existsSync(chiefMessagePath(runtime, sessionId, buildRaceRecord.id)), false);
     assert.equal(
-      existsSync(chiefMessagePath(runtime, sessionId, buildRaceRecord.id)),
-      false,
-    );
-    assert.equal(
-      listPeerCorrespondences().some(
-        (item) => item.id === buildRaceCorrespondence.id,
-      ),
+      listPeerCorrespondences().some((item) => item.id === buildRaceCorrespondence.id),
       false,
     );
     writePeerLeadRecord(runtime, lead);
     const recoveredBuildRace = run(buildRaceTransfer);
     assert.equal(recoveredBuildRace.status, 0, recoveredBuildRace.stderr);
     assert.deepEqual(
-      readCoordinationMessage(
-        chiefMessagePath(runtime, sessionId, buildRaceRecord.id),
-      ),
+      readCoordinationMessage(chiefMessagePath(runtime, sessionId, buildRaceRecord.id)),
       buildRaceRecord,
     );
 
@@ -980,15 +884,9 @@ test("bridge accepts a directly addressed ordinary Lead and rejects role-transit
       assignmentHook,
     );
     assert.notEqual(raced.status, 0);
-    assert.match(
-      raced.stderr,
-      /exact correspondence recipient is not live or authorized/,
-    );
+    assert.match(raced.stderr, /exact correspondence recipient is not live or authorized/);
     assert.throws(
-      () =>
-        readCoordinationMessage(
-          chiefMessagePath(runtime, sessionId, racedRecord.id),
-        ),
+      () => readCoordinationMessage(chiefMessagePath(runtime, sessionId, racedRecord.id)),
       /Unable to read Chief message/,
       "assignment added after discovery must reject before inbox publication",
     );
@@ -1005,10 +903,7 @@ test("bridge accepts a directly addressed ordinary Lead and rejects role-transit
       hook,
     );
     assert.notEqual(changed.status, 0);
-    assert.match(
-      changed.stderr,
-      /Unexpected project assignment repository entry/,
-    );
+    assert.match(changed.stderr, /Unexpected project assignment repository entry/);
 
     const transition = run({
       ...transfer,
@@ -1016,10 +911,7 @@ test("bridge accepts a directly addressed ordinary Lead and rejects role-transit
       correspondence: { ...correspondence, id: id(), acceptanceId: id() },
     });
     assert.notEqual(transition.status, 0);
-    assert.match(
-      transition.stderr,
-      /peer source role does not match correspondence role/,
-    );
+    assert.match(transition.stderr, /peer source role does not match correspondence role/);
   } finally {
     claim.release();
     if (previousData === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -1043,18 +935,15 @@ test("probe preserves incompatible Managers and rejects their delivery before mu
   const leadId = id();
   const staleId = id();
   const runtime = peerRuntime();
-  const managerClaim = acquireProcessLock(
-    peerLeadLockPath(peerRuntime(), managerId),
-    { name: "probe Manager" },
-  );
-  const leadClaim = acquireProcessLock(
-    peerLeadLockPath(peerRuntime(), leadId),
-    { name: "probe Lead" },
-  );
-  const staleClaim = acquireProcessLock(
-    peerLeadLockPath(peerRuntime(), staleId),
-    { name: "stale probe Manager" },
-  );
+  const managerClaim = acquireProcessLock(peerLeadLockPath(peerRuntime(), managerId), {
+    name: "probe Manager",
+  });
+  const leadClaim = acquireProcessLock(peerLeadLockPath(peerRuntime(), leadId), {
+    name: "probe Lead",
+  });
+  const staleClaim = acquireProcessLock(peerLeadLockPath(peerRuntime(), staleId), {
+    name: "stale probe Manager",
+  });
   try {
     const build = HERDSMAN_BUILD;
     for (const [session, role, claim] of [
@@ -1107,9 +996,7 @@ test("probe preserves incompatible Managers and rejects their delivery before mu
     const result = JSON.parse(probe.stdout);
     assert.equal(result.ordinaryLeadsComplete, false);
     assert.deepEqual(
-      result.peers
-        .map((peer: { piSessionId: string }) => peer.piSessionId)
-        .sort(),
+      result.peers.map((peer: { piSessionId: string }) => peer.piSessionId).sort(),
       [managerId, staleId].sort(),
     );
 
@@ -1158,19 +1045,10 @@ test("probe preserves incompatible Managers and rejects their delivery before mu
       },
     );
     assert.notEqual(delivery.status, 0);
-    assert.match(
-      delivery.stderr,
-      /exact correspondence recipient is not live or authorized/,
-    );
+    assert.match(delivery.stderr, /exact correspondence recipient is not live or authorized/);
     assert.equal(existsSync(join(runtime.root, "peer-acceptances")), false);
-    assert.equal(
-      existsSync(join(herdsmanDataRoot(), "runtime", "peer-correspondences")),
-      false,
-    );
-    assert.equal(
-      existsSync(chiefMessagePath(runtime, staleId, messageId)),
-      false,
-    );
+    assert.equal(existsSync(join(herdsmanDataRoot(), "runtime", "peer-correspondences")), false);
+    assert.equal(existsSync(chiefMessagePath(runtime, staleId, messageId)), false);
     assert.equal(existsSync(join(runtime.root, "received-evidence")), false);
   } finally {
     managerClaim.release();
@@ -1238,13 +1116,7 @@ test("Lead correspondence commands reject a recipient transitioned to Manager", 
       newRecipientGeneration: claim.claim.id,
       replyId: id(),
     };
-    for (const action of [
-      "poll",
-      "ack",
-      "recover",
-      "recover-recipient",
-      "finalize",
-    ]) {
+    for (const action of ["poll", "ack", "recover", "recover-recipient", "finalize"]) {
       const result = spawnSync(
         process.execPath,
         ["--experimental-strip-types", "bin/peer-bridge.ts", action],
@@ -1283,9 +1155,7 @@ test("live replacement Manager cannot recover prior Manager correspondence", () 
   const previousData = process.env.PI_CODING_AGENT_DIR;
   const previousSocket = process.env.HERDR_SOCKET_PATH;
   const previousConnection = process.env.SSH_CONNECTION;
-  const agentDir = mkdtempSync(
-    join(tmpdir(), "peer-bridge-manager-replacement-"),
-  );
+  const agentDir = mkdtempSync(join(tmpdir(), "peer-bridge-manager-replacement-"));
   const socket = join(agentDir, "herdr.sock");
   process.env.PI_CODING_AGENT_DIR = agentDir;
   process.env.HERDR_SOCKET_PATH = socket;
@@ -1294,10 +1164,9 @@ test("live replacement Manager cannot recover prior Manager correspondence", () 
   const replacementSession = id();
   const originSession = id();
   const originGeneration = id();
-  const claim = acquireProcessLock(
-    peerLeadLockPath(peerRuntime(), replacementSession),
-    { name: "replacement Manager" },
-  );
+  const claim = acquireProcessLock(peerLeadLockPath(peerRuntime(), replacementSession), {
+    name: "replacement Manager",
+  });
   try {
     writePeerLeadRecord(peerRuntime(), {
       version: 2,
@@ -1349,13 +1218,9 @@ test("live replacement Manager cannot recover prior Manager correspondence", () 
       },
     );
     assert.notEqual(result.status, 0);
-    assert.match(
-      result.stderr,
-      /exact correspondence recipient is not live or authorized/,
-    );
+    assert.match(result.stderr, /exact correspondence recipient is not live or authorized/);
     assert.equal(
-      listPeerCorrespondences().find((item) => item.id === correspondence.id)
-        ?.recipientGeneration,
+      listPeerCorrespondences().find((item) => item.id === correspondence.id)?.recipientGeneration,
       correspondence.recipientGeneration,
     );
   } finally {
@@ -1453,14 +1318,11 @@ test("Lead ACK does not complete after assignment authority changes", () => {
       },
     );
     assert.notEqual(result.status, 0);
-    assert.match(
-      result.stderr,
-      /exact correspondence recipient is not live or authorized/,
-    );
+    assert.match(result.stderr, /exact correspondence recipient is not live or authorized/);
     assert.doesNotMatch(result.stdout, /"acknowledged":true/);
     assert.equal(
-      listPeerCorrespondences().find((item) => item.id === correspondence.id)
-        ?.replies[0]?.acknowledged,
+      listPeerCorrespondences().find((item) => item.id === correspondence.id)?.replies[0]
+        ?.acknowledged,
       false,
     );
   } finally {
@@ -1506,10 +1368,7 @@ test("short writes complete before publication and accepted EEXIST race cleans t
       updatedAt: Date.now(),
     };
     writePeerLeadRecord(runtime, manager);
-    const makeTransfer = (
-      text: string,
-      role: "lead" | "manager" = "manager",
-    ) => {
+    const makeTransfer = (text: string, role: "lead" | "manager" = "manager") => {
       const record = {
         version: 2 as const,
         build: manager.build,
@@ -1520,8 +1379,7 @@ test("short writes complete before publication and accepted EEXIST race cleans t
         toSessionId: sessionId,
         leadSessionId: sessionId,
         text,
-        peerSource:
-          role === "lead" ? { role, remoteOrdinary: true as const } : { role },
+        peerSource: role === "lead" ? { role, remoteOrdinary: true as const } : { role },
         createdAt: Date.now(),
       };
       return {
@@ -1577,33 +1435,18 @@ test("short writes complete before publication and accepted EEXIST race cleans t
       setPendingMarkerPublishHookForTests(() => updateConfig("peerFederationEnabled", false));
     `;
     const blocked = makeTransfer("disabled before durable publication");
-    const denial = run(
-      blocked,
-      `data:text/javascript,${encodeURIComponent(disableDuringPublish)}`,
-    );
+    const denial = run(blocked, `data:text/javascript,${encodeURIComponent(disableDuringPublish)}`);
     assert.equal(denial.status, 1, denial.stderr);
     assert.equal(denial.stderr.trim(), "Peer federation is disabled");
     assert.deepEqual(readdirSync(join(runtime.root, "peer-acceptances")), []);
-    assert.equal(
-      existsSync(chiefMessagePath(runtime, sessionId, blocked.record.id)),
-      false,
-    );
+    assert.equal(existsSync(chiefMessagePath(runtime, sessionId, blocked.record.id)), false);
     updateConfig("peerFederationEnabled", true);
 
     const shortWrite = makeTransfer("all bytes before publication");
-    const shortWriteResult = run(
-      shortWrite,
-      "./bin/peer-bridge-short-write.test-support.mjs",
-    );
+    const shortWriteResult = run(shortWrite, "./bin/peer-bridge-short-write.test-support.mjs");
     assert.equal(shortWriteResult.error, undefined, shortWriteResult.stderr);
-    assert.equal(
-      JSON.parse(readFileSync(markerPath(shortWrite), "utf8")).status,
-      "pending",
-    );
-    assert.deepEqual(
-      JSON.parse(readFileSync(markerPath(shortWrite), "utf8")).transfer,
-      shortWrite,
-    );
+    assert.equal(JSON.parse(readFileSync(markerPath(shortWrite), "utf8")).status, "pending");
+    assert.deepEqual(JSON.parse(readFileSync(markerPath(shortWrite), "utf8")).transfer, shortWrite);
     assert.deepEqual(readdirSync(join(runtime.root, "peer-acceptances")), [
       `${createHash("sha256").update(`${originSession}\0${shortWrite.record.id}`).digest("hex")}.json`,
     ]);
@@ -1615,10 +1458,7 @@ test("short writes complete before publication and accepted EEXIST race cleans t
       accepted: true,
       id: raced.record.id,
     });
-    assert.equal(
-      JSON.parse(readFileSync(markerPath(raced), "utf8")).status,
-      "accepted",
-    );
+    assert.equal(JSON.parse(readFileSync(markerPath(raced), "utf8")).status, "accepted");
     assert.deepEqual(
       readdirSync(join(runtime.root, "peer-acceptances")).sort(),
       [basename(markerPath(shortWrite)), basename(markerPath(raced))].sort(),
@@ -1633,10 +1473,7 @@ test("short writes complete before publication and accepted EEXIST race cleans t
     `;
     for (const role of ["manager", "lead"] as const) {
       writePeerLeadRecord(runtime, { ...manager, role });
-      const transfer = makeTransfer(
-        "disable between pending marker and inbox",
-        role,
-      );
+      const transfer = makeTransfer("disable between pending marker and inbox", role);
       const denied = run(
         transfer,
         `data:text/javascript,${encodeURIComponent(disableAfterPending)}`,
@@ -1648,9 +1485,7 @@ test("short writes complete before publication and accepted EEXIST race cleans t
       const inbox = chiefMessagePath(runtime, sessionId, transfer.record.id);
       assert.equal(existsSync(inbox), false);
       assert.equal(
-        listPeerCorrespondences().some(
-          (item) => item.id === transfer.correspondence.id,
-        ),
+        listPeerCorrespondences().some((item) => item.id === transfer.correspondence.id),
         false,
       );
       updateConfig("peerFederationEnabled", true);

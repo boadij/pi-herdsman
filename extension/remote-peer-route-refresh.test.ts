@@ -66,11 +66,7 @@ mock.module("./peer-transport.ts", {
     },
     listSavedPeerMachines: () => listMachinesImpl(),
     probePeerEndpoint: (machine: Machine) => probeImpl(machine),
-    runPeerEndpoint: async (
-      _machine: Machine,
-      action: string,
-      input?: string,
-    ) => {
+    runPeerEndpoint: async (_machine: Machine, action: string, input?: string) => {
       onEndpointCall(action);
       const request = JSON.parse(input ?? "{}") as {
         id?: string;
@@ -79,8 +75,7 @@ mock.module("./peer-transport.ts", {
         record?: { id?: string };
         correspondence?: unknown;
       };
-      if (request.correspondence)
-        outboundCorrespondence = request.correspondence;
+      if (request.correspondence) outboundCorrespondence = request.correspondence;
       if (action === "accept") acceptedEnvelopes.push(input ?? "");
       endpointCalls.push({
         action,
@@ -96,23 +91,15 @@ mock.module("./peer-transport.ts", {
       if (action === "recover") return JSON.stringify({ recovered: true });
       if (action === "status")
         return JSON.stringify(
-          typeof outboundStatus === "function"
-            ? outboundStatus(request.id)
-            : outboundStatus,
+          typeof outboundStatus === "function" ? outboundStatus(request.id) : outboundStatus,
         );
       if (action === "poll")
         return JSON.stringify({
           dataRoot,
-          replies:
-            request.recipientSession === "peer-C" && !cReplyAcknowledged
-              ? [cReply]
-              : [],
+          replies: request.recipientSession === "peer-C" && !cReplyAcknowledged ? [cReply] : [],
         });
       if (action === "ack") {
-        if (
-          request.recipientSession === "peer-C" &&
-          request.replyId === cReply.id
-        )
+        if (request.recipientSession === "peer-C" && request.replyId === cReply.id)
           cReplyAcknowledged = true;
         return JSON.stringify({ acknowledged: true });
       }
@@ -151,9 +138,7 @@ mock.module("./peer-correspondence.ts", {
       if (current) current.originGeneration = next;
     },
     storePeerCorrespondence: (item: any) => {
-      const index = correspondences.findIndex(
-        (current) => current.id === item.id,
-      );
+      const index = correspondences.findIndex((current) => current.id === item.id);
       if (index < 0) correspondences.push(item);
       else correspondences[index] = item;
     },
@@ -167,10 +152,8 @@ mock.module("./peer-correspondence.ts", {
 const support = await import("./support.ts");
 const compatibility = await import("./compatibility.ts");
 const supervision = await import("./supervision.ts");
-const { createLeadCoordinationRuntime } =
-  await import("./lead/coordination.ts");
-const { coordinatorTarget, rememberCoordinatorTarget } =
-  await import("./coordinator-target.ts");
+const { createLeadCoordinationRuntime } = await import("./lead/coordination.ts");
+const { coordinatorTarget, rememberCoordinatorTarget } = await import("./coordinator-target.ts");
 
 const self = "11111111-1111-4111-8111-111111111111";
 const assignment = {
@@ -193,11 +176,7 @@ const snapshot = (peers: Snapshot["peers"], root = dataRoot): Snapshot => ({
   dataRoot: root,
   peers,
 });
-const remote = (
-  id: string,
-  generation = `${id}-generation`,
-  build?: unknown,
-) => ({
+const remote = (id: string, generation = `${id}-generation`, build?: unknown) => ({
   role: "manager",
   piSessionId: id,
   claim: { id: generation },
@@ -227,8 +206,7 @@ function fixture(
   outboundReadCalls = 0;
   onEndpointCall = () => {};
   beforeOutboundPersist = () => {};
-  currentCorrespondence = (id) =>
-    correspondences.find((item) => item.id === id);
+  currentCorrespondence = (id) => correspondences.find((item) => item.id === id);
   currentOutbound = () => undefined;
   queuedReplies.length = 0;
   diagnostics.length = 0;
@@ -285,9 +263,7 @@ function fixture(
     pi: {
       sendMessage() {},
       appendEntry(customType: string, data: unknown) {
-        context.sessionManager
-          .getEntries()
-          .push({ type: "custom", customType, data });
+        context.sessionManager.getEntries().push({ type: "custom", customType, data });
       },
     },
     leadRuntime,
@@ -317,12 +293,7 @@ function fixture(
       primaryWorkspaceId: "route-test-workspace",
       workspaceIds: ["route-test-workspace"],
     }),
-    appendDurableError: (
-      _pi: unknown,
-      _ctx: unknown,
-      _type: string,
-      error: unknown,
-    ) => {
+    appendDurableError: (_pi: unknown, _ctx: unknown, _type: string, error: unknown) => {
       diagnosticAttempts++;
       if (failNextDiagnosticAppend) {
         failNextDiagnosticAppend = false;
@@ -330,16 +301,14 @@ function fixture(
       }
       diagnostics.push(error);
     },
-    writeCoordinationMessage: (record: unknown) =>
-      deliveredReplies.push(record),
+    writeCoordinationMessage: (record: unknown) => deliveredReplies.push(record),
     importResultBindings: () => {},
     messageLimits: async () => ({
       inline: { bytes: 10000 },
       mailbox: { bytes: 10000 },
     }),
     resolveMessageFiles: () => [],
-    chiefMessageBytes: (value: unknown) =>
-      Buffer.byteLength(JSON.stringify(value)),
+    chiefMessageBytes: (value: unknown) => Buffer.byteLength(JSON.stringify(value)),
     requireCompatibleBuild: compatibility.requireCompatibleBuild,
     sameRuntimeBuild: compatibility.sameRuntimeBuild,
     listManagerDescriptors: () => [],
@@ -362,16 +331,9 @@ const list = async (
   context: any,
   signal?: AbortSignal,
 ) => {
-  const value = await runtime.peerMessage(
-    "list",
-    { action: "list" },
-    signal,
-    undefined,
-    context,
-  );
+  const value = await runtime.peerMessage("list", { action: "list" }, signal, undefined, context);
   const details = value.details;
-  if (!details || !("peers" in details))
-    throw new Error("list_peers did not return peer details");
+  if (!details || !("peers" in details)) throw new Error("list_peers did not return peer details");
   return { ...value, details };
 };
 const send = (
@@ -423,10 +385,7 @@ test("federation disabled during discovery discards remote results and cached ro
   assert.deepEqual(result.details.peers, []);
   assert.deepEqual(endpointCalls, []);
   updateConfig("peerFederationEnabled", true);
-  await assert.rejects(
-    send(f.runtime, f.context, "peer-A"),
-    /no_authorized_target/u,
-  );
+  await assert.rejects(send(f.runtime, f.context, "peer-A"), /no_authorized_target/u);
 });
 
 test("federation disabled during a submission probe prevents durable outbound creation", async (t) => {
@@ -441,10 +400,7 @@ test("federation disabled during a submission probe prevents durable outbound cr
     return result;
   };
 
-  await assert.rejects(
-    send(f.runtime, f.context, "peer-A"),
-    /Peer federation is disabled/u,
-  );
+  await assert.rejects(send(f.runtime, f.context, "peer-A"), /Peer federation is disabled/u);
   assert.deepEqual(realTransport.listRemotePeerOutbounds(), []);
   assert.deepEqual(realCorrespondence.listPeerCorrespondences(), []);
   assert.deepEqual(endpointCalls, []);
@@ -483,10 +439,7 @@ test("remote federation refusal invalidates a cached route without reporting a n
   assert.deepEqual(result.details.remote_diagnostics, [
     { machine: "one", reason: "federation_disabled" },
   ]);
-  await assert.rejects(
-    send(f.runtime, f.context, "peer-A"),
-    /no_authorized_target/u,
-  );
+  await assert.rejects(send(f.runtime, f.context, "peer-A"), /no_authorized_target/u);
 });
 
 test("local publication rechecks the master setting after evidence verification", async (t) => {
@@ -514,10 +467,7 @@ test("local publication rechecks the master setting after evidence verification"
     /Peer communication is disabled/u,
   );
   assert.equal(deliveredReplies.length, 1);
-  await assert.rejects(
-    list(f.runtime, f.context),
-    /Peer communication is disabled/u,
-  );
+  await assert.rejects(list(f.runtime, f.context), /Peer communication is disabled/u);
 });
 
 test("remote inventories are loaded once per reconciliation, including empty snapshots", async (t) => {
@@ -529,11 +479,7 @@ test("remote inventories are loaded once per reconciliation, including empty sna
   await list(f.runtime, f.context);
 
   assert.equal(outboundListCalls, 1);
-  assert.equal(
-    correspondenceListCalls,
-    2,
-    "one local-discovery read plus one remote read",
-  );
+  assert.equal(correspondenceListCalls, 2, "one local-discovery read plus one remote read");
   const id = "33333333-3333-4333-8333-333333333333";
   const newRecord = {
     id,
@@ -554,16 +500,8 @@ test("remote inventories are loaded once per reconciliation, including empty sna
     status: "accepted",
   };
   await list(f.runtime, f.context);
-  assert.equal(
-    outboundListCalls,
-    2,
-    "a later invocation takes a fresh inventory",
-  );
-  assert.equal(
-    outboundReadCalls,
-    1,
-    "the new record is visible next invocation",
-  );
+  assert.equal(outboundListCalls, 2, "a later invocation takes a fresh inventory");
+  assert.equal(outboundReadCalls, 1, "the new record is visible next invocation");
   assert.equal(correspondenceListCalls, 4);
 });
 
@@ -637,15 +575,11 @@ test("later machine skips correspondence finalized during earlier machine proces
 
   assert.equal(correspondenceListCalls, 2);
   assert.ok(
-    endpointCalls.some(
-      (call) => call.action === "poll" && call.recipientSession === "peer-B",
-    ),
+    endpointCalls.some((call) => call.action === "poll" && call.recipientSession === "peer-B"),
     "machine one processes the first correspondence and finalizes the later durable record",
   );
   assert.equal(
-    endpointCalls.some(
-      (call) => call.action === "poll" && call.recipientSession === "peer-C",
-    ),
+    endpointCalls.some((call) => call.action === "poll" && call.recipientSession === "peer-C"),
     false,
     "machine two rereads current state and does not poll the stale inventory candidate",
   );
@@ -738,16 +672,8 @@ test("later machine uses outbound retargeted during earlier machine processing",
       envelope,
     };
   };
-  const first = makeOutbound(
-    "22222222-2222-4222-8222-222222222222",
-    "one",
-    "peer-B",
-  );
-  const later = makeOutbound(
-    "33333333-3333-4333-8333-333333333333",
-    "two",
-    "peer-C",
-  );
+  const first = makeOutbound("22222222-2222-4222-8222-222222222222", "one", "peer-B");
+  const later = makeOutbound("33333333-3333-4333-8333-333333333333", "two", "peer-C");
   const durable = new Map([
     [first.id, { ...first, envelope: first.envelope("peer-B-generation") }],
     [later.id, { ...later, envelope: later.envelope("stale-generation") }],
@@ -812,16 +738,8 @@ test("later machine skips outbound removed during earlier machine processing", a
       envelope,
     };
   };
-  const first = makeOutbound(
-    "55555555-5555-4555-8555-555555555555",
-    "one",
-    "peer-B",
-  );
-  const later = makeOutbound(
-    "66666666-6666-4666-8666-666666666666",
-    "two",
-    "peer-C",
-  );
+  const first = makeOutbound("55555555-5555-4555-8555-555555555555", "one", "peer-B");
+  const later = makeOutbound("66666666-6666-4666-8666-666666666666", "two", "peer-C");
   const durable = new Map([
     [first.id, { ...first }],
     [later.id, { ...later }],
@@ -844,9 +762,7 @@ test("later machine skips outbound removed during earlier machine processing", a
   await list(f.runtime, f.context);
 
   assert.deepEqual(
-    endpointCalls
-      .filter((call) => call.action === "status")
-      .map((call) => call.recipientSession),
+    endpointCalls.filter((call) => call.action === "status").map((call) => call.recipientSession),
     ["peer-B"],
   );
   assert.deepEqual(deliveries, [first.id]);
@@ -900,14 +816,9 @@ test("internal peer reconciliation does not persist model-facing target bindings
   const visible = await list(f.runtime, f.context);
   assert.ok(visible.details && "peers" in visible.details);
   assert.ok(visible.details.peers[0] && "target" in visible.details.peers[0]);
+  assert.equal(visible.details?.peers[0].target, coordinatorTarget("manager", "remote-manager"));
   assert.equal(
-    visible.details?.peers[0].target,
-    coordinatorTarget("manager", "remote-manager"),
-  );
-  assert.equal(
-    entries.filter(
-      (entry: any) => entry.customType === "pi-herdsman-coordinator-target-v1",
-    ).length,
+    entries.filter((entry: any) => entry.customType === "pi-herdsman-coordinator-target-v1").length,
     1,
   );
 });
@@ -976,10 +887,7 @@ test("Lead send reports failed authorization predicates without rejecting a vali
     { ...snapshot([remoteLead]), ordinaryLeadsComplete: true },
   ];
   await list(valid.runtime, valid.context);
-  assert.equal(
-    (await send(valid.runtime, valid.context, "remote-lead")).details?.accepted,
-    true,
-  );
+  assert.equal((await send(valid.runtime, valid.context, "remote-lead")).details?.accepted, true);
 });
 
 test("ambiguous remote routes are excluded and report route_ambiguous", async (t) => {
@@ -999,10 +907,7 @@ test("ambiguous remote routes are excluded and report route_ambiguous", async (t
   const peers = await list(f.runtime, f.context);
   assert.deepEqual(peers.details?.peers, []);
   assert.doesNotMatch(peers.content[0].text, /ambiguous-peer/u);
-  await assert.rejects(
-    send(f.runtime, f.context, "ambiguous-peer"),
-    /\[route_ambiguous\]$/u,
-  );
+  await assert.rejects(send(f.runtime, f.context, "ambiguous-peer"), /\[route_ambiguous\]$/u);
 });
 
 test("published route remains sendable during refresh and a stale discovery cannot overwrite newer routes", async (t) => {
@@ -1044,24 +949,15 @@ test("published route remains sendable during refresh and a stale discovery cann
   await newDiscovery;
   older.resolve(snapshot([remote("peer-stale")]));
   await oldDiscovery;
-  assert.equal(
-    (await send(f.runtime, f.context, "peer-newer")).details?.accepted,
-    true,
-  );
-  await assert.rejects(
-    send(f.runtime, f.context, "peer-stale"),
-    /not found|unavailable/,
-  );
+  assert.equal((await send(f.runtime, f.context, "peer-newer")).details?.accepted, true);
+  await assert.rejects(send(f.runtime, f.context, "peer-stale"), /not found|unavailable/);
 });
 
 test("outbound correspondence merges newly captured partial origin metadata", async (t) => {
   const f = fixture();
   t.after(f.close);
   machines.push(machine("one"));
-  nextSnapshots = [
-    snapshot([remote("peer-old")]),
-    snapshot([remote("peer-old")]),
-  ];
+  nextSnapshots = [snapshot([remote("peer-old")]), snapshot([remote("peer-old")])];
   await list(f.runtime, f.context);
   const correspondence = realCorrespondence.createPeerCorrespondence({
     originSession: self,
@@ -1142,9 +1038,7 @@ test("Manager reply enqueue avoids assignment authority lock while Lead still re
   let managerLock: ReturnType<typeof acquireProcessLock> | undefined;
   const managerEntered = gate<void>();
   const manager = fixture("manager", async () => {
-    managerLock = acquireProcessLock(
-      supervision.projectAssignmentAuthorityLockPath(),
-    );
+    managerLock = acquireProcessLock(supervision.projectAssignmentAuthorityLockPath());
     managerEntered.resolve();
     return { inline: { bytes: 10000 }, mailbox: { bytes: 10000 } };
   });
@@ -1158,11 +1052,7 @@ test("Manager reply enqueue avoids assignment authority lock while Lead still re
     finalized: false,
     replies: [],
   });
-  const managerSending = send(
-    manager.runtime,
-    manager.context,
-    "origin-manager",
-  );
+  const managerSending = send(manager.runtime, manager.context, "origin-manager");
   await managerEntered.promise;
   try {
     const sent = await managerSending;
@@ -1176,9 +1066,7 @@ test("Manager reply enqueue avoids assignment authority lock while Lead still re
   let leadLock: ReturnType<typeof acquireProcessLock> | undefined;
   const leadEntered = gate<void>();
   const lead = fixture("lead", async () => {
-    leadLock = acquireProcessLock(
-      supervision.projectAssignmentAuthorityLockPath(),
-    );
+    leadLock = acquireProcessLock(supervision.projectAssignmentAuthorityLockPath());
     leadEntered.resolve();
     return { inline: { bytes: 10000 }, mailbox: { bytes: 10000 } };
   });
@@ -1203,10 +1091,7 @@ test("Manager reply enqueue avoids assignment authority lock while Lead still re
   const leadSending = send(lead.runtime, lead.context, "origin-lead");
   await leadEntered.promise;
   try {
-    await assert.rejects(
-      leadSending,
-      /Project assignment authority is in progress/u,
-    );
+    await assert.rejects(leadSending, /Project assignment authority is in progress/u);
     assert.equal(queuedReplies.length, 0);
   } finally {
     leadLock?.release();
@@ -1243,20 +1128,12 @@ test("list_peers projects exact reply-only correspondence targets without exposi
     },
   ];
   assert.deepEqual(result.details?.reply_only, expected);
-  assert.deepEqual(JSON.parse(result.content[0].text).reply_only, [
-    ...expected,
-  ]);
+  assert.deepEqual(JSON.parse(result.content[0].text).reply_only, [...expected]);
   assert.doesNotMatch(result.content[0].text, /secret-capability|corr-origin/);
-  assert.doesNotMatch(
-    JSON.stringify(result.details),
-    /secret-capability|corr-origin/,
-  );
+  assert.doesNotMatch(JSON.stringify(result.details), /secret-capability|corr-origin/);
 
   const sent = await send(f.runtime, f.context, "origin-manager");
-  assert.equal(
-    sent.details?.target,
-    coordinatorTarget("manager", "origin-manager"),
-  );
+  assert.equal(sent.details?.target, coordinatorTarget("manager", "origin-manager"));
   assert.equal(sent.details?.queued, true);
   assert.equal(queuedReplies.length, 1);
   assert.equal(queuedReplies[0][0].id, "corr-origin");
@@ -1267,10 +1144,7 @@ test("list_peers projects exact reply-only correspondence targets without exposi
     { ...correspondence, id: "corr-duplicate" },
   ]) {
     correspondences.length = 0;
-    correspondences.push(
-      invalid,
-      ...(invalid.id === "corr-duplicate" ? [correspondence] : []),
-    );
+    correspondences.push(invalid, ...(invalid.id === "corr-duplicate" ? [correspondence] : []));
     const excluded = await list(f.runtime, f.context);
     assert.equal(excluded.details?.reply_only, undefined);
     assert.equal(JSON.parse(excluded.content[0].text).reply_only, undefined);
@@ -1305,8 +1179,7 @@ test("a discovered Manager is not duplicated in reply_only", async (t) => {
   const result = await list(f.runtime, f.context);
   assert.ok(
     result.details?.peers.some(
-      (peer: any) =>
-        peer.target === coordinatorTarget("manager", "origin-manager"),
+      (peer: any) => peer.target === coordinatorTarget("manager", "origin-manager"),
     ),
   );
   assert.equal(result.details?.reply_only, undefined);
@@ -1316,12 +1189,7 @@ test("a correspondence failure is isolated, deduplicated, and retried", async (t
   const f = fixture();
   t.after(f.close);
   machines.push(machine("one"));
-  nextSnapshots = [
-    snapshot([
-      remote("peer-B", "generation-1"),
-      remote("peer-C", "generation-C"),
-    ]),
-  ];
+  nextSnapshots = [snapshot([remote("peer-B", "generation-1"), remote("peer-C", "generation-C")])];
   await list(f.runtime, f.context);
 
   correspondences.push(
@@ -1347,45 +1215,26 @@ test("a correspondence failure is isolated, deduplicated, and retried", async (t
   failRecoveryForB = true;
   failNextDiagnosticAppend = true;
   probeImpl = async () =>
-    snapshot([
-      remote("peer-B", "generation-2"),
-      remote("peer-C", "generation-C"),
-    ]);
+    snapshot([remote("peer-B", "generation-2"), remote("peer-C", "generation-C")]);
   const first = await list(f.runtime, f.context);
   assert.equal(first.details?.remote_diagnostics, undefined);
   assert.equal(diagnostics.length, 0, "failed diagnostic append is contained");
   assert.equal(deliveredReplies.length, 1);
   assert.equal(deliveredReplies[0].id, cReply.id);
   assert.ok(
-    endpointCalls.some(
-      (call) => call.action === "poll" && call.recipientSession === "peer-C",
-    ),
+    endpointCalls.some((call) => call.action === "poll" && call.recipientSession === "peer-C"),
   );
   assert.ok(
-    endpointCalls.some(
-      (call) => call.action === "ack" && call.recipientSession === "peer-C",
-    ),
+    endpointCalls.some((call) => call.action === "ack" && call.recipientSession === "peer-C"),
   );
 
   await list(f.runtime, f.context);
-  assert.equal(
-    diagnostics.length,
-    1,
-    "recovery error is reported after append succeeds",
-  );
+  assert.equal(diagnostics.length, 1, "recovery error is reported after append succeeds");
   assert.match(String(diagnostics[0]), /injected recipient recovery failure/);
   await list(f.runtime, f.context);
   assert.equal(diagnostics.length, 1, "same B recovery error is reported once");
-  assert.equal(
-    diagnosticAttempts,
-    2,
-    "failed append is retried once, then deduplicated",
-  );
-  assert.equal(
-    deliveredReplies.length,
-    1,
-    "C's acknowledged reply is not redelivered",
-  );
+  assert.equal(diagnosticAttempts, 2, "failed append is retried once, then deduplicated");
+  assert.equal(deliveredReplies.length, 1, "C's acknowledged reply is not redelivered");
 
   failRecoveryForB = false;
   await list(f.runtime, f.context);
@@ -1393,9 +1242,7 @@ test("a correspondence failure is isolated, deduplicated, and retried", async (t
   assert.equal(diagnostics.length, 1);
   assert.ok(
     endpointCalls.some(
-      (call) =>
-        call.action === "recover-recipient" &&
-        call.recipientSession === "peer-B",
+      (call) => call.action === "recover-recipient" && call.recipientSession === "peer-B",
     ),
   );
   const sent = await send(f.runtime, f.context, "peer-B");
@@ -1406,12 +1253,7 @@ test("aborted correspondence recovery stops later correspondence processing", as
   const f = fixture();
   t.after(f.close);
   machines.push(machine("one"));
-  nextSnapshots = [
-    snapshot([
-      remote("peer-B", "generation-1"),
-      remote("peer-C", "generation-C"),
-    ]),
-  ];
+  nextSnapshots = [snapshot([remote("peer-B", "generation-1"), remote("peer-C", "generation-C")])];
   await list(f.runtime, f.context);
   correspondences.push(
     {
@@ -1438,10 +1280,7 @@ test("aborted correspondence recovery stops later correspondence processing", as
   failRecoveryForB = true;
   abortRecoveryForB = () => controller.abort();
   probeImpl = async () =>
-    snapshot([
-      remote("peer-B", "generation-2"),
-      remote("peer-C", "generation-C"),
-    ]);
+    snapshot([remote("peer-B", "generation-2"), remote("peer-C", "generation-C")]);
   const result = await list(f.runtime, f.context, controller.signal);
 
   assert.equal(controller.signal.aborted, true);
@@ -1449,9 +1288,7 @@ test("aborted correspondence recovery stops later correspondence processing", as
   assert.deepEqual(diagnostics, []);
   assert.ok(
     endpointCalls.some(
-      (call) =>
-        call.action === "recover-recipient" &&
-        call.recipientSession === "peer-B",
+      (call) => call.action === "recover-recipient" && call.recipientSession === "peer-B",
     ),
   );
   assert.equal(
@@ -1478,10 +1315,7 @@ test("reachability and probe failures have distinct remote diagnostics", async (
     JSON.parse(result.content[0].text).remote_diagnostics,
     result.details?.remote_diagnostics,
   );
-  assert.doesNotMatch(
-    JSON.stringify(result.details?.remote_diagnostics),
-    /\.example|injected/u,
-  );
+  assert.doesNotMatch(JSON.stringify(result.details?.remote_diagnostics), /\.example|injected/u);
 });
 
 test("machine-list failures are reported without exposing transport details", async (t) => {
@@ -1491,9 +1325,7 @@ test("machine-list failures are reported without exposing transport details", as
     throw new Error("ssh://user:secret@private-target");
   };
   const result = await list(f.runtime, f.context);
-  assert.deepEqual(result.details?.remote_diagnostics, [
-    { reason: "machine_list_failed" },
-  ]);
+  assert.deepEqual(result.details?.remote_diagnostics, [{ reason: "machine_list_failed" }]);
   assert.doesNotMatch(result.content[0].text, /secret|private-target|ssh:/u);
 });
 
@@ -1629,8 +1461,7 @@ test("incomplete ordinary-Lead scans retain prior verified routes", async (t) =>
     ordinaryLeadsComplete: true,
   });
   assert.equal(
-    (await send(f.runtime, f.context, "previously-verified-peer")).details
-      ?.accepted,
+    (await send(f.runtime, f.context, "previously-verified-peer")).details?.accepted,
     true,
   );
 });
@@ -1640,10 +1471,7 @@ test("managed assigned local Leads do not discover or probe remote peers", async
   t.after(f.close);
   machines.push(machine("one"));
   nextSnapshots = [snapshot([])];
-  supervision.writeProjectAssignment(
-    supervision.supervisionRuntime(),
-    assignment,
-  );
+  supervision.writeProjectAssignment(supervision.supervisionRuntime(), assignment);
   t.after(() =>
     supervision.removeProjectAssignment(
       supervision.supervisionRuntime(),
@@ -1674,10 +1502,7 @@ test("ordinary assigned local Leads do not discover or probe remote peers", asyn
   t.after(f.close);
   machines.push(machine("one"));
   nextSnapshots = [snapshot([])];
-  supervision.writeProjectAssignment(
-    supervision.supervisionRuntime(),
-    assignment,
-  );
+  supervision.writeProjectAssignment(supervision.supervisionRuntime(), assignment);
   t.after(() =>
     supervision.removeProjectAssignment(
       supervision.supervisionRuntime(),
@@ -1687,16 +1512,9 @@ test("ordinary assigned local Leads do not discover or probe remote peers", asyn
   );
 
   assert.equal(f.sender.sessionKind, "ordinary");
-  await assert.rejects(
-    list(f.runtime, f.context),
-    /eligibility could not be verified/,
-  );
+  await assert.rejects(list(f.runtime, f.context), /eligibility could not be verified/);
 
-  assert.equal(
-    nextSnapshots.length,
-    1,
-    "assigned ordinary Lead skips remote probe",
-  );
+  assert.equal(nextSnapshots.length, 1, "assigned ordinary Lead skips remote probe");
   assert.equal(
     supervision.globalProjectAssignmentSnapshot().get(self)?.length,
     1,
@@ -1746,10 +1564,7 @@ test("Lead reply is rejected when assignment changes during async preparation", 
 
   const replying = send(f.runtime, f.context, "origin-lead");
   await entered.promise;
-  supervision.writeProjectAssignment(
-    supervision.supervisionRuntime(),
-    assignment,
-  );
+  supervision.writeProjectAssignment(supervision.supervisionRuntime(), assignment);
   t.after(() =>
     supervision.removeProjectAssignment(
       supervision.supervisionRuntime(),
@@ -1827,20 +1642,14 @@ test("partial discovery refreshes healthy routes, retains unavailable routes, an
   assert.deepEqual(partial.details?.remote_diagnostics, [
     { machine: "offline", reason: "herdr_not_reachable" },
   ]);
-  assert.equal(
-    (await send(f.runtime, f.context, "healthy-peer")).details?.accepted,
-    true,
-  );
+  assert.equal((await send(f.runtime, f.context, "healthy-peer")).details?.accepted, true);
 
   probeImpl = async (item) =>
     item.id === "healthy"
       ? snapshot([remote("offline-peer", "offline-generation")])
       : Promise.reject(new Error("offline"));
   await list(f.runtime, f.context);
-  await assert.rejects(
-    send(f.runtime, f.context, "offline-peer"),
-    /not found|ambiguous/,
-  );
+  await assert.rejects(send(f.runtime, f.context, "offline-peer"), /not found|ambiguous/);
 });
 
 test("fresh send-time probe rejects incompatible or missing build metadata", async (t) => {
@@ -1851,9 +1660,6 @@ test("fresh send-time probe rejects incompatible or missing build metadata", asy
   await list(f.runtime, f.context);
   for (const build of [support.OTHER_HERDSMAN_BUILD, undefined]) {
     probeImpl = async () => snapshot([{ ...remote("peer"), build }]);
-    await assert.rejects(
-      send(f.runtime, f.context, "peer"),
-      /incompatible|build/i,
-    );
+    await assert.rejects(send(f.runtime, f.context, "peer"), /incompatible|build/i);
   }
 });

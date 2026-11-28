@@ -102,20 +102,12 @@ test("recovery delivers Manager-owned results and asks only to the exact owner",
     completedRequestId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
   };
   const managerAsk = {
-    ...managedState(
-      "manager-recovery-ask",
-      REQUEST_ID,
-      recoveryIdentity("manager-recovery-ask"),
-    ),
+    ...managedState("manager-recovery-ask", REQUEST_ID, recoveryIdentity("manager-recovery-ask")),
     ownerSessionId: managerSessionId,
     pendingAskId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
   };
   const leadResult = {
-    ...managedState(
-      "lead-recovery-result",
-      undefined,
-      recoveryIdentity("lead-recovery-result"),
-    ),
+    ...managedState("lead-recovery-result", undefined, recoveryIdentity("lead-recovery-result")),
     ownerSessionId: LEAD_SESSION_ID,
     completedRequestId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
   };
@@ -124,9 +116,7 @@ test("recovery delivers Manager-owned results and asks only to the exact owner",
     piSessionId: managerSessionId,
   };
   const states = [parent, managerResult, managerAsk, leadResult];
-  const mailboxes = states.map((state) =>
-    agentMailboxPath(WORKSPACE, state.agentLabel),
-  );
+  const mailboxes = states.map((state) => agentMailboxPath(WORKSPACE, state.agentLabel));
   for (const [index, state] of states.entries()) {
     resetAgentMailbox(mailboxes[index]);
     writeAgentState(mailboxes[index], state);
@@ -210,44 +200,29 @@ test("combined status reports a completed agent as pending, not active", async (
   const triggerRequestId = randomUUID();
   const pendingRequestId = triggerRequestId;
   const trigger = {
-    ...managedState(
-      "status-trigger-child",
-      undefined,
-      recoveryIdentity("status-trigger-child"),
-    ),
+    ...managedState("status-trigger-child", undefined, recoveryIdentity("status-trigger-child")),
     ownerSessionId: parent.piSessionId,
     piSessionId: CHILD_SESSION_ID,
     piSessionFile: "/tmp/status-trigger-child.jsonl",
     completedRequestId: triggerRequestId,
   };
   const pending = {
-    ...managedState(
-      "status-pending-child",
-      undefined,
-      recoveryIdentity("status-pending-child"),
-    ),
+    ...managedState("status-pending-child", undefined, recoveryIdentity("status-pending-child")),
     ownerSessionId: parent.piSessionId,
     piSessionId: "22222222-2222-4222-8222-222222222222",
     piSessionFile: "/tmp/status-pending-child.jsonl",
     completedRequestId: pendingRequestId,
   };
   const settling = {
-    ...managedState(
-      "status-settling-child",
-      undefined,
-      recoveryIdentity("status-settling-child"),
-    ),
+    ...managedState("status-settling-child", undefined, recoveryIdentity("status-settling-child")),
     ownerSessionId: parent.piSessionId,
     piSessionId: "11111111-1111-4111-8111-111111111111",
     piSessionFile: "/tmp/status-settling-child.jsonl",
   };
   const states = [parent, trigger, pending, settling];
-  const mailboxes = states.map((state) =>
-    agentMailboxPath(WORKSPACE, state.agentLabel),
-  );
+  const mailboxes = states.map((state) => agentMailboxPath(WORKSPACE, state.agentLabel));
   for (const mailbox of mailboxes) resetAgentMailbox(mailbox);
-  for (const [index, state] of states.entries())
-    writeAgentState(mailboxes[index], state);
+  for (const [index, state] of states.entries()) writeAgentState(mailboxes[index], state);
   const writeChildResult = (
     state: ManagedAgentState,
     mailbox: string,
@@ -291,21 +266,16 @@ test("combined status reports a completed agent as pending, not active", async (
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, fakeAgentContext(entries));
     const resultMessages = pi.sentMessageCalls.filter(
-      ({ message }) =>
-        (message as any).customType === "pi-herdsman-agent-result",
+      ({ message }) => (message as any).customType === "pi-herdsman-agent-result",
     );
     assert.equal(resultMessages.length, 2);
-    const statuses = resultMessages.map(
-      ({ message }) => (message as any).details,
-    );
+    const statuses = resultMessages.map(({ message }) => (message as any).details);
     assert.deepEqual(
       new Set(statuses.map((details) => details.agentLabel)),
       new Set(["status-trigger-child", "status-pending-child"]),
     );
     assert.deepEqual(
-      Object.fromEntries(
-        statuses.map((details) => [details.agentLabel, details.resultIndex]),
-      ),
+      Object.fromEntries(statuses.map((details) => [details.agentLabel, details.resultIndex])),
       {
         "status-trigger-child": 1,
         "status-pending-child": 1,
@@ -350,8 +320,7 @@ test("combined status reports a completed agent as pending, not active", async (
     );
     assert.equal(
       pi.sentMessageCalls.some(
-        ({ message }) =>
-          (message as any).customType === "pi-herdsman-delegation-guidance",
+        ({ message }) => (message as any).customType === "pi-herdsman-delegation-guidance",
       ),
       false,
     );
@@ -364,11 +333,7 @@ test("combined status reports a completed agent as pending, not active", async (
 test("conflicting same-request entries do not suppress an exact combined result", async (t) => {
   setLeadEnvironment();
   const child = {
-    ...managedState(
-      "queued-child",
-      undefined,
-      recoveryIdentity("queued-child"),
-    ),
+    ...managedState("queued-child", undefined, recoveryIdentity("queued-child")),
     piSessionId: CHILD_SESSION_ID,
     piSessionFile: "/tmp/queued-child.jsonl",
     completedRequestId: REQUEST_ID,
@@ -489,8 +454,7 @@ test("conflicting same-request entries do not suppress an exact combined result"
     );
     assert.equal(
       pi.sentMessageCalls.some(
-        ({ message }) =>
-          (message as any).customType === "pi-herdsman-delegation-guidance",
+        ({ message }) => (message as any).customType === "pi-herdsman-delegation-guidance",
       ),
       false,
     );
@@ -535,9 +499,7 @@ test("reload result recovery rejects wrong owners and replacement identities", a
       fakeContext(wrongOwnerPi.entries),
     );
     assert.equal(
-      wrongOwnerPi.sent.some(
-        (message: any) => message.customType === "pi-herdsman-agent-result",
-      ),
+      wrongOwnerPi.sent.some((message: any) => message.customType === "pi-herdsman-agent-result"),
       false,
     );
     assert.ok(readResult(mailbox, REQUEST_ID));
@@ -574,9 +536,7 @@ test("reload result recovery rejects wrong owners and replacement identities", a
       fakeContext(replacementPi.entries),
     );
     assert.equal(
-      replacementPi.sent.some(
-        (message: any) => message.customType === "pi-herdsman-agent-result",
-      ),
+      replacementPi.sent.some((message: any) => message.customType === "pi-herdsman-agent-result"),
       true,
     );
     assert.deepEqual(replacementLifecycle.closeOrder, []);
@@ -769,16 +729,12 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
           stderr: "",
           code: 0,
         };
-      if (
-        args[0] === "pane" &&
-        (args[1] === "run" || args[1] === "wait-output")
-      ) {
+      if (args[0] === "pane" && (args[1] === "run" || args[1] === "wait-output")) {
         if (args[1] === "run") {
           const value = (key: string) =>
             new RegExp(`${key}='([^']*)'`).exec(args.at(-1) ?? "")?.[1];
           runId = value("PI_HERDSMAN_RUN_ID") ?? runId;
-          ownerSessionId =
-            value("PI_HERDSMAN_OWNER_SESSION_ID") ?? ownerSessionId;
+          ownerSessionId = value("PI_HERDSMAN_OWNER_SESSION_ID") ?? ownerSessionId;
         }
         return { stdout: "{}", stderr: "", code: 0 };
       }
@@ -915,10 +871,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
   assert.equal(result.details.truncated, false);
   assert.equal(result.details.error.retryAttempted, true);
   assert.equal(result.details.error.primary.category, "target_not_found");
-  assert.equal(
-    result.details.error.primary.message,
-    "live Herdr agent Pi session mismatch",
-  );
+  assert.equal(result.details.error.primary.message, "live Herdr agent Pi session mismatch");
   assert.match(
     result.details.error.cleanup.message,
     /pane list disappearance proof is unavailable/,
@@ -927,10 +880,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
     (result.content[0] as { text: string }).text,
     /Primary:.*category=target_not_found/s,
   );
-  assert.match(
-    (result.content[0] as { text: string }).text,
-    /Cleanup:.*operation=rollback/s,
-  );
+  assert.match((result.content[0] as { text: string }).text, /Cleanup:.*operation=rollback/s);
   assert.match(
     (result.content[0] as { text: string }).text,
     /Next action: Resolve the reported cleanup failure before retrying\./,
@@ -950,18 +900,12 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
     },
   );
   assert.match(rendered.text, /category: rollback_failure/);
-  assert.match(
-    rendered.text,
-    /message: Agent launch failed and rollback was incomplete\./,
-  );
+  assert.match(rendered.text, /message: Agent launch failed and rollback was incomplete\./);
   assert.match(
     rendered.text,
     /identity: label=rollback-agent, paneId=pane-start, tabId=registered-tab/,
   );
-  assert.match(
-    rendered.text,
-    /next: Resolve the reported cleanup failure before retrying\./,
-  );
+  assert.match(rendered.text, /next: Resolve the reported cleanup failure before retrying\./);
   assert.match(
     rendered.text,
     /primary: category=target_not_found, message=live Herdr agent Pi session mismatch/,
@@ -984,18 +928,10 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
   assert.equal(panePresent, false);
   assert.equal(readAgentState(mailbox)?.agentLabel, label);
   assert.equal(
-    pi.entries.some(
-      (entry: any) => entry.customType === "pi_herdsman_cleanup_error",
-    ),
+    pi.entries.some((entry: any) => entry.customType === "pi_herdsman_cleanup_error"),
     true,
   );
-  const listed = await agentTool(pi, "list").execute(
-    "id",
-    {},
-    undefined,
-    undefined,
-    fakeContext(),
-  );
+  const listed = await agentTool(pi, "list").execute("id", {}, undefined, undefined, fakeContext());
   assert.equal(listed.details.agents.length, 1);
   assert.equal(listed.details.agents[0].state, "lost");
   assert.deepEqual(listed.details.agents[0].available_tools, ["stop_agent"]);
@@ -1009,9 +945,7 @@ test("startup executor identity overrides are explicit and consistent", () => {
   const sessionId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
   const mailbox = agentMailboxPath(WORKSPACE, label);
   resetAgentMailbox(mailbox);
-  const defaultFixture = startupExecutor(label, (count) =>
-    count === 1 ? sessionId : null,
-  );
+  const defaultFixture = startupExecutor(label, (count) => (count === 1 ? sessionId : null));
   const explicitFixture = startupExecutor(
     label,
     () => sessionId,
@@ -1030,14 +964,13 @@ test("startup executor identity overrides are explicit and consistent", () => {
   );
   try {
     const agentSession = (fixture: ReturnType<typeof startupExecutor>) =>
-      JSON.parse(
-        fixture.exec("herdr", ["agent", "get", "fixture-alias"]).stdout,
-      ).result.agent.agent_session.value;
+      JSON.parse(fixture.exec("herdr", ["agent", "get", "fixture-alias"]).stdout).result.agent
+        .agent_session.value;
     assert.equal(agentSession(defaultFixture), DEFAULT_PI_SESSION_ID);
     assert.equal(agentSession(explicitFixture), sessionId);
     assert.equal(
-      JSON.parse(explicitFixture.exec("herdr", ["pane", "get"]).stdout).result
-        .pane.agent_session.value,
+      JSON.parse(explicitFixture.exec("herdr", ["pane", "get"]).stdout).result.pane.agent_session
+        .value,
       sessionId,
     );
 
@@ -1059,10 +992,7 @@ test("rollback requires disappearance proof after a successful close", async () 
   const label = "persistent-close-agent";
   const startup = startupExecutor(
     label,
-    (count) =>
-      count === 1
-        ? "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
-        : DEFAULT_PI_SESSION_ID,
+    (count) => (count === 1 ? "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" : DEFAULT_PI_SESSION_ID),
     undefined,
     undefined,
     false,
@@ -1077,11 +1007,7 @@ test("rollback requires disappearance proof after a successful close", async () 
   const pi = fakePi({
     exec: (command, args, options) => {
       const result = startup.exec(command, args, options);
-      if (
-        command === "herdr" &&
-        args[0] === "pane" &&
-        args[1] === "process-info"
-      ) {
+      if (command === "herdr" && args[0] === "pane" && args[1] === "process-info") {
         const payload = JSON.parse(result.stdout);
         payload.result.process_info.foreground_process_group_id =
           agentStarted && !agentInterrupted ? 456 : 123;
@@ -1095,10 +1021,8 @@ test("rollback requires disappearance proof after a successful close", async () 
             : [{ pid: 123, argv0: "/bin/zsh" }];
         result.stdout = JSON.stringify(payload);
       }
-      if (command === "herdr" && args[0] === "agent" && args[1] === "start")
-        agentStarted = true;
-      if (command === "herdr" && isPreservePaneStop(args))
-        agentInterrupted = true;
+      if (command === "herdr" && args[0] === "agent" && args[1] === "start") agentStarted = true;
+      if (command === "herdr" && isPreservePaneStop(args)) agentInterrupted = true;
       if (command === "herdr" && isTabClose(args)) {
         assert.equal(result.code, 0);
         closeSucceeded = true;
@@ -1140,9 +1064,7 @@ test("rollback requires disappearance proof after a successful close", async () 
     assert.equal(paneRemainsAfterClose, true);
     assert.equal(readAgentState(startup.mailbox)?.agentLabel, label);
     assert.equal(
-      pi.entries.some(
-        (entry: any) => entry.customType === "pi_herdsman_cleanup_error",
-      ),
+      pi.entries.some((entry: any) => entry.customType === "pi_herdsman_cleanup_error"),
       true,
     );
   } finally {
@@ -1244,8 +1166,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
         for (let i = 0; i < args.length - 1; i++) {
           if (args[i] !== "--env") continue;
           const assignment = args[i + 1]!;
-          if (assignment.startsWith("PI_HERDSMAN_RUN_ID="))
-            runId = assignment.slice(19);
+          if (assignment.startsWith("PI_HERDSMAN_RUN_ID=")) runId = assignment.slice(19);
           if (assignment.startsWith("PI_HERDSMAN_OWNER_SESSION_ID="))
             ownerSessionId = assignment.slice(29);
         }
@@ -1272,9 +1193,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
               layout: {
                 workspace_id: WORKSPACE,
                 tab_id: "registered-tab",
-                panes: [
-                  { pane_id: "detail-pane", rect: { width: 100, height: 40 } },
-                ],
+                panes: [{ pane_id: "detail-pane", rect: { width: 100, height: 40 } }],
               },
             },
           }),
@@ -1343,16 +1262,12 @@ test("assignment rollback retains primary failure and actionable cleanup details
           stderr: "",
           code: 0,
         };
-      if (
-        args[0] === "pane" &&
-        (args[1] === "run" || args[1] === "wait-output")
-      ) {
+      if (args[0] === "pane" && (args[1] === "run" || args[1] === "wait-output")) {
         if (args[1] === "run") {
           const value = (key: string) =>
             new RegExp(`${key}='([^']*)'`).exec(args.at(-1) ?? "")?.[1];
           runId = value("PI_HERDSMAN_RUN_ID") ?? runId;
-          ownerSessionId =
-            value("PI_HERDSMAN_OWNER_SESSION_ID") ?? ownerSessionId;
+          ownerSessionId = value("PI_HERDSMAN_OWNER_SESSION_ID") ?? ownerSessionId;
         }
         return { stdout: "{}", stderr: "", code: 0 };
       }
@@ -1496,9 +1411,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
   );
   assert.equal(readAgentState(mailbox)?.agentLabel, label);
   assert.equal(
-    pi.entries.some(
-      (entry: any) => entry.customType === "pi_herdsman_cleanup_error",
-    ),
+    pi.entries.some((entry: any) => entry.customType === "pi_herdsman_cleanup_error"),
     true,
   );
   pi.events.get("session_shutdown")?.[0]();
@@ -1553,10 +1466,7 @@ test("recovery requires the official session and retries one failed delivery", a
     ),
   });
   registerExtension!(mismatch.pi as never);
-  await mismatch.events.get("session_start")![0](
-    undefined,
-    fakeContext(mismatch.entries),
-  );
+  await mismatch.events.get("session_start")![0](undefined, fakeContext(mismatch.entries));
   t.mock.timers.tick(250);
   await Promise.resolve();
   assert.equal(mismatch.sent.length, 0);
@@ -1595,10 +1505,7 @@ test("recovery requires the official session and retries one failed delivery", a
         delivered = String((message as any).content ?? "");
         deliveredDetails = (message as any).details;
         const match = /Result ref: (result:[^\s]+)/.exec(delivered);
-        assert.ok(
-          match,
-          "every publication attempt should retain its result ref",
-        );
+        assert.ok(match, "every publication attempt should retain its result ref");
         attemptedRefs.push(match[1]);
         attempts++;
         if (attempts <= transientFailures) throw new Error("transient");
@@ -1611,10 +1518,7 @@ test("recovery requires the official session and retries one failed delivery", a
     },
   });
   registerExtension!(recovering.pi as never);
-  await recovering.events.get("session_start")![0](
-    undefined,
-    fakeContext(entries),
-  );
+  await recovering.events.get("session_start")![0](undefined, fakeContext(entries));
   assert.equal(attempts, 1);
   assert.ok(
     readResult(mailbox, REQUEST_ID),
@@ -1633,21 +1537,14 @@ test("recovery requires the official session and retries one failed delivery", a
   assert.equal(recovering.sentUsers.length, 0);
   assert.match(
     delivered,
-    new RegExp(
-      `^Agent result · agent=${label} · definition=agent · status=completed`,
-    ),
+    new RegExp(`^Agent result · agent=${label} · definition=agent · status=completed`),
   );
   assert.doesNotMatch(delivered.split("\n\n")[0], /\bsession=/);
   assert.match(
     delivered,
-    new RegExp(
-      `To continue this session, use resume_agent with session="result:${label}#2"\\.`,
-    ),
+    new RegExp(`To continue this session, use resume_agent with session="result:${label}#2"\\.`),
   );
-  assert.deepEqual(
-    attemptedRefs,
-    Array(transientFailures + 1).fill(`result:${label}#2`),
-  );
+  assert.deepEqual(attemptedRefs, Array(transientFailures + 1).fill(`result:${label}#2`));
   assert.doesNotMatch(delivered, /Agent result source:/);
   assert.equal(
     readFileSync(resultPath(REQUEST_ID), "utf8"),
@@ -1725,23 +1622,16 @@ test("in-place branch history does not reuse a result index", async () => {
     entries,
     exec: lifecycle.exec,
     sendMessage: (message) => {
-      if ((message as any).customType === "pi-herdsman-agent-result")
-        delivered = message;
+      if ((message as any).customType === "pi-herdsman-agent-result") delivered = message;
       entries.push(message);
     },
   });
   registerExtension!(pi.pi as never);
   try {
-    await pi.events.get("session_start")![0](
-      undefined,
-      fakeContext(entries, [first]),
-    );
+    await pi.events.get("session_start")![0](undefined, fakeContext(entries, [first]));
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(delivered?.details.resultIndex, 3);
-    assert.match(
-      String(delivered?.content),
-      /Result ref: result:branched-result-agent#3/,
-    );
+    assert.match(String(delivered?.content), /Result ref: result:branched-result-agent#3/);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
@@ -1758,18 +1648,14 @@ test("completed and failed one-shot agents converge after durable delivery", asy
   ].map(([label, requestId], index) => {
     const identity = recoveryIdentity(label);
     identity.piSessionFile = join(testTmpRoot, `${label}.jsonl`);
-    if (index === 1)
-      identity.piSessionId = "11111111-1111-4111-8111-111111111111";
+    if (index === 1) identity.piSessionId = "11111111-1111-4111-8111-111111111111";
     return {
       ...managedState(label, undefined, identity),
       completedRequestId: requestId,
     };
   });
-  const mailboxes = children.map((child) =>
-    agentMailboxPath(WORKSPACE, child.agentLabel),
-  );
-  for (const child of children)
-    realFs.writeFileSync(child.piSessionFile!, "{}", "utf8");
+  const mailboxes = children.map((child) => agentMailboxPath(WORKSPACE, child.agentLabel));
+  for (const child of children) realFs.writeFileSync(child.piSessionFile!, "{}", "utf8");
   for (const [index, [child, mailbox]] of children
     .map((child, index) => [child, mailboxes[index]] as const)
     .entries()) {
@@ -1808,8 +1694,7 @@ test("completed and failed one-shot agents converge after durable delivery", asy
     entries,
     exec: lifecycle.exec,
     sendMessage: (message) => {
-      if ((message as any).customType === "pi-herdsman-agent-result")
-        deliveries++;
+      if ((message as any).customType === "pi-herdsman-agent-result") deliveries++;
     },
   });
   t.mock.timers.enable({ apis: ["setTimeout"] });
@@ -1848,14 +1733,12 @@ test("completed and failed one-shot agents converge after durable delivery", asy
         ),
       }),
     );
-    for (const mailbox of mailboxes)
-      assert.equal(readAgentState(mailbox), undefined);
+    for (const mailbox of mailboxes) assert.equal(readAgentState(mailbox), undefined);
     assert.equal(deliveries, 1);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     for (const mailbox of mailboxes) resetAgentMailbox(mailbox);
-    for (const child of children)
-      realFs.rmSync(child.piSessionFile!, { force: true });
+    for (const child of children) realFs.rmSync(child.piSessionFile!, { force: true });
   }
 });
 
@@ -2000,10 +1883,7 @@ test("delivered-result cascade retries descendant mailbox cleanup failure", asyn
       "failed mailbox cleanup must preserve the durable identity anchor",
     );
     assert.ok(readResult(parentMailbox, REQUEST_ID));
-    assert.ok(
-      realFs.existsSync(obstruction),
-      "failed descendant mailbox remains",
-    );
+    assert.ok(realFs.existsSync(obstruction), "failed descendant mailbox remains");
     assert.equal(
       entries.filter(
         (entry: any) =>
@@ -2017,10 +1897,7 @@ test("delivered-result cascade retries descendant mailbox cleanup failure", asyn
     t.mock.timers.tick(250);
     for (let index = 0; index < 10; index++)
       await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.deepEqual(lifecycle.closeOrder, [
-      child.agentLabel,
-      parent.agentLabel,
-    ]);
+    assert.deepEqual(lifecycle.closeOrder, [child.agentLabel, parent.agentLabel]);
     assert.equal(readAgentState(parentMailbox), undefined);
     assert.equal(readResult(parentMailbox, REQUEST_ID), undefined);
     assert.equal(readAgentState(childMailbox), undefined);
@@ -2036,11 +1913,7 @@ test("delivered-result cascade retries descendant mailbox cleanup failure", asyn
 test("recovery redelivers an unpersisted child result and then cleans it safely", async () => {
   setLeadEnvironment();
   const child = {
-    ...managedState(
-      "reload-result-child",
-      undefined,
-      recoveryIdentity("reload-result-child"),
-    ),
+    ...managedState("reload-result-child", undefined, recoveryIdentity("reload-result-child")),
     completedRequestId: REQUEST_ID,
   };
   const sibling = {
@@ -2081,10 +1954,7 @@ test("recovery redelivers an unpersisted child result and then cleans it safely"
   });
   registerExtension!(first.pi as never);
   try {
-    await first.events.get("session_start")![0](
-      undefined,
-      fakeContext(firstEntries),
-    );
+    await first.events.get("session_start")![0](undefined, fakeContext(firstEntries));
     assert.equal(queued, 1);
     assert.ok(
       readResult(childMailbox, REQUEST_ID),
@@ -2128,20 +1998,14 @@ test("recovery redelivers an unpersisted child result and then cleans it safely"
     );
     assert.equal(
       recovered.sentMessageCalls.some(
-        ({ message }) =>
-          (message as any).customType === "pi-herdsman-delegation-guidance",
+        ({ message }) => (message as any).customType === "pi-herdsman-delegation-guidance",
       ),
       false,
     );
     const recoveryStatusCall = recovered.sentMessageCalls[0];
     assert.ok(recoveryStatusCall, "recovery should send delegation status");
-    assert.equal(
-      (recoveryStatusCall.message as any).details.unresolvedDirectChildCount,
-      1,
-    );
-    const recoveredContent = String(
-      (recoveryStatusCall.message as any).content,
-    );
+    assert.equal((recoveryStatusCall.message as any).details.unresolvedDirectChildCount, 1);
+    const recoveredContent = String((recoveryStatusCall.message as any).content);
     const recoveredStatus = recoveredContent.slice(
       recoveredContent.lastIndexOf("Delegation status:"),
     );
@@ -2151,14 +2015,8 @@ test("recovery redelivers an unpersisted child result and then cleans it safely"
       ),
     );
     assert.ok(recoveredStatus.includes("end the turn without concluding"));
-    assert.equal(
-      (recoveryStatusCall.message as any).details.activeDirectChildCount,
-      1,
-    );
-    assert.equal(
-      (recoveryStatusCall.message as any).details.pendingDirectResultCount,
-      0,
-    );
+    assert.equal((recoveryStatusCall.message as any).details.activeDirectChildCount, 1);
+    assert.equal((recoveryStatusCall.message as any).details.pendingDirectResultCount, 0);
     assert.equal(readResult(childMailbox, REQUEST_ID), undefined);
     assert.equal(readAgentState(childMailbox), undefined);
   } finally {
@@ -2225,10 +2083,7 @@ test("settlement redelivers an unpersisted child result in the same session", as
     assert.equal(deliveries, 1);
     assert.ok(readResult(mailbox, REQUEST_ID));
     assert.equal(
-      entries.some(
-        (entry: any) =>
-          entry.message?.customType === "pi-herdsman-agent-result",
-      ),
+      entries.some((entry: any) => entry.message?.customType === "pi-herdsman-agent-result"),
       false,
     );
 
@@ -2236,11 +2091,7 @@ test("settlement redelivers an unpersisted child result in the same session", as
       await handler({ aborted: false }, context);
 
     await t.waitFor(() =>
-      assert.equal(
-        deliveries,
-        2,
-        "settlement did not redeliver the lost child result",
-      ),
+      assert.equal(deliveries, 2, "settlement did not redeliver the lost child result"),
     );
 
     await t.waitFor(() =>
@@ -2331,9 +2182,7 @@ test("recovered no-live result removal retry never cleans up a replacement", asy
       undefined,
       fakeContext(entries),
     );
-    const listed = unresolved.details.agents.find(
-      (agent: any) => agent.agent === label,
-    );
+    const listed = unresolved.details.agents.find((agent: any) => agent.agent === label);
     assert.match(listed.cleanup_error, /injected result removal failure/);
     assert.equal(unresolved.details.cleanup_errors, undefined);
 
@@ -2377,9 +2226,7 @@ test("recovered no-live result removal retry never cleans up a replacement", asy
       fakeContext(entries),
     );
     assert.equal(
-      replacementListed.details.agents.find(
-        (agent: any) => agent.agent === label,
-      ).cleanup_error,
+      replacementListed.details.agents.find((agent: any) => agent.agent === label).cleanup_error,
       undefined,
     );
   } finally {
@@ -2479,38 +2326,22 @@ test("controller reply submits the normal request and preserves the assignment",
   assert.equal(result.details.session_id, identity.piSessionId);
   assert.equal(result.details.truncated, false);
   assert.match((result.content[0] as { text: string }).text, /Request: /);
-  assert.ok(
-    (result.content[0] as { text: string }).text.includes(
-      `Ask: ${waiting.pendingAskId}`,
-    ),
-  );
-  assert.match(
-    (result.content[0] as { text: string }).text,
-    /Assignment request: /,
-  );
+  assert.ok((result.content[0] as { text: string }).text.includes(`Ask: ${waiting.pendingAskId}`));
+  assert.match((result.content[0] as { text: string }).text, /Assignment request: /);
   const rendered = agentTool(pi, "reply").renderResult(
     { content: result.content, details: result.details },
     { expanded: true, isPartial: false },
     { fg: (_color: string, text: string) => text },
     { args: { agent: label, message: "Use ALPHA." } },
   );
-  assert.match(
-    rendered.text,
-    new RegExp(`request: ${result.details.request_id}`),
-  );
+  assert.match(rendered.text, new RegExp(`request: ${result.details.request_id}`));
   assert.match(rendered.text, new RegExp(`ask: ${waiting.pendingAskId}`));
   assert.match(rendered.text, new RegExp(`session: ${identity.piSessionId}`));
   assert.match(rendered.text, /assignment request: /);
   assert.equal(readAgentState(mailbox)?.activeRequestId, REQUEST_ID);
   assert.equal(readAgentState(mailbox)?.pendingAskId, undefined);
   assert.equal(readRequest(mailbox, submitted!.requestId), undefined);
-  const afterReply = await agentTool(pi, "list").execute(
-    "list",
-    {},
-    undefined,
-    undefined,
-    context,
-  );
+  const afterReply = await agentTool(pi, "list").execute("list", {}, undefined, undefined, context);
   assert.deepEqual(afterReply.details.agents[0].available_tools, [
     "inspect_agent",
     "steer_agent",
@@ -2713,10 +2544,7 @@ test("lead recovery integration validation aborts with session shutdown", async 
     },
   });
   registerExtension!(recovery.pi as never);
-  const pending = recovery.events.get("session_start")![0](
-    undefined,
-    fakeContext(),
-  );
+  const pending = recovery.events.get("session_start")![0](undefined, fakeContext());
   await new Promise((resolve) => setImmediate(resolve));
   assert.ok(integrationSignal);
   assert.equal(integrationSignal?.aborted, false);
@@ -2730,20 +2558,12 @@ test("parent close cascades child-first and reports a structured child failure",
   for (const failed of [false, true]) {
     setLeadEnvironment();
     const parent = {
-      ...managedState(
-        "cascade-parent",
-        undefined,
-        recoveryIdentity("cascade-parent"),
-      ),
+      ...managedState("cascade-parent", undefined, recoveryIdentity("cascade-parent")),
       piSessionId: PARENT_SESSION_ID,
       piSessionFile: "/tmp/cascade-parent.jsonl",
     };
     const child = {
-      ...managedState(
-        "cascade-child",
-        undefined,
-        recoveryIdentity("cascade-child"),
-      ),
+      ...managedState("cascade-child", undefined, recoveryIdentity("cascade-child")),
       ownerSessionId: parent.piSessionId,
       piSessionId: CHILD_SESSION_ID,
       piSessionFile: "/tmp/cascade-child.jsonl",
@@ -2789,9 +2609,7 @@ test("parent close cascades child-first and reports a structured child failure",
         assert.equal(result.details.agent, parent.agentLabel);
         assert.equal(result.details.truncated, false);
         assert.ok(
-          (result.content[0] as { text: string }).text.includes(
-            `Stop agent ${parent.agentLabel}.`,
-          ),
+          (result.content[0] as { text: string }).text.includes(`Stop agent ${parent.agentLabel}.`),
         );
         const rendered = agentTool(pi, "stop").renderResult(
           { content: result.content, details: result.details },
@@ -2800,19 +2618,13 @@ test("parent close cascades child-first and reports a structured child failure",
           { args: { agent: parent.agentLabel } },
         );
         assert.match(rendered.text, new RegExp(`${parent.agentLabel} stopped`));
-        assert.deepEqual(lifecycle.closeOrder, [
-          child.agentLabel,
-          parent.agentLabel,
-        ]);
+        assert.deepEqual(lifecycle.closeOrder, [child.agentLabel, parent.agentLabel]);
         assert.equal(readAgentState(parentMailbox), undefined);
         assert.equal(readAgentState(childMailbox), undefined);
       } else {
         assert.equal(result.details.error.category, "internal_failure");
         assert.equal(result.details.error.ids.label, child.agentLabel);
-        assert.equal(
-          result.details.error.details.parentLabel,
-          parent.agentLabel,
-        );
+        assert.equal(result.details.error.details.parentLabel, parent.agentLabel);
         assert.deepEqual(lifecycle.closeOrder, []);
         assert.ok(readAgentState(parentMailbox));
         assert.ok(readAgentState(childMailbox));
@@ -2856,11 +2668,7 @@ test("close returns a structured nonfatal mailbox cleanup warning", async () => 
       parent,
       "incomplete mailbox cleanup must preserve its durable identity anchor",
     );
-    assert.ok(
-      pi.entries.some(
-        (entry: any) => entry.customType === "pi_herdsman_cleanup_error",
-      ),
-    );
+    assert.ok(pi.entries.some((entry: any) => entry.customType === "pi_herdsman_cleanup_error"));
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     realFs.rmSync(mailbox, { recursive: true, force: true });
@@ -2871,20 +2679,12 @@ test("lost parent pane absence preserves durable child ancestry", async () => {
   for (const parentPresent of [false, true]) {
     setLeadEnvironment();
     const parent = {
-      ...managedState(
-        "missing-parent",
-        undefined,
-        recoveryIdentity("missing-parent"),
-      ),
+      ...managedState("missing-parent", undefined, recoveryIdentity("missing-parent")),
       piSessionId: PARENT_SESSION_ID,
       piSessionFile: join(testTmpRoot, "missing-parent.jsonl"),
     };
     const child = {
-      ...managedState(
-        "missing-parent-child",
-        undefined,
-        recoveryIdentity("missing-parent-child"),
-      ),
+      ...managedState("missing-parent-child", undefined, recoveryIdentity("missing-parent-child")),
       ownerSessionId: parent.piSessionId,
       piSessionId: CHILD_SESSION_ID,
       piSessionFile: join(testTmpRoot, "missing-parent-child.jsonl"),
@@ -2936,11 +2736,7 @@ test("lead list excludes another lead's durable subtree", async () => {
   setLeadEnvironment();
   const foreignLeadSessionId = PARENT_SESSION_ID;
   const child = {
-    ...managedState(
-      "foreign-lead-agent",
-      undefined,
-      recoveryIdentity("foreign-lead-agent"),
-    ),
+    ...managedState("foreign-lead-agent", undefined, recoveryIdentity("foreign-lead-agent")),
     ownerSessionId: foreignLeadSessionId,
     piSessionId: CHILD_SESSION_ID,
     piSessionFile: join(testTmpRoot, "foreign-lead-agent.jsonl"),
@@ -2991,20 +2787,12 @@ test("lead list excludes another lead's durable subtree", async () => {
 test("lead list excludes cyclic unrooted durable ancestry", async () => {
   setLeadEnvironment();
   const cycleA = {
-    ...managedState(
-      "cycle-ancestry-a",
-      undefined,
-      recoveryIdentity("cycle-ancestry-a"),
-    ),
+    ...managedState("cycle-ancestry-a", undefined, recoveryIdentity("cycle-ancestry-a")),
     ownerSessionId: "11111111-1111-4111-8111-111111111111",
     piSessionId: "22222222-2222-4222-8222-222222222222",
   };
   const cycleB = {
-    ...managedState(
-      "cycle-ancestry-b",
-      undefined,
-      recoveryIdentity("cycle-ancestry-b"),
-    ),
+    ...managedState("cycle-ancestry-b", undefined, recoveryIdentity("cycle-ancestry-b")),
     ownerSessionId: cycleA.piSessionId,
     piSessionId: "11111111-1111-4111-8111-111111111111",
   };
@@ -3018,9 +2806,7 @@ test("lead list excludes cyclic unrooted durable ancestry", async () => {
     piSessionId: "33333333-3333-4333-8333-333333333333",
   };
   const states = [cycleA, cycleB, descendant];
-  const mailboxes = states.map((state) =>
-    agentMailboxPath(WORKSPACE, state.agentLabel),
-  );
+  const mailboxes = states.map((state) => agentMailboxPath(WORKSPACE, state.agentLabel));
   for (const [mailbox, state] of mailboxes.map(
     (mailbox, index) => [mailbox, states[index]] as const,
   )) {
@@ -3038,11 +2824,7 @@ test("lead list excludes cyclic unrooted durable ancestry", async () => {
       fakeContext(),
     );
     const listed = result.details.agents as any[];
-    for (const label of [
-      cycleA.agentLabel,
-      cycleB.agentLabel,
-      descendant.agentLabel,
-    ]) {
+    for (const label of [cycleA.agentLabel, cycleB.agentLabel, descendant.agentLabel]) {
       assert.equal(
         listed.some((candidate) => candidate.agent === label),
         false,
@@ -3083,9 +2865,7 @@ test("lead list excludes descendants with ambiguous durable parents", async () =
     piSessionId: CHILD_SESSION_ID,
   };
   const states = [parent, duplicateParent, child];
-  const mailboxes = states.map((state) =>
-    agentMailboxPath(WORKSPACE, state.agentLabel),
-  );
+  const mailboxes = states.map((state) => agentMailboxPath(WORKSPACE, state.agentLabel));
   for (const [mailbox, state] of mailboxes.map(
     (mailbox, index) => [mailbox, states[index]] as const,
   )) {
@@ -3103,9 +2883,7 @@ test("lead list excludes descendants with ambiguous durable parents", async () =
       fakeContext(),
     );
     assert.equal(
-      (result.details.agents as any[]).some(
-        (agent) => agent.agent === child.agentLabel,
-      ),
+      (result.details.agents as any[]).some((agent) => agent.agent === child.agentLabel),
       false,
     );
   } finally {
@@ -3117,11 +2895,7 @@ test("lead list excludes descendants with ambiguous durable parents", async () =
 test("lead cannot mutate a child owned by a live parent", async () => {
   setLeadEnvironment();
   const parent = {
-    ...managedState(
-      "owned-parent",
-      undefined,
-      recoveryIdentity("owned-parent"),
-    ),
+    ...managedState("owned-parent", undefined, recoveryIdentity("owned-parent")),
     piSessionId: PARENT_SESSION_ID,
     piSessionFile: "/tmp/owned-parent.jsonl",
   };
@@ -3168,14 +2942,7 @@ test("manual close omits malformed and absent agents", async () => {
   const mailbox = agentMailboxPath(WORKSPACE, label);
   resetAgentMailbox(mailbox);
   const pi = fakePi({
-    exec: leadExec(
-      label,
-      "idle",
-      identity.piSessionId,
-      undefined,
-      identity.piSessionId,
-      identity,
-    ),
+    exec: leadExec(label, "idle", identity.piSessionId, undefined, identity.piSessionId, identity),
   });
   registerExtension!(pi.pi as never);
   writeAgentState(mailbox, managedState(label, undefined, identity));
@@ -3183,22 +2950,10 @@ test("manual close omits malformed and absent agents", async () => {
   writeFileSync(join(mailbox, "state.json"), "{malformed", "utf8");
   const tool = pi.tools.find((candidate) => candidate.name === "stop_agent");
   assert.ok(tool);
-  const malformed = await tool.execute(
-    "id",
-    { agent: label },
-    undefined,
-    undefined,
-    fakeContext(),
-  );
+  const malformed = await tool.execute("id", { agent: label }, undefined, undefined, fakeContext());
   assert.equal(malformed.details.error.category, "target_not_found");
   resetAgentMailbox(mailbox);
-  const absent = await tool.execute(
-    "id",
-    { agent: label },
-    undefined,
-    undefined,
-    fakeContext(),
-  );
+  const absent = await tool.execute("id", { agent: label }, undefined, undefined, fakeContext());
   assert.equal(absent.details.error.category, "target_not_found");
   pi.events.get("session_shutdown")?.[0]();
 });
@@ -3250,9 +3005,7 @@ test("result cleanup retains durable delivery across agent identity changes", as
   try {
     await pi.events.get("session_start")![0](undefined, fakeContext(entries));
     assert.equal(
-      pi.sent.filter(
-        (message: any) => message.customType === "pi-herdsman-agent-result",
-      ).length,
+      pi.sent.filter((message: any) => message.customType === "pi-herdsman-agent-result").length,
       1,
     );
     assert.ok(
@@ -3309,16 +3062,14 @@ test("delivered result remains while agent state is active", async () => {
     assert.ok(readResult(mailbox, REQUEST_ID));
     assert.equal(
       pi.sentMessageCalls.some(
-        ({ message }) =>
-          (message as any).customType === "pi-herdsman-delegation-guidance",
+        ({ message }) => (message as any).customType === "pi-herdsman-delegation-guidance",
       ),
       false,
     );
     await pi.events.get("session_start")![0](undefined, fakeContext(entries));
     assert.equal(
       pi.sentMessageCalls.some(
-        ({ message }) =>
-          (message as any).customType === "pi-herdsman-delegation-guidance",
+        ({ message }) => (message as any).customType === "pi-herdsman-delegation-guidance",
       ),
       false,
     );
@@ -3448,58 +3199,31 @@ test("result delivery reports retirement-policy uncertainty without losing resul
     );
     assert.match(failedRetired.content.split("\n\n")[0], /status=failed/);
     assert.match(failedRetired.content, /child failed/);
-    assert.match(
-      failedRetired.content,
-      /delegate_agent with this result and relevant files/,
-    );
+    assert.match(failedRetired.content, /delegate_agent with this result and relevant files/);
     assert.doesNotMatch(failedRetired.content, /completed child work/);
     assert.doesNotMatch(failedRetired.content, /To continue this session/);
 
-    const failed = await deliver(
-      "failed-delivery-agent",
-      false,
-      false,
-      "/tmp",
-      true,
-      "failed",
-    );
+    const failed = await deliver("failed-delivery-agent", false, false, "/tmp", true, "failed");
     assert.match(failed.content, /status=failed/);
     assert.doesNotMatch(failed.content, /session="result:/);
 
-    const uncertain = await deliver(
-      "uncertain-delivery-agent",
-      true,
-      true,
-      "/tmp/other-project",
-    );
+    const uncertain = await deliver("uncertain-delivery-agent", true, true, "/tmp/other-project");
     assert.match(uncertain.content, /Continuation policy unverified/);
     assert.doesNotMatch(uncertain.content.split("\n\n")[0], /\bsession=/);
     assert.doesNotMatch(uncertain.content, /To continue this session/);
     assert.equal(uncertain.details.sessionRetired, null);
 
     const disabled = await deliver("disabled-delivery-agent", true, false);
-    assert.doesNotMatch(
-      disabled.content,
-      /retirement policy could not be verified/,
-    );
+    assert.doesNotMatch(disabled.content, /retirement policy could not be verified/);
     assert.equal(disabled.details.sessionRetired, false);
     assert.match(disabled.content, /To continue this session/);
 
     const ordinary = await deliver("ordinary-delivery-agent", false, true);
-    assert.doesNotMatch(
-      ordinary.content,
-      /Session retired after context pressure/,
-    );
+    assert.doesNotMatch(ordinary.content, /Session retired after context pressure/);
     assert.equal(ordinary.details.sessionRetired, false);
     assert.match(ordinary.content, /To continue this session/);
 
-    const missingFile = await deliver(
-      "missing-session-file-agent",
-      false,
-      true,
-      "/tmp",
-      false,
-    );
+    const missingFile = await deliver("missing-session-file-agent", false, true, "/tmp", false);
     assert.match(missingFile.content, /Continuation policy unverified/);
     assert.doesNotMatch(missingFile.content.split("\n\n")[0], /\bsession=/);
     assert.doesNotMatch(missingFile.content, /To continue this session/);
@@ -3577,8 +3301,7 @@ test("accepted result delivery survives session identity failure in status guida
     assert.equal(
       pi.sent.some(
         (message: any) =>
-          message.customType === "pi-herdsman-agent-result" &&
-          message.details?.status === "failed",
+          message.customType === "pi-herdsman-agent-result" && message.details?.status === "failed",
       ),
       false,
     );
@@ -3633,8 +3356,7 @@ test("result is removed after agent state reaches completed", async (t) => {
   assert.equal(delivered.length, 1);
   const durableResults = entries.filter(
     (entry: any) =>
-      entry.customType === "pi-herdsman-agent-result" &&
-      entry.details?.requestId === REQUEST_ID,
+      entry.customType === "pi-herdsman-agent-result" && entry.details?.requestId === REQUEST_ID,
   );
   assert.equal(durableResults.length, 1);
   assert.ok(
@@ -3642,10 +3364,7 @@ test("result is removed after agent state reaches completed", async (t) => {
       durableResults[0] !== null &&
       "details" in durableResults[0],
   );
-  assert.deepEqual(
-    durableResults[0].details,
-    resultEntryDetails(activeState, REQUEST_ID),
-  );
+  assert.deepEqual(durableResults[0].details, resultEntryDetails(activeState, REQUEST_ID));
   assert.equal(readAgentState(mailbox)?.activeRequestId, REQUEST_ID);
   const pending = await agentTool(pi, "list").execute(
     "id",
@@ -3656,9 +3375,7 @@ test("result is removed after agent state reaches completed", async (t) => {
   );
   assert.equal(pending.details.cleanup_errors?.[label], undefined);
   assert.equal(
-    entries.some(
-      (entry: any) => entry.customType === "pi_herdsman_cleanup_error",
-    ),
+    entries.some((entry: any) => entry.customType === "pi_herdsman_cleanup_error"),
     false,
   );
   t.mock.timers.tick(250);
@@ -3668,8 +3385,7 @@ test("result is removed after agent state reaches completed", async (t) => {
   assert.ok(readResult(mailbox, REQUEST_ID));
   assert.equal(
     pi.sentMessageCalls.filter(
-      ({ message }) =>
-        (message as any).customType === "pi-herdsman-agent-result",
+      ({ message }) => (message as any).customType === "pi-herdsman-agent-result",
     ).length,
     1,
   );
@@ -3683,8 +3399,7 @@ test("result is removed after agent state reaches completed", async (t) => {
   assert.deepEqual(lifecycle.closeOrder, [label]);
   assert.equal(
     pi.sentMessageCalls.filter(
-      ({ message }) =>
-        (message as any).customType === "pi-herdsman-agent-result",
+      ({ message }) => (message as any).customType === "pi-herdsman-agent-result",
     ).length,
     1,
   );
@@ -3733,10 +3448,7 @@ test("mixed-build notification delivers during active work without enabling cont
   try {
     await pi.events.get("session_start")![0](undefined, context);
     assert.ok(
-      pi.sent.some(
-        (message: any) =>
-          message.customType === "pi-herdsman-agent-owner-message",
-      ),
+      pi.sent.some((message: any) => message.customType === "pi-herdsman-agent-owner-message"),
     );
     assert.equal(readAgentState(mailbox)?.activeRequestId, REQUEST_ID);
     assert.equal(readOwnerMessages(mailbox).length, 1);
@@ -3759,10 +3471,7 @@ test("unsupported terminal result is preserved during recovery", async (t) => {
   };
   writeAgentState(mailbox, state);
   const path = join(mailbox, `result-${requestId}.json`);
-  writeFileSync(
-    path,
-    JSON.stringify({ version: 999, runId: state.runId, requestId }),
-  );
+  writeFileSync(path, JSON.stringify({ version: 999, runId: state.runId, requestId }));
   writeOwnerMessage(mailbox, {
     version: 5,
     messageId: randomUUID(),
@@ -3798,8 +3507,9 @@ test("unsupported terminal result is preserved during recovery", async (t) => {
         undefined,
         context,
       );
-      return listed.details.agents.find((agent: any) => agent.agent === label)
-        ?.cleanup_error as string | undefined;
+      return listed.details.agents.find((agent: any) => agent.agent === label)?.cleanup_error as
+        | string
+        | undefined;
     };
     const firstDiagnostic = await listCleanupError();
     assert.match(
@@ -3841,10 +3551,7 @@ test("repeated watcher result-read failures are bounded and clear after repair",
   const state = managedState(label, requestId, identity);
   writeAgentState(mailbox, state);
   const path = join(mailbox, `result-${requestId}.json`);
-  writeFileSync(
-    path,
-    JSON.stringify({ version: 999, runId: state.runId, requestId }),
-  );
+  writeFileSync(path, JSON.stringify({ version: 999, runId: state.runId, requestId }));
   const entries: unknown[] = [];
   const pi = fakePi({ entries, exec: cascadeExecutor([state]).exec });
   registerExtension!(pi.pi as never);
@@ -3858,16 +3565,14 @@ test("repeated watcher result-read failures are bounded and clear after repair",
       undefined,
       context,
     );
-    return listed.details.agents.find((agent: any) => agent.agent === label)
-      ?.cleanup_error as string | undefined;
+    return listed.details.agents.find((agent: any) => agent.agent === label)?.cleanup_error as
+      | string
+      | undefined;
   };
   try {
     await pi.events.get("session_start")![0](undefined, context);
     const first = await currentDiagnostic();
-    assert.match(
-      first ?? "",
-      /Result read failed.*Invalid mailbox protocol version or record/,
-    );
+    assert.match(first ?? "", /Result read failed.*Invalid mailbox protocol version or record/);
     for (let attempt = 0; attempt < 3; attempt++) {
       t.mock.timers.tick(1_000);
       await new Promise<void>((resolve) => setImmediate(resolve));
@@ -3875,12 +3580,9 @@ test("repeated watcher result-read failures are bounded and clear after repair",
       assert.equal(JSON.parse(readFileSync(path, "utf8")).version, 999);
     }
     for (const handler of pi.events.get("before_agent_start") ?? [])
-      for (let attempt = 0; attempt < 3; attempt++)
-        await handler({ prompt: "test" }, context);
+      for (let attempt = 0; attempt < 3; attempt++) await handler({ prompt: "test" }, context);
     assert.equal(
-      entries.filter(
-        (entry: any) => entry.customType === "pi_herdsman_cleanup_error",
-      ).length,
+      entries.filter((entry: any) => entry.customType === "pi_herdsman_cleanup_error").length,
       0,
     );
     assert.equal(await currentDiagnostic(), first);
@@ -3898,10 +3600,7 @@ test("repeated watcher result-read failures are bounded and clear after repair",
     });
     t.mock.timers.tick(1_000);
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.doesNotMatch(
-      (await currentDiagnostic()) ?? "",
-      /Result read failed/,
-    );
+    assert.doesNotMatch((await currentDiagnostic()) ?? "", /Result read failed/);
     assert.equal(readAgentState(mailbox)?.activeRequestId, requestId);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
@@ -3974,8 +3673,7 @@ test("mixed-build startup reconciles a preexisting exact notification receipt", 
     for (let index = 0; index < 5; index++) await Promise.resolve();
     assert.equal(
       pi.sentMessageCalls.filter(
-        ({ message }) =>
-          (message as any).customType === "pi-herdsman-agent-owner-message",
+        ({ message }) => (message as any).customType === "pi-herdsman-agent-owner-message",
       ).length,
       0,
     );
@@ -4039,8 +3737,7 @@ test("mixed-build owner notification still gates completed-result mailbox cleanu
   try {
     await pi.events.get("session_start")![0](undefined, context);
     const sent = pi.sent.find(
-      (message: any) =>
-        message.customType === "pi-herdsman-agent-owner-message",
+      (message: any) => message.customType === "pi-herdsman-agent-owner-message",
     ) as any;
     assert.ok(sent);
     assert.ok(readResult(mailbox, REQUEST_ID));
@@ -4096,10 +3793,7 @@ test("live result cleanup keeps a later request owned by the mailbox", async (t)
           customType: "pi-herdsman-agent-result",
           details: resultEntryDetails(state, REQUEST_ID),
         });
-        if (
-          !secondRequestWritten &&
-          (message as any).customType === "pi-herdsman-agent-result"
-        ) {
+        if (!secondRequestWritten && (message as any).customType === "pi-herdsman-agent-result") {
           secondRequestWritten = true;
           writeRequest(mailbox, {
             version: 5,
@@ -4195,10 +3889,7 @@ test("lost result cleanup keeps a later request owned by the mailbox", async (t)
           customType: "pi-herdsman-agent-result",
           details: resultEntryDetails(state, REQUEST_ID),
         });
-        if (
-          !secondRequestWritten &&
-          (message as any).customType === "pi-herdsman-agent-result"
-        ) {
+        if (!secondRequestWritten && (message as any).customType === "pi-herdsman-agent-result") {
           secondRequestWritten = true;
           writeRequest(mailbox, {
             version: 5,
@@ -4239,13 +3930,7 @@ test("lost result cleanup keeps a later request owned by the mailbox", async (t)
       assert.ok(readRequest(mailbox, secondRequestId));
       assert.deepEqual(
         (
-          await agentTool(pi, "list").execute(
-            "id",
-            {},
-            undefined,
-            undefined,
-            fakeContext(entries),
-          )
+          await agentTool(pi, "list").execute("id", {}, undefined, undefined, fakeContext(entries))
         ).details.agents.find((agent: any) => agent.agent === label).state,
         "settling",
       );
@@ -4415,10 +4100,7 @@ test("completed lost parent cleanup resolves descendants before its mailbox", as
       assert.equal(readResult(parentMailbox, REQUEST_ID), undefined);
       assert.equal(readAgentState(parentMailbox), undefined);
       assert.equal(readAgentState(childMailbox), undefined);
-      assert.deepEqual(
-        lifecycle.closeOrder,
-        childLive ? [child.agentLabel] : [],
-      );
+      assert.deepEqual(lifecycle.closeOrder, childLive ? [child.agentLabel] : []);
     } finally {
       pi.events.get("session_shutdown")?.[0]();
       resetAgentMailbox(parentMailbox);
@@ -4457,9 +4139,7 @@ test("automatic close invokes the exact lifecycle only after live identity proof
   let closeArgs: string[] | undefined;
   const entries: unknown[] = [];
   const emptyList = () => {
-    const value = JSON.parse(
-      listResponse(label, "working", identity.piSessionId, identity),
-    );
+    const value = JSON.parse(listResponse(label, "working", identity.piSessionId, identity));
     value.agents = [];
     return JSON.stringify({ id: AGENT_ID, result: value });
   };
@@ -4482,9 +4162,7 @@ test("automatic close invokes the exact lifecycle only after live identity proof
           stdout: JSON.stringify({
             id: AGENT_ID,
             result: {
-              panes: live
-                ? [{ pane_id: identity.paneId, workspace_id: WORKSPACE }]
-                : [],
+              panes: live ? [{ pane_id: identity.paneId, workspace_id: WORKSPACE }] : [],
             },
           }),
           stderr: "",
@@ -4512,11 +4190,7 @@ test("automatic close invokes the exact lifecycle only after live identity proof
           stderr: "",
           code: 0,
         };
-      if (
-        command === "herdr" &&
-        args[0] === "pane" &&
-        args[1] === "process-info"
-      )
+      if (command === "herdr" && args[0] === "pane" && args[1] === "process-info")
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
@@ -4543,14 +4217,7 @@ test("automatic close invokes the exact lifecycle only after live identity proof
           stdout: live
             ? JSON.stringify({
                 id: AGENT_ID,
-                result: JSON.parse(
-                  listResponse(
-                    label,
-                    "working",
-                    identity.piSessionId,
-                    identity,
-                  ),
-                ),
+                result: JSON.parse(listResponse(label, "working", identity.piSessionId, identity)),
               })
             : emptyList(),
           stderr: "",
@@ -4566,18 +4233,9 @@ test("automatic close invokes the exact lifecycle only after live identity proof
                     workspaces: [],
                     agents: (() => {
                       const value = JSON.parse(
-                        listResponse(
-                          label,
-                          "working",
-                          identity.piSessionId,
-                          identity,
-                        ),
+                        listResponse(label, "working", identity.piSessionId, identity),
                       );
-                      value.agents[0].name = runScopedHerdrAlias(
-                        WORKSPACE,
-                        label,
-                        AGENT_ID,
-                      );
+                      value.agents[0].name = runScopedHerdrAlias(WORKSPACE, label, AGENT_ID);
                       return value.agents;
                     })(),
                     panes: [
@@ -4647,11 +4305,7 @@ test("automatic close invokes the exact lifecycle only after live identity proof
     await pi.events.get("session_start")![0](undefined, fakeContext(entries));
     assert.equal(closeCalls, 1);
     assert.equal(closeArgs?.[2], identity.paneId);
-    assert.equal(
-      readAgentState(mailbox),
-      undefined,
-      JSON.stringify(pi.entries),
-    );
+    assert.equal(readAgentState(mailbox), undefined, JSON.stringify(pi.entries));
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     realFs.unlinkSync(join(PI_AGENTS_DIR, "automatic-close-test.md"));
@@ -4663,11 +4317,7 @@ test("managed child automatic cleanup respects the parent delegation lock", asyn
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "parent";
   const parent = managedState("cleanup-parent");
   const child = {
-    ...managedState(
-      "cleanup-child",
-      undefined,
-      recoveryIdentity("cleanup-child"),
-    ),
+    ...managedState("cleanup-child", undefined, recoveryIdentity("cleanup-child")),
     ownerSessionId: parent.piSessionId,
     piSessionId: CHILD_SESSION_ID,
     piSessionFile: "/tmp/cleanup-child.jsonl",
@@ -4714,17 +4364,13 @@ test("managed child automatic cleanup respects the parent delegation lock", asyn
         });
     },
   });
-  const release = claimProcessLock(
-    delegationLockPathForTest(WORKSPACE, parent.piSessionId),
-    {
-      name: "test delegation lifecycle",
-    },
-  );
+  const release = claimProcessLock(delegationLockPathForTest(WORKSPACE, parent.piSessionId), {
+    name: "test delegation lifecycle",
+  });
   const context = fakeAgentContext(entries);
   try {
     registerExtension!(pi.pi as never);
-    for (const handler of pi.events.get("session_start") ?? [])
-      await handler(undefined, context);
+    for (const handler of pi.events.get("session_start") ?? []) await handler(undefined, context);
 
     assert.deepEqual(lifecycle.closeOrder, []);
     assert.ok(readAgentState(childMailbox));
@@ -4751,13 +4397,7 @@ test("manual close retains ownership when live session identity is missing or wr
     resetAgentMailbox(mailbox);
     writeAgentState(mailbox, managedState(label));
     const pi = fakePi({
-      exec: leadExec(
-        label,
-        "idle",
-        "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-        undefined,
-        liveSession,
-      ),
+      exec: leadExec(label, "idle", "dddddddd-dddd-4ddd-8ddd-dddddddddddd", undefined, liveSession),
     });
     registerExtension!(pi.pi as never);
     const result = await agentTool(pi, "stop").execute(
@@ -4820,19 +4460,11 @@ test("stale scanner starts immediately, reschedules, deduplicates, and retries f
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
   await Promise.resolve();
-  assert.equal(
-    attempts,
-    2,
-    "the failed wake-up is retried before the scan ends",
-  );
+  assert.equal(attempts, 2, "the failed wake-up is retried before the scan ends");
 
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(
-    attempts,
-    2,
-    "a successfully retried advisory waits for its reminder",
-  );
+  assert.equal(attempts, 2, "a successfully retried advisory waits for its reminder");
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(attempts, 2, "a successful episode waits for its reminder");
@@ -4867,11 +4499,7 @@ test("stale scanner starts immediately, reschedules, deduplicates, and retries f
   });
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(
-    attempts,
-    6,
-    "a changed activity timestamp starts a new episode",
-  );
+  assert.equal(attempts, 6, "a changed activity timestamp starts a new episode");
   pi.events.get("session_shutdown")?.[0]();
   t.mock.timers.tick(60_000);
   assert.equal(attempts, 6, "shutdown removes the recurring scanner");
@@ -4979,10 +4607,7 @@ test("stale scanner skips every replaced identity field before publication", asy
       },
     });
     registerExtension!(pi.pi as never);
-    const startup = pi.events.get("session_start")![0](
-      undefined,
-      fakeContext(),
-    );
+    const startup = pi.events.get("session_start")![0](undefined, fakeContext());
     await new Promise((resolve) => setImmediate(resolve));
     const replacements = {
       runId: "99999999-9999-4999-8999-999999999999",
@@ -5017,11 +4642,7 @@ test("delegation parent notifies only its direct stale child", async (t) => {
     lastActivityAt: now - 11 * 60_000,
   };
   const unrelated = {
-    ...managedState(
-      "unrelated-child",
-      REQUEST_ID,
-      recoveryIdentity("unrelated-child"),
-    ),
+    ...managedState("unrelated-child", REQUEST_ID, recoveryIdentity("unrelated-child")),
     ownerSessionId: PARENT_SESSION_ID,
     // A distinct durable identity: stop availability now proves the whole
     // cascade, which rejects states that share a Pi session.
@@ -5088,9 +4709,7 @@ test("delegation parent notifies only its direct stale child", async (t) => {
     ) {
       diagnosticReads++;
       if (resumeOnDiagnostic) {
-        const current = readAgentState(
-          agentMailboxPath(WORKSPACE, child.agentLabel),
-        )!;
+        const current = readAgentState(agentMailboxPath(WORKSPACE, child.agentLabel))!;
         writeAgentState(agentMailboxPath(WORKSPACE, child.agentLabel), {
           ...current,
           lastActivityAt: now,
@@ -5118,9 +4737,7 @@ test("delegation parent notifies only its direct stale child", async (t) => {
               pane_id: child.paneId,
               shell_pid: 100,
               foreground_process_group_id: 101,
-              foreground_processes: [
-                { pid: 101, argv0: "node", cmdline: "npm test" },
-              ],
+              foreground_processes: [{ pid: 101, argv0: "node", cmdline: "npm test" }],
             },
           },
         }),
@@ -5163,14 +4780,8 @@ test("delegation parent notifies only its direct stale child", async (t) => {
   );
   const advisory = sent[0] as any;
   assert.equal(advisory.customType, "pi-herdsman-agent-stale");
-  assert.match(
-    advisory.content,
-    /Agent stale-child has had no qualifying execution progress/,
-  );
-  assert.match(
-    advisory.content,
-    /Streaming tool output does not count as qualifying progress/,
-  );
+  assert.match(advisory.content, /Agent stale-child has had no qualifying execution progress/);
+  assert.match(advisory.content, /Streaming tool output does not count as qualifying progress/);
   assert.match(advisory.content, /not proof of a hang/);
   assert.doesNotMatch(
     advisory.content,
@@ -5181,23 +4792,14 @@ test("delegation parent notifies only its direct stale child", async (t) => {
   assert.match(advisory.content, /42 passed/);
   assert.match(advisory.content, /untrusted observation/);
   assert.equal(diagnosticReads, 1);
-  assert.equal(
-    advisory.details.recent_output,
-    "npm test\n42 passed, still running",
-  );
-  assert.equal(
-    advisory.details.process.foreground_processes[0].cmdline,
-    "npm test",
-  );
+  assert.equal(advisory.details.recent_output, "npm test\n42 passed, still running");
+  assert.equal(advisory.details.process.foreground_processes[0].cmdline, "npm test");
   assert.match(
     advisory.content,
     /Available tools: inspect_agent, steer_agent, interrupt_agent, stop_agent/,
   );
   assert.match(advisory.content, /steer_agent queues a cooperative correction/);
-  assert.match(
-    advisory.content,
-    /interrupt.*current operation.*continues the same assignment/,
-  );
+  assert.match(advisory.content, /interrupt.*current operation.*continues the same assignment/);
   assert.match(advisory.content, /Next reminder if unresolved/);
   assert.equal(advisory.details.agentLabel, child.agentLabel);
   assert.equal(advisory.details.ownerSessionId, parent.piSessionId);
@@ -5217,10 +4819,7 @@ test("delegation parent notifies only its direct stale child", async (t) => {
   assert.match(reminder.content, /additional elapsed time.*recovery evidence/i);
   assert.match(reminder.content, /no qualifying execution boundary/i);
   assert.match(reminder.content, /steer.*cannot have taken effect/i);
-  assert.match(
-    reminder.content,
-    /do not repeat inspect_agent or read_agent_transcript/i,
-  );
+  assert.match(reminder.content, /do not repeat inspect_agent or read_agent_transcript/i);
   assert.match(reminder.content, /otherwise use interrupt_agent/i);
   assert.match(
     reminder.content,
@@ -5250,9 +4849,7 @@ test("delegation parent notifies only its direct stale child", async (t) => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(diagnosticReads, 3);
   assert.equal(
-    parentPi.sent.filter(
-      (message: any) => message.customType === "pi-herdsman-agent-stale",
-    ).length,
+    parentPi.sent.filter((message: any) => message.customType === "pi-herdsman-agent-stale").length,
     0,
   );
   parentPi.events.get("session_shutdown")?.[0]();
@@ -5272,9 +4869,7 @@ test("delegation parent notifies only its direct stale child", async (t) => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(
     rootSent
-      .filter(
-        (message: any) => message.customType === "pi-herdsman-agent-stale",
-      )
+      .filter((message: any) => message.customType === "pi-herdsman-agent-stale")
       .map((message: any) => message.details.agentLabel),
     [],
     "lead must not steal a parent's child advisory",
@@ -5282,8 +4877,7 @@ test("delegation parent notifies only its direct stale child", async (t) => {
   rootPi.events.get("session_shutdown")?.[0]();
   for (const state of [parent, child, unrelated])
     resetAgentMailbox(agentMailboxPath(WORKSPACE, state.agentLabel));
-  for (const state of [parent, child, unrelated])
-    nativeSessions.delete(state.piSessionFile!);
+  for (const state of [parent, child, unrelated]) nativeSessions.delete(state.piSessionFile!);
 });
 
 test("stale diagnostic failure still publishes advisory without recovery", async () => {
@@ -5313,18 +4907,11 @@ test("stale diagnostic failure still publishes advisory without recovery", async
       (message: any) => message.customType === "pi-herdsman-agent-stale",
     ) as any[];
     assert.equal(staleMessages.length, 1);
-    assert.match(
-      staleMessages[0].content,
-      /Automatic live diagnostic evidence was unavailable/,
-    );
-    assert.match(
-      staleMessages[0].content,
-      /at most one currently available diagnostic read/,
-    );
+    assert.match(staleMessages[0].content, /Automatic live diagnostic evidence was unavailable/);
+    assert.match(staleMessages[0].content, /at most one currently available diagnostic read/);
     assert.equal(
       calls.some(
-        ([, args]) =>
-          args[0] === "agent" && ["prompt", "close", "stop"].includes(args[1]!),
+        ([, args]) => args[0] === "agent" && ["prompt", "close", "stop"].includes(args[1]!),
       ),
       false,
     );
@@ -5371,15 +4958,9 @@ test("stale diagnostic failure refreshes physical state before publication", asy
     await pi.events.get("session_start")![0](undefined, fakeContext());
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(diagnosisFailed, true);
+    assert.equal(snapshots, 3, "diagnostic refresh and final validation re-read physical state");
     assert.equal(
-      snapshots,
-      3,
-      "diagnostic refresh and final validation re-read physical state",
-    );
-    assert.equal(
-      pi.sent.filter(
-        (message: any) => message.customType === "pi-herdsman-agent-stale",
-      ).length,
+      pi.sent.filter((message: any) => message.customType === "pi-herdsman-agent-stale").length,
       0,
       "a no-longer-working target must not publish stale-working attention",
     );
@@ -5395,11 +4976,7 @@ test("stale working parents remain visible while waiting parents project blocked
   t.mock.method(Date, "now", () => now);
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const parent = {
-    ...managedState(
-      "stale-working-parent",
-      REQUEST_ID,
-      recoveryIdentity("stale-working-parent"),
-    ),
+    ...managedState("stale-working-parent", REQUEST_ID, recoveryIdentity("stale-working-parent")),
     lastActivityAt: now - 11 * 60_000,
   };
   const child = {
@@ -5416,15 +4993,11 @@ test("stale working parents remain visible while waiting parents project blocked
   const controller = agentControllerExecutor(parent, [child]);
   const exec = (command: string, args: string[], options?: any) => {
     const result = controller(command, args, options);
-    if (command !== "herdr" || (!isAgentList(args) && !isApiSnapshot(args)))
-      return result;
+    if (command !== "herdr" || (!isAgentList(args) && !isApiSnapshot(args))) return result;
     const payload = JSON.parse(result.stdout);
-    const agents = isApiSnapshot(args)
-      ? payload.result.snapshot.agents
-      : payload.result.agents;
+    const agents = isApiSnapshot(args) ? payload.result.snapshot.agents : payload.result.agents;
     agents[0].agent_status = parentLifecycle;
-    if (isApiSnapshot(args))
-      payload.result.snapshot.panes[0].agent_status = parentLifecycle;
+    if (isApiSnapshot(args)) payload.result.snapshot.panes[0].agent_status = parentLifecycle;
     return { ...result, stdout: JSON.stringify(payload) };
   };
   const pi = fakePi({ exec });
@@ -5433,9 +5006,7 @@ test("stale working parents remain visible while waiting parents project blocked
     await pi.events.get("session_start")![0](undefined, fakeContext());
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(
-      pi.sent.filter(
-        (message: any) => message.customType === "pi-herdsman-agent-stale",
-      ).length,
+      pi.sent.filter((message: any) => message.customType === "pi-herdsman-agent-stale").length,
       1,
       "a stale working parent must notify its own owner even with an active child",
     );
@@ -5457,9 +5028,7 @@ test("stale working parents remain visible while waiting parents project blocked
       fakeContext(),
     );
     assert.equal(
-      waiting.details.agents.find(
-        (agent: any) => agent.agent === parent.agentLabel,
-      )?.state,
+      waiting.details.agents.find((agent: any) => agent.agent === parent.agentLabel)?.state,
       "blocked",
       "an idle parent waiting on an unresolved child projects blocked",
     );
@@ -5471,9 +5040,7 @@ test("stale working parents remain visible while waiting parents project blocked
       "a physically listed waiting parent may attempt steering, but its receiver must acknowledge",
     );
     assert.equal(
-      pi.sent.filter(
-        (message: any) => message.customType === "pi-herdsman-agent-stale",
-      ).length,
+      pi.sent.filter((message: any) => message.customType === "pi-herdsman-agent-stale").length,
       0,
       "a waiting parent must not receive a stale advisory",
     );
@@ -5545,9 +5112,7 @@ test("settling alone does not trigger generic health attention", async () => {
   await pi.events.get("session_start")![0](undefined, fakeContext());
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(
-    pi.sent.some(
-      (message: any) => message.customType === "pi-herdsman-agent-attention",
-    ),
+    pi.sent.some((message: any) => message.customType === "pi-herdsman-agent-attention"),
     false,
   );
   pi.events.get("session_shutdown")?.[0]();
@@ -5674,9 +5239,7 @@ test("physical unknown attention is one-shot and fail-closed", async (t) => {
   await pi.events.get("session_start")![0](undefined, fakeContext());
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(
-    pi.sent.filter(
-      (message: any) => message.customType === "pi-herdsman-agent-attention",
-    ).length,
+    pi.sent.filter((message: any) => message.customType === "pi-herdsman-agent-attention").length,
     1,
   );
   const attention = pi.sent.find(
@@ -5688,9 +5251,7 @@ test("physical unknown attention is one-shot and fail-closed", async (t) => {
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(
-    pi.sent.filter(
-      (message: any) => message.customType === "pi-herdsman-agent-attention",
-    ).length,
+    pi.sent.filter((message: any) => message.customType === "pi-herdsman-agent-attention").length,
     1,
   );
   pi.events.get("session_shutdown")?.[0]();
@@ -5741,9 +5302,7 @@ test("delivered owner asks repeat without duplicating first delivery", async (t)
   await pi.events.get("session_start")![0](undefined, fakeContext(entries));
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(
-    pi.sent.filter(
-      (message: any) => message.customType === "pi-herdsman-agent-ask",
-    ).length,
+    pi.sent.filter((message: any) => message.customType === "pi-herdsman-agent-ask").length,
     0,
   );
   now += 5 * 60_000;
@@ -5757,19 +5316,14 @@ test("delivered owner asks repeat without duplicating first delivery", async (t)
   assert.equal(reminders[0].details.requestId, ask.requestId);
   assert.equal(reminders[0].details.nextReminderMs, 150_000);
   assert.match(reminders[0].content, /still waiting/);
-  assert.match(
-    reminders[0].content,
-    /Use reply_agent to reply to this exact pending ask/,
-  );
+  assert.match(reminders[0].content, /Use reply_agent to reply to this exact pending ask/);
   writeAgentState(mailbox, { ...state, pendingAskId: undefined });
   removeAsk(mailbox);
   now += 3 * 60_000;
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(
-    pi.sent.filter(
-      (message: any) => message.customType === "pi-herdsman-agent-ask",
-    ).length,
+    pi.sent.filter((message: any) => message.customType === "pi-herdsman-agent-ask").length,
     1,
   );
   pi.events.get("session_shutdown")?.[0]();
@@ -5805,14 +5359,8 @@ test("old unacknowledged requests get attention without being resubmitted", asyn
             result: {
               snapshot: {
                 workspaces: [],
-                agents: JSON.parse(
-                  listResponse(
-                    label,
-                    "working",
-                    DEFAULT_PI_SESSION_ID,
-                    identity,
-                  ),
-                ).agents,
+                agents: JSON.parse(listResponse(label, "working", DEFAULT_PI_SESSION_ID, identity))
+                  .agents,
                 panes: [
                   {
                     pane_id: identity.paneId,
@@ -5878,8 +5426,7 @@ test("health reconciliation batches independent attention and preserves episode 
     state.runId = randomUUID();
     state.resultError!.runId = state.runId;
   }
-  for (const state of states)
-    writeAgentState(agentMailboxPath(WORKSPACE, state.agentLabel), state);
+  for (const state of states) writeAgentState(agentMailboxPath(WORKSPACE, state.agentLabel), state);
   const pi = fakePi({
     exec: (command, args) => {
       if (command === "herdr" && isApiSnapshot(args))
@@ -5911,10 +5458,7 @@ test("health reconciliation batches independent attention and preserves episode 
       ({ message }: any) => message.details.runId === state.runId,
     ) as any;
     assert.equal(item.message.details.requestId, state.resultError!.requestId);
-    assert.match(
-      item.message.content,
-      new RegExp(state.resultError!.nextAction),
-    );
+    assert.match(item.message.content, new RegExp(state.resultError!.nextAction));
   }
   assert.deepEqual(
     attentions.map(({ options }: any) => (options as any).triggerTurn),
@@ -5924,14 +5468,12 @@ test("health reconciliation batches independent attention and preserves episode 
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(
     pi.sentMessageCalls.filter(
-      ({ message }: any) =>
-        message.customType === "pi-herdsman-agent-attention",
+      ({ message }: any) => message.customType === "pi-herdsman-agent-attention",
     ).length,
     2,
   );
   pi.events.get("session_shutdown")?.[0]();
-  for (const state of states)
-    resetAgentMailbox(agentMailboxPath(WORKSPACE, state.agentLabel));
+  for (const state of states) resetAgentMailbox(agentMailboxPath(WORKSPACE, state.agentLabel));
 });
 
 test("health attention defers candidates beyond the recipient fan-in cap", async (t) => {
@@ -5970,22 +5512,17 @@ test("health attention defers candidates beyond the recipient fan-in cap", async
   await pi.events.get("session_start")![0](undefined, fakeContext());
   await new Promise((resolve) => setImmediate(resolve));
   const attentions = () =>
-    pi.sent.filter(
-      (message: any) => message.customType === "pi-herdsman-agent-attention",
-    );
+    pi.sent.filter((message: any) => message.customType === "pi-herdsman-agent-attention");
   assert.equal(attentions().length, 32);
   assert.equal(
-    pi.sentMessageCalls.filter(
-      ({ options }: any) => (options as any).triggerTurn === true,
-    ).length,
+    pi.sentMessageCalls.filter(({ options }: any) => (options as any).triggerTurn === true).length,
     1,
   );
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(attentions().length, 33);
   pi.events.get("session_shutdown")?.[0]();
-  for (const state of states)
-    resetAgentMailbox(agentMailboxPath(WORKSPACE, state.agentLabel));
+  for (const state of states) resetAgentMailbox(agentMailboxPath(WORKSPACE, state.agentLabel));
 });
 
 test("lost managed agents remain visible and repeatedly notify their owner", async (t) => {
@@ -6062,18 +5599,11 @@ test("lost managed agents remain visible and repeatedly notify their owner", asy
       undefined,
       fakeContext(pi.entries),
     );
-    const agent = listed.details.agents.find(
-      (candidate: any) => candidate.agent === label,
-    );
+    const agent = listed.details.agents.find((candidate: any) => candidate.agent === label);
     assert.equal(agent.state, "lost");
-    assert.deepEqual(agent.available_tools, [
-      "read_agent_transcript",
-      "stop_agent",
-    ]);
+    assert.deepEqual(agent.available_tools, ["read_agent_transcript", "stop_agent"]);
     assert.equal(
-      pi.sent.filter(
-        (message: any) => message.customType === "pi-herdsman-agent-lost",
-      ).length,
+      pi.sent.filter((message: any) => message.customType === "pi-herdsman-agent-lost").length,
       1,
     );
 
@@ -6084,20 +5614,14 @@ test("lost managed agents remain visible and repeatedly notify their owner", asy
       undefined,
       fakeContext(pi.entries),
     );
-    assert.equal(
-      transcript.details.ok,
-      true,
-      JSON.stringify(transcript.details),
-    );
+    assert.equal(transcript.details.ok, true, JSON.stringify(transcript.details));
     assert.match(transcript.details.transcript, /last persisted work/);
 
     t.mock.timers.tick(30_000);
     for (let index = 0; index < 8; index++)
       await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(
-      pi.sent.filter(
-        (message: any) => message.customType === "pi-herdsman-agent-lost",
-      ).length,
+      pi.sent.filter((message: any) => message.customType === "pi-herdsman-agent-lost").length,
       1,
     );
     now += 5 * 60_000;
@@ -6105,9 +5629,7 @@ test("lost managed agents remain visible and repeatedly notify their owner", asy
     for (let index = 0; index < 8; index++)
       await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(
-      pi.sent.filter(
-        (message: any) => message.customType === "pi-herdsman-agent-lost",
-      ).length,
+      pi.sent.filter((message: any) => message.customType === "pi-herdsman-agent-lost").length,
       2,
     );
     assert.ok(readAgentState(mailbox));
@@ -6125,9 +5647,7 @@ test("lost managed agents remain visible and repeatedly notify their owner", asy
     t.mock.timers.tick(30_000);
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(
-      pi.sent.filter(
-        (message: any) => message.customType === "pi-herdsman-agent-lost",
-      ).length,
+      pi.sent.filter((message: any) => message.customType === "pi-herdsman-agent-lost").length,
       2,
     );
   } finally {
@@ -6188,14 +5708,8 @@ test("lost parent health attention omits close when a descendant has an unread d
     ) as any;
     assert.equal(attention?.details.agentLabel, parent.agentLabel);
     assert.equal(attention?.details.availableActions.includes("stop"), false);
-    assert.match(
-      String(attention?.content),
-      /stop_agent is not currently available/,
-    );
-    assert.doesNotMatch(
-      String(attention?.content),
-      /Close this lost generation|Use close/,
-    );
+    assert.match(String(attention?.content), /stop_agent is not currently available/);
+    assert.doesNotMatch(String(attention?.content), /Close this lost generation|Use close/);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(parentMailbox);
@@ -6235,9 +5749,7 @@ test("live agents with an unread durable result do not advertise close", async (
       undefined,
       fakeContext(),
     );
-    const agent = listed.details.agents.find(
-      (candidate: any) => candidate.agent === label,
-    );
+    const agent = listed.details.agents.find((candidate: any) => candidate.agent === label);
     assert.equal(agent.state, "settling");
     assert.equal(agent.available_tools.includes("stop_agent"), false);
   } finally {
@@ -6249,19 +5761,11 @@ test("live agents with an unread durable result do not advertise close", async (
 test("lead list hides close when a descendant has an unread durable result", async () => {
   setLeadEnvironment();
   const parent = {
-    ...managedState(
-      "cascade-result-parent",
-      undefined,
-      recoveryIdentity("cascade-result-parent"),
-    ),
+    ...managedState("cascade-result-parent", undefined, recoveryIdentity("cascade-result-parent")),
     piSessionId: PARENT_SESSION_ID,
   };
   const child = {
-    ...managedState(
-      "cascade-result-child",
-      undefined,
-      recoveryIdentity("cascade-result-child"),
-    ),
+    ...managedState("cascade-result-child", undefined, recoveryIdentity("cascade-result-child")),
     ownerSessionId: parent.piSessionId,
     piSessionId: CHILD_SESSION_ID,
     completedRequestId: REQUEST_ID,
@@ -6339,9 +5843,7 @@ test("lost agents with an unread durable result cannot be closed", async () => {
       undefined,
       fakeContext(),
     );
-    const agent = listed.details.agents.find(
-      (candidate: any) => candidate.agent === label,
-    );
+    const agent = listed.details.agents.find((candidate: any) => candidate.agent === label);
     assert.equal(agent.state, "settling");
     assert.deepEqual(agent.available_tools, []);
 
@@ -6364,19 +5866,11 @@ test("lost agents with an unread durable result cannot be closed", async () => {
 test("cascade preflight keeps descendants when a lost parent has a pending result", async () => {
   setLeadEnvironment();
   const parent = {
-    ...managedState(
-      "lost-result-parent",
-      undefined,
-      recoveryIdentity("lost-result-parent"),
-    ),
+    ...managedState("lost-result-parent", undefined, recoveryIdentity("lost-result-parent")),
     piSessionId: PARENT_SESSION_ID,
   };
   const child = {
-    ...managedState(
-      "lost-result-child",
-      REQUEST_ID,
-      recoveryIdentity("lost-result-child"),
-    ),
+    ...managedState("lost-result-child", REQUEST_ID, recoveryIdentity("lost-result-child")),
     ownerSessionId: parent.piSessionId,
     piSessionId: CHILD_SESSION_ID,
   };
@@ -6428,11 +5922,7 @@ test("lost close fails closed when a result appears during its final proof", asy
   setLeadEnvironment();
   const mailbox = agentMailboxPath(WORKSPACE, "racing-lost-result");
   const state = {
-    ...managedState(
-      "racing-lost-result",
-      REQUEST_ID,
-      recoveryIdentity("racing-lost-result"),
-    ),
+    ...managedState("racing-lost-result", REQUEST_ID, recoveryIdentity("racing-lost-result")),
   };
   writeAgentState(mailbox, state);
   let snapshots = 0;
@@ -6541,11 +6031,7 @@ test("retained pane remains unknown when its session is reported on another unre
           code: 0,
         };
       }
-      if (
-        command === "herdr" &&
-        args[0] === "pane" &&
-        args[1] === "process-info"
-      ) {
+      if (command === "herdr" && args[0] === "pane" && args[1] === "process-info") {
         processInfoCalls.push(args);
         return {
           stdout: JSON.stringify({
@@ -6554,9 +6040,7 @@ test("retained pane remains unknown when its session is reported on another unre
               process_info: {
                 pane_id: state.paneId,
                 shell_pid: state.launchShellPid,
-                foreground_processes: [
-                  { pid: state.launchShellPid, argv0: "sh" },
-                ],
+                foreground_processes: [{ pid: state.launchShellPid, argv0: "sh" }],
               },
             },
           }),
@@ -6577,15 +6061,10 @@ test("retained pane remains unknown when its session is reported on another unre
       undefined,
       fakeContext(),
     );
-    const agent = listed.details.agents.find(
-      (candidate: any) => candidate.agent === label,
-    );
+    const agent = listed.details.agents.find((candidate: any) => candidate.agent === label);
     assert.equal(agent.state, "unknown");
     assert.equal(agent.available_tools.includes("stop_agent"), false);
-    assert.ok(
-      snapshotCalls >= 2,
-      "retained-pane proof should re-read Herdr inventory",
-    );
+    assert.ok(snapshotCalls >= 2, "retained-pane proof should re-read Herdr inventory");
     assert.equal(processInfoCalls.length, 0);
 
     const stopped = await agentTool(pi, "stop").execute(
@@ -6644,11 +6123,7 @@ test("direct owner can stop a lost Agent with its exact retained pane", async ()
           stderr: "",
           code: 0,
         };
-      if (
-        command === "herdr" &&
-        args[0] === "pane" &&
-        args[1] === "process-info"
-      )
+      if (command === "herdr" && args[0] === "pane" && args[1] === "process-info")
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
@@ -6656,9 +6131,7 @@ test("direct owner can stop a lost Agent with its exact retained pane", async ()
               process_info: {
                 pane_id: state.paneId,
                 shell_pid: state.launchShellPid,
-                foreground_processes: [
-                  { pid: state.launchShellPid, argv0: "sh" },
-                ],
+                foreground_processes: [{ pid: state.launchShellPid, argv0: "sh" }],
               },
             },
           }),
@@ -6682,9 +6155,7 @@ test("direct owner can stop a lost Agent with its exact retained pane", async ()
           stdout: JSON.stringify({
             id: AGENT_ID,
             result: {
-              panes: paneExists
-                ? [{ pane_id: state.paneId, workspace_id: WORKSPACE }]
-                : [],
+              panes: paneExists ? [{ pane_id: state.paneId, workspace_id: WORKSPACE }] : [],
             },
           }),
           stderr: "",
@@ -6705,10 +6176,7 @@ test("direct owner can stop a lost Agent with its exact retained pane", async ()
     assert.equal(attention?.details.agentLabel, label);
     assert.ok(attention.details.availableActions.includes("stop"));
     assert.match(String(attention.content), /stop_agent/);
-    assert.match(
-      String(attention.content),
-      /original pane is verified as settled/,
-    );
+    assert.match(String(attention.content), /original pane is verified as settled/);
 
     const listed = await agentTool(pi, "list").execute(
       "id",
@@ -6717,9 +6185,7 @@ test("direct owner can stop a lost Agent with its exact retained pane", async ()
       undefined,
       fakeContext(),
     );
-    const agent = listed.details.agents.find(
-      (candidate: any) => candidate.agent === label,
-    );
+    const agent = listed.details.agents.find((candidate: any) => candidate.agent === label);
     assert.equal(agent.state, "lost");
     assert.ok(agent.available_tools.includes("stop_agent"));
 
@@ -6743,9 +6209,7 @@ test("direct owner can stop a lost Agent with its exact retained pane", async ()
       fakeContext(),
     );
     assert.equal(
-      afterStop.details.agents.some(
-        (candidate: any) => candidate.agent === label,
-      ),
+      afterStop.details.agents.some((candidate: any) => candidate.agent === label),
       false,
       "the stopped generation must no longer block the owner",
     );
@@ -6762,11 +6226,7 @@ test("a lost parent retains its live child ancestry and closes child-first", asy
     piSessionId: PARENT_SESSION_ID,
   };
   const child = {
-    ...managedState(
-      "lost-parent-child",
-      REQUEST_ID,
-      recoveryIdentity("lost-parent-child"),
-    ),
+    ...managedState("lost-parent-child", REQUEST_ID, recoveryIdentity("lost-parent-child")),
     ownerSessionId: parent.piSessionId,
     piSessionId: CHILD_SESSION_ID,
   };
@@ -6787,12 +6247,8 @@ test("a lost parent retains its live child ancestry and closes child-first", asy
       undefined,
       fakeContext(),
     );
-    const parentRow = listed.details.agents.find(
-      (agent: any) => agent.agent === parent.agentLabel,
-    );
-    const childRow = listed.details.agents.find(
-      (agent: any) => agent.agent === child.agentLabel,
-    );
+    const parentRow = listed.details.agents.find((agent: any) => agent.agent === parent.agentLabel);
+    const childRow = listed.details.agents.find((agent: any) => agent.agent === child.agentLabel);
     assert.equal(parentRow?.state, "lost");
     assert.equal(parentRow?.available_tools.includes("stop_agent"), true);
     assert.equal(childRow?.parent_label, parent.agentLabel);
@@ -6818,19 +6274,11 @@ test("a lost parent retains its live child ancestry and closes child-first", asy
 test("unknown descendants refuse a lost-parent cascade", async () => {
   setLeadEnvironment();
   const parent = {
-    ...managedState(
-      "unknown-child-parent",
-      undefined,
-      recoveryIdentity("unknown-child-parent"),
-    ),
+    ...managedState("unknown-child-parent", undefined, recoveryIdentity("unknown-child-parent")),
     piSessionId: PARENT_SESSION_ID,
   };
   const child = {
-    ...managedState(
-      "unknown-child",
-      undefined,
-      recoveryIdentity("unknown-child"),
-    ),
+    ...managedState("unknown-child", undefined, recoveryIdentity("unknown-child")),
     ownerSessionId: parent.piSessionId,
     piSessionId: CHILD_SESSION_ID,
   };
@@ -6875,28 +6323,19 @@ test("mixed live and unknown descendants preflight before closing", async () => 
     piSessionId: PARENT_SESSION_ID,
   };
   const liveChild = {
-    ...managedState(
-      "mixed-live-child",
-      undefined,
-      recoveryIdentity("mixed-live-child"),
-    ),
+    ...managedState("mixed-live-child", undefined, recoveryIdentity("mixed-live-child")),
     ownerSessionId: parent.piSessionId,
     piSessionId: CHILD_SESSION_ID,
   };
   const unknownChild = {
-    ...managedState(
-      "mixed-unknown-child",
-      undefined,
-      recoveryIdentity("mixed-unknown-child"),
-    ),
+    ...managedState("mixed-unknown-child", undefined, recoveryIdentity("mixed-unknown-child")),
     ownerSessionId: parent.piSessionId,
     piSessionId: "11111111-1111-4111-8111-111111111111",
   };
   const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
   const liveMailbox = agentMailboxPath(WORKSPACE, liveChild.agentLabel);
   const unknownMailbox = agentMailboxPath(WORKSPACE, unknownChild.agentLabel);
-  for (const mailbox of [parentMailbox, liveMailbox, unknownMailbox])
-    resetAgentMailbox(mailbox);
+  for (const mailbox of [parentMailbox, liveMailbox, unknownMailbox]) resetAgentMailbox(mailbox);
   for (const [mailbox, state] of [
     [parentMailbox, parent],
     [liveMailbox, liveChild],
@@ -6923,8 +6362,7 @@ test("mixed live and unknown descendants preflight before closing", async () => 
     assert.ok(readAgentState(unknownMailbox));
   } finally {
     pi.events.get("session_shutdown")?.[0]();
-    for (const mailbox of [parentMailbox, liveMailbox, unknownMailbox])
-      resetAgentMailbox(mailbox);
+    for (const mailbox of [parentMailbox, liveMailbox, unknownMailbox]) resetAgentMailbox(mailbox);
   }
 });
 
@@ -6939,11 +6377,7 @@ test("mixed lost and unknown descendants preflight before removing mailboxes", a
     piSessionId: PARENT_SESSION_ID,
   };
   const lostChild = {
-    ...managedState(
-      "mixed-lost-child",
-      undefined,
-      recoveryIdentity("mixed-lost-child"),
-    ),
+    ...managedState("mixed-lost-child", undefined, recoveryIdentity("mixed-lost-child")),
     ownerSessionId: parent.piSessionId,
     piSessionId: CHILD_SESSION_ID,
   };
@@ -6959,8 +6393,7 @@ test("mixed lost and unknown descendants preflight before removing mailboxes", a
   const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
   const lostMailbox = agentMailboxPath(WORKSPACE, lostChild.agentLabel);
   const unknownMailbox = agentMailboxPath(WORKSPACE, unknownChild.agentLabel);
-  for (const mailbox of [parentMailbox, lostMailbox, unknownMailbox])
-    resetAgentMailbox(mailbox);
+  for (const mailbox of [parentMailbox, lostMailbox, unknownMailbox]) resetAgentMailbox(mailbox);
   for (const [mailbox, state] of [
     [parentMailbox, parent],
     [lostMailbox, lostChild],
@@ -6987,8 +6420,7 @@ test("mixed lost and unknown descendants preflight before removing mailboxes", a
     assert.ok(readAgentState(unknownMailbox));
   } finally {
     pi.events.get("session_shutdown")?.[0]();
-    for (const mailbox of [parentMailbox, lostMailbox, unknownMailbox])
-      resetAgentMailbox(mailbox);
+    for (const mailbox of [parentMailbox, lostMailbox, unknownMailbox]) resetAgentMailbox(mailbox);
   }
 });
 
@@ -7023,17 +6455,13 @@ test("nested cascades resolve every descendant deepest-first", async () => {
       piSessionId: "11111111-1111-4111-8111-111111111111",
     };
     const states = [parent, child, grandchild];
-    const mailboxes = states.map((state) =>
-      agentMailboxPath(WORKSPACE, state.agentLabel),
-    );
+    const mailboxes = states.map((state) => agentMailboxPath(WORKSPACE, state.agentLabel));
     for (const mailbox of mailboxes) resetAgentMailbox(mailbox);
     for (const [mailbox, state] of mailboxes.map(
       (mailbox, index) => [mailbox, states[index]] as const,
     ))
       writeAgentState(mailbox, state);
-    const lifecycle = cascadeExecutor(
-      childLive ? [child, grandchild] : [grandchild],
-    );
+    const lifecycle = cascadeExecutor(childLive ? [child, grandchild] : [grandchild]);
     const pi = fakePi({ exec: lifecycle.exec });
     registerExtension!(pi.pi as never);
     try {
@@ -7047,12 +6475,9 @@ test("nested cascades resolve every descendant deepest-first", async () => {
       assert.equal(result.details.ok, true, JSON.stringify(result.details));
       assert.deepEqual(
         lifecycle.closeOrder,
-        childLive
-          ? [grandchild.agentLabel, child.agentLabel]
-          : [grandchild.agentLabel],
+        childLive ? [grandchild.agentLabel, child.agentLabel] : [grandchild.agentLabel],
       );
-      for (const mailbox of mailboxes)
-        assert.equal(readAgentState(mailbox), undefined);
+      for (const mailbox of mailboxes) assert.equal(readAgentState(mailbox), undefined);
     } finally {
       pi.events.get("session_shutdown")?.[0]();
       for (const mailbox of mailboxes) resetAgentMailbox(mailbox);
@@ -7063,19 +6488,11 @@ test("nested cascades resolve every descendant deepest-first", async () => {
 test("nested unknown descendants refuse the cascade before any mutation", async () => {
   setLeadEnvironment();
   const parent = {
-    ...managedState(
-      "nested-unknown-parent",
-      undefined,
-      recoveryIdentity("nested-unknown-parent"),
-    ),
+    ...managedState("nested-unknown-parent", undefined, recoveryIdentity("nested-unknown-parent")),
     piSessionId: PARENT_SESSION_ID,
   };
   const child = {
-    ...managedState(
-      "nested-unknown-child",
-      undefined,
-      recoveryIdentity("nested-unknown-child"),
-    ),
+    ...managedState("nested-unknown-child", undefined, recoveryIdentity("nested-unknown-child")),
     ownerSessionId: parent.piSessionId,
     piSessionId: CHILD_SESSION_ID,
   };
@@ -7089,9 +6506,7 @@ test("nested unknown descendants refuse the cascade before any mutation", async 
     piSessionId: "11111111-1111-4111-8111-111111111111",
   };
   const states = [parent, child, grandchild];
-  const mailboxes = states.map((state) =>
-    agentMailboxPath(WORKSPACE, state.agentLabel),
-  );
+  const mailboxes = states.map((state) => agentMailboxPath(WORKSPACE, state.agentLabel));
   for (const mailbox of mailboxes) resetAgentMailbox(mailbox);
   for (const [mailbox, state] of mailboxes.map(
     (mailbox, index) => [mailbox, states[index]] as const,
@@ -7147,9 +6562,7 @@ test("duplicate durable parent identities refuse cascade before mutation", async
     piSessionId: CHILD_SESSION_ID,
   };
   const states = [parent, duplicateParent, child];
-  const mailboxes = states.map((state) =>
-    agentMailboxPath(WORKSPACE, state.agentLabel),
-  );
+  const mailboxes = states.map((state) => agentMailboxPath(WORKSPACE, state.agentLabel));
   for (const [mailbox, state] of mailboxes.map(
     (mailbox, index) => [mailbox, states[index]] as const,
   )) {
@@ -7332,20 +6745,12 @@ test("stale scanner keeps one inventory in flight and retries rejection", async 
         };
       }
       if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
-        const result = leadExec(
-          state.agentLabel,
-          "working",
-          DEFAULT_PI_SESSION_ID,
-        )(command, args);
+        const result = leadExec(state.agentLabel, "working", DEFAULT_PI_SESSION_ID)(command, args);
         const payload = JSON.parse(result.stdout);
         payload.result.agent.agent_status = "working";
         return { ...result, stdout: JSON.stringify(payload) };
       }
-      return leadExec(
-        state.agentLabel,
-        "working",
-        DEFAULT_PI_SESSION_ID,
-      )(command, args);
+      return leadExec(state.agentLabel, "working", DEFAULT_PI_SESSION_ID)(command, args);
     },
     sendMessage: () => {
       sends++;
@@ -7420,20 +6825,12 @@ test("stale scanner shutdown invalidates old inventory generation", async (t) =>
         };
       }
       if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
-        const result = leadExec(
-          state.agentLabel,
-          "working",
-          DEFAULT_PI_SESSION_ID,
-        )(command, args);
+        const result = leadExec(state.agentLabel, "working", DEFAULT_PI_SESSION_ID)(command, args);
         const payload = JSON.parse(result.stdout);
         payload.result.agent.agent_status = "working";
         return { ...result, stdout: JSON.stringify(payload) };
       }
-      return leadExec(
-        state.agentLabel,
-        "working",
-        DEFAULT_PI_SESSION_ID,
-      )(command, args);
+      return leadExec(state.agentLabel, "working", DEFAULT_PI_SESSION_ID)(command, args);
     },
     sendMessage: (message) => {
       sends.push(message);
@@ -7476,21 +6873,13 @@ test("list derives inactivity without changing public state", async () => {
     exec: (command, args) => {
       if (command === "herdr" && args[0] === "api" && args[1] === "snapshot") {
         const agents = cases.map((item) => {
-          const state = readAgentState(
-            agentMailboxPath(WORKSPACE, item.label),
-          )!;
+          const state = readAgentState(agentMailboxPath(WORKSPACE, item.label))!;
           const identity = recoveryIdentity(item.label);
           identity.paneId = state.paneId;
           identity.piSessionId = state.piSessionId;
           return {
-            ...JSON.parse(
-              listResponse(
-                item.label,
-                item.status,
-                state.piSessionId,
-                identity,
-              ),
-            ).agents[0],
+            ...JSON.parse(listResponse(item.label, item.status, state.piSessionId, identity))
+              .agents[0],
             agent_session: {
               source: "herdr:pi",
               agent: "pi",
@@ -7522,47 +6911,23 @@ test("list derives inactivity without changing public state", async () => {
           code: 0,
         };
       }
-      return leadExec(
-        "old-working",
-        "working",
-        DEFAULT_PI_SESSION_ID,
-      )(command, args);
+      return leadExec("old-working", "working", DEFAULT_PI_SESSION_ID)(command, args);
     },
   });
   registerExtension!(pi.pi as never);
-  const result = await agentTool(pi, "list").execute(
-    "id",
-    {},
-    undefined,
-    undefined,
-    fakeContext(),
-  );
+  const result = await agentTool(pi, "list").execute("id", {}, undefined, undefined, fakeContext());
   const agents = result.details.agents as any[];
+  assert.equal(agents.find((agent) => agent.agent === "old-working")?.stale, true);
+  assert.equal(agents.find((agent) => agent.agent === "old-working")?.state, "working");
+  assert.ok(agents.find((agent) => agent.agent === "old-working")?.inactive_ms >= 11 * 60_000);
   assert.equal(
-    agents.find((agent) => agent.agent === "old-working")?.stale,
-    true,
-  );
-  assert.equal(
-    agents.find((agent) => agent.agent === "old-working")?.state,
-    "working",
-  );
-  assert.ok(
-    agents.find((agent) => agent.agent === "old-working")?.inactive_ms >=
-      11 * 60_000,
-  );
-  assert.equal(
-    typeof agents.find((agent) => agent.agent === "old-working")
-      ?.last_activity_at,
+    typeof agents.find((agent) => agent.agent === "old-working")?.last_activity_at,
     "number",
   );
   for (const label of ["fresh-working", "missing-working", "future-working"]) {
-    assert.equal(
-      agents.find((agent) => agent.agent === label)?.stale,
-      undefined,
-    );
+    assert.equal(agents.find((agent) => agent.agent === label)?.stale, undefined);
     const agent = agents.find((candidate) => candidate.agent === label);
-    if (label === "missing-working")
-      assert.equal(agent?.last_activity_at, undefined);
+    if (label === "missing-working") assert.equal(agent?.last_activity_at, undefined);
     else assert.equal(typeof agent?.last_activity_at, "number");
     assert.equal(agent?.inactive_ms, undefined);
   }

@@ -1,21 +1,8 @@
-import {
-  parseSessionEntries,
-  SessionManager,
-} from "@earendil-works/pi-coding-agent";
-import {
-  closeSync,
-  constants,
-  fstatSync,
-  openSync,
-  readFileSync,
-  readSync,
-} from "node:fs";
+import { parseSessionEntries, SessionManager } from "@earendil-works/pi-coding-agent";
+import { closeSync, constants, fstatSync, openSync, readFileSync, readSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { sameDirectory } from "./herdr.ts";
-import {
-  readCoordinatorDefinitionBinding,
-  sessionLeadRoleState,
-} from "./supervision.ts";
+import { readCoordinatorDefinitionBinding, sessionLeadRoleState } from "./supervision.ts";
 
 export function readSavedManagerSession(
   session: { id: string; path: string },
@@ -28,24 +15,16 @@ export function readSavedManagerSession(
   let content: string;
   try {
     const stat = fstatSync(fd);
-    if (!stat.isFile())
-      throw new Error("Saved Manager session is not a regular file");
+    if (!stat.isFile()) throw new Error("Saved Manager session is not a regular file");
     const { maxBytes } = options;
     if (maxBytes === undefined) content = readFileSync(fd, "utf8");
     else {
-      const tooLarge = () =>
-        new Error("Saved Manager session exceeds the discovery read limit");
+      const tooLarge = () => new Error("Saved Manager session exceeds the discovery read limit");
       if (stat.size > maxBytes) throw tooLarge();
       const buffer = Buffer.allocUnsafe(stat.size);
       let length = 0;
       while (length < buffer.length) {
-        const count = readSync(
-          fd,
-          buffer,
-          length,
-          buffer.length - length,
-          null,
-        );
+        const count = readSync(fd, buffer, length, buffer.length - length, null);
         if (!count) break;
         length += count;
       }
@@ -63,12 +42,9 @@ export function readSavedManagerSession(
     header.id !== session.id ||
     typeof header.cwd !== "string" ||
     !isAbsolute(header.cwd) ||
-    (options.checkout !== undefined &&
-      !sameDirectory(header.cwd, options.checkout))
+    (options.checkout !== undefined && !sameDirectory(header.cwd, options.checkout))
   )
-    throw new Error(
-      "Saved Manager session identity does not match the repository",
-    );
+    throw new Error("Saved Manager session identity does not match the repository");
   // Opening an existing file with Pi can migrate it. Inspect the branch in memory.
   const saved = SessionManager.inMemory(header.cwd, undefined, entries);
   return {

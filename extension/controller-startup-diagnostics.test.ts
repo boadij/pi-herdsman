@@ -58,10 +58,7 @@ function startupRoleHistory(): SessionEntry[] {
   ];
 }
 
-function safeHerdrOperation(
-  command: string,
-  args: string[],
-): string | undefined {
+function safeHerdrOperation(command: string, args: string[]): string | undefined {
   if (command !== "herdr") return;
   const operation = args.slice(0, 2).join(" ");
   return (
@@ -141,9 +138,7 @@ test("missing Herdr integration rejects before launch preparation", async () => 
       pi.calls
         .slice(callsBefore)
         .some(([area, action]) =>
-          ["agent start", "pane split", "tab create"].includes(
-            `${area} ${action}`,
-          ),
+          ["agent start", "pane split", "tab create"].includes(`${area} ${action}`),
         ),
       false,
     );
@@ -158,12 +153,7 @@ test("missing Herdr integration rejects before launch preparation", async () => 
   }
 });
 
-for (const scenario of [
-  "failed",
-  "conflicting",
-  "conflicting-state",
-  "missing-state",
-] as const) {
+for (const scenario of ["failed", "conflicting", "conflicting-state", "missing-state"] as const) {
   test(`startup ${scenario} rejects without dispatch and rolls back`, async () => {
     setLeadEnvironment();
     const label = `startup-${scenario}`;
@@ -235,12 +225,10 @@ for (const scenario of [
                 ...readAgentState(startup.mailbox)!,
                 runId: "11111111-1111-4111-8111-111111111111",
               });
-            if (scenario === "missing-state")
-              realFs.unlinkSync(`${startup.mailbox}/state.json`);
+            if (scenario === "missing-state") realFs.unlinkSync(`${startup.mailbox}/state.json`);
             startupRejected = true;
           }
-          if (operation === "pane-process-info" && startupRejected)
-            rollbackPaneSettled = true;
+          if (operation === "pane-process-info" && startupRejected) rollbackPaneSettled = true;
           return result;
         } finally {
           const finishedAt = performance.now();
@@ -260,10 +248,7 @@ for (const scenario of [
     });
     registerExtension!(pi.pi as never);
     pi.entries.push(...startupRoleHistory());
-    await pi.events.get("session_start")![0](
-      undefined,
-      fakeContext(pi.entries),
-    );
+    await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
     try {
       const delegate = pi.tools.find((tool) => tool.name === "delegate_agent")!;
       const operationStartedAt = performance.now();
@@ -305,9 +290,7 @@ for (const scenario of [
         assert.match(result.details.error.primary.message, /bootstrap failed/);
       assert.equal(
         realFs.existsSync(startup.mailbox) &&
-          realFs
-            .readdirSync(startup.mailbox)
-            .some((name) => name.startsWith("request-")),
+          realFs.readdirSync(startup.mailbox).some((name) => name.startsWith("request-")),
         false,
       );
       assert.equal(result.details.error.rollbackOccurred, true);
@@ -382,10 +365,7 @@ test(
     });
     registerExtension!(pi.pi as never);
     pi.entries.push(...startupRoleHistory());
-    await pi.events.get("session_start")![0](
-      undefined,
-      fakeContext(pi.entries),
-    );
+    await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
     try {
       const delegate = pi.tools.find((tool) => tool.name === "delegate_agent");
       assert.ok(delegate);
@@ -401,14 +381,8 @@ test(
       assert.equal(result.details.error.category, "rollback_failure");
       assert.equal(result.details.error.rollbackOccurred, true);
       assert.equal(result.details.error.primary.category, "internal_failure");
-      assert.match(
-        result.details.error.primary.message,
-        /timed out waiting for agent startup/,
-      );
-      assert.match(
-        result.details.error.primary.message,
-        /Tool "exec" conflicts/,
-      );
+      assert.match(result.details.error.primary.message, /timed out waiting for agent startup/);
+      assert.match(result.details.error.primary.message, /Tool "exec" conflicts/);
       assert.equal(result.details.error.details.stage, "agent_start");
       assert.equal(result.details.error.details.herdrCode, "timeout");
       assert.equal(result.details.error.details.paneSnapshot, diagnostic);
@@ -421,9 +395,7 @@ test(
       assert.match(modelFacingText, /Agent delegate failed/);
       assert.match(modelFacingText, /timed out waiting for agent startup/);
       assert.match(modelFacingText, /Tool "exec" conflicts/);
-      const paneReads = pi.calls.filter(
-        (args) => args[0] === "pane" && args[1] === "read",
-      );
+      const paneReads = pi.calls.filter((args) => args[0] === "pane" && args[1] === "read");
       assert.equal(paneReads.length, 1);
       assert.equal(
         result.details.error.ids.paneId,
@@ -431,9 +403,7 @@ test(
         "the failed identity should remain attached to rollback evidence",
       );
       assert.equal(result.details.error.cleanup.operation, "rollback");
-      const preservingStops = pi.calls.filter((args) =>
-        isPreservePaneStop(args),
-      );
+      const preservingStops = pi.calls.filter((args) => isPreservePaneStop(args));
       assert.equal(preservingStops.length, 1);
       assert.equal(
         preservingStops[0]?.[2],
@@ -535,10 +505,7 @@ test(
     });
     registerExtension!(pi.pi as never);
     pi.entries.push(...startupRoleHistory());
-    await pi.events.get("session_start")![0](
-      undefined,
-      fakeContext(pi.entries),
-    );
+    await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
     try {
       const delegate = pi.tools.find((tool) => tool.name === "delegate_agent");
       assert.ok(delegate);
@@ -550,11 +517,7 @@ test(
         undefined,
         fakeContext(pi.entries),
       );
-      assert.equal(
-        result.details.error.category,
-        "pane_not_ready",
-        JSON.stringify(result.details),
-      );
+      assert.equal(result.details.error.category, "pane_not_ready", JSON.stringify(result.details));
       const attachedDiagnostic = result.details.error.details.startupDiagnostic;
       assert.ok(Buffer.byteLength(attachedDiagnostic) <= 4096);
       assert.ok(attachedDiagnostic.endsWith("startup diagnostic"));
@@ -568,16 +531,11 @@ test(
       assert.equal(operationController.signal.aborted, true);
       assert.equal(processInfoSignal, undefined);
       assert.equal(diagnosticProcessAttempted, true);
-      const reads = pi.calls.filter(
-        (args) => args[0] === "pane" && args[1] === "read",
-      );
+      const reads = pi.calls.filter((args) => args[0] === "pane" && args[1] === "read");
       assert.equal(reads.length, 1);
       assert.deepEqual(reads[0]?.slice(-2), ["--lines", "40"]);
       assert.equal(
-        pi.calls.some(
-          (args) =>
-            isPreservePaneStop(args) || isPaneClose(args) || isTabClose(args),
-        ),
+        pi.calls.some((args) => isPreservePaneStop(args) || isPaneClose(args) || isTabClose(args)),
         true,
       );
       assert.equal(readAgentState(startup.mailbox), undefined);
@@ -642,10 +600,7 @@ test(
     });
     registerExtension!(pi.pi as never);
     pi.entries.push(...startupRoleHistory());
-    await pi.events.get("session_start")![0](
-      undefined,
-      fakeContext(pi.entries),
-    );
+    await pi.events.get("session_start")![0](undefined, fakeContext(pi.entries));
     try {
       const delegate = pi.tools.find((tool) => tool.name === "delegate_agent");
       assert.ok(delegate);
@@ -658,21 +613,12 @@ test(
         fakeContext(pi.entries),
       );
       assert.equal(result.details.error.category, "pane_not_ready");
-      assert.equal(
-        result.details.error.message,
-        "Agent did not report a startup outcome",
-      );
-      assert.equal(
-        result.details.error.details.startupDiagnostic,
-        "pane output",
-      );
+      assert.equal(result.details.error.message, "Agent did not report a startup outcome");
+      assert.equal(result.details.error.details.startupDiagnostic, "pane output");
       assert.equal("startupProcess" in result.details.error.details, false);
       assert.equal(diagnosticProcessAttempted, true);
       assert.equal(
-        pi.calls.some(
-          (args) =>
-            isPreservePaneStop(args) || isPaneClose(args) || isTabClose(args),
-        ),
+        pi.calls.some((args) => isPreservePaneStop(args) || isPaneClose(args) || isTabClose(args)),
         true,
       );
     } finally {

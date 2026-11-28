@@ -16,22 +16,14 @@ export const overrideModelPickerTitle = "Allowed override models";
 
 const inheritLabel = "Use Pi scoped models";
 
-function sameSelection(
-  selected: ReadonlySet<string>,
-  models: readonly string[],
-): boolean {
-  return (
-    selected.size === models.length && models.every((id) => selected.has(id))
-  );
+function sameSelection(selected: ReadonlySet<string>, models: readonly string[]): boolean {
+  return selected.size === models.length && models.every((id) => selected.has(id));
 }
 
 export async function pickOverrideModels(
   ctx: ExtensionContext,
   configured: readonly string[],
-  selectMenu: (
-    title: string,
-    items: readonly SelectItem[],
-  ) => Promise<string | undefined>,
+  selectMenu: (title: string, items: readonly SelectItem[]) => Promise<string | undefined>,
 ): Promise<string[] | undefined> {
   await ctx.modelRegistry.refresh();
   if (ctx.signal?.aborted) return;
@@ -52,8 +44,7 @@ export async function pickOverrideModels(
     ...ids.filter((id) => selected.has(id)),
     ...ids.filter((id) => !selected.has(id)),
   ];
-  const usingInheritance = () =>
-    preserveInheritance && sameSelection(selected, inherited);
+  const usingInheritance = () => preserveInheritance && sameSelection(selected, inherited);
   const selectionStatus = () => {
     const inheritedSelection = usingInheritance();
     if (!inheritedSelection && !selected.size) {
@@ -61,9 +52,7 @@ export async function pickOverrideModels(
     }
     let unavailable = 0;
     for (const id of selected) if (!available.has(id)) unavailable++;
-    const policy = inheritedSelection
-      ? "Using Pi scoped models"
-      : "Custom selection";
+    const policy = inheritedSelection ? "Using Pi scoped models" : "Custom selection";
     const count = `${selected.size - unavailable}/${available.size} selected`;
     return `${policy} · ${count}${unavailable ? ` · ${unavailable} unavailable` : ""}`;
   };
@@ -91,21 +80,18 @@ export async function pickOverrideModels(
 
   if (ctx.mode !== "tui") {
     while (!ctx.signal?.aborted) {
-      const choice = await selectMenu(
-        `${overrideModelPickerTitle} · ${selectionStatus()}`,
-        [
-          {
-            value: "inherit",
-            label: `${usingInheritance() ? "✓" : " "} ${inheritLabel}`,
-          },
-          { value: "save", label: "Save" },
-          { value: "cancel", label: "Cancel" },
-          ...orderedIds.map((id, index) => ({
-            value: String(index),
-            label: `${index + 1}. ${label(id)}`,
-          })),
-        ],
-      );
+      const choice = await selectMenu(`${overrideModelPickerTitle} · ${selectionStatus()}`, [
+        {
+          value: "inherit",
+          label: `${usingInheritance() ? "✓" : " "} ${inheritLabel}`,
+        },
+        { value: "save", label: "Save" },
+        { value: "cancel", label: "Cancel" },
+        ...orderedIds.map((id, index) => ({
+          value: String(index),
+          label: `${index + 1}. ${label(id)}`,
+        })),
+      ]);
       if (choice === "save") return save();
       if (choice === undefined || choice === "cancel") return;
       if (choice === "inherit") {
@@ -124,8 +110,7 @@ export async function pickOverrideModels(
     const body = new Container();
     const status = new Text();
     const frame = new Container();
-    const hint = (key: Parameters<typeof keys.getKeys>[0]) =>
-      keys.getKeys(key).join("/");
+    const hint = (key: Parameters<typeof keys.getKeys>[0]) => keys.getKeys(key).join("/");
     frame.addChild(new Text(theme.fg("accent", overrideModelPickerTitle)));
     frame.addChild(input);
     frame.addChild(new Spacer(1));
@@ -155,9 +140,7 @@ export async function pickOverrideModels(
     const addRow = (current: boolean, content: string) => {
       const row = `${current ? "→" : " "} ${content}`;
       body.addChild({
-        render: (width) => [
-          truncateToWidth(current ? theme.fg("accent", row) : row, width),
-        ],
+        render: (width) => [truncateToWidth(current ? theme.fg("accent", row) : row, width)],
         invalidate() {},
       });
     };
@@ -165,11 +148,7 @@ export async function pickOverrideModels(
       body.clear();
       const accentCheckmark = theme.fg("accent", "✓");
       const inheritCurrent = index === 0;
-      const inheritMark = usingInheritance()
-        ? inheritCurrent
-          ? "✓"
-          : accentCheckmark
-        : " ";
+      const inheritMark = usingInheritance() ? (inheritCurrent ? "✓" : accentCheckmark) : " ";
       addRow(inheritCurrent, `${inheritMark} ${inheritLabel}`);
 
       const start = Math.max(0, Math.min(index - 4, filtered.length - 8));
@@ -177,8 +156,7 @@ export async function pickOverrideModels(
         const current = index === start + offset + 1;
         addRow(current, label(id, current ? "✓" : accentCheckmark));
       }
-      if (!filtered.length)
-        body.addChild(new Text(theme.fg("dim", "No matching models")));
+      if (!filtered.length) body.addChild(new Text(theme.fg("dim", "No matching models")));
       status.setText(selectionStatus());
     };
     redraw();
@@ -202,9 +180,7 @@ export async function pickOverrideModels(
           for (const id of filtered) selected.delete(id);
         } else if (keys.matches(data, "app.models.toggleProvider")) {
           const provider =
-            highlighted === undefined
-              ? undefined
-              : available.get(highlighted)?.provider;
+            highlighted === undefined ? undefined : available.get(highlighted)?.provider;
           if (provider !== undefined) {
             const group = [...available]
               .filter(([, model]) => model.provider === provider)
@@ -218,10 +194,7 @@ export async function pickOverrideModels(
         } else if (keys.matches(data, "tui.select.confirm")) {
           if (highlighted === undefined) restoreInheritance();
           else toggle(highlighted);
-        } else if (
-          keys.matches(data, "tui.select.up") ||
-          keys.matches(data, "tui.select.down")
-        ) {
+        } else if (keys.matches(data, "tui.select.up") || keys.matches(data, "tui.select.down")) {
           const count = filtered.length + 1; // Include the inheritance row.
           const delta = keys.matches(data, "tui.select.up") ? -1 : 1;
           index = (index + delta + count) % count;
@@ -231,11 +204,7 @@ export async function pickOverrideModels(
           const query = input.getValue().trim();
           if (input.getValue() !== previous) {
             filtered = query
-              ? fuzzyFilter(
-                  orderedIds,
-                  query,
-                  (id) => `${id} ${available.get(id)?.name ?? ""}`,
-                )
+              ? fuzzyFilter(orderedIds, query, (id) => `${id} ${available.get(id)?.name ?? ""}`)
               : orderedIds;
             index = filtered.length ? 1 : 0;
           }

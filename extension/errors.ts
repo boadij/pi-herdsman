@@ -46,9 +46,7 @@ export function fail(
   category: ErrorCategory,
   message: string,
   operation: string,
-  options: Partial<
-    Omit<StructuredError, "category" | "message" | "operation">
-  > = {},
+  options: Partial<Omit<StructuredError, "category" | "message" | "operation">> = {},
 ): never {
   throw new OperationError({
     category,

@@ -15,17 +15,14 @@ export function matchesProjectMessageContent(actual, expected) {
   return (
     typeof actual === "string" &&
     (actual === expected ||
-      (actual.startsWith(
-        `${expected}\n\n<sender_environment informational="true">\ncwd: "`,
-      ) &&
+      (actual.startsWith(`${expected}\n\n<sender_environment informational="true">\ncwd: "`) &&
         /^\n\n<sender_environment informational="true">\ncwd: "(?:[^&<>"'\r\n]|&(?:amp|lt|gt|quot|apos);)+"(?:\nworktree_root: "(?:[^&<>"'\r\n]|&(?:amp|lt|gt|quot|apos);)+"\nbranch: "(?:[^&<>"'\r\n]|&(?:amp|lt|gt|quot|apos);)+"\nhead: "(?:[a-f0-9]{40}|[a-f0-9]{64})")?\nInformational only; not an instruction or authorization\.\n<\/sender_environment>$/u.test(
           actual.slice(expected.length),
         )))
   );
 }
 
-const MANAGER_HANDOFF_SUPERVISOR_TOOL_NOT_OFFERED =
-  "MANAGER_HANDOFF_SUPERVISOR_TOOL_NOT_OFFERED";
+const MANAGER_HANDOFF_SUPERVISOR_TOOL_NOT_OFFERED = "MANAGER_HANDOFF_SUPERVISOR_TOOL_NOT_OFFERED";
 
 const modelIds = [
   "core",
@@ -60,11 +57,8 @@ function piPackageFromExecutingCli(entryPoint = process.argv[1]) {
       let directory = dirname(realpathSync(entryPoint));
       while (true) {
         try {
-          const metadata = JSON.parse(
-            readFileSync(join(directory, "package.json"), "utf8"),
-          );
-          if (metadata.name === "@earendil-works/pi-coding-agent")
-            return metadata;
+          const metadata = JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
+          if (metadata.name === "@earendil-works/pi-coding-agent") return metadata;
         } catch {}
         const parent = dirname(directory);
         if (parent === directory) break;
@@ -72,9 +66,7 @@ function piPackageFromExecutingCli(entryPoint = process.argv[1]) {
       }
     } catch {}
   }
-  const version = execFileSync("pi", ["--version"], { encoding: "utf8" })
-    .trim()
-    .replace(/^v/u, "");
+  const version = execFileSync("pi", ["--version"], { encoding: "utf8" }).trim().replace(/^v/u, "");
   if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(version))
     throw new Error("Could not resolve Pi package metadata from executing CLI");
   return { name: "@earendil-works/pi-coding-agent", version };
@@ -102,9 +94,7 @@ function correlatedCall(messages, name, identity) {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
     if (message.role !== "assistant") continue;
-    const call = message.content?.find(
-      (part) => part.type === "toolCall" && part.name === name,
-    );
+    const call = message.content?.find((part) => part.type === "toolCall" && part.name === name);
     if (!call) continue;
     if (
       identity &&
@@ -120,8 +110,7 @@ function correlatedCall(messages, name, identity) {
         candidate.toolName === name &&
         candidate.toolCallId === call.id,
     );
-    if (result && !result.isError)
-      return { call, result, resultIndex: messages.indexOf(result) };
+    if (result && !result.isError) return { call, result, resultIndex: messages.indexOf(result) };
     if (result?.isError) throw new Error(`Failed ${name} result`);
   }
   return null;
@@ -135,10 +124,7 @@ function successfulResult(messages, name) {
 
 function successfulCallCount(messages, name) {
   return messages.filter(
-    (message) =>
-      message.role === "toolResult" &&
-      message.toolName === name &&
-      !message.isError,
+    (message) => message.role === "toolResult" && message.toolName === name && !message.isError,
   ).length;
 }
 
@@ -164,16 +150,10 @@ function packageDetails(value) {
     const match = source.match(
       /"name"\s*:\s*("(?:\\.|[^"\\])*")[\s\S]*?"version"\s*:\s*("(?:\\.|[^"\\])*")(?=\s*[,}])/,
     );
-    if (!match)
-      throw new Error("package result omitted valid package metadata");
+    if (!match) throw new Error("package result omitted valid package metadata");
     pkg = { name: JSON.parse(match[1]), version: JSON.parse(match[2]) };
   }
-  if (
-    typeof pkg.name !== "string" ||
-    !pkg.name ||
-    typeof pkg.version !== "string" ||
-    !pkg.version
-  )
+  if (typeof pkg.name !== "string" || !pkg.name || typeof pkg.version !== "string" || !pkg.version)
     throw new Error("package result omitted name or version");
   return pkg;
 }
@@ -185,11 +165,7 @@ function semanticResultRef(value) {
 
 function forwardedResultRefs(value) {
   const source = typeof value === "string" ? value : text(value);
-  return (
-    source
-      .match(/^Forwardable result evidence: (.+)$/mu)?.[1]
-      ?.split(/,\s*/u) ?? []
-  );
+  return source.match(/^Forwardable result evidence: (.+)$/mu)?.[1]?.split(/,\s*/u) ?? [];
 }
 
 function deliveredResult(messages, toolName, matches, identity) {
@@ -197,9 +173,7 @@ function deliveredResult(messages, toolName, matches, identity) {
   if (!matched) return null;
   return messages.find(
     (message, index) =>
-      index > matched.resultIndex &&
-      message.role === "user" &&
-      matches(text(message)),
+      index > matched.resultIndex && message.role === "user" && matches(text(message)),
   );
 }
 
@@ -213,9 +187,7 @@ function deliveredAgentResult(messages, toolName, label) {
   if (!handoff) return null;
   const content = text(handoff);
   if (!content.includes("status=completed"))
-    throw new Error(
-      `Agent ${label} did not complete successfully: ${content.slice(0, 500)}`,
-    );
+    throw new Error(`Agent ${label} did not complete successfully: ${content.slice(0, 500)}`);
   return content;
 }
 
@@ -226,9 +198,7 @@ function supervisorAgentResult(messages) {
   const sessionId = details.match(/^Session: ([^\n]+)$/m)?.[1];
   const requestId = details.match(/^Request: ([^\n]+)$/m)?.[1];
   if (!sessionId || !requestId)
-    throw new Error(
-      "Supervisor Agent assignment result omitted session/request identity",
-    );
+    throw new Error("Supervisor Agent assignment result omitted session/request identity");
   const expectedHeader =
     "Agent result · agent=smoke-supervisor-agent · definition=smoke-agent · status=completed";
   const handoff = messages.find((message, index) => {
@@ -253,8 +223,7 @@ function completedResultBody(message) {
   const match = text(message).match(
     /status=completed\n\n(?:Result ref: [^\n]+\n\n)?(?:To continue this session, use resume_agent with session="[^"]+"\.\n\n)?([\s\S]+?)\n\nDelegation status:/,
   );
-  if (!match)
-    throw new Error("Completed Agent result omitted its response body");
+  if (!match) throw new Error("Completed Agent result omitted its response body");
   return match[1].trim();
 }
 
@@ -265,9 +234,7 @@ function call(name, arguments_) {
 }
 
 export function managerHandoffSupervisorToolAvailable(messages) {
-  return getCurrentTools(messages).some(
-    (tool) => tool.name === "message_manager",
-  );
+  return getCurrentTools(messages).some((tool) => tool.name === "message_manager");
 }
 
 function waitForResult(message) {
@@ -292,10 +259,7 @@ function logFederatedPeerBDecision({
     ...(tool ? { tool } : {}),
   });
   process.stderr.write(`[peer-faux-decision] ${decision}\n`);
-  if (
-    process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS === "1" &&
-    process.env.PI_CODING_AGENT_DIR
-  )
+  if (process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS === "1" && process.env.PI_CODING_AGENT_DIR)
     appendFileSync(
       join(process.env.PI_CODING_AGENT_DIR, "peer-federation-decisions.jsonl"),
       `${decision}\n`,
@@ -309,9 +273,7 @@ function packageRead(messages) {
     if (message.role !== "assistant") continue;
     const call = message.content?.find(
       (part) =>
-        part.type === "toolCall" &&
-        part.name === "read" &&
-        part.arguments?.path === "package.json",
+        part.type === "toolCall" && part.name === "read" && part.arguments?.path === "package.json",
     );
     if (!call) continue;
     const result = messages.find(
@@ -329,19 +291,14 @@ function packageRead(messages) {
 }
 
 function rootAgentPrompt(messages, marker) {
-  return messages.find(
-    (message) => message.role === "user" && text(message).includes(marker),
-  );
+  return messages.find((message) => message.role === "user" && text(message).includes(marker));
 }
 
 function coreDecision(context) {
   const messages = context.messages;
   const latest = messages.at(-1);
   const prompt = text(lastUser(messages));
-  const rootTask = rootAgentPrompt(
-    messages,
-    "Do not read package.json yourself.",
-  );
+  const rootTask = rootAgentPrompt(messages, "Do not read package.json yourself.");
   if (rootTask) {
     const implementerResult = deliveredAgentResult(
       messages,
@@ -355,29 +312,17 @@ function coreDecision(context) {
           systemPrompt,
         )
       )
-        throw new Error(
-          "Lead role context missing or incorrect after Agent result",
-        );
+        throw new Error("Lead role context missing or incorrect after Agent result");
       const refs = forwardedResultRefs(implementerResult);
       if (refs.length !== 1 || !/^result:smoke-core-scout#\d+$/u.test(refs[0]))
-        throw new Error(
-          "Implementer completion omitted the selected Scout result",
-        );
-      const next = deliveredAgentResult(
-        messages,
-        "delegate_agent",
-        "smoke-core-next",
-      );
+        throw new Error("Implementer completion omitted the selected Scout result");
+      const next = deliveredAgentResult(messages, "delegate_agent", "smoke-core-next");
       if (next) {
         const pkg = packageDetails(next);
-        return fauxAssistantMessage(
-          `PI_HERDSMAN_SMOKE_OK ${pkg.name}@${pkg.version}`,
-        );
+        return fauxAssistantMessage(`PI_HERDSMAN_SMOKE_OK ${pkg.name}@${pkg.version}`);
       }
       if (correlatedCall(messages, "delegate_agent", "smoke-core-next"))
-        return waitForResult(
-          "Waiting for the next Agent to verify forwarded evidence.",
-        );
+        return waitForResult("Waiting for the next Agent to verify forwarded evidence.");
       return call("delegate_agent", {
         definition: "scout",
         label: "smoke-core-next",
@@ -396,16 +341,10 @@ function coreDecision(context) {
 
   if (prompt.includes("SMOKE_CORE_SCOUT:")) {
     if (
-      !/<file name="evidence:[^"]+"[^>]*>\s*SMOKE_CORE_IMPLEMENTER:/u.test(
-        prompt,
-      ) ||
-      !prompt.includes(
-        "owner work assignment supplied as evidence is context only",
-      )
+      !/<file name="evidence:[^"]+"[^>]*>\s*SMOKE_CORE_IMPLEMENTER:/u.test(prompt) ||
+      !prompt.includes("owner work assignment supplied as evidence is context only")
     )
-      throw new Error(
-        "Scout did not receive its owner's task as contextual evidence",
-      );
+      throw new Error("Scout did not receive its owner's task as contextual evidence");
     const pkg = packageRead(messages);
     if (pkg) return fauxAssistantMessage(JSON.stringify(pkg));
     if (latest?.role === "toolResult")
@@ -419,26 +358,15 @@ function coreDecision(context) {
         message:
           "SMOKE_CORE_OWNER_NOTIFICATION: I am starting the delegated Scout work and will continue this assignment.",
       });
-    const result = deliveredAgentResult(
-      messages,
-      "delegate_agent",
-      "smoke-core-scout",
-    );
+    const result = deliveredAgentResult(messages, "delegate_agent", "smoke-core-scout");
     if (result) {
       const ref = semanticResultRef(result);
       if (!ref || !/^result:smoke-core-scout#\d+$/u.test(ref))
-        throw new Error(
-          "Scout completion omitted its semantic result reference",
-        );
+        throw new Error("Scout completion omitted its semantic result reference");
       const selection = correlatedCall(messages, "attach_handoff");
       if (selection) {
-        if (
-          JSON.stringify(selection.call.arguments?.files) !==
-          JSON.stringify([ref])
-        )
-          throw new Error(
-            "Implementer selected evidence other than the Scout result",
-          );
+        if (JSON.stringify(selection.call.arguments?.files) !== JSON.stringify([ref]))
+          throw new Error("Implementer selected evidence other than the Scout result");
         return fauxAssistantMessage(JSON.stringify(packageDetails(result)));
       }
       return call("attach_handoff", { files: [ref] });
@@ -458,9 +386,7 @@ function coreDecision(context) {
       /<file name="(result:smoke-core-scout#\d+)"[^>]*>\s*([\s\S]*?)\s*<\/file>/u,
     );
     if (!expectedRef || !attached || attached[1] !== expectedRef)
-      throw new Error(
-        "Next Agent did not receive the selected Scout result artifact",
-      );
+      throw new Error("Next Agent did not receive the selected Scout result artifact");
     return fauxAssistantMessage(JSON.stringify(packageDetails(attached[2])));
   }
   throw new Error("Unexpected core transcript");
@@ -478,9 +404,7 @@ function deepChainDecision(context) {
   const levels = messages
     .filter((message) => message.role === "user")
     .flatMap((message) =>
-      [...text(message).matchAll(/SMOKE_DEEP_LEVEL_(\d)/gu)].map((match) =>
-        Number(match[1]),
-      ),
+      [...text(message).matchAll(/SMOKE_DEEP_LEVEL_(\d)/gu)].map((match) => Number(match[1])),
     );
   const level = levels.length ? Math.max(...levels) : 0;
   if (level === 0 && !rootAgentPrompt(messages, "SMOKE_DEEP_ROOT"))
@@ -492,8 +416,7 @@ function deepChainDecision(context) {
     if (!correlatedCall(messages, "await_owner"))
       return call("await_owner", { question: "SMOKE_DEEP_QUESTION" });
     const answered = messages.some(
-      (message) =>
-        message.role === "user" && text(message).includes("SMOKE_DEEP_ANSWER"),
+      (message) => message.role === "user" && text(message).includes("SMOKE_DEEP_ANSWER"),
     );
     if (!answered) return waitForResult("Waiting for the owner's reply.");
     return fauxAssistantMessage(`L${level}:SMOKE_DEEP_LEAF`);
@@ -507,14 +430,11 @@ function deepChainDecision(context) {
     const bubbled = result.match(new RegExp(`L${next}:\\S+`, "u"))?.[0];
     if (!bubbled) throw new Error(`${label} result omitted its bubbled marker`);
     return fauxAssistantMessage(
-      level === 0
-        ? `PI_HERDSMAN_DEEP_CHAIN_OK ${bubbled}`
-        : `L${level}:${bubbled}`,
+      level === 0 ? `PI_HERDSMAN_DEEP_CHAIN_OK ${bubbled}` : `L${level}:${bubbled}`,
     );
   }
   const asked = messages.some(
-    (message) =>
-      message.role === "user" && text(message).includes("SMOKE_DEEP_QUESTION"),
+    (message) => message.role === "user" && text(message).includes("SMOKE_DEEP_QUESTION"),
   );
   if (level === DEEP_CHAIN_DEPTH - 1 && asked) {
     if (!correlatedCall(messages, "reply_agent", label))
@@ -566,16 +486,13 @@ function continuationDecision(messages) {
         task: "SMOKE_CONTINUATION_SECOND: use the exact package name from your previous successful package.json read; do not reread package.json; return the name followed by PI_HERDSMAN_CONTINUATION_SECOND.",
       });
     if (continued.call.arguments?.session !== followup[1])
-      throw new Error(
-        "resume_agent did not target the exact saved session path",
-      );
+      throw new Error("resume_agent did not target the exact saved session path");
     const result = deliveredResult(
       messages,
       "resume_agent",
       (content) =>
-        content.startsWith(
-          "Agent result · agent=smoke-continuation-implementer ·",
-        ) && content.includes("status=completed"),
+        content.startsWith("Agent result · agent=smoke-continuation-implementer ·") &&
+        content.includes("status=completed"),
     );
     if (result) {
       const body = completedResultBody(result);
@@ -583,47 +500,24 @@ function continuationDecision(messages) {
         !body.endsWith("PI_HERDSMAN_CONTINUATION_SECOND") ||
         body === "PI_HERDSMAN_CONTINUATION_SECOND"
       )
-        throw new Error(
-          "Second continuation result omitted its completion marker",
-        );
-      return resultAlreadyAcknowledged(
-        messages,
-        result,
-        "PI_HERDSMAN_CONTINUATION_SECOND",
-      )
+        throw new Error("Second continuation result omitted its completion marker");
+      return resultAlreadyAcknowledged(messages, result, "PI_HERDSMAN_CONTINUATION_SECOND")
         ? waitForResult("Continued Agent result already delivered.")
         : fauxAssistantMessage(body);
     }
     if (latest?.role === "toolResult")
-      return waitForResult(
-        "Waiting for the continued Agent's completed handoff.",
-      );
-    return waitForResult(
-      "Waiting for the continued Agent's completed handoff.",
-    );
+      return waitForResult("Waiting for the continued Agent's completed handoff.");
+    return waitForResult("Waiting for the continued Agent's completed handoff.");
   }
 
-  if (
-    rootAgentPrompt(
-      messages,
-      "Delegate exactly one bounded task to an implementer:",
-    )
-  ) {
+  if (rootAgentPrompt(messages, "Delegate exactly one bounded task to an implementer:")) {
     const result = deliveredResult(messages, "delegate_agent", (content) =>
-      content.startsWith(
-        "Agent result · agent=smoke-continuation-implementer ·",
-      ),
+      content.startsWith("Agent result · agent=smoke-continuation-implementer ·"),
     );
     if (result) {
       if (!text(result).includes("CONTINUATION_FIRST_DONE"))
-        throw new Error(
-          "First continuation result omitted its completion marker",
-        );
-      return resultAlreadyAcknowledged(
-        messages,
-        result,
-        "PI_HERDSMAN_CONTINUATION_FIRST",
-      )
+        throw new Error("First continuation result omitted its completion marker");
+      return resultAlreadyAcknowledged(messages, result, "PI_HERDSMAN_CONTINUATION_FIRST")
         ? waitForResult("First continuation Agent result already delivered.")
         : fauxAssistantMessage("PI_HERDSMAN_CONTINUATION_FIRST");
     }
@@ -645,8 +539,7 @@ function continuationDecision(messages) {
   }
   if (prompt.includes("SMOKE_CONTINUATION_SECOND:")) {
     const ref = prompt.match(/(evidence:[^\s]+) — work-assignment\.md/u)?.[1];
-    if (!ref)
-      throw new Error("Continued task omitted prior work assignment reference");
+    if (!ref) throw new Error("Continued task omitted prior work assignment reference");
     const prior = correlatedCall(messages, "read_evidence");
     if (!prior) return call("read_evidence", { ref });
     if (
@@ -654,12 +547,9 @@ function continuationDecision(messages) {
       prior.result.isError ||
       !text(prior.result).includes("SMOKE_CONTINUATION_FIRST:")
     )
-      throw new Error(
-        "Continued task could not read its prior work assignment",
-      );
+      throw new Error("Continued task could not read its prior work assignment");
     const pkg = packageRead(messages);
-    if (!pkg)
-      throw new Error("Resumed transcript has no successful package.json read");
+    if (!pkg) throw new Error("Resumed transcript has no successful package.json read");
     return fauxAssistantMessage(`${pkg.name} PI_HERDSMAN_CONTINUATION_SECOND`);
   }
   throw new Error("Unexpected continuation transcript");
@@ -669,9 +559,7 @@ function resultAlreadyAcknowledged(messages, result, marker) {
   return messages
     .slice(messages.indexOf(result) + 1)
     .some(
-      (message) =>
-        message.role === "assistant" &&
-        text(message).split(/\s+/u).includes(marker),
+      (message) => message.role === "assistant" && text(message).split(/\s+/u).includes(marker),
     );
 }
 
@@ -682,8 +570,7 @@ function agentCrashRecoveryDecision(model, context) {
   if (model === "agent-crash-root") {
     const initial = messages.some(
       (message) =>
-        message.role === "user" &&
-        text(message).includes("PI_HERDSMAN_CRASH_RECOVERY_INITIAL"),
+        message.role === "user" && text(message).includes("PI_HERDSMAN_CRASH_RECOVERY_INITIAL"),
     );
     const postRestart = messages.find(
       (message) =>
@@ -703,32 +590,20 @@ function agentCrashRecoveryDecision(model, context) {
           label: "smoke-crash-parent",
           task: "SMOKE_CRASH_PARENT: delegate one child that asks its owner a question, then wait for that child.",
         });
-      return fauxAssistantMessage(
-        "PI_HERDSMAN_CRASH_RECOVERY_ASSIGNMENTS_ACCEPTED",
-      );
+      return fauxAssistantMessage("PI_HERDSMAN_CRASH_RECOVERY_ASSIGNMENTS_ACCEPTED");
     }
     if (postRestart) {
-      const list = correlatedCall(
-        messages.slice(messages.indexOf(postRestart)),
-        "list_agents",
-      );
+      const list = correlatedCall(messages.slice(messages.indexOf(postRestart)), "list_agents");
       if (!list) return call("list_agents", {});
       const parent = list.result?.details?.agents?.find(
-        (agent) =>
-          (agent.label ?? agent.agent_label ?? agent.agent) ===
-          "smoke-crash-parent",
+        (agent) => (agent.label ?? agent.agent_label ?? agent.agent) === "smoke-crash-parent",
       );
       const target = list.result?.details?.agents?.find(
-        (agent) =>
-          (agent.label ?? agent.agent_label ?? agent.agent) ===
-          "smoke-crash-target",
+        (agent) => (agent.label ?? agent.agent_label ?? agent.agent) === "smoke-crash-target",
       );
       if (parent?.available_tools?.includes("steer_agent")) {
         const steerCall = messages
-          .filter(
-            (message) =>
-              message.role === "assistant" && Array.isArray(message.content),
-          )
+          .filter((message) => message.role === "assistant" && Array.isArray(message.content))
           .flatMap((message) => message.content)
           .find(
             (part) =>
@@ -747,31 +622,23 @@ function agentCrashRecoveryDecision(model, context) {
             message.toolName === "steer_agent" &&
             message.toolCallId === steerCall.id,
         );
-        if (!steerResult)
-          return waitForResult("Waiting for steer acknowledgement outcome.");
+        if (!steerResult) return waitForResult("Waiting for steer acknowledgement outcome.");
         if (
           steerResult.details?.ok !== false ||
           steerResult.details?.error?.category !== "agent_busy"
         )
           throw new Error("Receiverless parent steering was not rejected");
       }
-      const closed = correlatedCall(
-        messages,
-        "stop_agent",
-        "smoke-crash-target",
-      );
+      const closed = correlatedCall(messages, "stop_agent", "smoke-crash-target");
       const settledPrompt = messages.find(
         (message) =>
           message.role === "user" &&
-          text(message).startsWith(
-            "PI_HERDSMAN_CRASH_RECOVERY_SETTLED_CONTINUE ",
-          ),
+          text(message).startsWith("PI_HERDSMAN_CRASH_RECOVERY_SETTLED_CONTINUE "),
       );
       const stopAuthorization = messages.find(
         (message) =>
           message.role === "user" &&
-          text(message) ===
-            `PI_HERDSMAN_CRASH_RECOVERY_STOP_EXACT ${target?.pi_session_path}`,
+          text(message) === `PI_HERDSMAN_CRASH_RECOVERY_STOP_EXACT ${target?.pi_session_path}`,
       );
       if (!closed && !settledPrompt && stopAuthorization) {
         if (!target?.available_tools?.includes("stop_agent"))
@@ -779,23 +646,17 @@ function agentCrashRecoveryDecision(model, context) {
         return call("stop_agent", { agent: "smoke-crash-target" });
       }
       if (!closed && !settledPrompt)
-        return waitForResult(
-          "Waiting for the harness to authorize exact-target recovery.",
-        );
+        return waitForResult("Waiting for the harness to authorize exact-target recovery.");
       const continuePrompt = messages.find(
         (message) =>
-          message.role === "user" &&
-          text(message).includes("PI_HERDSMAN_CRASH_RECOVERY_CONTINUE"),
+          message.role === "user" && text(message).includes("PI_HERDSMAN_CRASH_RECOVERY_CONTINUE"),
       );
       if (!settledPrompt && !continuePrompt)
         return fauxAssistantMessage("PI_HERDSMAN_CRASH_RECOVERY_CLOSED");
       const session = settledPrompt
-        ? text(settledPrompt).slice(
-            "PI_HERDSMAN_CRASH_RECOVERY_SETTLED_CONTINUE ".length,
-          )
+        ? text(settledPrompt).slice("PI_HERDSMAN_CRASH_RECOVERY_SETTLED_CONTINUE ".length)
         : closed.result?.details?.closed_assignment?.session_path;
-      if (!session)
-        throw new Error("Crash recovery omitted exact target session path");
+      if (!session) throw new Error("Crash recovery omitted exact target session path");
       const continued = correlatedCall(messages, "resume_agent");
       if (!continued)
         return call("resume_agent", {
@@ -806,9 +667,7 @@ function agentCrashRecoveryDecision(model, context) {
         messages,
         "resume_agent",
         (content) =>
-          content.startsWith(
-            "Agent result · agent=smoke-crash-target · definition=",
-          ) &&
+          content.startsWith("Agent result · agent=smoke-crash-target · definition=") &&
           content.includes("status=completed") &&
           content.includes("PI_HERDSMAN_CRASH_RECOVERY_CONTINUED"),
       );
@@ -826,11 +685,7 @@ function agentCrashRecoveryDecision(model, context) {
     );
   }
   if (model === "agent-crash-parent") {
-    const delegated = correlatedCall(
-      messages,
-      "delegate_agent",
-      "smoke-crash-child",
-    );
+    const delegated = correlatedCall(messages, "delegate_agent", "smoke-crash-child");
     if (!delegated)
       return call("delegate_agent", {
         definition: "scout",
@@ -844,8 +699,7 @@ function agentCrashRecoveryDecision(model, context) {
     if (!asked) return call("await_owner", { question: "CRASH_CHILD_WAITING" });
     return waitForResult("Child remains blocked on its owner.");
   }
-  if (latest?.role === "toolResult")
-    throw new Error(`Unexpected recovery result for ${model}`);
+  if (latest?.role === "toolResult") throw new Error(`Unexpected recovery result for ${model}`);
   throw new Error(`Unexpected recovery model: ${model}`);
 }
 
@@ -906,10 +760,7 @@ export function decide(model, context) {
     }
     const marker = prompt.match(/MANAGER_HANDOFF_PENDING_[0-9a-f-]+/)?.[0];
     if (!marker) throw new Error("Unexpected manager-handoff-lead transcript");
-    if (
-      correlatedCall(messages, "message_manager")?.call.arguments?.message ===
-      marker
-    )
+    if (correlatedCall(messages, "message_manager")?.call.arguments?.message === marker)
       return fauxAssistantMessage("MANAGER_HANDOFF_SENT");
     if (!managerHandoffSupervisorToolAvailable(messages))
       throw new Error(MANAGER_HANDOFF_SUPERVISOR_TOOL_NOT_OFFERED);
@@ -921,8 +772,7 @@ export function decide(model, context) {
     const bash = correlatedCall(messages, "bash");
     if (!bash) return call("bash", { command, timeout: 30000 });
     const result = bash.result;
-    if (!result || result.isError)
-      throw new Error("Manager merge Lead Git command failed");
+    if (!result || result.isError) throw new Error("Manager merge Lead Git command failed");
     const sha = text(result)
       .match(/\b[0-9a-f]{40,64}\b/gi)
       ?.at(-1);
@@ -941,32 +791,25 @@ export function decide(model, context) {
         task: "Create and commit one source file using bash, then finish your assignment with a final response containing MANAGER_MERGE_SOURCE_READY and the exact full HEAD, plus validation evidence. Do not send an interim supervisor message.",
       });
     }
-    if (!assignment)
-      throw new Error("Manager merge decision lacks its assigned Lead");
+    if (!assignment) throw new Error("Manager merge decision lacks its assigned Lead");
     const attempt = prompt.match(/MANAGER_MERGE_ATTEMPT ([0-9a-f]{40,64})/i);
     if (attempt) {
       const previous = correlatedCall(messages, "integrate_branch");
       if (previous?.call.arguments?.expected_head === attempt[1])
-        return waitForResult(
-          "Waiting for the next explicit Manager merge scenario step.",
-        );
+        return waitForResult("Waiting for the next explicit Manager merge scenario step.");
       return call("integrate_branch", {
         branch: assignment.call.arguments.branch,
         expected_head: attempt[1],
       });
     }
-    return waitForResult(
-      "Waiting for the next explicit Manager merge scenario step.",
-    );
+    return waitForResult("Waiting for the next explicit Manager merge scenario step.");
   }
   if (model === "manager-handoff") {
     const assignment = correlatedCall(messages, "delegate_work");
     if (!assignment && prompt.includes("Use delegate_work exactly once")) {
       const branch = prompt.match(/branch ([^\s]+) and task exactly/)?.[1];
       const task = prompt.match(/task exactly ("(?:[^"\\]|\\.)*")/)?.[1];
-      const definition = prompt.match(
-        /Set definition to exactly ([a-z0-9-]+)\./,
-      )?.[1];
+      const definition = prompt.match(/Set definition to exactly ([a-z0-9-]+)\./)?.[1];
       if (!branch || !task || !definition)
         throw new Error("Missing Manager handoff assignment details");
       return call("delegate_work", {
@@ -977,12 +820,8 @@ export function decide(model, context) {
     }
     if (!assignment) throw new Error("Unexpected manager-handoff transcript");
     const branch = assignment.call.arguments?.branch;
-    if (
-      prompt === "MANAGER_HANDOFF_STOP" ||
-      prompt === "MANAGER_HANDOFF_RESUME"
-    ) {
-      if (!branch)
-        throw new Error("Manager handoff assignment omitted its branch");
+    if (prompt === "MANAGER_HANDOFF_STOP" || prompt === "MANAGER_HANDOFF_RESUME") {
+      if (!branch) throw new Error("Manager handoff assignment omitted its branch");
       const stopping = prompt === "MANAGER_HANDOFF_STOP";
       const tool = stopping ? "stop_lead" : "resume_work";
       if (correlatedCall(currentTurn(messages), tool))
@@ -991,13 +830,10 @@ export function decide(model, context) {
         ? call(tool, { branch })
         : call(tool, {
             branch,
-            message:
-              "MANAGER_HANDOFF_RESUME_INSTRUCTION: End the turn without calling tools.",
+            message: "MANAGER_HANDOFF_RESUME_INSTRUCTION: End the turn without calling tools.",
           });
     }
-    const leadSessionId = text(assignment.result).match(
-      /^Session: ([^\n]+)$/m,
-    )?.[1];
+    const leadSessionId = text(assignment.result).match(/^Session: ([^\n]+)$/m)?.[1];
     if (!branch || !leadSessionId)
       throw new Error("Manager handoff assignment omitted exact identity");
     if (
@@ -1012,9 +848,7 @@ export function decide(model, context) {
       )
     )
       return fauxAssistantMessage("MANAGER_HANDOFF_READY_RECEIVED");
-    return waitForResult(
-      "Waiting for the exact assigned Lead readiness message.",
-    );
+    return waitForResult("Waiting for the exact assigned Lead readiness message.");
   }
   if (model === "federated-peer-a") {
     const managedSession = prompt.match(
@@ -1027,9 +861,7 @@ export function decide(model, context) {
         throw new Error("managed Lead appeared in ordinary peer listing");
       const rejected = messages.find(
         (message) =>
-          message.role === "toolResult" &&
-          message.toolName === "message_peer" &&
-          message.isError,
+          message.role === "toolResult" && message.toolName === "message_peer" && message.isError,
       );
       if (rejected) return fauxAssistantMessage("PEER_E2E_A_MANAGED_REJECTED");
       if (successfulCallCount(messages, "message_peer"))
@@ -1059,8 +891,7 @@ export function decide(model, context) {
       const peer = peers.peers?.find((candidate) => candidate.machine);
       if (!peer) throw new Error("ordinary Lead send found no remote Lead");
       const semantic = prompt.match(/\bresult:[A-Za-z0-9_-]+#\d+\b/u)?.[0];
-      if (!semantic)
-        throw new Error("ordinary Lead request omitted its result reference");
+      if (!semantic) throw new Error("ordinary Lead request omitted its result reference");
       if (successfulCallCount(turn, "message_peer") === 0)
         return call("message_peer", {
           target: peer.target,
@@ -1081,8 +912,7 @@ export function decide(model, context) {
     if (
       messages.some(
         (message) =>
-          (message.role === "user" &&
-            text(message).includes("PEER_E2E_SINGLE_REPLY")) ||
+          (message.role === "user" && text(message).includes("PEER_E2E_SINGLE_REPLY")) ||
           (message.type === "custom_message" &&
             message.customType === "pi-herdsman-peer_message" &&
             text(message).includes("PEER_E2E_SINGLE_REPLY")),
@@ -1093,8 +923,7 @@ export function decide(model, context) {
       const listed = correlatedCall(messages, "list_peers");
       if (!listed) return call("list_peers", {});
       const peers = JSON.parse(text(listed.result));
-      const expectedRole =
-        prompt.match(/\brole=(lead|manager)\b/u)?.[1] ?? "manager";
+      const expectedRole = prompt.match(/\brole=(lead|manager)\b/u)?.[1] ?? "manager";
       const expectedTarget = prompt.match(
         /\bexpectedTarget=((?:lead|manager):[0-9a-hjkmnp-tv-z]{10})\b/u,
       )?.[1];
@@ -1104,10 +933,7 @@ export function decide(model, context) {
           candidate.target?.startsWith(`${expectedRole}:`) &&
           (!expectedTarget || candidate.target === expectedTarget),
       );
-      if (!peer)
-        throw new Error(
-          `single-message fixture found no remote ${expectedRole}`,
-        );
+      if (!peer) throw new Error(`single-message fixture found no remote ${expectedRole}`);
       if (successfulCallCount(messages, "message_peer") === 0)
         return call("message_peer", {
           target: peer.target,
@@ -1137,12 +963,10 @@ export function decide(model, context) {
       const peer = peers.peers?.find((candidate) => candidate.machine);
       if (!peer) throw new Error("federation smoke found no remote Manager");
       const semantic = prompt.match(/\bresult:[A-Za-z0-9_-]+#\d+\b/)?.[0];
-      if (!semantic)
-        throw new Error("federation smoke omitted semantic result evidence");
+      if (!semantic) throw new Error("federation smoke omitted semantic result evidence");
       return call("message_peer", {
         target: peer.target,
-        message:
-          "PEER_E2E_REQUEST: delegate the attached Manager spec and report the result.",
+        message: "PEER_E2E_REQUEST: delegate the attached Manager spec and report the result.",
         files: ["manager-spec.md", semantic],
       });
     }
@@ -1164,18 +988,13 @@ export function decide(model, context) {
       )
     ) {
       const forwarding = messages.some(
-        (message) =>
-          message.role === "user" &&
-          text(message).includes("PEER_E2E_A_FORWARD_REPLY"),
+        (message) => message.role === "user" && text(message).includes("PEER_E2E_A_FORWARD_REPLY"),
       );
       if (forwarding) {
         const forwarded = messages.some(
-          (message) =>
-            message.role === "user" &&
-            text(message).includes("PEER_E2E_A_FORWARDED"),
+          (message) => message.role === "user" && text(message).includes("PEER_E2E_A_FORWARDED"),
         );
-        if (forwarded)
-          return fauxAssistantMessage("PEER_E2E_A_REPLY_FORWARDED");
+        if (forwarded) return fauxAssistantMessage("PEER_E2E_A_REPLY_FORWARDED");
         const reply = [...messages]
           .reverse()
           .find(
@@ -1184,8 +1003,7 @@ export function decide(model, context) {
               text(message).includes("PEER_E2E_REPLY_FINAL"),
           );
         const files = forwardableRefs(reply);
-        if (files.length < 2)
-          throw new Error("reply evidence was not forwardable through files");
+        if (files.length < 2) throw new Error("reply evidence was not forwardable through files");
         const assignment = correlatedCall(messages, "delegate_work");
         if (!assignment)
           return call("delegate_work", {
@@ -1247,23 +1065,18 @@ export function decide(model, context) {
           branch: "herdsman/peer-smoke-managed",
           task: "Confirm the assigned task is complete and report PEER_E2E_MANAGED_LEAD_COMPLETE.",
         });
-      if (assignment.result.isError)
-        throw new Error("managed Lead project assignment failed");
+      if (assignment.result.isError) throw new Error("managed Lead project assignment failed");
       return fauxAssistantMessage("PEER_E2E_B_MANAGED_ASSIGNED");
     }
     if (inboundRequestPresent) {
       const inbound = inboundMessage;
-      const semantic = text(inbound).match(
-        /\bresult:[A-Za-z0-9_-]+#\d+\b/u,
-      )?.[0];
+      const semantic = text(inbound).match(/\bresult:[A-Za-z0-9_-]+#\d+\b/u)?.[0];
       const refs = forwardableRefs(inbound);
       if (!semantic || !refs.some((ref) => /^result:[0-9a-f-]{36}$/u.test(ref)))
         throw new Error(
           "Lead recipient did not receive usable result-reference and artifact-content evidence",
         );
-      const canonicalRef = refs.find((ref) =>
-        /^result:[0-9a-f-]{36}$/u.test(ref),
-      );
+      const canonicalRef = refs.find((ref) => /^result:[0-9a-f-]{36}$/u.test(ref));
       const imported =
         context.peerImportedBindingVisible === true ||
         messages.some(
@@ -1307,15 +1120,9 @@ export function decide(model, context) {
         );
       const artifact = text(artifactRead.result);
       if (!artifact.includes("PEER_E2E_PORTABLE_RESULT_CONTENT_V1"))
-        throw new Error(
-          "Imported canonical result artifact omitted expected portable content",
-        );
-      const artifactSha256 = createHash("sha256")
-        .update(artifact)
-        .digest("hex");
-      const origin = text(inbound).match(
-        /Peer message from (lead:[0-9a-hjkmnp-tv-z]{10}):/u,
-      )?.[1];
+        throw new Error("Imported canonical result artifact omitted expected portable content");
+      const artifactSha256 = createHash("sha256").update(artifact).digest("hex");
+      const origin = text(inbound).match(/Peer message from (lead:[0-9a-hjkmnp-tv-z]{10}):/u)?.[1];
       if (!origin) throw new Error("Lead request omitted origin target");
       if (successfulCallCount(messages, "message_peer") === 0) {
         logFederatedPeerBDecision({
@@ -1371,27 +1178,18 @@ export function decide(model, context) {
         (message.role === "user" || message.type === "custom_message") &&
         text(message).includes("PEER_E2E_REQUEST"),
     );
-    const inbound =
-      inbounds.find((message) => forwardableRefs(message).length >= 2) ??
-      inbounds[0];
-    const origin = text(inbound).match(
-      /Peer message from (manager:[0-9a-hjkmnp-tv-z]{10}):/u,
-    )?.[1];
+    const inbound = inbounds.find((message) => forwardableRefs(message).length >= 2) ?? inbounds[0];
+    const origin = text(inbound).match(/Peer message from (manager:[0-9a-hjkmnp-tv-z]{10}):/u)?.[1];
     if (inbound && !origin)
       throw new Error("federation smoke could not identify the origin target");
     const semantic = text(inbound).match(/\bresult:[A-Za-z0-9_-]+#\d+\b/)?.[0];
     if (inbounds.length < 2)
-      return waitForResult(
-        "Waiting for both requests on the Manager pair route.",
-      );
+      return waitForResult("Waiting for both requests on the Manager pair route.");
     const branch = `herdsman/federation-smoke-${origin.slice(8, 16)}`;
     const assignment = correlatedCall(messages, "delegate_work", branch);
     if (!assignment) {
       const refs = forwardableRefs(inbound);
-      if (refs.length < 2)
-        throw new Error(
-          "federation smoke did not receive forwardable evidence",
-        );
+      if (refs.length < 2) throw new Error("federation smoke did not receive forwardable evidence");
       return call("delegate_work", {
         branch,
         task: "PEER_E2E_LOCAL_TASK: read the forwarded spec and canonical result artifacts, then message_manager with PEER_E2E_LOCAL_RESULT.",
@@ -1416,8 +1214,7 @@ export function decide(model, context) {
         })
       : call("message_peer", {
           target: origin,
-          message:
-            "PEER_E2E_REPLY_FINAL: local delegation inspected the forwarded evidence.",
+          message: "PEER_E2E_REPLY_FINAL: local delegation inspected the forwarded evidence.",
           files: ["reply.txt", semantic],
         });
   }
@@ -1427,13 +1224,11 @@ export function decide(model, context) {
       return fauxAssistantMessage("PEER_E2E_MANAGED_LEAD_COMPLETE");
     const isBTask = promptMessage.includes("PEER_E2E_LOCAL_TASK");
     const isATask = promptMessage.includes("PEER_E2E_A_FORWARD_TASK");
-    if (!isBTask && !isATask)
-      throw new Error("Unexpected federation Lead task");
-    const paths = [
-      ...promptMessage.matchAll(/<file name="([^"]+)" bytes="\d+">/gu),
-    ].map((match) => match[1]);
-    if (paths.length < 2)
-      throw new Error("federation Lead did not receive both evidence refs");
+    if (!isBTask && !isATask) throw new Error("Unexpected federation Lead task");
+    const paths = [...promptMessage.matchAll(/<file name="([^"]+)" bytes="\d+">/gu)].map(
+      (match) => match[1],
+    );
+    if (paths.length < 2) throw new Error("federation Lead did not receive both evidence refs");
     const successfulReads = messages
       .filter((message) => message.role === "assistant")
       .flatMap((message) => message.content ?? [])
@@ -1453,11 +1248,8 @@ export function decide(model, context) {
       const path = paths[successfulReads.length];
       return call("read", { path });
     }
-    const resultMarker = isBTask
-      ? "PEER_E2E_LOCAL_RESULT"
-      : "PEER_E2E_A_FORWARDED";
-    if (correlatedCall(messages, "message_manager"))
-      return fauxAssistantMessage(resultMarker);
+    const resultMarker = isBTask ? "PEER_E2E_LOCAL_RESULT" : "PEER_E2E_A_FORWARDED";
+    if (correlatedCall(messages, "message_manager")) return fauxAssistantMessage(resultMarker);
     return call("message_manager", {
       message: `${resultMarker}: inspected forwarded files and result evidence.`,
     });
@@ -1477,9 +1269,7 @@ export function decide(model, context) {
       });
     return assignment.result && !assignment.result.isError
       ? fauxAssistantMessage("PEER_E2E_SOURCE_RESULT_COMPLETE")
-      : waitForResult(
-          "Waiting for the exact researcher terminal result handoff.",
-        );
+      : waitForResult("Waiting for the exact researcher terminal result handoff.");
   }
   if (model === "agent-terminal-failure") {
     const matched = correlatedCall(messages, "delegate_agent");
@@ -1487,8 +1277,7 @@ export function decide(model, context) {
       const details = text(matched.result);
       const sessionId = details.match(/^Session: ([^\n]+)$/m)?.[1];
       const requestId = details.match(/^Request: ([^\n]+)$/m)?.[1];
-      if (!sessionId || !requestId)
-        throw new Error("Agent delegation omitted identity");
+      if (!sessionId || !requestId) throw new Error("Agent delegation omitted identity");
       const handoff = messages.find(
         (message, index) =>
           index > matched.resultIndex &&
@@ -1506,8 +1295,7 @@ export function decide(model, context) {
         (message) =>
           message.role === "assistant" &&
           message.content?.some(
-            (part) =>
-              part.type === "toolCall" && part.name === "delegate_agent",
+            (part) => part.type === "toolCall" && part.name === "delegate_agent",
           ),
       )
     )
@@ -1521,9 +1309,7 @@ export function decide(model, context) {
   if (model === "chief-manager") {
     if (prompt === "Reply exactly with CHIEF_MANAGER_SMOKE_STARTUP.") {
       if (
-        !getCurrentSystemPrompt(messages).includes(
-          "You are an ordinary Lead for this Pi session.",
-        )
+        !getCurrentSystemPrompt(messages).includes("You are an ordinary Lead for this Pi session.")
       )
         throw new Error("Chief Manager startup lacked ordinary Lead context");
       return fauxAssistantMessage("CHIEF_MANAGER_SMOKE_STARTUP");
@@ -1533,9 +1319,7 @@ export function decide(model, context) {
     );
     if (request) {
       if (
-        !getCurrentSystemPrompt(messages).includes(
-          "You are the verified workspace-neutral Chief",
-        )
+        !getCurrentSystemPrompt(messages).includes("You are the verified workspace-neutral Chief")
       )
         throw new Error("Project tool prompt lacked verified Chief context");
       const [, tool, args] = request;
@@ -1547,9 +1331,7 @@ export function decide(model, context) {
         ? fauxAssistantMessage("CHIEF_MANAGER_SMOKE_SETTLED")
         : call(tool, JSON.parse(args));
     }
-    const delegation = prompt.match(
-      /^CHIEF_MANAGER_SMOKE delegate (chief|first|second)$/u,
-    );
+    const delegation = prompt.match(/^CHIEF_MANAGER_SMOKE delegate (chief|first|second)$/u);
     if (delegation) {
       const [, owner] = delegation;
       const nested = owner === "first";
@@ -1584,10 +1366,7 @@ export function decide(model, context) {
           });
     const assignment = prompt.match(/^CHIEF_MANAGER_SMOKE assign (\S+)$/u);
     if (assignment) {
-      const result = successfulCallCount(
-        currentTurn(messages),
-        "delegate_work",
-      );
+      const result = successfulCallCount(currentTurn(messages), "delegate_work");
       return result
         ? fauxAssistantMessage("CHIEF_MANAGER_SMOKE_ASSIGNED")
         : call("delegate_work", {
@@ -1603,9 +1382,7 @@ export function decide(model, context) {
           "You are the verified Manager for this Pi session.",
         )
       )
-        throw new Error(
-          "Manager verification prompt lacked verified Manager context",
-        );
+        throw new Error("Manager verification prompt lacked verified Manager context");
       return fauxAssistantMessage("CHIEF_MANAGER_SMOKE_VERIFIED");
     }
     if (prompt === "CHIEF_MANAGER_SMOKE delegate") {
@@ -1671,30 +1448,24 @@ export function decide(model, context) {
     throw new Error("Unexpected chief-manager request");
   }
   if (model === "chief-tree") {
-    const marker = prompt.match(
-      /PI_HERDSMAN_CHIEF_TREE_(?:STARTUP|POST_CHIEF|FOLLOWUP)/,
-    )?.[0];
+    const marker = prompt.match(/PI_HERDSMAN_CHIEF_TREE_(?:STARTUP|POST_CHIEF|FOLLOWUP)/)?.[0];
     if (!marker) throw new Error("Unexpected chief-tree request");
     return fauxAssistantMessage(marker);
   }
   if (model === "supervisor-agent") {
     const latest = messages.at(-1);
     const task = messages.find(
-      (message) =>
-        message.role === "user" &&
-        text(message).includes("SMOKE_SUPERVISOR_AGENT_TASK"),
+      (message) => message.role === "user" && text(message).includes("SMOKE_SUPERVISOR_AGENT_TASK"),
     );
     if (task) return fauxAssistantMessage("SMOKE_SUPERVISOR_AGENT_COMPLETED");
     if (
       messages.some(
         (message) =>
-          message.role === "user" &&
-          text(message).includes("SMOKE_SUPERVISOR_AGENT_DELEGATE"),
+          message.role === "user" && text(message).includes("SMOKE_SUPERVISOR_AGENT_DELEGATE"),
       )
     ) {
       const result = supervisorAgentResult(messages);
-      if (result)
-        return fauxAssistantMessage("PI_HERDSMAN_SUPERVISOR_AGENT_DELIVERED");
+      if (result) return fauxAssistantMessage("PI_HERDSMAN_SUPERVISOR_AGENT_DELIVERED");
       if (correlatedCall(messages, "delegate_agent"))
         return waitForResult("Waiting for the completed Agent result.");
       return call("delegate_agent", {
@@ -1706,14 +1477,11 @@ export function decide(model, context) {
     if (
       messages.some(
         (message) =>
-          message.role === "user" &&
-          text(message).includes("PI_HERDSMAN_SUPERVISOR_AGENT_STARTUP"),
+          message.role === "user" && text(message).includes("PI_HERDSMAN_SUPERVISOR_AGENT_STARTUP"),
       )
     )
       return fauxAssistantMessage("PI_HERDSMAN_SUPERVISOR_AGENT_STARTUP");
-    throw new Error(
-      `Unexpected supervisor-agent transcript (${latest?.role ?? "empty"})`,
-    );
+    throw new Error(`Unexpected supervisor-agent transcript (${latest?.role ?? "empty"})`);
   }
   if (model === "core") return coreDecision(context);
   if (model === "continuation") return continuationDecision(messages);
@@ -1726,27 +1494,19 @@ export function decide(model, context) {
 
   if (model === "terminal-failure") {
     const latest = messages.at(-1);
-    if (
-      latest?.role === "user" &&
-      prompt.includes("Use delegate_work exactly once")
-    ) {
+    if (latest?.role === "user" && prompt.includes("Use delegate_work exactly once")) {
       const branch = prompt.match(/branch to exactly ([^,\s]+)/)?.[1];
       const task = prompt.match(/task to exactly ("(?:[^"\\]|\\.)*")/)?.[1];
-      if (!branch || !task)
-        throw new Error("Missing exact terminal-failure branch or task");
+      if (!branch || !task) throw new Error("Missing exact terminal-failure branch or task");
       return call("delegate_work", { branch, task: JSON.parse(task) });
     }
     if (latest?.role === "toolResult") {
       successfulResult(messages, "delegate_work");
-      return fauxAssistantMessage(
-        "Assigned Lead started; waiting for its report.",
-      );
+      return fauxAssistantMessage("Assigned Lead started; waiting for its report.");
     }
     if (
       latest?.role === "user" &&
-      /Lead model execution failed|Lead execution settled without verified completion/i.test(
-        prompt,
-      )
+      /Lead model execution failed|Lead execution settled without verified completion/i.test(prompt)
     )
       return fauxAssistantMessage("Lead failure report received.");
   }
@@ -1785,10 +1545,7 @@ export async function waitForSmokeObservation(directory, filename, signal) {
         }
       };
       timeout = setTimeout(
-        () =>
-          finish(
-            new Error(`Smoke live evidence was not acknowledged: ${filename}`),
-          ),
+        () => finish(new Error(`Smoke live evidence was not acknowledged: ${filename}`)),
         120_000,
       );
       abort = () => finish(signal.reason);
@@ -1804,11 +1561,7 @@ export async function waitForSmokeObservation(directory, filename, signal) {
 }
 
 export function waitForContinuationObservation(directory, signal) {
-  return waitForSmokeObservation(
-    directory,
-    "continuation-first-observed",
-    signal,
-  );
+  return waitForSmokeObservation(directory, "continuation-first-observed", signal);
 }
 
 export default function install(pi) {
@@ -1817,12 +1570,7 @@ export default function install(pi) {
   const logPeerCoreLifecycle = (event) => {
     if (process.env.PEER_FEDERATION_CORE_DIAGNOSTICS !== "1") return;
     appendFileSync(
-      join(
-        process.env.PI_CODING_AGENT_DIR,
-        "pi-herdsman",
-        "runtime",
-        "peer-core-lifecycle.jsonl",
-      ),
+      join(process.env.PI_CODING_AGENT_DIR, "pi-herdsman", "runtime", "peer-core-lifecycle.jsonl"),
       `${JSON.stringify({
         at: new Date().toISOString(),
         sessionId,
@@ -1837,10 +1585,7 @@ export default function install(pi) {
       logPeerCoreLifecycle({
         event: "before_agent_start",
         messageType: event.messageType,
-        customType:
-          event.messageType === "custom"
-            ? event.message?.customType
-            : undefined,
+        customType: event.messageType === "custom" ? event.message?.customType : undefined,
       });
     });
     pi.on("agent_settled", (event, context) => {
@@ -1853,8 +1598,7 @@ export default function install(pi) {
   }
   if (process.env.PEER_FEDERATION_DECISION_DIAGNOSTICS === "1") {
     pi.on("before_agent_start", (event, context) => {
-      const message =
-        event.messageType === "custom" ? event.message : undefined;
+      const message = event.messageType === "custom" ? event.message : undefined;
       const content = text(message);
       const inboundRequestPresent =
         message?.customType === "pi-herdsman-peer_message" &&
@@ -1893,8 +1637,7 @@ export default function install(pi) {
     const currentSessionId = sessionId;
     if (typeof currentSessionId !== "string" || !currentSessionId)
       throw new Error("Faux provider request has no Pi session identity");
-    const invocationSequence =
-      (invocationSequences.get(currentSessionId) ?? 0) + 1;
+    const invocationSequence = (invocationSequences.get(currentSessionId) ?? 0) + 1;
     invocationSequences.set(currentSessionId, invocationSequence);
     if (model.id === "manager-merge" || model.id === "manager-merge-lead") {
       const tools = getCurrentTools(context.messages).map((tool) => tool.name);
@@ -1932,18 +1675,14 @@ export default function install(pi) {
         piVersion: piPackage.version,
         model: model.id,
         hasAgentDefinitions: systemPrompt.includes("<agent_definitions>"),
-        hasLeadIdentity: systemPrompt.includes(
-          "You are an ordinary Lead for this Pi session.",
-        ),
+        hasLeadIdentity: systemPrompt.includes("You are an ordinary Lead for this Pi session."),
         hasManagedLeadIdentity: systemPrompt.includes(
           "You are a Managed Lead for this Pi session.",
         ),
         hasManagerIdentity: systemPrompt.includes(
           "You are the verified Manager for this Pi session.",
         ),
-        hasChiefIdentity: systemPrompt.includes(
-          "You are the verified workspace-neutral Chief",
-        ),
+        hasChiefIdentity: systemPrompt.includes("You are the verified workspace-neutral Chief"),
         hasRoleSection: systemPrompt.includes("<pi_herdsman_role>"),
       };
       if (
@@ -1951,48 +1690,29 @@ export default function install(pi) {
         provenance.hasLeadIdentity &&
         (provenance.hasManagerIdentity || provenance.hasChiefIdentity)
       )
-        throw new Error(
-          "Provider request contains contradictory role identities",
-        );
+        throw new Error("Provider request contains contradictory role identities");
       if (model.id === "core" && !process.env.PI_HERDSMAN_AGENT_DEFINITION) {
         if (!provenance.hasRoleSection || !provenance.hasLeadIdentity)
           throw new Error("Provider request omitted the Lead role contract");
         if (provenance.hasManagerIdentity || provenance.hasChiefIdentity)
-          throw new Error(
-            "Provider request contains a contradictory role identity",
-          );
+          throw new Error("Provider request contains a contradictory role identity");
       }
       const expectedRole =
-        model.id.startsWith("manager-") && !model.id.endsWith("-lead")
-          ? "manager"
-          : undefined;
+        model.id.startsWith("manager-") && !model.id.endsWith("-lead") ? "manager" : undefined;
       if (expectedRole) {
         if (!provenance.hasRoleSection)
-          throw new Error(
-            `Provider request omitted the ${expectedRole} role section`,
-          );
+          throw new Error(`Provider request omitted the ${expectedRole} role section`);
         const identity = {
           lead: provenance.hasLeadIdentity,
           manager: provenance.hasManagerIdentity,
           chief: provenance.hasChiefIdentity,
         };
         if (!identity[expectedRole])
-          throw new Error(
-            `Provider request omitted the ${expectedRole} role contract`,
-          );
-        if (
-          Object.entries(identity).some(
-            ([role, present]) => role !== expectedRole && present,
-          )
-        )
-          throw new Error(
-            `Provider request contains an identity other than ${expectedRole}`,
-          );
+          throw new Error(`Provider request omitted the ${expectedRole} role contract`);
+        if (Object.entries(identity).some(([role, present]) => role !== expectedRole && present))
+          throw new Error(`Provider request contains an identity other than ${expectedRole}`);
       }
-      if (
-        model.id === "manager-handoff-lead" ||
-        model.id === "manager-merge-lead"
-      ) {
+      if (model.id === "manager-handoff-lead" || model.id === "manager-merge-lead") {
         if (
           !provenance.hasRoleSection ||
           !provenance.hasManagedLeadIdentity ||
@@ -2004,11 +1724,7 @@ export default function install(pi) {
             "Provider request omitted or contradicted the Managed Lead role contract",
           );
       }
-      const evidenceDir = join(
-        process.env.PI_CODING_AGENT_DIR,
-        "pi-herdsman",
-        "runtime",
-      );
+      const evidenceDir = join(process.env.PI_CODING_AGENT_DIR, "pi-herdsman", "runtime");
       appendFileSync(
         join(evidenceDir, "smoke-faux-provenance.jsonl"),
         `${JSON.stringify(provenance)}\n`,
@@ -2026,39 +1742,21 @@ export default function install(pi) {
           : undefined;
       if (expectedRole) {
         const identity = {
-          lead: systemPrompt.includes(
-            "You are an ordinary Lead for this Pi session.",
-          ),
-          manager: systemPrompt.includes(
-            "You are the verified Manager for this Pi session.",
-          ),
-          chief: systemPrompt.includes(
-            "You are the verified workspace-neutral Chief",
-          ),
+          lead: systemPrompt.includes("You are an ordinary Lead for this Pi session."),
+          manager: systemPrompt.includes("You are the verified Manager for this Pi session."),
+          chief: systemPrompt.includes("You are the verified workspace-neutral Chief"),
         };
         if (!identity[expectedRole])
-          throw new Error(
-            `Provider request omitted the ${expectedRole} identity`,
-          );
-        if (
-          Object.entries(identity).some(
-            ([role, present]) => role !== expectedRole && present,
-          )
-        )
-          throw new Error(
-            `Provider request contains an identity other than ${expectedRole}`,
-          );
+          throw new Error(`Provider request omitted the ${expectedRole} identity`);
+        if (Object.entries(identity).some(([role, present]) => role !== expectedRole && present))
+          throw new Error(`Provider request contains an identity other than ${expectedRole}`);
       }
     }
     if (model.id === "terminal-error" || model.id === "terminal-agent-error") {
       const first = terminalErrorRequests++ === 0;
       const systemPrompt = getCurrentSystemPrompt(context.messages);
       const hasRoster = systemPrompt.includes("<agent_definitions>");
-      const evidenceDir = join(
-        process.env.PI_CODING_AGENT_DIR,
-        "pi-herdsman",
-        "runtime",
-      );
+      const evidenceDir = join(process.env.PI_CODING_AGENT_DIR, "pi-herdsman", "runtime");
       appendFileSync(
         join(evidenceDir, "smoke-faux-attempts.jsonl"),
         `${JSON.stringify({ model: model.id, hasRoster, sessionId: currentSessionId })}\n`,
@@ -2105,10 +1803,7 @@ export default function install(pi) {
         invocationSequence,
       });
     } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message === MANAGER_HANDOFF_SUPERVISOR_TOOL_NOT_OFFERED
-      ) {
+      if (error instanceof Error && error.message === MANAGER_HANDOFF_SUPERVISOR_TOOL_NOT_OFFERED) {
         appendFileSync(
           join(
             process.env.PI_CODING_AGENT_DIR,
@@ -2168,11 +1863,7 @@ export default function install(pi) {
       : ctx.model.provider === "smoke-faux" && ctx.model.id === "chief-manager"
         ? "selected"
         : "other";
-    const evidenceDir = join(
-      process.env.PI_CODING_AGENT_DIR,
-      "pi-herdsman",
-      "runtime",
-    );
+    const evidenceDir = join(process.env.PI_CODING_AGENT_DIR, "pi-herdsman", "runtime");
     appendFileSync(
       join(evidenceDir, "smoke-faux-session-start.jsonl"),
       `${JSON.stringify({ sessionId, pid: process.pid, chiefManagerModel })}\n`,
@@ -2184,11 +1875,7 @@ export default function install(pi) {
       !["terminal-error", "terminal-agent-error"].includes(ctx.model?.id)
     )
       return;
-    const evidenceDir = join(
-      process.env.PI_CODING_AGENT_DIR,
-      "pi-herdsman",
-      "runtime",
-    );
+    const evidenceDir = join(process.env.PI_CODING_AGENT_DIR, "pi-herdsman", "runtime");
     appendFileSync(
       join(evidenceDir, "smoke-faux-settled.jsonl"),
       `${JSON.stringify({ sessionId: ctx.sessionManager.getSessionId(), aborted: event.aborted })}\n`,

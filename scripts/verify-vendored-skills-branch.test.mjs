@@ -5,10 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import {
-  verifyBranchScope,
-  verifyExistingBranch,
-} from "./verify-vendored-skills-branch.mjs";
+import { verifyBranchScope, verifyExistingBranch } from "./verify-vendored-skills-branch.mjs";
 
 const snapshotPath = "vendor/github-cli/SKILL.md";
 const secondSkillPath = "vendor/gh-stack/SKILL.md";
@@ -35,20 +32,8 @@ test("permits ordinary snapshot additions, replacements and removals", () => {
 
 test("rejects changes outside managed ordinary files", async (t) => {
   for (const [label, path, before, after, expected] of [
-    [
-      "unrelated addition",
-      "extension/injected.ts",
-      undefined,
-      entry("a"),
-      /Unexpected/,
-    ],
-    [
-      "unrelated deletion",
-      "vendor/gh-stack/README.md",
-      entry("a"),
-      undefined,
-      /Unexpected/,
-    ],
+    ["unrelated addition", "extension/injected.ts", undefined, entry("a"), /Unexpected/],
+    ["unrelated deletion", "vendor/gh-stack/README.md", entry("a"), undefined, /Unexpected/],
     [
       "unsupported reference",
       "vendor/gh-stack/references/space name.md",
@@ -58,13 +43,7 @@ test("rejects changes outside managed ordinary files", async (t) => {
     ],
     ["executable", snapshotPath, entry("a"), entry("a", "100755"), /Unsafe/],
     ["symlink", snapshotPath, entry("a"), entry("b", "120000"), /Unsafe/],
-    [
-      "gitlink",
-      snapshotPath,
-      entry("a"),
-      entry("b", "160000", "commit"),
-      /Unsafe/,
-    ],
+    ["gitlink", snapshotPath, entry("a"), entry("b", "160000", "commit"), /Unsafe/],
   ]) {
     await t.test(label, () => {
       assert.throws(
@@ -103,9 +82,7 @@ function integrationFixture() {
     encoding: "utf8",
   }).trim();
   const branchSha = "c".repeat(40);
-  const baseTree = [
-    { path: snapshotPath, mode: "100644", type: "blob", sha: mainBlob },
-  ];
+  const baseTree = [{ path: snapshotPath, mode: "100644", type: "blob", sha: mainBlob }];
   const branchTree = [{ path: snapshotPath, ...entry("d") }];
   const response = (body) => Response.json(body);
   const request = async (url) => {
@@ -155,9 +132,7 @@ test("workflow verifies the old proposal independently of the reconciler", async
   ]) {
     await t.test(label, async (subtest) => {
       const fixture = integrationFixture();
-      subtest.after(() =>
-        rmSync(fixture.root, { recursive: true, force: true }),
-      );
+      subtest.after(() => rmSync(fixture.root, { recursive: true, force: true }));
       reconcile(fixture);
       await verifyExistingBranch({
         request: fixture.request,

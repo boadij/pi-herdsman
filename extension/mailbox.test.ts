@@ -17,11 +17,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
-import {
-  isRuntimeBuild,
-  runtimeBuild,
-  sameRuntimeBuild,
-} from "./compatibility.ts";
+import { isRuntimeBuild, runtimeBuild, sameRuntimeBuild } from "./compatibility.ts";
 import {
   controlMarker,
   claimAgentMailbox,
@@ -124,15 +120,11 @@ test("startup outcome is strict, transient, and independently awaited", async ()
       name: "TimeoutError",
     });
     const signal = AbortSignal.abort();
-    await assert.rejects(
-      waitForStartupOutcome(directory, { timeoutMs: 100, signal }),
-      { name: "AbortError" },
-    );
+    await assert.rejects(waitForStartupOutcome(directory, { timeoutMs: 100, signal }), {
+      name: "AbortError",
+    });
     writeAgentStartupOutcome(directory, ready);
-    assert.deepEqual(
-      await waitForStartupOutcome(directory, { timeoutMs: 100 }),
-      ready,
-    );
+    assert.deepEqual(await waitForStartupOutcome(directory, { timeoutMs: 100 }), ready);
     assert.throws(() =>
       writeAgentStartupOutcome(directory, {
         ...ready,
@@ -168,10 +160,7 @@ test("startup outcome is strict, transient, and independently awaited", async ()
       stage: "metadata",
     });
     writeFileSync(join(directory, "startup.json"), "{");
-    await assert.rejects(
-      waitForStartupOutcome(directory, { timeoutMs: 100 }),
-      SyntaxError,
-    );
+    await assert.rejects(waitForStartupOutcome(directory, { timeoutMs: 100 }), SyntaxError);
     resetAgentMailbox(directory);
     assert.equal(readAgentStartupOutcome(directory), undefined);
   } finally {
@@ -224,8 +213,7 @@ test("new-agent observer reports a state.json published later, once, and ignores
   const late = agentMailboxPath("w-observe", `late-${randomUUID()}`);
   const after = agentMailboxPath("w-observe", `after-${randomUUID()}`);
   t.after(() => {
-    for (const path of [early, late, after])
-      rmSync(path, { recursive: true, force: true });
+    for (const path of [early, late, after]) rmSync(path, { recursive: true, force: true });
   });
   writeAgentState(early, { ...state, workspaceId: "w-observe" });
   let reports = 0;
@@ -331,20 +319,11 @@ test("live mailbox build evidence is optional to read but required to write", ()
   assert.deepEqual(readAgentState(path), legacyState);
   const legacyRequest = { ...request };
   delete legacyRequest.build;
-  writeFileSync(
-    join(path, `request-${requestId}.json`),
-    JSON.stringify(legacyRequest),
-  );
+  writeFileSync(join(path, `request-${requestId}.json`), JSON.stringify(legacyRequest));
   assert.deepEqual(readRequest(path, requestId), legacyRequest);
 
-  assert.throws(
-    () => writeAgentState(path, legacyState),
-    /build identity is required/,
-  );
-  assert.throws(
-    () => writeRequest(path, legacyRequest),
-    /build identity is required/,
-  );
+  assert.throws(() => writeAgentState(path, legacyState), /build identity is required/);
+  assert.throws(() => writeRequest(path, legacyRequest), /build identity is required/);
   writeFileSync(
     join(path, "state.json"),
     JSON.stringify({ ...state, build: { ...state.build, sha256: "bad" } }),
@@ -354,10 +333,7 @@ test("live mailbox build evidence is optional to read but required to write", ()
     join(path, `request-${requestId}.json`),
     JSON.stringify({ ...request, build: { ...state.build, sha256: "bad" } }),
   );
-  assert.throws(
-    () => readRequest(path, requestId),
-    /Invalid runtime build identity/,
-  );
+  assert.throws(() => readRequest(path, requestId), /Invalid runtime build identity/);
 
   writeAgentState(path, {
     ...state,
@@ -409,10 +385,7 @@ test("Pi UUIDv7 session and run identities are valid mailbox fields", () => {
     createdAt: Date.now(),
   };
   writeRequest(path, interruptRequest);
-  assert.deepEqual(
-    readRequest(path, interruptRequest.requestId),
-    interruptRequest,
-  );
+  assert.deepEqual(readRequest(path, interruptRequest.requestId), interruptRequest);
 });
 test("asks and reply requests round-trip with strict correlation", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
@@ -452,10 +425,7 @@ test("asks and reply requests round-trip with strict correlation", () => {
 });
 test("owner notifications persist independently and are ordered by acceptance", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-owner-notice-"));
-  const message = (
-    messageId: string,
-    createdAt: number,
-  ): OwnerMessageRecord => ({
+  const message = (messageId: string, createdAt: number): OwnerMessageRecord => ({
     version: 5,
     messageId,
     requestId: state.runId,
@@ -480,10 +450,7 @@ test("malformed owner-message-prefixed files fail closed for cleanup", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-owner-notice-"));
   const malformed = join(path, "owner-message-not-a-uuid.json");
   writeFileSync(malformed, "{}");
-  assert.throws(
-    readOwnerMessages.bind(null, path),
-    /Malformed owner message filename/,
-  );
+  assert.throws(readOwnerMessages.bind(null, path), /Malformed owner message filename/);
   assert.equal(existsSync(malformed), true);
 });
 test("request and ask result bindings are strictly validated", () => {
@@ -525,10 +492,7 @@ test("request and ask result bindings are strictly validated", () => {
       }),
     /result bindings/,
   );
-  assert.throws(
-    () => writeAgentState(path, { ...state, version: 4 } as never),
-    /protocol version/,
-  );
+  assert.throws(() => writeAgentState(path, { ...state, version: 4 } as never), /protocol version/);
   writeAgentState(path, {
     ...state,
     lastAck: {
@@ -581,8 +545,7 @@ test("task requests round-trip validated required evidence snapshots and results
   const restored = readRequest(path, request.requestId)!;
   assert.equal("sourceAssignmentId" in restored.requiredEvidence![0]!, true);
   assert.equal(
-    (restored.requiredEvidence![0] as { sourceAssignmentId: string })
-      .sourceAssignmentId,
+    (restored.requiredEvidence![0] as { sourceAssignmentId: string }).sourceAssignmentId,
     "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
   );
   assert.throws(
@@ -646,9 +609,7 @@ test("task requests round-trip validated required evidence snapshots and results
   );
 });
 test("evidenced task continuations round-trip split metadata and reject malformed splits", () => {
-  const path = mkdtempSync(
-    join(tmpdir(), "pi-herdsman-mailbox-continuation-evidence-"),
-  );
+  const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-continuation-evidence-"));
   const inherited = {
     id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     name: "plan.md",
@@ -697,10 +658,7 @@ test("evidenced task continuations round-trip split metadata and reject malforme
     taskEvidenceId: task.id,
   };
   writeRequest(path, withTask);
-  assert.deepEqual(
-    readRequest(path, withTask.requestId),
-    JSON.parse(JSON.stringify(withTask)),
-  );
+  assert.deepEqual(readRequest(path, withTask.requestId), JSON.parse(JSON.stringify(withTask)));
   for (const invalid of [
     { ...withTask, taskEvidenceId: "bad" },
     { ...withTask, taskEvidenceId: inherited.id },
@@ -712,13 +670,8 @@ test("evidenced task continuations round-trip split metadata and reject malforme
     },
     {
       ...withTask,
-      localEvidence: [
-        { ...task, sourceAssignmentId: inherited.sourceAssignmentId },
-      ],
-      requiredEvidence: [
-        inherited,
-        { ...task, sourceAssignmentId: inherited.sourceAssignmentId },
-      ],
+      localEvidence: [{ ...task, sourceAssignmentId: inherited.sourceAssignmentId }],
+      requiredEvidence: [inherited, { ...task, sourceAssignmentId: inherited.sourceAssignmentId }],
     },
     { ...withTask, kind: "steer" as const },
   ])
@@ -774,10 +727,7 @@ test("reply ask IDs are required and non-reply requests cannot carry one", () =>
     text: "reply",
     createdAt: Date.now(),
   };
-  assert.throws(
-    () => writeRequest(path, { ...base, kind: "reply" } as never),
-    /reply ask ID/,
-  );
+  assert.throws(() => writeRequest(path, { ...base, kind: "reply" } as never), /reply ask ID/);
   assert.throws(
     () =>
       writeRequest(path, {
@@ -851,10 +801,7 @@ test("readPendingAsk fails closed for a missing or mismatched artifact", () => {
 });
 test("rejects malformed state records", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
-  writeFileSync(
-    join(path, "state.json"),
-    JSON.stringify({ ...state, extra: true }),
-  );
+  writeFileSync(join(path, "state.json"), JSON.stringify({ ...state, extra: true }));
   assert.throws(() => readAgentState(path), /Unknown mailbox field/);
   writeFileSync(
     join(path, "state.json"),
@@ -872,36 +819,22 @@ test("rejects malformed state records", () => {
   writeFileSync(join(path, "state.json"), "x".repeat(65 * 1024));
   assert.throws(() => readAgentState(path), /too large/);
   for (const value of ["1", 1.5, -1, Infinity, NaN]) {
-    writeFileSync(
-      join(path, "state.json"),
-      JSON.stringify({ ...state, lastActivityAt: value }),
-    );
+    writeFileSync(join(path, "state.json"), JSON.stringify({ ...state, lastActivityAt: value }));
     assert.throws(() => readAgentState(path), /lastActivityAt/);
   }
   for (const value of ["", "   ", 1, null]) {
-    writeFileSync(
-      join(path, "state.json"),
-      JSON.stringify({ ...state, agentDefinition: value }),
-    );
+    writeFileSync(join(path, "state.json"), JSON.stringify({ ...state, agentDefinition: value }));
     assert.throws(() => readAgentState(path), /agentDefinition/);
   }
-  writeFileSync(
-    join(path, "state.json"),
-    JSON.stringify({ ...state, workerLabel: "legacy" }),
-  );
+  writeFileSync(join(path, "state.json"), JSON.stringify({ ...state, workerLabel: "legacy" }));
   assert.throws(() => readAgentState(path), /Unknown mailbox field/);
 });
 test("waits on the exact state path and resolves after an update", async () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
-  const waiting = waitForState(
-    path,
-    (value) => value.completedRequestId === state.runId,
-    { timeoutMs: 1000 },
-  );
-  setTimeout(
-    () => writeAgentState(path, { ...state, completedRequestId: state.runId }),
-    20,
-  );
+  const waiting = waitForState(path, (value) => value.completedRequestId === state.runId, {
+    timeoutMs: 1000,
+  });
+  setTimeout(() => writeAgentState(path, { ...state, completedRequestId: state.runId }), 20);
   assert.equal((await waiting).completedRequestId, state.runId);
 });
 test("state waiter observes a write made during its initial check", async () => {
@@ -1118,10 +1051,7 @@ test("ambiguous unacknowledged requests are rejected", () => {
       text: requestId,
       createdAt: Date.now(),
     });
-  assert.throws(
-    () => readUnacknowledgedRequest(path, state),
-    /Multiple unacknowledged requests/,
-  );
+  assert.throws(() => readUnacknowledgedRequest(path, state), /Multiple unacknowledged requests/);
   assert.equal(unacknowledgedRequestExists(path, state), true);
 });
 test("mailbox paths separate workspace and label and use private directories", () => {
@@ -1183,25 +1113,13 @@ test("startup claims serialize access and reset preserves the claim", () => {
     completedAt: Date.now(),
   });
   const stateBefore = readFileSync(join(path, "state.json"), "utf8");
-  const requestBefore = readFileSync(
-    join(path, `request-${requestId}.json`),
-    "utf8",
-  );
-  const resultFileBefore = readFileSync(
-    join(path, `result-${requestId}.json`),
-    "utf8",
-  );
+  const requestBefore = readFileSync(join(path, `request-${requestId}.json`), "utf8");
+  const resultFileBefore = readFileSync(join(path, `result-${requestId}.json`), "utf8");
   const release = claimAgentMailbox(path);
   assert.throws(() => claimAgentMailbox(path), MailboxClaimOccupiedError);
   assert.equal(readFileSync(join(path, "state.json"), "utf8"), stateBefore);
-  assert.equal(
-    readFileSync(join(path, `request-${requestId}.json`), "utf8"),
-    requestBefore,
-  );
-  assert.equal(
-    readFileSync(join(path, `result-${requestId}.json`), "utf8"),
-    resultFileBefore,
-  );
+  assert.equal(readFileSync(join(path, `request-${requestId}.json`), "utf8"), requestBefore);
+  assert.equal(readFileSync(join(path, `result-${requestId}.json`), "utf8"), resultFileBefore);
   resetAgentMailbox(path);
   const claimDir = join(path, ".starting");
   assertPosixMode(claimDir, 0o700);
@@ -1211,10 +1129,7 @@ test("startup claims serialize access and reset preserves the claim", () => {
   assert.equal(readAgentState(path), undefined);
   assert.equal(readRequest(path, requestId), undefined);
   assert.equal(readResult(path, requestId), undefined);
-  assert.equal(
-    JSON.stringify({ ...state, activeRequestId: requestId }),
-    resultBefore,
-  );
+  assert.equal(JSON.stringify({ ...state, activeRequestId: requestId }), resultBefore);
   assert.equal(chooseLabel("reviewer", new Set(["reviewer"])), "reviewer-2");
   release();
   assert.equal(readdirSync(path).includes(".starting"), false);
@@ -1261,27 +1176,16 @@ test("stale recovery cannot remove a replacement owner", () => {
     );
     assert.equal(staleObserved, true);
     const freshOwner = `${replacement!.claim.pid}-${replacement!.claim.id}`;
-    const freshPayload = JSON.parse(
-      readFileSync(join(claimDir, freshOwner), "utf8"),
-    );
+    const freshPayload = JSON.parse(readFileSync(join(claimDir, freshOwner), "utf8"));
     assert.deepEqual(readdirSync(claimDir), [freshOwner]);
-    assert.deepEqual(
-      { pid: freshPayload.pid, id: freshPayload.id },
-      replacement!.claim,
-    );
+    assert.deepEqual({ pid: freshPayload.pid, id: freshPayload.id }, replacement!.claim);
     if (process.platform === "linux") {
       assert.ok(freshPayload.linuxBirth);
-      assert.deepEqual(Object.keys(freshPayload.linuxBirth).sort(), [
-        "bootId",
-        "startTicks",
-      ]);
+      assert.deepEqual(Object.keys(freshPayload.linuxBirth).sort(), ["bootId", "startTicks"]);
     }
     assert.throws(() => claimAgentMailbox(path), MailboxClaimOccupiedError);
     assert.deepEqual(readdirSync(claimDir), [freshOwner]);
-    assert.deepEqual(
-      JSON.parse(readFileSync(join(claimDir, freshOwner), "utf8")),
-      freshPayload,
-    );
+    assert.deepEqual(JSON.parse(readFileSync(join(claimDir, freshOwner), "utf8")), freshPayload);
   } finally {
     replacement?.release();
   }
@@ -1309,10 +1213,7 @@ test("malformed JSON and legacy protocol records are rejected", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
   writeFileSync(join(path, "state.json"), "not json");
   assert.throws(() => readAgentState(path), /Unexpected token|JSON/);
-  writeFileSync(
-    join(path, "state.json"),
-    JSON.stringify({ ...state, version: 3 }),
-  );
+  writeFileSync(join(path, "state.json"), JSON.stringify({ ...state, version: 3 }));
   assert.throws(() => readAgentState(path), /protocol version/);
   const requestId = "66666666-6666-4666-8666-666666666666";
   writeFileSync(
@@ -1370,8 +1271,7 @@ test("lists malformed current mailbox state as bounded diagnostics", (t) => {
   mkdirSync(path, { recursive: true });
   t.after(() => {
     try {
-      if (statSync(join(path, "state.json")).isDirectory())
-        rmdirSync(join(path, "state.json"));
+      if (statSync(join(path, "state.json")).isDirectory()) rmdirSync(join(path, "state.json"));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
@@ -1385,11 +1285,7 @@ test("lists malformed current mailbox state as bounded diagnostics", (t) => {
     ],
     [
       "invalid shape",
-      () =>
-        writeFileSync(
-          join(path, "state.json"),
-          JSON.stringify({ ...state, extra: true }),
-        ),
+      () => writeFileSync(join(path, "state.json"), JSON.stringify({ ...state, extra: true })),
       /Unknown mailbox field/,
     ],
     [
@@ -1397,22 +1293,14 @@ test("lists malformed current mailbox state as bounded diagnostics", (t) => {
       () => writeFileSync(join(path, "state.json"), "x".repeat(65 * 1024)),
       /Mailbox record is too large/,
     ],
-    [
-      "state read failure",
-      () => mkdirSync(join(path, "state.json")),
-      /EISDIR|directory/,
-    ],
+    ["state read failure", () => mkdirSync(join(path, "state.json")), /EISDIR|directory/],
   ] as const) {
     setup();
-    const issue = listAgentStateIssues().find(
-      (candidate) => candidate.path === path,
-    );
+    const issue = listAgentStateIssues().find((candidate) => candidate.path === path);
     assert.ok(issue, kind);
     assert.match(issue.diagnostic, expected);
     assert.match(issue.diagnostic, /^Mailbox state unavailable:/);
-    assert.ok(
-      issue.diagnostic.length <= 256 + "Mailbox state unavailable: ".length,
-    );
+    assert.ok(issue.diagnostic.length <= 256 + "Mailbox state unavailable: ".length);
     if (kind === "state read failure") rmdirSync(join(path, "state.json"));
     else unlinkSync(join(path, "state.json"));
   }
@@ -1588,8 +1476,7 @@ test("bootstrap sidecar round-trips atomically, rejects duplicates, and resets",
     /Invalid or duplicate bootstrap participant/,
   );
   assert.throws(
-    () =>
-      writeAgentBootstrap(path, { ...bootstrap, childSessionId: "invalid" }),
+    () => writeAgentBootstrap(path, { ...bootstrap, childSessionId: "invalid" }),
     /child session UUID/,
   );
   assert.throws(

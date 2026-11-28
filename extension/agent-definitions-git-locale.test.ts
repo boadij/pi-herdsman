@@ -8,11 +8,7 @@ import { mock, test } from "node:test";
 mock.module("node:child_process", {
   namedExports: {
     ...realChildProcess,
-    execFileSync(
-      _file: string,
-      _args: string[],
-      options?: { env?: NodeJS.ProcessEnv },
-    ) {
+    execFileSync(_file: string, _args: string[], options?: { env?: NodeJS.ProcessEnv }) {
       const error = new Error("git failed") as Error & {
         status: number;
         stderr: Buffer;
@@ -33,9 +29,7 @@ const { discoverAgentDefinitions } = await import("./agent-definitions.ts");
 test("private definition discovery treats a non-repository as such under a translated Git locale", () => {
   const project = mkdtempSync(join(tmpdir(), "pi-herdsman-git-locale-"));
   try {
-    assert.doesNotThrow(() =>
-      discoverAgentDefinitions({ projectRoot: project }),
-    );
+    assert.doesNotThrow(() => discoverAgentDefinitions({ projectRoot: project }));
   } finally {
     rmSync(project, { recursive: true, force: true });
   }

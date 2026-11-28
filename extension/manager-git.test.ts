@@ -90,23 +90,14 @@ test("live workspace-keyed legacy authority blocks only a correlated repository"
     const targetScope = await gitRepositoryScope(pi, primary);
     assert.equal(targetScope.canonicalRepoKey, targetKey);
     await assert.rejects(
-      requireNoLiveLegacyManager(
-        pi,
-        runtime,
-        targetScope.canonicalRepoKey,
-        "different-workspace",
-      ),
+      requireNoLiveLegacyManager(pi, runtime, targetScope.canonicalRepoKey, "different-workspace"),
       /legacy Manager authority.*restart/,
     );
     lock.release();
     const legacy = JSON.parse(readFileSync(descriptorPath, "utf8"));
     const otherScope = await gitRepositoryScope(pi, other);
     const alternateKey = join(realpathSync.native(root), "legacy-common");
-    symlinkSync(
-      targetKey,
-      alternateKey,
-      process.platform === "win32" ? "junction" : "dir",
-    );
+    symlinkSync(targetKey, alternateKey, process.platform === "win32" ? "junction" : "dir");
     for (const oldKey of [workspaceId, targetKey, alternateKey]) {
       const foreignPath = join(
         foreign.root,
@@ -126,20 +117,10 @@ test("live workspace-keyed legacy authority blocks only a correlated repository"
           }),
         );
         await assert.rejects(
-          requireNoLiveLegacyManager(
-            pi,
-            runtime,
-            targetKey,
-            "different-workspace",
-          ),
+          requireNoLiveLegacyManager(pi, runtime, targetKey, "different-workspace"),
           /legacy Manager authority.*restart/,
         );
-        await requireNoLiveLegacyManager(
-          pi,
-          runtime,
-          otherScope.canonicalRepoKey,
-          workspaceId,
-        );
+        await requireNoLiveLegacyManager(pi, runtime, otherScope.canonicalRepoKey, workspaceId);
       } finally {
         foreignLock.release();
       }
@@ -163,11 +144,7 @@ test("live workspace-keyed legacy authority blocks only a correlated repository"
         requireNoLiveLegacyManager(pi, runtime, targetKey),
         /legacy Manager authority/,
       );
-      await requireNoLiveLegacyManager(
-        pi,
-        runtime,
-        otherScope.canonicalRepoKey,
-      );
+      await requireNoLiveLegacyManager(pi, runtime, otherScope.canonicalRepoKey);
     } finally {
       oldStartup.release();
     }
@@ -176,10 +153,7 @@ test("live workspace-keyed legacy authority blocks only a correlated repository"
       requireNoLiveLegacyManager(pi, runtime, targetKey),
       /legacy Manager authority/,
     );
-    assert.equal(
-      readFileSync(oldRepoPath + ".unsettled", "utf8"),
-      "prior launch evidence",
-    );
+    assert.equal(readFileSync(oldRepoPath + ".unsettled", "utf8"), "prior launch evidence");
     unlinkSync(oldRepoPath + ".unsettled");
     assert.deepEqual(listManagerDescriptors(runtime, true), []);
   } finally {

@@ -10,14 +10,10 @@ mock.module("node:fs", {
   namedExports: {
     constants: realFs.constants,
     ...Object.fromEntries(
-      Object.entries(realFs).filter(
-        ([name]) => name !== "constants" && name !== "default",
-      ),
+      Object.entries(realFs).filter(([name]) => name !== "constants" && name !== "default"),
     ),
     rmdirSync: () => {
-      const error = new Error(
-        "injected directory pruning failure",
-      ) as NodeJS.ErrnoException;
+      const error = new Error("injected directory pruning failure") as NodeJS.ErrnoException;
       error.code = "EACCES";
       throw error;
     },
@@ -27,12 +23,8 @@ mock.module("node:fs", {
   },
 });
 
-const {
-  agentMailboxPath,
-  listAgentStates,
-  removeAgentMailbox,
-  writeAgentState,
-} = await import("./mailbox.ts");
+const { agentMailboxPath, listAgentStates, removeAgentMailbox, writeAgentState } =
+  await import("./mailbox.ts");
 const HERDSMAN_BUILD = runtimeBuild(
   packageMetadata.version,
   fileURLToPath(new URL("./index.ts", import.meta.url)),

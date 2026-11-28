@@ -28,8 +28,7 @@ test("private definition discovery reports unexpected Git status-128 failures", 
   try {
     assert.throws(
       () => discoverAgentDefinitions({ projectRoot: project }),
-      (error: unknown) =>
-        error instanceof Error && error.message.includes(diagnostic),
+      (error: unknown) => error instanceof Error && error.message.includes(diagnostic),
     );
   } finally {
     rmSync(project, { recursive: true, force: true });

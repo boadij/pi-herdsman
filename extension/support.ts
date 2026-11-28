@@ -16,19 +16,14 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import packageMetadata from "../package.json" with { type: "json" };
-import type {
-  RequestRecord,
-  ResultRecord,
-  ManagedAgentState,
-} from "./mailbox.ts";
+import type { RequestRecord, ResultRecord, ManagedAgentState } from "./mailbox.ts";
 import { assignmentLockPath } from "./lock.ts";
 import { runtimeBuild } from "./compatibility.ts";
 import { herdsmanTempRoot } from "./storage.ts";
 
 export const watchedMailboxDirectories = new Map<string, Set<Function>>();
 export let failNextMailboxWatch = false;
-export const MANAGED_AGENT_BOOTSTRAP_EVENT =
-  "pi-herdsman:managed-agent-bootstrap";
+export const MANAGED_AGENT_BOOTSTRAP_EVENT = "pi-herdsman:managed-agent-bootstrap";
 export const projectContextCwds: string[] = [];
 export const nativeSessions = new Map<
   string,
@@ -146,14 +141,8 @@ function assertWidgetContent(content: unknown): void {
   }
   assert.equal(typeof content, "function", "invalid widget content");
   const component = (
-    content as (
-      tui: { requestRender(): void },
-      theme: unknown,
-    ) => WidgetComponent
-  )(
-    { requestRender: () => undefined },
-    { fg: (_color: string, text: string) => text },
-  );
+    content as (tui: { requestRender(): void }, theme: unknown) => WidgetComponent
+  )({ requestRender: () => undefined }, { fg: (_color: string, text: string) => text });
   assert.equal(typeof component?.render, "function");
   assert.equal(typeof component?.invalidate, "function");
   assert.ok(Array.isArray(component.render(80)));
@@ -161,12 +150,8 @@ function assertWidgetContent(content: unknown): void {
 }
 export const realFs = await import("node:fs");
 const systemTmpDir = tmpdir();
-export const testTmpRoot = realFs.mkdtempSync(
-  join(systemTmpDir, "pi-herdsman-test-"),
-);
-export const PI_AGENT_ROOT = realFs.mkdtempSync(
-  join(systemTmpDir, "pi-herdsman-pi-agent-"),
-);
+export const testTmpRoot = realFs.mkdtempSync(join(systemTmpDir, "pi-herdsman-test-"));
+export const PI_AGENT_ROOT = realFs.mkdtempSync(join(systemTmpDir, "pi-herdsman-pi-agent-"));
 process.env.TMPDIR = testTmpRoot;
 // Keep account-scoped Manager authority isolated in each test-file process.
 const testAccount = os.userInfo();
@@ -220,8 +205,7 @@ mock.module("node:fs", {
     closeSync: realFs.closeSync,
     chmodSync: realFs.chmodSync,
     existsSync: (path: string) => {
-      if (path === join(PI_AGENT_ROOT, "pi-herdsman", "config.json"))
-        configReadHook?.();
+      if (path === join(PI_AGENT_ROOT, "pi-herdsman", "config.json")) configReadHook?.();
       return realFs.existsSync(path);
     },
     fstatSync: realFs.fstatSync,
@@ -239,12 +223,8 @@ mock.module("node:fs", {
     readFileSync: new Proxy(realFs.readFileSync, {
       apply(target, _thisArg, args) {
         fileReadHook?.(args[0]);
-        if (args[0] === join(PI_AGENT_ROOT, "pi-herdsman", "config.json"))
-          configReadHook?.();
-        if (
-          typeof args[0] === "string" &&
-          args[0].startsWith(`${PI_AGENTS_DIR}${sep}`)
-        )
+        if (args[0] === join(PI_AGENT_ROOT, "pi-herdsman", "config.json")) configReadHook?.();
+        if (typeof args[0] === "string" && args[0].startsWith(`${PI_AGENTS_DIR}${sep}`))
           agentDefinitionReadCount++;
         const result = Reflect.apply(target, realFs, args);
         if (typeof args[0] === "string" && args[0].endsWith(`${sep}state.json`))
@@ -262,8 +242,7 @@ mock.module("node:fs", {
     realpathSync: realFs.realpathSync,
     renameSync: (source: string, destination: string) => {
       if (destination.includes(`${sep}retirements${sep}`)) {
-        if (retirementFailure === "rename")
-          throw new Error("injected retirement rename failure");
+        if (retirementFailure === "rename") throw new Error("injected retirement rename failure");
         realFs.renameSync(source, destination);
         if (retirementFailure === "sync") failRetirementSync = true;
         return;
@@ -279,11 +258,7 @@ mock.module("node:fs", {
     statSync: realFs.statSync,
     unlinkSync: (path: string) => {
       const name = basename(path);
-      if (
-        failProjectMessageRemoval &&
-        path.includes(".messages") &&
-        name.endsWith(".json")
-      )
+      if (failProjectMessageRemoval && path.includes(".messages") && name.endsWith(".json"))
         throw new Error("injected project message removal failure");
       if (failNextRequestRemoval && name.startsWith("request-")) {
         failNextRequestRemoval = false;
@@ -403,10 +378,7 @@ mock.module("@earendil-works/pi-coding-agent", {
       scrollInfo: (text: string) => text,
       noMatch: (text: string) => text,
     }),
-    truncateHead: (
-      text: string,
-      options: { maxBytes?: number; maxLines?: number },
-    ) => {
+    truncateHead: (text: string, options: { maxBytes?: number; maxLines?: number }) => {
       const lines = text.split("\n");
       const maxLines = options.maxLines ?? lines.length;
       const content = lines.slice(0, maxLines).join("\n");
@@ -435,15 +407,13 @@ mock.module("@earendil-works/pi-coding-agent", {
     SessionManager: {
       create: (...args: Parameters<typeof nativeSessionManager.create>) =>
         nativeSessionManager.create(...args),
-      inMemory: (...args: any[]) =>
-        (nativeSessionManager as any).inMemory(...args),
+      inMemory: (...args: any[]) => (nativeSessionManager as any).inMemory(...args),
       findById: (cwd: string, id: string, sessionDir?: string) =>
         [...nativeSessions.values()].find(
           (session) =>
             session.id === id &&
             session.cwd === cwd &&
-            (session.sessionDir === undefined ||
-              session.sessionDir === sessionDir),
+            (session.sessionDir === undefined || session.sessionDir === sessionDir),
         )?.path,
       listAll: async () =>
         [...nativeSessions.values()].map((session) => ({
@@ -456,8 +426,7 @@ mock.module("@earendil-works/pi-coding-agent", {
         const session = [...nativeSessions.values()].find(
           (item) =>
             item.path === path ||
-            (realFs.existsSync(item.path) &&
-              realFs.realpathSync(item.path) === path),
+            (realFs.existsSync(item.path) && realFs.realpathSync(item.path) === path),
         );
         return {
           getSessionId: () => session?.id ?? DEFAULT_PI_SESSION_ID,
@@ -536,11 +505,7 @@ mock.module("@earendil-works/pi-tui", {
       private readonly paddingX: number;
       private readonly paddingY: number;
       private readonly bgFn: (text: string) => string;
-      constructor(
-        paddingX = 0,
-        paddingY = 0,
-        bgFn: (text: string) => string = (text) => text,
-      ) {
+      constructor(paddingX = 0, paddingY = 0, bgFn: (text: string) => string = (text) => text) {
         this.paddingX = paddingX;
         this.paddingY = paddingY;
         this.bgFn = bgFn;
@@ -550,22 +515,14 @@ mock.module("@earendil-works/pi-tui", {
       }
       render(width: number) {
         const innerWidth = Math.max(0, width - this.paddingX * 2);
-        const content = this.children.flatMap((child) =>
-          child.render(innerWidth),
-        );
+        const content = this.children.flatMap((child) => child.render(innerWidth));
         const blank = "".padEnd(Math.max(0, innerWidth));
         return [
-          ...Array.from({ length: this.paddingY }, () =>
-            this.bgFn(blank.padEnd(width)),
-          ),
+          ...Array.from({ length: this.paddingY }, () => this.bgFn(blank.padEnd(width))),
           ...content.map((line: string) =>
-            this.bgFn(
-              `${"".padEnd(this.paddingX)}${line}${"".padEnd(this.paddingX)}`,
-            ),
+            this.bgFn(`${"".padEnd(this.paddingX)}${line}${"".padEnd(this.paddingX)}`),
           ),
-          ...Array.from({ length: this.paddingY }, () =>
-            this.bgFn(blank.padEnd(width)),
-          ),
+          ...Array.from({ length: this.paddingY }, () => this.bgFn(blank.padEnd(width))),
         ];
       }
     },
@@ -648,8 +605,7 @@ mock.module("@earendil-works/pi-tui", {
         );
       }
       handleInput(data: string) {
-        if (tuiMatchesKey(data, tuiKey.enter))
-          this.onSelect?.(this.getSelectedItem());
+        if (tuiMatchesKey(data, tuiKey.enter)) this.onSelect?.(this.getSelectedItem());
         else if (tuiMatchesKey(data, tuiKey.escape)) this.onCancel?.();
         else if (tuiMatchesKey(data, tuiKey.down)) {
           this.index = Math.min(this.items.length - 1, this.index + 1);
@@ -670,10 +626,7 @@ mock.module("@earendil-works/pi-tui", {
 mock.module("@earendil-works/pi-ai", {
   namedExports: {
     clampThinkingLevel,
-    contentText: (
-      content: string | readonly { type: string; text: string }[],
-      separator = "\n",
-    ) =>
+    contentText: (content: string | readonly { type: string; text: string }[], separator = "\n") =>
       typeof content === "string"
         ? content
         : content
@@ -691,13 +644,8 @@ mock.module("@earendil-works/pi-ai", {
 mock.module("typebox", {
   namedExports: {
     Type: {
-      Object: (
-        properties: Record<string, { "~optional"?: boolean }>,
-        options: object = {},
-      ) => {
-        const required = Object.keys(properties).filter(
-          (key) => !properties[key]?.["~optional"],
-        );
+      Object: (properties: Record<string, { "~optional"?: boolean }>, options: object = {}) => {
+        const required = Object.keys(properties).filter((key) => !properties[key]?.["~optional"]);
         return {
           type: "object",
           ...(required.length ? { required } : {}),
@@ -720,14 +668,11 @@ mock.module("typebox", {
   },
 });
 
-const {
-  resolveAssignmentSession: resolveOwnedAssignmentSession,
-  sessionAgentIdentity,
-} = await import("./agent-controller.ts");
+const { resolveAssignmentSession: resolveOwnedAssignmentSession, sessionAgentIdentity } =
+  await import("./agent-controller.ts");
 const { sessionContextRetired, registerManagedAgentContextHandlers } =
   await import("./managed-agent-runtime.ts");
-const { default: registerExtension, registerExtensionForTest } =
-  await import("./index.ts");
+const { default: registerExtension, registerExtensionForTest } = await import("./index.ts");
 const { readEffectiveConfig } = await import("./config.ts");
 export function resolveAssignmentSession(
   ctx: import("@earendil-works/pi-coding-agent").ExtensionContext,
@@ -758,8 +703,7 @@ export const OTHER_HERDSMAN_BUILD = {
       ? `1${HERDSMAN_BUILD.sha256.slice(1)}`
       : `0${HERDSMAN_BUILD.sha256.slice(1)}`,
 };
-export const { herdrAgentAlias: runScopedHerdrAlias } =
-  await import("./herdr.ts");
+export const { herdrAgentAlias: runScopedHerdrAlias } = await import("./herdr.ts");
 export const {
   StatusWidget,
   formatAgentDefinitions,
@@ -767,11 +711,8 @@ export const {
   truncateModelText,
   visibleWidth,
 } = await import("./presentation.ts");
-export const {
-  agentDefinitionMetadata,
-  discoverAgent,
-  discoverAgentDefinitions,
-} = await import("./agent-definitions.ts");
+export const { agentDefinitionMetadata, discoverAgent, discoverAgentDefinitions } =
+  await import("./agent-definitions.ts");
 
 export type Context = {
   cwd: string;
@@ -859,10 +800,7 @@ export function isPaneList(args: string[]): boolean {
 export function isHerdrList(args: string[]): boolean {
   return isAgentList(args) || isTabList(args) || isPaneList(args);
 }
-export function delegationLockPathForTest(
-  workspaceId: string,
-  parentSessionId: string,
-): string {
+export function delegationLockPathForTest(workspaceId: string, parentSessionId: string): string {
   return join(
     herdsmanTempRoot(),
     "locks",
@@ -911,29 +849,19 @@ export function fakeContext(
       select: async () => "tab",
       confirm: async () => true,
       input: async (): Promise<never> => {
-        throw new Error(
-          "fakeContext: ui.input requires an explicit test override",
-        );
+        throw new Error("fakeContext: ui.input requires an explicit test override");
       },
       pasteToEditor: (): never => {
-        throw new Error(
-          "fakeContext: ui.pasteToEditor requires an explicit test override",
-        );
+        throw new Error("fakeContext: ui.pasteToEditor requires an explicit test override");
       },
       setEditorText: (): never => {
-        throw new Error(
-          "fakeContext: ui.setEditorText requires an explicit test override",
-        );
+        throw new Error("fakeContext: ui.setEditorText requires an explicit test override");
       },
       getEditorText: (): never => {
-        throw new Error(
-          "fakeContext: ui.getEditorText requires an explicit test override",
-        );
+        throw new Error("fakeContext: ui.getEditorText requires an explicit test override");
       },
       editor: async (): Promise<never> => {
-        throw new Error(
-          "fakeContext: ui.editor requires an explicit test override",
-        );
+        throw new Error("fakeContext: ui.editor requires an explicit test override");
       },
       addAutocompleteProvider: (): never => {
         throw new Error(
@@ -942,36 +870,24 @@ export function fakeContext(
       },
       setEditorComponent: () => undefined,
       getEditorComponent: (): never => {
-        throw new Error(
-          "fakeContext: ui.getEditorComponent requires an explicit test override",
-        );
+        throw new Error("fakeContext: ui.getEditorComponent requires an explicit test override");
       },
       theme: fakeTheme,
       getAllThemes: (): never => {
-        throw new Error(
-          "fakeContext: ui.getAllThemes requires an explicit test override",
-        );
+        throw new Error("fakeContext: ui.getAllThemes requires an explicit test override");
       },
       getTheme: (): never => {
-        throw new Error(
-          "fakeContext: ui.getTheme requires an explicit test override",
-        );
+        throw new Error("fakeContext: ui.getTheme requires an explicit test override");
       },
       setTheme: (): never => {
-        throw new Error(
-          "fakeContext: ui.setTheme requires an explicit test override",
-        );
+        throw new Error("fakeContext: ui.setTheme requires an explicit test override");
       },
       getToolsExpanded: (): never => {
-        throw new Error(
-          "fakeContext: ui.getToolsExpanded requires an explicit test override",
-        );
+        throw new Error("fakeContext: ui.getToolsExpanded requires an explicit test override");
       },
       setToolsExpanded: () => undefined,
       onTerminalInput: (): never => {
-        throw new Error(
-          "fakeContext: ui.onTerminalInput requires an explicit test override",
-        );
+        throw new Error("fakeContext: ui.onTerminalInput requires an explicit test override");
       },
       setStatus: () => undefined,
       setWorkingMessage: () => undefined,
@@ -989,9 +905,7 @@ export function fakeContext(
       setHeader: () => undefined,
       setTitle: () => undefined,
       custom: async (): Promise<never> => {
-        throw new Error(
-          "fakeContext: ui.custom requires an explicit test override",
-        );
+        throw new Error("fakeContext: ui.custom requires an explicit test override");
       },
     },
   } as ExtensionContext;
@@ -1075,10 +989,7 @@ export function fakePi(
     allTools?: unknown[] | (() => unknown[]);
   } = {},
 ) {
-  type StoredEventHandler = (
-    event?: unknown,
-    ctx?: ExtensionContext,
-  ) => unknown;
+  type StoredEventHandler = (event?: unknown, ctx?: ExtensionContext) => unknown;
   const events = new Map<string, StoredEventHandler[]>();
   const eventListeners = new Map<string, ((event: unknown) => unknown)[]>();
   const commands: string[] = [];
@@ -1087,8 +998,7 @@ export function fakePi(
   const messageRenderers: { customType: string; renderer: unknown }[] = [];
   const tools: any[] = [];
   const calls: string[][] = [];
-  const callResults: { args: string[]; succeeded: boolean; code?: number }[] =
-    [];
+  const callResults: { args: string[]; succeeded: boolean; code?: number }[] = [];
   const execOptions: { timeout?: number; signal?: AbortSignal }[] = [];
   const entries = options.entries ?? [];
   let sessionName = options.sessionName;
@@ -1099,16 +1009,11 @@ export function fakePi(
   const sentUsers: unknown[] = [];
   const sentUserCalls: { content: unknown; options?: unknown }[] = [];
   let activeTools: string[] | undefined =
-    typeof options.activeTools === "function"
-      ? undefined
-      : [...(options.activeTools ?? [])];
+    typeof options.activeTools === "function" ? undefined : [...(options.activeTools ?? [])];
   const pi = {
     events: {
       on(name: string, handler: (event: unknown) => unknown) {
-        eventListeners.set(name, [
-          ...(eventListeners.get(name) ?? []),
-          handler,
-        ]);
+        eventListeners.set(name, [...(eventListeners.get(name) ?? []), handler]);
       },
       emit(name: string, event: any) {
         for (const handler of eventListeners.get(name) ?? []) handler(event);
@@ -1124,9 +1029,7 @@ export function fakePi(
     registerTool(tool: unknown) {
       tools.push(tool);
       if (options.autoActivateRegisteredTools && (tool as any)?.name) {
-        activeTools = [
-          ...new Set([...this.getActiveTools(), (tool as any).name]),
-        ];
+        activeTools = [...new Set([...this.getActiveTools(), (tool as any).name])];
       }
     },
     registerMessageRenderer(customType: string, renderer: unknown) {
@@ -1136,17 +1039,13 @@ export function fakePi(
       entryRenderers.push({ customType, renderer });
     },
     getActiveTools() {
-      return activeTools
-        ? [...activeTools]
-        : (options.activeTools as () => string[])();
+      return activeTools ? [...activeTools] : (options.activeTools as () => string[])();
     },
     setActiveTools(next: string[]) {
       activeTools = [...next];
     },
     getAllTools() {
-      return typeof options.allTools === "function"
-        ? options.allTools()
-        : (options.allTools ?? []);
+      return typeof options.allTools === "function" ? options.allTools() : (options.allTools ?? []);
     },
     getSessionName() {
       return sessionName?.trim() || undefined;
@@ -1171,11 +1070,7 @@ export function fakePi(
         return result;
       }
       try {
-        const result = await (options.exec?.(
-          command,
-          args,
-          execOptionsValue,
-        ) ?? {
+        const result = await (options.exec?.(command, args, execOptionsValue) ?? {
           stdout:
             command === "herdr" && isAgentList(args)
               ? JSON.stringify({ id: AGENT_ID, result: { agents: [] } })
@@ -1266,13 +1161,9 @@ export function invokeEventHandlers(
 export function stopSummary(pi: ReturnType<typeof fakePi>): string {
   const message = [...pi.sentMessageCalls]
     .reverse()
-    .find(
-      (candidate: any) =>
-        candidate?.message?.customType === "pi-herdsman-stop-summary",
-    )?.message as { details?: { summary?: unknown } } | undefined;
-  return typeof message?.details?.summary === "string"
-    ? message.details.summary
-    : "";
+    .find((candidate: any) => candidate?.message?.customType === "pi-herdsman-stop-summary")
+    ?.message as { details?: { summary?: unknown } } | undefined;
+  return typeof message?.details?.summary === "string" ? message.details.summary : "";
 }
 
 export function setLeadEnvironment(): void {
@@ -1283,10 +1174,7 @@ export function setLeadEnvironment(): void {
     join(PI_AGENTS_DIR, "agent.md"),
     "---\nname: agent\n---\nagent instructions\n",
   );
-  realFs.writeFileSync(
-    join(PI_AGENTS_DIR, "child.md"),
-    "---\nname: child\n---\nchild\n",
-  );
+  realFs.writeFileSync(join(PI_AGENTS_DIR, "child.md"), "---\nname: child\n---\nchild\n");
   process.env.HERDR_ENV = "1";
   process.env.HERDR_WORKSPACE_ID = WORKSPACE;
   for (const key of [
@@ -1303,10 +1191,7 @@ export function setLeadEnvironment(): void {
     "HERDR_PANE_ID",
   ])
     delete process.env[key];
-  process.env.HERDR_SOCKET_PATH = join(
-    testTmpRoot,
-    `herdr-${randomUUID()}.sock`,
-  );
+  process.env.HERDR_SOCKET_PATH = join(testTmpRoot, `herdr-${randomUUID()}.sock`);
 }
 
 export function setAgentEnvironment(
@@ -1320,23 +1205,16 @@ export function setAgentEnvironment(
     join(PI_AGENTS_DIR, "agent.md"),
     "---\nname: agent\n---\nagent instructions\n",
   );
-  realFs.writeFileSync(
-    join(PI_AGENTS_DIR, "child.md"),
-    "---\nname: child\n---\nchild\n",
-  );
+  realFs.writeFileSync(join(PI_AGENTS_DIR, "child.md"), "---\nname: child\n---\nchild\n");
   const workspace = WORKSPACE;
   const mailbox = agentMailboxPath(workspace, label);
   process.env.HERDR_ENV = "1";
   process.env.HERDR_WORKSPACE_ID = workspace;
   if (!process.env.HERDR_SOCKET_PATH)
-    process.env.HERDR_SOCKET_PATH = join(
-      testTmpRoot,
-      `herdr-${randomUUID()}.sock`,
-    );
+    process.env.HERDR_SOCKET_PATH = join(testTmpRoot, `herdr-${randomUUID()}.sock`);
   process.env.PI_HERDSMAN_MAILBOX = mailbox;
   process.env.PI_HERDSMAN_RUN_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
-  process.env.PI_HERDSMAN_OWNER_SESSION_ID =
-    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  process.env.PI_HERDSMAN_OWNER_SESSION_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   process.env.PI_HERDSMAN_ROOT_SESSION_ID = LEAD_SESSION_ID;
   process.env.PI_HERDSMAN_OWNER_DISPLAY = "lead";
   process.env.PI_HERDSMAN_LABEL = label;
@@ -1346,18 +1224,14 @@ export function setAgentEnvironment(
   process.env.HERDR_PANE_ID = "registered-pane";
   if (allowedAgentDefinitions === undefined)
     delete process.env.PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS;
-  else
-    process.env.PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS = JSON.stringify(
-      allowedAgentDefinitions,
-    );
+  else process.env.PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS = JSON.stringify(allowedAgentDefinitions);
   resetAgentMailbox(mailbox);
   return mailbox;
 }
 
 function clearTestMailboxes(): void {
   for (const { path, state } of listAgentStates())
-    if (state.workspaceId === WORKSPACE)
-      realFs.rmSync(path, { recursive: true, force: true });
+    if (state.workspaceId === WORKSPACE) realFs.rmSync(path, { recursive: true, force: true });
 }
 
 export function managedState(
@@ -1382,10 +1256,7 @@ export function managedState(
   };
 }
 
-export function resultEntryDetails(
-  state: ManagedAgentState,
-  requestId: string,
-) {
+export function resultEntryDetails(state: ManagedAgentState, requestId: string) {
   return {
     runId: state.runId,
     requestId,
@@ -1395,9 +1266,7 @@ export function resultEntryDetails(
     paneId: state.paneId,
     cwd: state.cwd,
     piSessionId: state.piSessionId,
-    ...(state.piSessionFile !== undefined
-      ? { piSessionFile: state.piSessionFile }
-      : {}),
+    ...(state.piSessionFile !== undefined ? { piSessionFile: state.piSessionFile } : {}),
   };
 }
 
@@ -1442,11 +1311,7 @@ export function listResponse(
   });
 }
 
-export function requestRecordBytes(
-  agentLabel: string,
-  paneId: string,
-  text: string,
-): number {
+export function requestRecordBytes(agentLabel: string, paneId: string, text: string): number {
   return Buffer.byteLength(
     JSON.stringify({
       version: 5,
@@ -1488,14 +1353,7 @@ export function leadExec(
         stdout: JSON.stringify({
           id: AGENT_ID,
           result: JSON.parse(
-            listResponse(
-              label,
-              status,
-              listSession,
-              identity,
-              useAgentStatus,
-              agentStatus,
-            ),
+            listResponse(label, status, listSession, identity, useAgentStatus, agentStatus),
           ),
         }),
         stderr: "",
@@ -1509,14 +1367,7 @@ export function leadExec(
             snapshot: {
               workspaces: [],
               agents: JSON.parse(
-                listResponse(
-                  label,
-                  status,
-                  listSession,
-                  identity,
-                  useAgentStatus,
-                  agentStatus,
-                ),
+                listResponse(label, status, listSession, identity, useAgentStatus, agentStatus),
               ).agents,
               panes: [
                 {
@@ -1598,11 +1449,7 @@ export function agentFromState(
   state: ManagedAgentState,
   status: "idle" | "working" | "blocked" | "done" = "idle",
 ): Record<string, unknown> {
-  const alias = runScopedHerdrAlias(
-    state.workspaceId,
-    state.agentLabel,
-    state.runId,
-  );
+  const alias = runScopedHerdrAlias(state.workspaceId, state.agentLabel, state.runId);
   return {
     name: alias,
     agent_status: status,
@@ -1625,20 +1472,13 @@ export function agentControllerExecutor(
   children: ManagedAgentState[] = [],
 ): SyncExecHandler {
   for (const child of [parent, ...children])
-    consumeMailboxRequest(
-      agentMailboxPath(child.workspaceId, child.agentLabel),
-      (request) =>
-        acceptMailboxRequest(
-          agentMailboxPath(child.workspaceId, child.agentLabel),
-          request,
-        ),
+    consumeMailboxRequest(agentMailboxPath(child.workspaceId, child.agentLabel), (request) =>
+      acceptMailboxRequest(agentMailboxPath(child.workspaceId, child.agentLabel), request),
     );
   return (command, args) => {
     if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
-    if (args[0] === "status" && args[1] === "--json")
-      return herdrStatusResult();
-    if (args[0] === "--version")
-      return { stdout: "0.8.0", stderr: "", code: 0 };
+    if (args[0] === "status" && args[1] === "--json") return herdrStatusResult();
+    if (args[0] === "--version") return { stdout: "0.8.0", stderr: "", code: 0 };
     if (isAgentList(args))
       return {
         stdout: JSON.stringify({
@@ -1660,10 +1500,7 @@ export function agentControllerExecutor(
             snapshot: {
               workspaces: [],
               agents: [parent, ...children].map((state) =>
-                agentFromState(
-                  state,
-                  state.activeRequestId ? "working" : "idle",
-                ),
+                agentFromState(state, state.activeRequestId ? "working" : "idle"),
               ),
               panes: [parent, ...children].map((state) => ({
                 pane_id: state.paneId,
@@ -1704,8 +1541,7 @@ export function agentControllerExecutor(
     if (args[0] === "agent" && args[1] === "get") {
       const requested = args[2];
       const state =
-        requested ===
-        runScopedHerdrAlias(parent.workspaceId, parent.agentLabel, parent.runId)
+        requested === runScopedHerdrAlias(parent.workspaceId, parent.agentLabel, parent.runId)
           ? parent
           : children.find(
               (candidate) =>
@@ -1721,10 +1557,7 @@ export function agentControllerExecutor(
           stdout: JSON.stringify({
             id: AGENT_ID,
             result: {
-              agent: agentFromState(
-                state,
-                state.activeRequestId ? "working" : "idle",
-              ),
+              agent: agentFromState(state, state.activeRequestId ? "working" : "idle"),
             },
           }),
           stderr: "",
@@ -1749,9 +1582,7 @@ export function delegatedLifecycleExecutor(
   createdTabs: () => number;
   tabForPane: (paneId: string) => string | undefined;
 } {
-  const live = new Map(
-    [parent, ...initialChildren].map((state) => [state.agentLabel, state]),
-  );
+  const live = new Map([parent, ...initialChildren].map((state) => [state.agentLabel, state]));
   const slots = ["delegated-slot-1", "delegated-slot-2", "delegated-slot-3"];
   const childSessionIds = [
     CHILD_SESSION_ID,
@@ -1763,10 +1594,7 @@ export function delegatedLifecycleExecutor(
   const closedPanes = new Set<string>();
   const paneEnvironment: Record<string, string> = {};
   const tabByPane = new Map(
-    [parent, ...initialChildren].map((state) => [
-      state.paneId,
-      "delegated-tab",
-    ]),
+    [parent, ...initialChildren].map((state) => [state.paneId, "delegated-tab"]),
   );
   const tabLabels = new Map([["delegated-tab", "agents"]]);
   if (callerPane) {
@@ -1777,9 +1605,7 @@ export function delegatedLifecycleExecutor(
   let createdChildren = 0;
   const currentStateForPane = (paneId: string): ManagedAgentState | undefined =>
     [...live.values()].find((state) => state.paneId === paneId);
-  const agentForState = (
-    state: ManagedAgentState,
-  ): Record<string, unknown> => ({
+  const agentForState = (state: ManagedAgentState): Record<string, unknown> => ({
     ...agentFromState(state, state.activeRequestId ? "working" : "idle"),
     tab_id: tabByPane.get(state.paneId),
     tab_label: tabLabels.get(tabByPane.get(state.paneId) ?? ""),
@@ -1809,9 +1635,7 @@ export function delegatedLifecycleExecutor(
       agent_status: state.activeRequestId ? "working" : "idle",
     })),
     ...slots
-      .filter(
-        (paneId) => !closedPanes.has(paneId) && !currentStateForPane(paneId),
-      )
+      .filter((paneId) => !closedPanes.has(paneId) && !currentStateForPane(paneId))
       .map((paneId) => ({
         pane_id: paneId,
         terminal_id: `terminal-${paneId}`,
@@ -1831,8 +1655,7 @@ export function delegatedLifecycleExecutor(
     tabForPane: (paneId) => tabByPane.get(paneId),
     exec: (command, args) => {
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
-      if (args[0] === "--version")
-        return { stdout: "0.8.0", stderr: "", code: 0 };
+      if (args[0] === "--version") return { stdout: "0.8.0", stderr: "", code: 0 };
       if (isAgentList(args))
         return {
           stdout: JSON.stringify({
@@ -1863,11 +1686,8 @@ export function delegatedLifecycleExecutor(
           currentStateForPane(requested) ??
           [...live.values()].find(
             (candidate) =>
-              runScopedHerdrAlias(
-                candidate.workspaceId,
-                candidate.agentLabel,
-                candidate.runId,
-              ) === requested,
+              runScopedHerdrAlias(candidate.workspaceId, candidate.agentLabel, candidate.runId) ===
+              requested,
           );
         return {
           stdout: JSON.stringify({
@@ -1900,9 +1720,7 @@ export function delegatedLifecycleExecutor(
           const separator = assignment.indexOf("=");
           if (separator > 0) {
             environmentCommands.push(assignment);
-            paneEnvironment[assignment.slice(0, separator)] = assignment.slice(
-              separator + 1,
-            );
+            paneEnvironment[assignment.slice(0, separator)] = assignment.slice(separator + 1);
           }
         }
         const createdTabId = `delegated-tab-${++createdTabs}`;
@@ -1971,9 +1789,7 @@ export function delegatedLifecycleExecutor(
                       pane_id: args.at(-1),
                       shell_pid: 123,
                       foreground_process_group_id: 456,
-                      foreground_processes: [
-                        { pid: 456, argv0: "/usr/bin/pi" },
-                      ],
+                      foreground_processes: [{ pid: 456, argv0: "/usr/bin/pi" }],
                     }
                   : {
                       pane_id: args.at(-1),
@@ -2008,9 +1824,7 @@ export function delegatedLifecycleExecutor(
       if (args[0] === "pane" && args[1] === "run") {
         const commandText = args.at(-1) ?? "";
         environmentCommands.push(commandText);
-        for (const match of commandText.matchAll(
-          /([A-Z][A-Z0-9_]*)='([^']*)'/g,
-        ))
+        for (const match of commandText.matchAll(/([A-Z][A-Z0-9_]*)='([^']*)'/g))
           paneEnvironment[match[1]] = match[2];
         return { stdout: "{}", stderr: "", code: 0 };
       }
@@ -2023,14 +1837,11 @@ export function delegatedLifecycleExecutor(
           const separator = assignment.indexOf("=");
           if (separator > 0) {
             environmentCommands.push(assignment);
-            paneEnvironment[assignment.slice(0, separator)] = assignment.slice(
-              separator + 1,
-            );
+            paneEnvironment[assignment.slice(0, separator)] = assignment.slice(separator + 1);
           }
         }
         const paneId = slots.find(
-          (candidate) =>
-            !closedPanes.has(candidate) && !currentStateForPane(candidate),
+          (candidate) => !closedPanes.has(candidate) && !currentStateForPane(candidate),
         );
         if (!paneId) return { stdout: "{}", stderr: "no pane", code: 1 };
         const anchor = args[args.indexOf("--pane") + 1];
@@ -2134,17 +1945,14 @@ export function cascadeExecutor(
   const omitAgentLabels = new Set(options.omitAgentLabels ?? []);
   const omitPaneLabels = new Set(options.omitPaneLabels ?? []);
   const closeOrder: string[] = [];
-  const paneFor = (paneId: string) =>
-    [...live.values()].find((state) => state.paneId === paneId);
+  const paneFor = (paneId: string) => [...live.values()].find((state) => state.paneId === paneId);
   return {
     closeOrder,
     live,
     exec: (command, args) => {
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
-      if (args[0] === "status" && args[1] === "--json")
-        return herdrStatusResult();
-      if (args[0] === "--version")
-        return { stdout: "0.8.0", stderr: "", code: 0 };
+      if (args[0] === "status" && args[1] === "--json") return herdrStatusResult();
+      if (args[0] === "--version") return { stdout: "0.8.0", stderr: "", code: 0 };
       if (isAgentList(args)) {
         const agents = [...live.values()]
           .filter((state) => !omitAgentLabels.has(state.agentLabel))
@@ -2247,11 +2055,8 @@ export function cascadeExecutor(
           [...live.values()].find(
             (candidate) =>
               candidate.paneId === requested ||
-              runScopedHerdrAlias(
-                candidate.workspaceId,
-                candidate.agentLabel,
-                candidate.runId,
-              ) === requested,
+              runScopedHerdrAlias(candidate.workspaceId, candidate.agentLabel, candidate.runId) ===
+                requested,
           ) ?? undefined;
         if (!state)
           return {
@@ -2415,9 +2220,7 @@ export async function assertRestrictiveManagedDefinition(
       command.includes("PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS="),
     );
     assert.ok(environment);
-    const encoded = /PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS='([^']*)'/.exec(
-      environment,
-    )?.[1];
+    const encoded = /PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS='([^']*)'/.exec(environment)?.[1];
     assert.equal(encoded, "[]");
     allowedAgentDefinitions = JSON.parse(encoded);
   } catch (error) {
@@ -2434,14 +2237,8 @@ export async function assertRestrictiveManagedDefinition(
   registerExtension!(agent.pi as never);
   try {
     assert.equal(agent.tools.filter((tool) => tool.name === "agent").length, 0);
-    assert.equal(
-      agent.tools.filter((tool) => tool.name === "await_owner").length,
-      1,
-    );
-    await agent.events.get("session_start")![0](
-      undefined,
-      fakeAgentContext(agent.entries),
-    );
+    assert.equal(agent.tools.filter((tool) => tool.name === "await_owner").length, 1);
+    await agent.events.get("session_start")![0](undefined, fakeAgentContext(agent.entries));
   } finally {
     agent.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
@@ -2461,10 +2258,7 @@ export function testGate<T = void>(): {
   return { promise, resolve };
 }
 
-export function afterTestCleanup(
-  t: TestContext,
-  ...steps: (() => unknown)[]
-): void {
+export function afterTestCleanup(t: TestContext, ...steps: (() => unknown)[]): void {
   t.after(async () => {
     const errors: unknown[] = [];
     for (const step of steps) {
@@ -2475,8 +2269,7 @@ export function afterTestCleanup(
         t.diagnostic(`Fixture cleanup failed: ${String(error)}`);
       }
     }
-    if (errors.length)
-      throw new AggregateError(errors, "Fixture cleanup failed");
+    if (errors.length) throw new AggregateError(errors, "Fixture cleanup failed");
   });
 }
 
@@ -2625,9 +2418,7 @@ export function createStagedAssignmentFixture(
             ? [
                 {
                   ...JSON.parse(listResponse(label)).agents[0],
-                  agent_status:
-                    observedLifecycle ??
-                    (state.activeRequestId ? "working" : "idle"),
+                  agent_status: observedLifecycle ?? (state.activeRequestId ? "working" : "idle"),
                   name: runScopedHerdrAlias(WORKSPACE, label, state.runId),
                   pane_id: "startup-pane",
                   workspace_id: WORKSPACE,
@@ -2641,8 +2432,7 @@ export function createStagedAssignmentFixture(
                 },
               ]
             : [];
-        if (agents.some((agent: any) => agent.agent_status === "working"))
-          workingObservations++;
+        if (agents.some((agent: any) => agent.agent_status === "working")) workingObservations++;
         return {
           stdout: JSON.stringify({ id: 1, result: { agents } }),
           stderr: "",
@@ -2669,15 +2459,12 @@ export function createStagedAssignmentFixture(
         const agents = payload.result?.snapshot?.agents ?? [];
         for (const agent of agents) {
           if (observedLifecycle) agent.agent_status = observedLifecycle;
-          if (interactiveReady !== undefined)
-            agent.interactive_ready = interactiveReady;
+          if (interactiveReady !== undefined) agent.interactive_ready = interactiveReady;
           if (observedSessionId && agent.agent_session)
             agent.agent_session.value = observedSessionId;
         }
-        if (agents.some((agent: any) => agent.agent_status === "working"))
-          workingObservations++;
-        if (agents.some((agent: any) => agent.agent_status === "unknown"))
-          unknownObservations++;
+        if (agents.some((agent: any) => agent.agent_status === "working")) workingObservations++;
+        if (agents.some((agent: any) => agent.agent_status === "unknown")) unknownObservations++;
         return { ...result, stdout: JSON.stringify(payload) };
       }
       if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
@@ -2737,9 +2524,7 @@ export function createStagedAssignmentFixture(
   };
 
   registerExtension!(pi.pi as never);
-  const sessionStart = Promise.resolve(
-    pi.events.get("session_start")![0](undefined, context),
-  );
+  const sessionStart = Promise.resolve(pi.events.get("session_start")![0](undefined, context));
   const emptyStatus = (): ExecResult => ({
     stdout: JSON.stringify({
       id: 1,
@@ -2776,10 +2561,7 @@ export function createStagedAssignmentFixture(
       return !holdInitialStatus;
     },
     get acceptedRequestIdWritten(): string {
-      assert.ok(
-        acceptedRequestIdWritten,
-        "staged fixture did not write an accepted request",
-      );
+      assert.ok(acceptedRequestIdWritten, "staged fixture did not write an accepted request");
       return acceptedRequestIdWritten;
     },
     get workingObservations(): number {
@@ -2793,27 +2575,15 @@ export function createStagedAssignmentFixture(
     },
     releaseInitialStatus: () =>
       initialStatus.resolve(
-        readAgentState(startupMailbox)
-          ? startup.exec("herdr", ["api", "snapshot"])
-          : emptyStatus(),
+        readAgentState(startupMailbox) ? startup.exec("herdr", ["api", "snapshot"]) : emptyStatus(),
       ),
     releaseStart: () => start.resolve(),
     releasePreSubmitValidation: () => preSubmitValidation.resolve(),
     releaseAcknowledgement: () => handoff.resolve(),
     async list() {
-      return pi.tools[0].execute(
-        "id",
-        { action: "list" },
-        undefined,
-        undefined,
-        context,
-      );
+      return pi.tools[0].execute("id", { action: "list" }, undefined, undefined, context);
     },
-    observe(
-      lifecycle?: "idle" | "working" | "unknown",
-      sessionId?: string,
-      ready?: boolean,
-    ) {
+    observe(lifecycle?: "idle" | "working" | "unknown", sessionId?: string, ready?: boolean) {
       observedLifecycle = lifecycle;
       observedSessionId = sessionId;
       interactiveReady = ready;
@@ -3006,12 +2776,8 @@ export function startupExecutor(
           state && runId && !stopped
             ? [
                 {
-                  ...JSON.parse(
-                    listResponse(
-                      label,
-                      state.activeRequestId ? "working" : "idle",
-                    ),
-                  ).agents[0],
+                  ...JSON.parse(listResponse(label, state.activeRequestId ? "working" : "idle"))
+                    .agents[0],
                   name: runScopedHerdrAlias(WORKSPACE, label, state.runId),
                   pane_id: activePaneId,
                   workspace_id: WORKSPACE,
@@ -3158,9 +2924,7 @@ export function startupExecutor(
               layout: {
                 workspace_id: WORKSPACE,
                 tab_id: "registered-tab",
-                panes: [
-                  { pane_id: activePaneId, rect: { width: 100, height: 40 } },
-                ],
+                panes: [{ pane_id: activePaneId, rect: { width: 100, height: 40 } }],
               },
             },
           }),
@@ -3227,11 +2991,8 @@ export function startupExecutor(
           const assignment = args[i + 1]!;
           const separator = assignment.indexOf("=");
           if (separator > 0)
-            paneEnvironment[assignment.slice(0, separator)] = assignment.slice(
-              separator + 1,
-            );
-          if (assignment.startsWith("PI_HERDSMAN_RUN_ID="))
-            runId = assignment.slice(19);
+            paneEnvironment[assignment.slice(0, separator)] = assignment.slice(separator + 1);
+          if (assignment.startsWith("PI_HERDSMAN_RUN_ID=")) runId = assignment.slice(19);
           if (assignment.startsWith("PI_HERDSMAN_OWNER_SESSION_ID="))
             ownerSessionId = assignment.slice(29);
         }
@@ -3249,10 +3010,7 @@ export function startupExecutor(
           code: 0,
         };
       }
-      if (
-        args[0] === "pane" &&
-        (args[1] === "run" || args[1] === "wait-output")
-      ) {
+      if (args[0] === "pane" && (args[1] === "run" || args[1] === "wait-output")) {
         return { stdout: "{}", stderr: "", code: 0 };
       }
       if (isAgentList(args))
@@ -3262,16 +3020,9 @@ export function startupExecutor(
               ? (() => {
                   const state = readAgentState(mailbox)!;
                   const value = JSON.parse(
-                    listResponse(
-                      label,
-                      state.activeRequestId ? "working" : "idle",
-                    ),
+                    listResponse(label, state.activeRequestId ? "working" : "idle"),
                   );
-                  const alias = runScopedHerdrAlias(
-                    WORKSPACE,
-                    label,
-                    state.runId,
-                  );
+                  const alias = runScopedHerdrAlias(WORKSPACE, label, state.runId);
                   value.agents[0].herdr_agent = alias;
                   value.agents[0].name = alias;
                   value.agents[0].pane_id = activePaneId;
@@ -3301,8 +3052,7 @@ export function startupExecutor(
         stopped = true;
         return { stdout: "{}", stderr: "", code: 0 };
       }
-      if (args[0] !== "agent" || args[1] !== "start")
-        return { stdout: "{}", stderr: "", code: 0 };
+      if (args[0] !== "agent" || args[1] !== "start") return { stdout: "{}", stderr: "", code: 0 };
       onStart?.(args);
       const sessionIdIndex = args.indexOf("--session-id");
       if (sessionIdIndex >= 0 && args[sessionIdIndex + 1])
@@ -3353,20 +3103,12 @@ export function startupExecutor(
             tab_label: "agents",
             pane_id: activePaneId,
             cwd: testCwd,
-            herdr_agent: runScopedHerdrAlias(
-              WORKSPACE,
-              label,
-              runId || AGENT_ID,
-            ),
+            herdr_agent: runScopedHerdrAlias(WORKSPACE, label, runId || AGENT_ID),
             created_tab: false,
             created_pane: true,
             agent: startedAgent,
             runtime_identity: {
-              herdr_agent: runScopedHerdrAlias(
-                WORKSPACE,
-                label,
-                runId || AGENT_ID,
-              ),
+              herdr_agent: runScopedHerdrAlias(WORKSPACE, label, runId || AGENT_ID),
               herdr_kind: "pi",
               agent_definition: null,
               model: null,
@@ -3388,10 +3130,7 @@ export function startupExecutor(
 export function promptLaunchContents(args: string[]): string[] {
   const contents: string[] = [];
   for (let index = 0; index < args.length; index++) {
-    if (
-      args[index] === "--system-prompt" ||
-      args[index] === "--append-system-prompt"
-    ) {
+    if (args[index] === "--system-prompt" || args[index] === "--append-system-prompt") {
       const input = args[index + 1]!;
       if (input.startsWith("<active_agent ")) continue;
       contents.push(readFileSync(input, "utf8"));
@@ -3403,24 +3142,14 @@ export function promptLaunchContents(args: string[]): string[] {
 export function promptLaunchPaths(args: string[]): string[] {
   const paths: string[] = [];
   for (let index = 0; index < args.length; index++) {
-    if (
-      args[index] === "--system-prompt" ||
-      args[index] === "--append-system-prompt"
-    )
+    if (args[index] === "--system-prompt" || args[index] === "--append-system-prompt")
       paths.push(args[index + 1]!);
   }
   return paths;
 }
 
-export function writePromptDefinition(
-  path: string,
-  name: string,
-  promptPath: string,
-): void {
-  realFs.writeFileSync(
-    path,
-    `---\nname: ${name}\n---\ndefinition body\n@${promptPath}\n`,
-  );
+export function writePromptDefinition(path: string, name: string, promptPath: string): void {
+  realFs.writeFileSync(path, `---\nname: ${name}\n---\ndefinition body\n@${promptPath}\n`);
 }
 
 export default {

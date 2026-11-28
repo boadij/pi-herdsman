@@ -31,8 +31,7 @@ export function inheritedStartupModelExpectation(
   };
 }
 
-export function readStartupModelExpectation():
-  StartupModelExpectation | undefined {
+export function readStartupModelExpectation(): StartupModelExpectation | undefined {
   const raw = process.env[EXPECTED_STARTUP_MODEL_ENV];
   if (raw === undefined) return undefined;
   let parsed: unknown;
@@ -42,10 +41,7 @@ export function readStartupModelExpectation():
     // Report the same bounded error as for an invalid shape.
   }
   if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-    const { provider, id, requireCatalog, thinking } = parsed as Record<
-      string,
-      unknown
-    >;
+    const { provider, id, requireCatalog, thinking } = parsed as Record<string, unknown>;
     if (
       typeof provider === "string" &&
       provider.trim() &&
@@ -53,8 +49,7 @@ export function readStartupModelExpectation():
       id.trim() &&
       typeof requireCatalog === "boolean" &&
       (thinking === undefined ||
-        (typeof thinking === "string" &&
-          VALID_THINKING_LEVELS.some((level) => level === thinking)))
+        (typeof thinking === "string" && VALID_THINKING_LEVELS.some((level) => level === thinking)))
     )
       return { provider, id, requireCatalog, thinking };
   }
@@ -68,14 +63,11 @@ export function assertStartupModel(
   const { provider, id, requireCatalog, thinking } = expected;
   const actual = ctx.model;
   // Pi may synthesize the exact ID even when a required catalog entry is absent.
-  const registered = requireCatalog
-    ? ctx.modelRegistry.find(provider, id)
-    : undefined;
+  const registered = requireCatalog ? ctx.modelRegistry.find(provider, id) : undefined;
   if (
     actual?.provider !== provider ||
     actual.id !== id ||
-    (requireCatalog &&
-      (registered?.provider !== provider || registered.id !== id))
+    (requireCatalog && (registered?.provider !== provider || registered.id !== id))
   )
     throw new Error(
       `Expected startup model ${modelToken(expected)} was not selected${requireCatalog ? " from the child catalog" : ""}. Pi selected ${actual ? modelToken(actual) : "no model"}.`,
@@ -86,10 +78,7 @@ export function assertStartupModel(
     );
 }
 
-export function allowedOverrideModels(
-  ctx: ModelCatalogContext,
-  config: HerdsmanConfig,
-) {
+export function allowedOverrideModels(ctx: ModelCatalogContext, config: HerdsmanConfig) {
   if (!config.allowAgentModelOverrides) return [];
 
   const available = ctx.modelRegistry.getAvailable();
@@ -109,8 +98,7 @@ export function allowedOverrideModels(
       ? configuredTokens.has(token)
       : ctx.scopedModels.length === 0 ||
           ctx.scopedModels.some(
-            ({ model: scoped }) =>
-              scoped.provider === model.provider && scoped.id === model.id,
+            ({ model: scoped }) => scoped.provider === model.provider && scoped.id === model.id,
           );
   });
 }
@@ -127,10 +115,7 @@ export function sessionAgentModelCatalog(
   );
 }
 
-export function agentModelCatalog(
-  ctx: ModelCatalogContext,
-  config: HerdsmanConfig,
-) {
+export function agentModelCatalog(ctx: ModelCatalogContext, config: HerdsmanConfig) {
   if (!config.allowAgentModelOverrides) return undefined;
   return allowedOverrideModels(ctx, config).map((model) => ({
     model: modelToken(model),

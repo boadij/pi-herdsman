@@ -122,10 +122,7 @@ test("Coordinator admission is profile/socket scoped, bounded, and verifies its 
   symlinkSync(profile, join(root, "profile-alias"), "dir");
   const lease = acquireCoordinatorAdmission(profile, socket);
   try {
-    equal(
-      coordinatorAdmissionClaimIsCurrent(lease.claim, profile, socket),
-      true,
-    );
+    equal(coordinatorAdmissionClaimIsCurrent(lease.claim, profile, socket), true);
     equal(
       coordinatorAdmissionLockPath(profile, socket),
       coordinatorAdmissionLockPath(profile, socket),
@@ -158,10 +155,7 @@ test("Coordinator admission is profile/socket scoped, bounded, and verifies its 
       }
     });
     equal(await concurrentAttempt, "busy");
-    equal(
-      coordinatorAdmissionClaimIsCurrent(lease.claim, profile, socket),
-      true,
-    );
+    equal(coordinatorAdmissionClaimIsCurrent(lease.claim, profile, socket), true);
   } finally {
     lease.release();
     rmSync(root, { recursive: true, force: true });
@@ -224,9 +218,7 @@ test("publication collision during release is reported as occupied", (t) => {
     } catch (error) {
       if (
         destination === path &&
-        ["EEXIST", "ENOTEMPTY", "EPERM"].includes(
-          (error as NodeJS.ErrnoException).code ?? "",
-        )
+        ["EEXIST", "ENOTEMPTY", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")
       ) {
         previousLease.release();
         released = true;
@@ -386,10 +378,7 @@ test("claim wrapper retains atomic stale recovery after a crash", () => {
   const id = randomUUID();
   try {
     mkdirSync(path, 0o700);
-    writeFileSync(
-      join(path, `2147483647-${id}`),
-      JSON.stringify({ pid: 2147483647, id }),
-    );
+    writeFileSync(join(path, `2147483647-${id}`), JSON.stringify({ pid: 2147483647, id }));
     throws(
       () =>
         claimProcessLock(path, {
@@ -413,8 +402,7 @@ test("metadata does not affect live lock verification and is removed on release"
   const path = temporaryPath();
   try {
     const lease = acquireProcessLock(path);
-    for (const name of metadataNames)
-      writeFileSync(join(path, name), "metadata");
+    for (const name of metadataNames) writeFileSync(join(path, name), "metadata");
     unlinkSync(join(path, "desktop.ini"));
     writeFileSync(join(path, "DESKTOP.INI"), "metadata");
     deepEqual(readProcessLockStatus(path), { claim: lease.claim, live: true });
@@ -434,12 +422,8 @@ test("stale recovery removes metadata only after verifying the stale owner", () 
   const id = randomUUID();
   try {
     mkdirSync(path, 0o700);
-    writeFileSync(
-      join(path, `2147483647-${id}`),
-      JSON.stringify({ pid: 2147483647, id }),
-    );
-    for (const name of metadataNames)
-      writeFileSync(join(path, name), "metadata");
+    writeFileSync(join(path, `2147483647-${id}`), JSON.stringify({ pid: 2147483647, id }));
+    for (const name of metadataNames) writeFileSync(join(path, name), "metadata");
     const release = claimProcessLock(path);
     assertOccupied(path);
     release();
@@ -480,8 +464,7 @@ test("owner with a metadata symlink or unknown file is rejected", () => {
     const path = temporaryPath();
     const lease = acquireProcessLock(path);
     try {
-      if (entry === "symlink")
-        symlinkSync("missing", join(path, "desktop.ini"));
+      if (entry === "symlink") symlinkSync("missing", join(path, "desktop.ini"));
       else if (entry === "directory") mkdirSync(join(path, ".directory"));
       else writeFileSync(join(path, "unexpected"), "unknown");
       throws(() => readProcessLockStatus(path), /Unable to verify/);
@@ -498,10 +481,7 @@ test("stale recovery reports a concurrent claimant as occupied", () => {
   let releaseConcurrent: (() => void) | undefined;
   try {
     mkdirSync(path, 0o700);
-    writeFileSync(
-      join(path, `2147483647-${id}`),
-      JSON.stringify({ pid: 2147483647, id }),
-    );
+    writeFileSync(join(path, `2147483647-${id}`), JSON.stringify({ pid: 2147483647, id }));
     throws(
       () =>
         claimProcessLock(path, {
@@ -522,10 +502,7 @@ test("stale recovery rejects malformed evidence without touching it", () => {
   const owner = "2147483647-stale";
   try {
     mkdirSync(path, 0o700);
-    writeFileSync(
-      join(path, owner),
-      JSON.stringify({ pid: 2147483647, id: "stale" }),
-    );
+    writeFileSync(join(path, owner), JSON.stringify({ pid: 2147483647, id: "stale" }));
     throws(() => claimProcessLock(path), /Unable to verify process lock/);
     deepEqual(readdirSync(path), [owner]);
   } finally {
@@ -559,10 +536,7 @@ test("readLiveProcessLock rejects a dead PID", () => {
   const id = randomUUID();
   try {
     mkdirSync(path, 0o700);
-    writeFileSync(
-      join(path, `2147483647-${id}`),
-      JSON.stringify({ pid: 2147483647, id }),
-    );
+    writeFileSync(join(path, `2147483647-${id}`), JSON.stringify({ pid: 2147483647, id }));
     deepEqual(readProcessLockStatus(path), {
       claim: { pid: 2147483647, id },
       live: false,
@@ -590,10 +564,7 @@ test("readLiveProcessLock rejects a malformed owner", () => {
 });
 
 test("readLiveProcessLock rejects empty and multiple owners", () => {
-  for (const owners of [
-    [],
-    [`${process.pid}-${randomUUID()}`, `${process.pid}-${randomUUID()}`],
-  ]) {
+  for (const owners of [[], [`${process.pid}-${randomUUID()}`, `${process.pid}-${randomUUID()}`]]) {
     const path = temporaryPath();
     try {
       mkdirSync(path, 0o700);

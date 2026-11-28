@@ -1,12 +1,5 @@
 import assert from "node:assert/strict";
-import {
-  mkdtempSync,
-  mkdirSync,
-  renameSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync, mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -142,10 +135,7 @@ test("launcher resolves selected local packages and rejects ambiguous selections
     const rebuilt = run();
     assert.equal(rebuilt.status, 17);
     assert.equal(rebuilt.stdout, 'rebuilt["one","two words"]');
-    settings([
-      "git:https://example.invalid/repo",
-      "https://example.invalid/repo",
-    ]);
+    settings(["git:https://example.invalid/repo", "https://example.invalid/repo"]);
     assert.match(run().stderr, /no supported Herdsman/);
     writeFileSync(join(agent, "settings.json"), "{");
     assert.equal(run().status, 1);
@@ -155,9 +145,7 @@ test("launcher resolves selected local packages and rejects ambiguous selections
 test("launcher rejects selected manifests without the runtime identity and declaration", () => {
   for (const local of [false, true])
     fixture(({ home, agent, settings, packageAt, run }) => {
-      const root = local
-        ? join(home, "local")
-        : join(agent, "npm/node_modules/pi-herdsman");
+      const root = local ? join(home, "local") : join(agent, "npm/node_modules/pi-herdsman");
       packageAt(root);
       settings([local ? root : "npm:pi-herdsman"]);
       for (const manifest of [
@@ -204,19 +192,13 @@ test("launcher rejects invalid builds and symlinks in selected package paths", (
       "npm/node_modules/pi-herdsman/dist/index.js",
       "npm/node_modules/pi-herdsman/dist/peer-bridge.js",
     ].map((p) => [false, p]),
-    ...["", "package.json", "dist", "dist/index.js", "dist/peer-bridge.js"].map(
-      (p) => [true, p],
-    ),
+    ...["", "package.json", "dist", "dist/index.js", "dist/peer-bridge.js"].map((p) => [true, p]),
   ])
     fixture(({ home, agent, settings, packageAt, run }) => {
-      const root = local
-        ? join(home, "local")
-        : join(agent, "npm/node_modules/pi-herdsman");
+      const root = local ? join(home, "local") : join(agent, "npm/node_modules/pi-herdsman");
       packageAt(root);
       settings([local ? root : "npm:pi-herdsman"]);
-      const target = local
-        ? join(root, relativePath)
-        : join(agent, relativePath);
+      const target = local ? join(root, relativePath) : join(agent, relativePath);
       const outside = join(home, "outside");
       renameSync(target, outside);
       symlinkSync(outside, target);

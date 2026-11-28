@@ -57,9 +57,7 @@ export type HerdsmanConfig = {
 
 export type ManagerMergeSetting = boolean | "divergent";
 
-export function validManagerMergeSetting(
-  value: unknown,
-): value is ManagerMergeSetting {
+export function validManagerMergeSetting(value: unknown): value is ManagerMergeSetting {
   return typeof value === "boolean" || value === "divergent";
 }
 
@@ -94,12 +92,7 @@ export function validByteLimit(value: unknown): value is number {
 }
 
 export function validStatusWidgetMaxRows(value: unknown): value is number {
-  return (
-    typeof value === "number" &&
-    Number.isInteger(value) &&
-    value >= 1 &&
-    value <= 100
-  );
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 100;
 }
 
 export function validMaxAgentDepth(value: unknown): value is number {
@@ -177,16 +170,13 @@ function containsControlCharacter(value: string): boolean {
   return false;
 }
 
-function validManagerMergeOverrides(
-  value: unknown,
-): value is Record<string, ManagerMergeSetting> {
+function validManagerMergeOverrides(value: unknown): value is Record<string, ManagerMergeSetting> {
   return (
     !!value &&
     typeof value === "object" &&
     !Array.isArray(value) &&
     Object.entries(value).every(
-      ([repoKey, enabled]) =>
-        validRepoIdentity(repoKey) && validManagerMergeSetting(enabled),
+      ([repoKey, enabled]) => validRepoIdentity(repoKey) && validManagerMergeSetting(enabled),
     )
   );
 }
@@ -213,8 +203,7 @@ function parseRawConfig(content: string): Partial<HerdsmanConfig> {
     result.statusWidgetMaxRows = record.statusWidgetMaxRows;
   }
   if ("maxAgentDepth" in record) {
-    if (!validMaxAgentDepth(record.maxAgentDepth))
-      throw invalidMaxAgentDepth(record.maxAgentDepth);
+    if (!validMaxAgentDepth(record.maxAgentDepth)) throw invalidMaxAgentDepth(record.maxAgentDepth);
     result.maxAgentDepth = record.maxAgentDepth;
   }
   if ("spawnPlacement" in record) {
@@ -232,10 +221,7 @@ function parseRawConfig(content: string): Partial<HerdsmanConfig> {
       throw new Error("Invalid Pi Herdsman config field contextRetirement");
     result.contextRetirement = record.contextRetirement;
   }
-  for (const key of [
-    "peerCommunicationEnabled",
-    "peerFederationEnabled",
-  ] as const)
+  for (const key of ["peerCommunicationEnabled", "peerFederationEnabled"] as const)
     if (key in record) {
       if (typeof record[key] !== "boolean")
         throw new Error(`Invalid Pi Herdsman config field ${key}`);
@@ -257,9 +243,7 @@ function parseRawConfig(content: string): Partial<HerdsmanConfig> {
   }
   if ("allowAgentModelOverrides" in record) {
     if (typeof record.allowAgentModelOverrides !== "boolean")
-      throw new Error(
-        "Invalid Pi Herdsman config field allowAgentModelOverrides",
-      );
+      throw new Error("Invalid Pi Herdsman config field allowAgentModelOverrides");
     result.allowAgentModelOverrides = record.allowAgentModelOverrides;
   }
   if ("allowedAgentModels" in record) {
@@ -269,11 +253,8 @@ function parseRawConfig(content: string): Partial<HerdsmanConfig> {
   }
   if ("managerGitBootstrapWithoutConfirmation" in record) {
     if (typeof record.managerGitBootstrapWithoutConfirmation !== "boolean")
-      throw new Error(
-        "Invalid Pi Herdsman config field managerGitBootstrapWithoutConfirmation",
-      );
-    result.managerGitBootstrapWithoutConfirmation =
-      record.managerGitBootstrapWithoutConfirmation;
+      throw new Error("Invalid Pi Herdsman config field managerGitBootstrapWithoutConfirmation");
+    result.managerGitBootstrapWithoutConfirmation = record.managerGitBootstrapWithoutConfirmation;
   }
   if ("managerMergeEnabled" in record) {
     if (!validManagerMergeSetting(record.managerMergeEnabled))
@@ -285,13 +266,9 @@ function parseRawConfig(content: string): Partial<HerdsmanConfig> {
       throw new Error("Invalid Pi Herdsman config field managerMergeOverrides");
     result.managerMergeOverrides = record.managerMergeOverrides;
   }
-  for (const key of [
-    "inlineAttachmentLimitBytes",
-    "mailboxPayloadLimitBytes",
-  ] as const)
+  for (const key of ["inlineAttachmentLimitBytes", "mailboxPayloadLimitBytes"] as const)
     if (key in record) {
-      if (!validByteLimit(record[key]))
-        throw new Error(`Invalid Pi Herdsman config field ${key}`);
+      if (!validByteLimit(record[key])) throw new Error(`Invalid Pi Herdsman config field ${key}`);
       result[key] = record[key];
     }
   if ("worktreeRemovalPreapprovedRepos" in record) {
@@ -301,9 +278,7 @@ function parseRawConfig(content: string): Partial<HerdsmanConfig> {
       repos.some((repo) => typeof repo !== "string" || !repo.trim()) ||
       new Set(repos).size !== repos.length
     )
-      throw new Error(
-        "Invalid Pi Herdsman config field worktreeRemovalPreapprovedRepos",
-      );
+      throw new Error("Invalid Pi Herdsman config field worktreeRemovalPreapprovedRepos");
     result.worktreeRemovalPreapprovedRepos = repos;
   }
   return result;
@@ -318,9 +293,7 @@ export function readPeerPolicy(): { local: boolean; remote: boolean } {
 }
 
 export function isWorktreeRemovalPreapproved(repoKey: string): boolean {
-  return (
-    !!repoKey && readConfig().worktreeRemovalPreapprovedRepos.includes(repoKey)
-  );
+  return !!repoKey && readConfig().worktreeRemovalPreapprovedRepos.includes(repoKey);
 }
 
 export type EffectiveMergePolicy = {
@@ -333,8 +306,7 @@ export function effectiveMergePolicy(
   config: Pick<HerdsmanConfig, "managerMergeEnabled" | "managerMergeOverrides">,
   repoKey: string,
 ): EffectiveMergePolicy {
-  if (!validRepoIdentity(repoKey))
-    throw new Error("A verified repository identity is required");
+  if (!validRepoIdentity(repoKey)) throw new Error("A verified repository identity is required");
   const override = config.managerMergeOverrides[repoKey];
   const setting = !Object.hasOwn(config.managerMergeOverrides, repoKey)
     ? config.managerMergeEnabled
@@ -342,9 +314,7 @@ export function effectiveMergePolicy(
   return {
     enabled: setting !== false,
     allowDivergence: setting === "divergent",
-    source: Object.hasOwn(config.managerMergeOverrides, repoKey)
-      ? "repository"
-      : "global",
+    source: Object.hasOwn(config.managerMergeOverrides, repoKey) ? "repository" : "global",
   };
 }
 
@@ -356,13 +326,8 @@ export function setManagerMergeOverride(
     override: ManagerMergeSetting | undefined;
   },
 ): void {
-  if (
-    !validRepoIdentity(repoKey) ||
-    (enabled !== undefined && !validManagerMergeSetting(enabled))
-  )
-    throw new Error(
-      "A verified repository identity and optional merge policy are required",
-    );
+  if (!validRepoIdentity(repoKey) || (enabled !== undefined && !validManagerMergeSetting(enabled)))
+    throw new Error("A verified repository identity and optional merge policy are required");
   const path = herdsmanConfigPath();
   const release = claimProcessLock(`${path}.lock`, {
     name: "Pi Herdsman config update",
@@ -371,18 +336,14 @@ export function setManagerMergeOverride(
     const current = readRawConfig();
     if (
       expected &&
-      ((current.managerMergeEnabled ?? DEFAULT_CONFIG.managerMergeEnabled) !==
-        expected.global ||
+      ((current.managerMergeEnabled ?? DEFAULT_CONFIG.managerMergeEnabled) !== expected.global ||
         current.managerMergeOverrides?.[repoKey] !== expected.override)
     )
-      throw new Error(
-        "Manager integration policy changed; reopen the selector.",
-      );
+      throw new Error("Manager integration policy changed; reopen the selector.");
     const overrides = { ...current.managerMergeOverrides };
     if (enabled === undefined) delete overrides[repoKey];
     else overrides[repoKey] = enabled;
-    if (Object.keys(overrides).length)
-      current.managerMergeOverrides = overrides;
+    if (Object.keys(overrides).length) current.managerMergeOverrides = overrides;
     else delete current.managerMergeOverrides;
     if (Object.keys(current).length)
       writeConfigAtomically(path, `${JSON.stringify(current, null, 2)}\n`);
@@ -404,9 +365,7 @@ export function setWorktreeRemovalPreapproved(
   expected?: boolean,
 ): void {
   if (!repoKey || typeof enabled !== "boolean")
-    throw new Error(
-      "A verified repository identity and boolean policy are required",
-    );
+    throw new Error("A verified repository identity and boolean policy are required");
   const path = herdsmanConfigPath();
   const release = claimProcessLock(`${path}.lock`, {
     name: "Pi Herdsman config update",
@@ -455,10 +414,7 @@ export type ProjectOverrides = Partial<
   Pick<HerdsmanConfig, "autoActivateManager" | "contextRetirement">
 >;
 
-function parseProjectSettings(
-  content: string,
-  path: string,
-): Record<string, unknown> {
+function parseProjectSettings(content: string, path: string): Record<string, unknown> {
   let settings: unknown;
   try {
     settings = JSON.parse(content.replace(/^\uFEFF/, ""));
@@ -472,10 +428,7 @@ function parseProjectSettings(
   return settings as Record<string, unknown>;
 }
 
-function parseProjectOverrides(
-  settings: Record<string, unknown>,
-  path: string,
-): ProjectOverrides {
+function parseProjectOverrides(settings: Record<string, unknown>, path: string): ProjectOverrides {
   const raw = settings.piHerdsman;
   if (raw === undefined) return {};
   if (!raw || typeof raw !== "object" || Array.isArray(raw))
@@ -499,9 +452,7 @@ function assertRegularProjectSettings(path: string): number | undefined {
   try {
     const stat = lstatSync(path);
     if (!stat.isFile())
-      throw new Error(
-        `Invalid project settings ${path}: expected a regular file`,
-      );
+      throw new Error(`Invalid project settings ${path}: expected a regular file`);
     return stat.mode & 0o777;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
@@ -514,8 +465,7 @@ function acquireProjectSettingsLock(path: string): () => void {
     try {
       return lockSync(path, { realpath: false });
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ELOCKED" || attempt === 9)
-        throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ELOCKED" || attempt === 9) throw error;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
     }
   }
@@ -562,20 +512,14 @@ export function updateProjectOverride(
     }
     const overrides = parseProjectOverrides(settings, path);
     const alreadySet = Object.hasOwn(overrides, key);
-    if (
-      value === undefined ? !alreadySet : alreadySet && overrides[key] === value
-    ) {
+    if (value === undefined ? !alreadySet : alreadySet && overrides[key] === value) {
       changed = false;
     } else {
       if (value === undefined) delete overrides[key];
       else overrides[key] = value;
       if (Object.keys(overrides).length) settings.piHerdsman = overrides;
       else delete settings.piHerdsman;
-      writeConfigAtomically(
-        path,
-        `${JSON.stringify(settings, null, 2)}\n`,
-        mode,
-      );
+      writeConfigAtomically(path, `${JSON.stringify(settings, null, 2)}\n`, mode);
       changed = true;
     }
   } finally {
@@ -583,16 +527,9 @@ export function updateProjectOverride(
   }
   let stored: ProjectOverrides;
   try {
-    stored = parseProjectOverrides(
-      parseProjectSettings(readFileSync(path, "utf8"), path),
-      path,
-    );
+    stored = parseProjectOverrides(parseProjectSettings(readFileSync(path, "utf8"), path), path);
   } catch (error) {
-    if (
-      !changed &&
-      value === undefined &&
-      (error as NodeJS.ErrnoException).code === "ENOENT"
-    )
+    if (!changed && value === undefined && (error as NodeJS.ErrnoException).code === "ENOENT")
       stored = {};
     else throw error;
   }
@@ -608,16 +545,9 @@ export function readEffectiveConfig(ctx: ProjectContext): HerdsmanConfig {
   return { ...readConfig(), ...readProjectOverrides(ctx) };
 }
 
-function writeConfigAtomically(
-  path: string,
-  content: string,
-  mode = 0o600,
-): void {
+function writeConfigAtomically(path: string, content: string, mode = 0o600): void {
   const directory = dirname(path);
-  const temporaryPath = join(
-    directory,
-    `.${basename(path)}.${randomUUID()}.tmp`,
-  );
+  const temporaryPath = join(directory, `.${basename(path)}.${randomUUID()}.tmp`);
   let descriptor: number | undefined;
   let cleanupError: unknown;
   let cleanupFailed = false;
@@ -660,26 +590,20 @@ export function updateConfig<K extends ConfigKey>(
         (current.managerMergeEnabled ?? DEFAULT_CONFIG.managerMergeEnabled) !==
           expectedManagerMergeEnabled)
     )
-      throw new Error(
-        "Global Manager integration policy changed; reopen the selector.",
-      );
+      throw new Error("Global Manager integration policy changed; reopen the selector.");
     if (value === undefined && !Object.hasOwn(current, key)) return;
     if (value !== undefined) {
       if (key === "statusWidgetMaxRows" && !validStatusWidgetMaxRows(value))
         throw new Error("Invalid Pi Herdsman config field statusWidgetMaxRows");
-      if (key === "maxAgentDepth" && !validMaxAgentDepth(value))
-        throw invalidMaxAgentDepth(value);
+      if (key === "maxAgentDepth" && !validMaxAgentDepth(value)) throw invalidMaxAgentDepth(value);
       if (key === "spawnPlacement" && !isSpawnPlacement(value))
         throw new Error("Invalid Pi Herdsman config field spawnPlacement");
       if (key === "defaultLeadExecution" && !isLeadExecutionMode(value))
-        throw new Error(
-          "Invalid Pi Herdsman config field defaultLeadExecution",
-        );
+        throw new Error("Invalid Pi Herdsman config field defaultLeadExecution");
       if (key === "contextRetirement" && typeof value !== "boolean")
         throw new Error("Invalid Pi Herdsman config field contextRetirement");
       if (
-        (key === "peerCommunicationEnabled" ||
-          key === "peerFederationEnabled") &&
+        (key === "peerCommunicationEnabled" || key === "peerFederationEnabled") &&
         typeof value !== "boolean"
       )
         throw new Error(`Invalid Pi Herdsman config field ${key}`);
@@ -687,40 +611,26 @@ export function updateConfig<K extends ConfigKey>(
         throw new Error("Invalid Pi Herdsman config field autoActivateManager");
       if (key === "projectsDirectory") validateProjectsDirectory(value);
       if (key === "allowAgentCwdOverride" && typeof value !== "boolean")
-        throw new Error(
-          "Invalid Pi Herdsman config field allowAgentCwdOverride",
-        );
+        throw new Error("Invalid Pi Herdsman config field allowAgentCwdOverride");
       if (key === "allowAgentModelOverrides" && typeof value !== "boolean")
-        throw new Error(
-          "Invalid Pi Herdsman config field allowAgentModelOverrides",
-        );
+        throw new Error("Invalid Pi Herdsman config field allowAgentModelOverrides");
       if (key === "allowedAgentModels" && !validAllowedAgentModels(value))
         throw new Error("Invalid Pi Herdsman config field allowedAgentModels");
-      if (
-        key === "managerGitBootstrapWithoutConfirmation" &&
-        typeof value !== "boolean"
-      )
-        throw new Error(
-          "Invalid Pi Herdsman config field managerGitBootstrapWithoutConfirmation",
-        );
+      if (key === "managerGitBootstrapWithoutConfirmation" && typeof value !== "boolean")
+        throw new Error("Invalid Pi Herdsman config field managerGitBootstrapWithoutConfirmation");
       if (key === "managerMergeEnabled" && !validManagerMergeSetting(value))
         throw new Error("Invalid Pi Herdsman config field managerMergeEnabled");
       if (key === "managerMergeOverrides" && !validManagerMergeOverrides(value))
-        throw new Error(
-          "Invalid Pi Herdsman config field managerMergeOverrides",
-        );
+        throw new Error("Invalid Pi Herdsman config field managerMergeOverrides");
       if (
         key === "worktreeRemovalPreapprovedRepos" &&
         (!Array.isArray(value) ||
           value.some((repo) => typeof repo !== "string" || !repo.trim()) ||
           new Set(value).size !== value.length)
       )
-        throw new Error(
-          "Invalid Pi Herdsman config field worktreeRemovalPreapprovedRepos",
-        );
+        throw new Error("Invalid Pi Herdsman config field worktreeRemovalPreapprovedRepos");
       if (
-        (key === "inlineAttachmentLimitBytes" ||
-          key === "mailboxPayloadLimitBytes") &&
+        (key === "inlineAttachmentLimitBytes" || key === "mailboxPayloadLimitBytes") &&
         !validByteLimit(value)
       )
         throw new Error(`Invalid Pi Herdsman config field ${key}`);

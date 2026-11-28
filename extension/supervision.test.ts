@@ -116,8 +116,7 @@ import type {
   ChiefMessageRecord,
 } from "./supervision.ts";
 
-const socket = () =>
-  join(mkdtempSync(join(tmpdir(), "supervision-test-")), "sock");
+const socket = () => join(mkdtempSync(join(tmpdir(), "supervision-test-")), "sock");
 const id = () => randomUUID();
 const BUILD = { version: "0.18.0", sha256: "a".repeat(64) } as const;
 
@@ -150,35 +149,18 @@ test("peer delivery receipts bind exact session, ID, and content durably", () =>
   const digest = coordinationMessageDigest(record);
   assert.equal(
     coordinationMessageDigest(
-      Object.fromEntries(
-        Object.entries(record).reverse(),
-      ) as ChiefMessageRecord,
+      Object.fromEntries(Object.entries(record).reverse()) as ChiefMessageRecord,
     ),
     digest,
   );
-  assert.equal(
-    hasPeerDeliveryReceipt(runtime, record.toSessionId, record.id, digest),
-    false,
-  );
+  assert.equal(hasPeerDeliveryReceipt(runtime, record.toSessionId, record.id, digest), false);
   writePeerDeliveryReceipt(runtime, record);
-  assert.equal(
-    hasPeerDeliveryReceipt(runtime, record.toSessionId, record.id, digest),
-    true,
-  );
+  assert.equal(hasPeerDeliveryReceipt(runtime, record.toSessionId, record.id, digest), true);
   assert.throws(
-    () =>
-      hasPeerDeliveryReceipt(
-        runtime,
-        record.toSessionId,
-        record.id,
-        "0".repeat(64),
-      ),
+    () => hasPeerDeliveryReceipt(runtime, record.toSessionId, record.id, "0".repeat(64)),
     /Conflicting peer delivery receipt/,
   );
-  assert.equal(
-    hasPeerDeliveryReceipt(runtime, "other-session", record.id, digest),
-    false,
-  );
+  assert.equal(hasPeerDeliveryReceipt(runtime, "other-session", record.id, digest), false);
 });
 
 for (const disableAt of ["before drain", "during authorization"]) {
@@ -194,8 +176,7 @@ for (const disableAt of ["before drain", "during authorization"]) {
     writeCoordinationMessage(hierarchy, runtime);
     const delivered = new Set<string>();
     let disableDuringAuthorization = disableAt === "during authorization";
-    if (!disableDuringAuthorization)
-      updateConfig("peerCommunicationEnabled", false);
+    if (!disableDuringAuthorization) updateConfig("peerCommunicationEnabled", false);
     const options = {
       runtime,
       sessionId: peer.toSessionId,
@@ -208,11 +189,7 @@ for (const disableAt of ["before drain", "during authorization"]) {
       },
       isPeerDeliveryEnabled: () => readPeerPolicy().local,
       isDelivered: (id: string) => delivered.has(id),
-      sendMessage: (
-        _payload: unknown,
-        _options: unknown,
-        record: ChiefMessageRecord,
-      ) => {
+      sendMessage: (_payload: unknown, _options: unknown, record: ChiefMessageRecord) => {
         assert.ok(!delivered.has(record.id), "duplicate delivery");
         delivered.add(record.id);
       },
@@ -321,8 +298,7 @@ test("resume inbox submits assignment without triggering before replacement-leas
       context.push((payload as { content: string }).content);
       deliveredIds.add(record.id);
       triggerOptions.push(options.triggerTurn);
-      if (options.triggerTurn && !firstTriggeredContext)
-        firstTriggeredContext = [...context];
+      if (options.triggerTurn && !firstTriggeredContext) firstTriggeredContext = [...context];
     },
   });
 
@@ -373,9 +349,7 @@ test("running resume handoff delivers only the fresh instruction", async () => {
 
   await drain();
   assert.equal(triggered.length, 1);
-  assert.deepEqual(context, [
-    "From Manager: Changed priority: investigate the regression first",
-  ]);
+  assert.deepEqual(context, ["From Manager: Changed priority: investigate the regression first"]);
 });
 
 test("paired assignment waits when resume instruction authorization is transient", async () => {
@@ -411,10 +385,7 @@ test("paired assignment waits when resume instruction authorization is transient
       runtime,
       sessionId,
       isAuthorized: (record) => {
-        if (
-          record.id === instruction.id &&
-          ++instructionAuthorizationAttempts === 1
-        )
+        if (record.id === instruction.id && ++instructionAuthorizationAttempts === 1)
           throw new Error("temporary authorization failure");
         return record.leaseId === leaseId;
       },
@@ -458,16 +429,14 @@ test("same-route unauthorized or quarantined Manager messages do not suppress as
     });
     writeChiefMessage(assignment, runtime);
     writeChiefMessage(instruction, runtime);
-    if (state === "quarantined")
-      quarantineChiefMessage(runtime, sessionId, instruction.id);
+    if (state === "quarantined") quarantineChiefMessage(runtime, sessionId, instruction.id);
 
     const triggerOptions: boolean[] = [];
     const delivered = new Set<string>();
     await drainCoordinationInbox({
       runtime,
       sessionId,
-      isAuthorized: (record) =>
-        state !== "unauthorized" || record.id === assignment.id,
+      isAuthorized: (record) => state !== "unauthorized" || record.id === assignment.id,
       isDelivered: (recordId) => delivered.has(recordId),
       sendMessage: (_payload, options, record) => {
         triggerOptions.push(options.triggerTurn);
@@ -559,37 +528,23 @@ test("remote Lead eligibility requires an ordinary Lead with no assignments", ()
   try {
     assert.equal(isRemoteOrdinaryLead(fixture.record, new Map()), true);
     assert.equal(
-      isRemoteOrdinaryLead(
-        fixture.record,
-        new Map([[fixture.record.piSessionId, []]]),
-      ),
+      isRemoteOrdinaryLead(fixture.record, new Map([[fixture.record.piSessionId, []]])),
       true,
     );
     assert.equal(isRemoteOrdinaryLead(fixture.record, assigned), false);
     assert.equal(
       isRemoteOrdinaryLead(
         fixture.record,
-        new Map([
-          [fixture.record.piSessionId, [{}, {}] as GlobalProjectAssignment[]],
-        ]),
+        new Map([[fixture.record.piSessionId, [{}, {}] as GlobalProjectAssignment[]]]),
       ),
       false,
     );
     assert.equal(
-      isRemoteOrdinaryLead(
-        { ...fixture.record, sessionKind: "managed" },
-        new Map(),
-      ),
+      isRemoteOrdinaryLead({ ...fixture.record, sessionKind: "managed" }, new Map()),
       false,
     );
-    assert.equal(
-      isRemoteOrdinaryLead({ ...fixture.record, role: "manager" }, new Map()),
-      false,
-    );
-    assert.equal(
-      isRemoteOrdinaryLead({ ...fixture.record, role: undefined }, new Map()),
-      false,
-    );
+    assert.equal(isRemoteOrdinaryLead({ ...fixture.record, role: "manager" }, new Map()), false);
+    assert.equal(isRemoteOrdinaryLead({ ...fixture.record, role: undefined }, new Map()), false);
   } finally {
     removePeerLeadRecord(runtime, fixture.record.piSessionId, fixture.record);
     fixture.release();
@@ -606,9 +561,7 @@ const state = (
   updatedAt: 1,
   ...extra,
 });
-const message = (
-  extra: Partial<ChiefMessageRecord> = {},
-): ChiefMessageRecord => ({
+const message = (extra: Partial<ChiefMessageRecord> = {}): ChiefMessageRecord => ({
   version: 2,
   build: BUILD,
   id: id(),
@@ -709,20 +662,14 @@ test("message locks fail closed for live and malformed owners", () => {
           }),
     );
 
-    assert.throws(
-      () => writeChiefMessage(record, runtime),
-      /in progress|verify/,
-    );
+    assert.throws(() => writeChiefMessage(record, runtime), /in progress|verify/);
     assert.deepEqual(readdirSync(lock), [owner]);
   }
 });
 
 test("chief message sizing is the exact serialized UTF-8 record size", () => {
   const record = message({ text: "héllo" });
-  assert.equal(
-    chiefMessageBytes(record),
-    Buffer.byteLength(`${JSON.stringify(record)}\n`, "utf8"),
-  );
+  assert.equal(chiefMessageBytes(record), Buffer.byteLength(`${JSON.stringify(record)}\n`, "utf8"));
 });
 
 test("chief messages keep compact records while storing large bodies", () => {
@@ -733,19 +680,14 @@ test("chief messages keep compact records while storing large bodies", () => {
   let high = COORDINATION_MESSAGE_MAX_BYTES;
   while (low < high) {
     const middle = Math.ceil((low + high) / 2);
-    if (
-      chiefMessageBytes(recordFor("x".repeat(middle))) <=
-      COORDINATION_MESSAGE_MAX_BYTES
-    )
+    if (chiefMessageBytes(recordFor("x".repeat(middle))) <= COORDINATION_MESSAGE_MAX_BYTES)
       low = middle;
     else high = middle - 1;
   }
   const exact = recordFor("x".repeat(low));
   const over = {
     ...recordFor("x".repeat(low + 1)),
-    resultBindings: [
-      { ref: "result:reviewer#1", canonicalRef: `result:${id()}` },
-    ],
+    resultBindings: [{ ref: "result:reviewer#1", canonicalRef: `result:${id()}` }],
   };
   assert.equal(chiefMessageBytes(exact), COORDINATION_MESSAGE_MAX_BYTES);
   assert.ok(chiefMessageBytes(over) > COORDINATION_MESSAGE_MAX_BYTES);
@@ -836,10 +778,7 @@ test("unreadable overflow messages do not consume the bounded delivery window", 
     },
   });
   assert.deepEqual(sent, [valid.id]);
-  assert.equal(
-    existsSync(chiefMessagePath(runtime, valid.toSessionId, valid.id)),
-    false,
-  );
+  assert.equal(existsSync(chiefMessagePath(runtime, valid.toSessionId, valid.id)), false);
 });
 
 test("overflow body reads reject FIFOs without blocking", async (t) => {
@@ -881,9 +820,7 @@ test("coordination records bind branch only for project and assigned Manager mes
     const managerProjectMessage = kind === "manager_message";
     const record = message({
       kind,
-      ...(projectMessage || managerProjectMessage
-        ? { branch: "feat/bootstrap" }
-        : {}),
+      ...(projectMessage || managerProjectMessage ? { branch: "feat/bootstrap" } : {}),
     });
     const path = writeCoordinationMessage(record, runtime);
     assert.deepEqual(readCoordinationMessage(path), record, kind);
@@ -893,39 +830,24 @@ test("coordination records bind branch only for project and assigned Manager mes
         ? ["", " ", "x".repeat(513), 1, null]
         : ["feat/bootstrap", "", null]) {
       assert.throws(
-        () =>
-          writeCoordinationMessage(
-            { ...record, id: randomUUID(), branch } as never,
-            runtime,
-          ),
+        () => writeCoordinationMessage({ ...record, id: randomUUID(), branch } as never, runtime),
         /Invalid Chief message record/,
         `${kind}: ${String(branch)}`,
       );
     }
     assert.throws(
-      () =>
-        writeCoordinationMessage(
-          { ...record, unknown: true } as never,
-          runtime,
-        ),
+      () => writeCoordinationMessage({ ...record, unknown: true } as never, runtime),
       /Invalid Chief message record/,
     );
   }
-  for (const kind of [
-    "lead_ask",
-    "chief_reply",
-    "manager_ask",
-    "manager_reply",
-    "report_result",
-  ])
+  for (const kind of ["lead_ask", "chief_reply", "manager_ask", "manager_reply", "report_result"])
     assert.throws(
       () => writeCoordinationMessage(message({ kind } as never), runtime),
       /Invalid Chief message record/,
       kind,
     );
   assert.throws(
-    () =>
-      writeCoordinationMessage({ ...message(), askId: id() } as never, runtime),
+    () => writeCoordinationMessage({ ...message(), askId: id() } as never, runtime),
     /Invalid Chief message record/,
   );
 });
@@ -939,10 +861,7 @@ test("peer lead presence requires a live generation and excludes corruption", ()
   );
   try {
     assert.equal(writePeerLeadRecord(runtime, fixture.record), path);
-    assert.deepEqual(
-      readPeerLeadRecord(runtime, "lead-presence"),
-      fixture.record,
-    );
+    assert.deepEqual(readPeerLeadRecord(runtime, "lead-presence"), fixture.record);
     assert.deepEqual(listPeerLeadRecords(runtime), [fixture.record]);
     assertPosixMode(path, 0o600);
 
@@ -969,10 +888,7 @@ test("peer lead presence rejects a changed or missing process-lock generation", 
   );
   assert.deepEqual(listPeerLeadRecords(runtime), []);
   unlinkSync(
-    join(
-      runtime.peers,
-      `${createHash("sha256").update("lead-generation").digest("hex")}.json`,
-    ),
+    join(runtime.peers, `${createHash("sha256").update("lead-generation").digest("hex")}.json`),
   );
 });
 
@@ -987,10 +903,7 @@ test("peer authority comparison rejects provenance changes but ignores presentat
       { workspaceId: `${expected.workspaceId}-other` },
       { group: { repoKey: "other-repo", primaryWorkspaceId: "other" } },
     ])
-      assert.equal(
-        samePeerLeadAuthority({ ...expected, ...changed }, expected),
-        false,
-      );
+      assert.equal(samePeerLeadAuthority({ ...expected, ...changed }, expected), false);
     assert.equal(
       samePeerLeadAuthority(
         { ...expected, name: "renamed", cwd: "/other", branch: "other" },
@@ -1034,16 +947,12 @@ test("record publication failures remove temporary files", () => {
   const peerPath = peerLeadRecordPath(peers, fixture.record.piSessionId);
   const supervision = supervisionRuntime(socket());
   const leadState = state("publication-failure-lead");
-  const statePath = leadCoordinationStatePath(
-    supervision,
-    leadState.piSessionId,
-  );
+  const statePath = leadCoordinationStatePath(supervision, leadState.piSessionId);
 
   const assertNoTemporaryFile = (path: string) => {
     assert.deepEqual(
       readdirSync(dirname(path)).filter(
-        (name) =>
-          name.startsWith(`.${basename(path)}.`) && name.endsWith(".tmp"),
+        (name) => name.startsWith(`.${basename(path)}.`) && name.endsWith(".tmp"),
       ),
       [],
     );
@@ -1102,18 +1011,14 @@ test("peer lead enumeration excludes arbitrary and duplicate JSON", () => {
 
 test("peer lead enumeration scans every canonical record before liveness filtering", () => {
   const runtime = peerRuntime(socket());
-  const fixtures = Array.from(
-    { length: COORDINATION_INBOX_SCAN_LIMIT + 1 },
-    (_, index) => peerRecord(runtime, `lead-enumeration-${index}`),
+  const fixtures = Array.from({ length: COORDINATION_INBOX_SCAN_LIMIT + 1 }, (_, index) =>
+    peerRecord(runtime, `lead-enumeration-${index}`),
   );
   const malformedPath = join(runtime.peers, `${"0".repeat(64)}.json`);
   const dead = peerRecord(runtime, "dead-0");
-  const deadFilename = `${createHash("sha256")
-    .update(dead.record.piSessionId)
-    .digest("hex")}.json`;
+  const deadFilename = `${createHash("sha256").update(dead.record.piSessionId).digest("hex")}.json`;
   try {
-    for (const fixture of fixtures)
-      writePeerLeadRecord(runtime, fixture.record);
+    for (const fixture of fixtures) writePeerLeadRecord(runtime, fixture.record);
     writeFileSync(malformedPath, "not-json", "utf8");
     writePeerLeadRecord(runtime, dead.record);
     dead.release();
@@ -1121,9 +1026,7 @@ test("peer lead enumeration scans every canonical record before liveness filteri
     const records = listPeerLeadRecords(runtime);
     const expected = fixtures
       .map((fixture) => ({
-        filename: `${createHash("sha256")
-          .update(fixture.record.piSessionId)
-          .digest("hex")}.json`,
+        filename: `${createHash("sha256").update(fixture.record.piSessionId).digest("hex")}.json`,
         record: fixture.record,
       }))
       .sort((a, b) => a.filename.localeCompare(b.filename))
@@ -1131,16 +1034,9 @@ test("peer lead enumeration scans every canonical record before liveness filteri
     assert.equal(records.length, fixtures.length);
     assert.deepEqual(records, expected);
     assert.ok(
-      deadFilename <
-        `${createHash("sha256")
-          .update(expected[0]!.piSessionId)
-          .digest("hex")}.json`,
+      deadFilename < `${createHash("sha256").update(expected[0]!.piSessionId).digest("hex")}.json`,
     );
-    assert.ok(
-      records.some(
-        (record) => record.piSessionId === fixtures.at(-1)!.record.piSessionId,
-      ),
-    );
+    assert.ok(records.some((record) => record.piSessionId === fixtures.at(-1)!.record.piSessionId));
   } finally {
     for (const fixture of fixtures) {
       removePeerLeadRecord(runtime, fixture.record.piSessionId, fixture.record);
@@ -1169,14 +1065,10 @@ test("message peer records use strict validation and the shared UTF-8 bound", ()
   };
   const remotePath = writeCoordinationMessage(remoteRecord, runtime);
   assert.deepEqual(readCoordinationMessage(remotePath), remoteRecord);
-  assert.equal(
-    coordinationMessagePath(runtime, record.toSessionId, record.id),
-    path,
-  );
+  assert.equal(coordinationMessagePath(runtime, record.toSessionId, record.id), path);
   assert.equal(coordinationMessageBytes(record), chiefMessageBytes(record));
   assert.throws(
-    () =>
-      writeCoordinationMessage({ ...record, kind: "peer" } as never, runtime),
+    () => writeCoordinationMessage({ ...record, kind: "peer" } as never, runtime),
     /Invalid Chief message record/,
   );
   for (const peerSource of [
@@ -1193,20 +1085,12 @@ test("message peer records use strict validation and the shared UTF-8 bound", ()
     { role: "lead", remoteOrdinary: true, extra: "field" },
   ]) {
     assert.throws(
-      () =>
-        writeCoordinationMessage(
-          { ...record, id: id(), peerSource } as never,
-          runtime,
-        ),
+      () => writeCoordinationMessage({ ...record, id: id(), peerSource } as never, runtime),
       /Invalid Chief message record/,
     );
   }
   assert.throws(
-    () =>
-      writeCoordinationMessage(
-        { ...record, unsupportedField: true } as never,
-        runtime,
-      ),
+    () => writeCoordinationMessage({ ...record, unsupportedField: true } as never, runtime),
     /Invalid Chief message record/,
   );
   const ordinaryNoGroup = {
@@ -1231,9 +1115,7 @@ test("message peer records use strict validation and the shared UTF-8 bound", ()
       writeCoordinationMessage(
         {
           ...record,
-          resultBindings: [
-            { ref: "result:implementation#01", canonicalRef: `result:${id()}` },
-          ],
+          resultBindings: [{ ref: "result:implementation#01", canonicalRef: `result:${id()}` }],
         },
         runtime,
       ),
@@ -1241,26 +1123,19 @@ test("message peer records use strict validation and the shared UTF-8 bound", ()
   );
 
   const prefix = "é\t".repeat(32);
-  const recordFor = (suffix: string) =>
-    message({ kind: "peer_message", text: prefix + suffix });
+  const recordFor = (suffix: string) => message({ kind: "peer_message", text: prefix + suffix });
   let low = 0;
   let high = COORDINATION_MESSAGE_MAX_BYTES;
   while (low < high) {
     const middle = Math.ceil((low + high) / 2);
-    if (
-      coordinationMessageBytes(recordFor("x".repeat(middle))) <=
-      COORDINATION_MESSAGE_MAX_BYTES
-    )
+    if (coordinationMessageBytes(recordFor("x".repeat(middle))) <= COORDINATION_MESSAGE_MAX_BYTES)
       low = middle;
     else high = middle - 1;
   }
   const exact = recordFor("x".repeat(low));
   const over = recordFor("x".repeat(low + 1));
   assert.equal(coordinationMessageBytes(exact), COORDINATION_MESSAGE_MAX_BYTES);
-  assert.equal(
-    coordinationMessageBytes(over),
-    COORDINATION_MESSAGE_MAX_BYTES + 1,
-  );
+  assert.equal(coordinationMessageBytes(over), COORDINATION_MESSAGE_MAX_BYTES + 1);
   writeCoordinationMessage(exact, runtime);
   const overPath = writeCoordinationMessage(over, runtime);
   assert.ok(statSync(overPath).size <= COORDINATION_MESSAGE_MAX_BYTES);
@@ -1504,8 +1379,7 @@ test("ordinary Lead coordination works when Manager account authority is unavail
   assert.equal(lookup.mock.callCount(), 0);
 
   const repo = join(tmpdir(), "manager-repository");
-  const unavailable =
-    /Unable to verify the OS account home for Manager authority/;
+  const unavailable = /Unable to verify the OS account home for Manager authority/;
   assert.throws(() => readManagerDescriptorStatus(runtime, repo), unavailable);
   assert.throws(() => claimManagerStartupLock(runtime, repo), unavailable);
   assert.throws(() => listManagerDescriptors(runtime), unavailable);
@@ -1526,9 +1400,7 @@ test("lead coordination state is strict, private, bounded, and atomic", () => {
   assert.match(path.split(sep).join("/"), /coordinators\/[0-9a-f]{64}\.json$/);
   assertPosixMode(path, 0o600);
   assertPosixMode(runtime.leads, 0o700);
-  assert.throws(() =>
-    writeLeadCoordinationState(runtime, { ...value, version: 2 } as never),
-  );
+  assert.throws(() => writeLeadCoordinationState(runtime, { ...value, version: 2 } as never));
   assert.throws(() =>
     writeLeadCoordinationState(runtime, {
       ...value,
@@ -1556,20 +1428,14 @@ test("lead coordination state is strict, private, bounded, and atomic", () => {
     } as never),
   );
   writeFileSync(path, JSON.stringify({ ...value, piSessionId: "other" }));
-  assert.throws(
-    () => readLeadCoordinationState(runtime, "lead"),
-    /Unable to read/,
-  );
+  assert.throws(() => readLeadCoordinationState(runtime, "lead"), /Unable to read/);
 });
 
 test("lead coordination reader ignores only the retired pendingAsk field", () => {
   const runtime = supervisionRuntime(socket());
   const current = state("legacy-lead");
   const path = writeLeadCoordinationState(runtime, current);
-  writeFileSync(
-    path,
-    JSON.stringify({ ...current, pendingAsk: { malformed: "ignored" } }),
-  );
+  writeFileSync(path, JSON.stringify({ ...current, pendingAsk: { malformed: "ignored" } }));
 
   const loaded = readLeadCoordinationState(runtime, current.piSessionId)!;
   assert.deepEqual(loaded, current);
@@ -1594,10 +1460,7 @@ test("lead coordination reader ignores only the retired pendingAsk field", () =>
     { ...current, pendingAsk: {}, instanceId: "invalid" },
   ]) {
     writeFileSync(path, JSON.stringify(invalid));
-    assert.throws(
-      () => readLeadCoordinationState(runtime, current.piSessionId),
-      /Unable to read/,
-    );
+    assert.throws(() => readLeadCoordinationState(runtime, current.piSessionId), /Unable to read/);
   }
 });
 
@@ -1608,10 +1471,7 @@ test("live supervision records validate optional build evidence and require it f
   const legacy = { ...value } as Record<string, unknown>;
   delete legacy.build;
   writeFileSync(path, JSON.stringify(legacy));
-  assert.deepEqual(
-    readLeadCoordinationState(runtime, value.piSessionId),
-    legacy,
-  );
+  assert.deepEqual(readLeadCoordinationState(runtime, value.piSessionId), legacy);
   assert.throws(
     () =>
       writeLeadCoordinationState(runtime, {
@@ -1636,10 +1496,7 @@ test("live supervision records validate optional build evidence and require it f
   );
   assert.throws(
     () =>
-      writeChiefMessage(
-        { ...record, build: { version: "v", sha256: "bad" } } as never,
-        runtime,
-      ),
+      writeChiefMessage({ ...record, build: { version: "v", sha256: "bad" } } as never, runtime),
     /Invalid Chief message record/,
   );
 
@@ -1684,8 +1541,7 @@ test("queued traffic remains correlated to the exact lead session after restart"
   await drainCoordinationInbox({
     runtime,
     sessionId: original.toSessionId,
-    isAuthorized: (record) =>
-      record.leadSessionId === "lead" && record.fromSessionId === "lead",
+    isAuthorized: (record) => record.leadSessionId === "lead" && record.fromSessionId === "lead",
     isDelivered: () => receipt,
     sendMessage: () => {
       delivered++;
@@ -1705,10 +1561,7 @@ test("role state selects only current-session branch records and rejects malform
   const valid = { sessionId: "session", role: "lead", leadTools: ["read"] };
   assert.equal(
     readLeadRoleState(
-      [
-        record({ role: "chief", leadTools: [] }),
-        record({ ...valid, sessionId: "foreign" }),
-      ],
+      [record({ role: "chief", leadTools: [] }), record({ ...valid, sessionId: "foreign" })],
       "session",
     ),
     undefined,
@@ -1746,10 +1599,7 @@ test("session identity is exact, session-wide, immutable and strict", () => {
     branch: "branch",
   };
   assert.equal(readSessionKind([record(managed)], "fork"), undefined);
-  assert.deepEqual(
-    readSessionKind([record(managed), record(managed)], "session"),
-    managed,
-  );
+  assert.deepEqual(readSessionKind([record(managed), record(managed)], "session"), managed);
   assert.deepEqual(readSessionKind([record(ordinary)], "session"), ordinary);
   assert.throws(
     () => readSessionKind([record(ordinary), record(managed)], "session"),
@@ -1790,10 +1640,7 @@ test("supervision authority is coordinator state, not metadata", () => {
   assert.equal(snapshot.leads[0].lead, piSessionId);
   assert.equal(serialized.session, piSessionId);
   assert.equal("lead" in serialized, false);
-  assert.deepEqual(serialized.available_tools, [
-    "inspect_staff",
-    "message_staff",
-  ]);
+  assert.deepEqual(serialized.available_tools, ["inspect_staff", "message_staff"]);
   assert.equal(snapshot.leads[0].displayName, "api/lead");
   assert.equal("display_name" in snapshot.leads[0], false);
   assert.equal(serialized.runtime_state, "idle");
@@ -1850,10 +1697,7 @@ test("Lead supervision separates exact-build mismatches from actionable reports"
       },
     ],
     managedAgents: [],
-    coordinationStates: [
-      incompatibleState,
-      state(compatibleId, { role: "lead", build: BUILD }),
-    ],
+    coordinationStates: [incompatibleState, state(compatibleId, { role: "lead", build: BUILD })],
     localBuild: BUILD,
   });
   assert.deepEqual(
@@ -1998,11 +1842,7 @@ test("supervision presentation preserves provenance and naming fallbacks", () =>
       base(unnamedSessionB),
     ] as any,
     managedAgents: [],
-    coordinationStates: [
-      state(namedSession),
-      state(unnamedSessionA),
-      state(unnamedSessionB),
-    ],
+    coordinationStates: [state(namedSession), state(unnamedSessionA), state(unnamedSessionB)],
     workspaceProvenance: new Map([
       [
         "workspace",
@@ -2020,9 +1860,7 @@ test("supervision presentation preserves provenance and naming fallbacks", () =>
   );
   assert.equal(snapshot.leads[0]!.branch, "feat/supervision");
   assert.equal(
-    snapshot.leads.some((lead) =>
-      lead.displayName.includes("mac-system-theme"),
-    ),
+    snapshot.leads.some((lead) => lead.displayName.includes("mac-system-theme")),
     false,
   );
   assert.deepEqual(
@@ -2030,13 +1868,8 @@ test("supervision presentation preserves provenance and naming fallbacks", () =>
     [unnamedSessionA, unnamedSessionB, namedSession],
   );
   assert.deepEqual(
-    snapshot.leads
-      .filter((lead) => lead.lead !== namedSession)
-      .map((lead) => lead.displayName),
-    [
-      "pi-herdsman/feat/supervision/lead-22222222",
-      "pi-herdsman/feat/supervision/lead-33333333",
-    ],
+    snapshot.leads.filter((lead) => lead.lead !== namedSession).map((lead) => lead.displayName),
+    ["pi-herdsman/feat/supervision/lead-22222222", "pi-herdsman/feat/supervision/lead-33333333"],
   );
   {
     const sessions = [
@@ -2059,17 +1892,11 @@ test("supervision presentation preserves provenance and naming fallbacks", () =>
       agents,
       managedAgents: [],
       coordinationStates: sessions.map((sessionId) => state(sessionId)),
-      workspaceProvenance: new Map([
-        ["workspace", { workspaceLabel: "project" }],
-      ]),
+      workspaceProvenance: new Map([["workspace", { workspaceLabel: "project" }]]),
     });
     assert.deepEqual(
       snapshot.leads.map((lead) => lead.displayName),
-      [
-        "project/meaningful token",
-        "project/none",
-        "project/unstable-herdr-name",
-      ],
+      ["project/meaningful token", "project/none", "project/unstable-herdr-name"],
     );
   }
   {
@@ -2100,11 +1927,7 @@ test("supervision presentation preserves provenance and naming fallbacks", () =>
     });
     assert.deepEqual(
       new Set(snapshot.leads.map((lead) => lead.displayName)),
-      new Set([
-        "my-workspace/lead-44444444",
-        "project/lead-55555555",
-        "id/lead-66666666",
-      ]),
+      new Set(["my-workspace/lead-44444444", "project/lead-55555555", "id/lead-66666666"]),
     );
   }
 });
@@ -2275,9 +2098,7 @@ test("supervision preserves lifecycle evidence and counts only active states", (
     assert.equal(serialized.runtime_state, runtimeState);
     assert.equal(serialized.agents[0].state, runtimeState);
     assert.deepEqual(serialized.agent_counts, {
-      active: Number(
-        ["working", "settling", "starting"].includes(runtimeState),
-      ),
+      active: Number(["working", "settling", "starting"].includes(runtimeState)),
       blocked: Number(runtimeState === "blocked"),
       total: 1,
     });
@@ -2345,14 +2166,8 @@ test("quarantined queued messages are excluded and non-blocking", () => {
       const record = message({ kind: "lead_message" });
       writeChiefMessage(record, runtime);
       quarantineChiefMessage(runtime, record.toSessionId, record.id);
-      assert.equal(
-        chiefMessageQuarantined(runtime, record.toSessionId, record.id),
-        true,
-      );
-      assert.equal(
-        listChiefMessagePaths(runtime, record.toSessionId).length,
-        1,
-      );
+      assert.equal(chiefMessageQuarantined(runtime, record.toSessionId, record.id), true);
+      assert.equal(listChiefMessagePaths(runtime, record.toSessionId).length, 1);
     } else if (kind === "new-message") {
       const first = message({ kind: "chief_message", toSessionId: "lead" });
       const second = message({ kind: "chief_message", toSessionId: "lead" });
@@ -2370,24 +2185,13 @@ test("removing a chief message removes its quarantine marker", () => {
   writeChiefMessage(record, runtime);
   quarantineChiefMessage(runtime, record.toSessionId, record.id);
   removeChiefMessage(runtime, record.toSessionId, record.id);
-  assert.throws(() =>
-    readChiefMessage(chiefMessagePath(runtime, "chief", record.id)),
-  );
-  assert.equal(
-    chiefMessageQuarantined(runtime, record.toSessionId, record.id),
-    false,
-  );
+  assert.throws(() => readChiefMessage(chiefMessagePath(runtime, "chief", record.id)));
+  assert.equal(chiefMessageQuarantined(runtime, record.toSessionId, record.id), false);
   removeChiefMessage(runtime, record.toSessionId, record.id);
   quarantineChiefMessage(runtime, record.toSessionId, record.id);
-  assert.equal(
-    chiefMessageQuarantined(runtime, record.toSessionId, record.id),
-    true,
-  );
+  assert.equal(chiefMessageQuarantined(runtime, record.toSessionId, record.id), true);
   removeChiefMessage(runtime, record.toSessionId, record.id);
-  assert.equal(
-    chiefMessageQuarantined(runtime, record.toSessionId, record.id),
-    false,
-  );
+  assert.equal(chiefMessageQuarantined(runtime, record.toSessionId, record.id), false);
 });
 
 test("re-quarantining a message accepts an existing marker", () => {
@@ -2395,13 +2199,8 @@ test("re-quarantining a message accepts an existing marker", () => {
   const record = message();
   writeChiefMessage(record, runtime);
   quarantineChiefMessage(runtime, record.toSessionId, record.id);
-  assert.doesNotThrow(() =>
-    quarantineChiefMessage(runtime, record.toSessionId, record.id),
-  );
-  assert.equal(
-    chiefMessageQuarantined(runtime, record.toSessionId, record.id),
-    true,
-  );
+  assert.doesNotThrow(() => quarantineChiefMessage(runtime, record.toSessionId, record.id));
+  assert.equal(chiefMessageQuarantined(runtime, record.toSessionId, record.id), true);
 });
 
 test("inbox draining skips quarantined messages and retains the record", async () => {
@@ -2425,10 +2224,7 @@ test("inbox draining skips quarantined messages and retains the record", async (
   });
   assert.equal(sent, false);
   assert.equal(authorized, 0);
-  assert.equal(
-    chiefMessageQuarantined(runtime, record.toSessionId, record.id),
-    true,
-  );
+  assert.equal(chiefMessageQuarantined(runtime, record.toSessionId, record.id), true);
   assert.deepEqual(listChiefMessagePaths(runtime, record.toSessionId), [path]);
   assert.equal(readChiefMessage(path).id, record.id);
 });
@@ -2449,20 +2245,15 @@ test("inbox rechecks quarantine immediately before delivery", async () => {
     transaction: {
       begin: () => ({}),
       revalidate: (_token, phase) => {
-        if (phase === "before-send")
-          quarantineChiefMessage(runtime, record.toSessionId, record.id);
+        if (phase === "before-send") quarantineChiefMessage(runtime, record.toSessionId, record.id);
       },
       clear: () => {},
     },
   });
   assert.equal(sent, false);
+  assert.equal(chiefMessageQuarantined(runtime, record.toSessionId, record.id), true);
   assert.equal(
-    chiefMessageQuarantined(runtime, record.toSessionId, record.id),
-    true,
-  );
-  assert.equal(
-    readChiefMessage(chiefMessagePath(runtime, record.toSessionId, record.id))
-      .id,
+    readChiefMessage(chiefMessagePath(runtime, record.toSessionId, record.id)).id,
     record.id,
   );
 });
@@ -2486,10 +2277,7 @@ test("inbox does not send when its transaction token is stale or forged", async 
     transaction: {
       begin: () => ({ ...storedToken, record: { ...record } }),
       revalidate: (token) => {
-        if (
-          token !== storedToken ||
-          (token as typeof storedToken).record !== record
-        )
+        if (token !== storedToken || (token as typeof storedToken).record !== record)
           throw new Error("Stale inbox transaction");
       },
       clear: () => {},
@@ -2526,10 +2314,7 @@ test("inbox rechecks quarantine before accepting an already-delivered record", a
     },
   });
   assert.equal(accepted, false);
-  assert.equal(
-    chiefMessageQuarantined(runtime, record.toSessionId, record.id),
-    true,
-  );
+  assert.equal(chiefMessageQuarantined(runtime, record.toSessionId, record.id), true);
 });
 
 test("deferred inbox records remain pending without authorization", async () => {
@@ -2593,9 +2378,7 @@ test("boundary inbox delivery is non-triggering, bounded, and keeps exact record
 
   assert.equal(await drainCoordinationInbox(options), 1);
   assert.equal(delivered.size, 1);
-  assert.deepEqual(listChiefMessagePaths(runtime, first.toSessionId), [
-    secondPath,
-  ]);
+  assert.deepEqual(listChiefMessagePaths(runtime, first.toSessionId), [secondPath]);
 });
 
 test("a rejected delivery policy leaves its record pending and drains later records", async () => {
@@ -2611,8 +2394,7 @@ test("a rejected delivery policy leaves its record pending and drains later reco
       runtime,
       sessionId: rejected.toSessionId,
       deliveryMode: async (record): Promise<"followUp"> => {
-        if (record.id === rejected.id)
-          throw new Error("authority changed during delivery policy");
+        if (record.id === rejected.id) throw new Error("authority changed during delivery policy");
         return "followUp";
       },
       isAuthorized: () => true,
@@ -2626,9 +2408,7 @@ test("a rejected delivery policy leaves its record pending and drains later reco
 
   assert.equal(delivered.has(accepted.id), true);
   assert.equal(existsSync(rejectedPath), true);
-  assert.deepEqual(listChiefMessagePaths(runtime, rejected.toSessionId), [
-    rejectedPath,
-  ]);
+  assert.deepEqual(listChiefMessagePaths(runtime, rejected.toSessionId), [rejectedPath]);
 });
 
 test("Pi send return is not a receipt; later exact receipt enables safe cleanup", async () => {
@@ -2793,11 +2573,7 @@ test("inbox orders valid records by createdAt and retains transient failures", a
       seen.push((payload as any).content);
     },
   });
-  assert.deepEqual(seen, [
-    "From Lead: ten",
-    "From Lead: twenty",
-    "From Lead: thirty",
-  ]);
+  assert.deepEqual(seen, ["From Lead: ten", "From Lead: twenty", "From Lead: thirty"]);
 });
 
 test("inbox ordering parses beyond the filename batch bound", () => {
@@ -2962,22 +2738,14 @@ test("coordination envelopes identify senders without claiming recipient roles",
         : route.senderRole === "manager"
           ? "From Manager: "
           : "From Lead: ";
-    assert.equal(
-      delivered[index]!.content,
-      `${senderPrefix}${record.text}`,
-      route.name,
-    );
+    assert.equal(delivered[index]!.content, `${senderPrefix}${record.text}`, route.name);
     assert.doesNotMatch(
       delivered[index]!.content,
       new RegExp(`\\bto ${route.recipientRole}\\b`),
       route.name,
     );
   }
-  assert.ok(
-    delivered.every(
-      ({ content }) => Buffer.byteLength(content, "utf8") <= 8 * 1024,
-    ),
-  );
+  assert.ok(delivered.every(({ content }) => Buffer.byteLength(content, "utf8") <= 8 * 1024));
 });
 
 test("lifecycle normalization uses current Herdr fields and fails closed", () => {
@@ -3026,19 +2794,13 @@ test("Chief lease authority rejects strict malformed lock claims", () => {
       }
       assert.equal(chiefLeaseIsHeld(lease.runtime), false);
       if (malformed === "unexpected") {
-        assert.throws(
-          () => lease.release(),
-          /Unable to verify Chief supervision lease ownership/,
-        );
+        assert.throws(() => lease.release(), /Unable to verify Chief supervision lease ownership/);
         rmSync(lease.runtime.lock, { recursive: true, force: true });
       } else {
         lease.release();
       }
       if (malformed === "missing") {
-        assert.equal(
-          readFileSync(lease.runtime.descriptor, "utf8").length > 0,
-          true,
-        );
+        assert.equal(readFileSync(lease.runtime.descriptor, "utf8").length > 0, true);
       }
       rmSync(lease.runtime.descriptor, { force: true });
     }
@@ -3060,10 +2822,7 @@ test("Chief release does not remove a valid replacement retaining the lease ID",
     };
     writeFileSync(lease.runtime.descriptor, JSON.stringify(replacement));
     lease.release();
-    assert.deepEqual(
-      readChiefDescriptor(lease.runtime.descriptor),
-      replacement,
-    );
+    assert.deepEqual(readChiefDescriptor(lease.runtime.descriptor), replacement);
     rmSync(lease.runtime.descriptor, { force: true });
   } finally {
     if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
@@ -3176,34 +2935,21 @@ test("coordinator state and peer presence admit only Lead or Manager roles", () 
   for (const role of ["lead", "manager"] as const) {
     const value = state(`session-${role}`, { role });
     writeLeadCoordinationState(runtime, value);
-    assert.deepEqual(
-      readLeadCoordinationState(runtime, value.piSessionId),
-      value,
-    );
+    assert.deepEqual(readLeadCoordinationState(runtime, value.piSessionId), value);
   }
   assert.throws(() =>
-    writeLeadCoordinationState(
-      runtime,
-      state("chief", { role: "chief" as never }),
-    ),
+    writeLeadCoordinationState(runtime, state("chief", { role: "chief" as never })),
   );
   const unknownStateFields: Partial<LeadCoordinationState> & {
     unknown: boolean;
   } = { role: "lead", unknown: true };
-  assert.throws(() =>
-    writeLeadCoordinationState(runtime, state("bad", unknownStateFields)),
-  );
+  assert.throws(() => writeLeadCoordinationState(runtime, state("bad", unknownStateFields)));
   const peers = peerRuntime();
   const manager = peerRecord(peers, `manager-${id()}`, { role: "manager" });
   try {
     writePeerLeadRecord(peers, manager.record);
-    assert.deepEqual(
-      readPeerLeadRecord(peers, manager.record.piSessionId),
-      manager.record,
-    );
-    assert.throws(() =>
-      writePeerLeadRecord(peers, { ...manager.record, role: "chief" } as never),
-    );
+    assert.deepEqual(readPeerLeadRecord(peers, manager.record.piSessionId), manager.record);
+    assert.throws(() => writePeerLeadRecord(peers, { ...manager.record, role: "chief" } as never));
   } finally {
     manager.release();
   }
@@ -3237,10 +2983,7 @@ test("Manager authority and startup serialize across local sockets; discovery st
   const startup = claimManagerStartupLock(local, canonicalRepoKey);
   const lease = claimManagerLease(identity, local);
   const otherStartup = claimManagerStartupLock(foreign, otherRepoKey);
-  const other = claimManagerLease(
-    { ...identity, canonicalRepoKey: otherRepoKey },
-    foreign,
-  );
+  const other = claimManagerLease({ ...identity, canonicalRepoKey: otherRepoKey }, foreign);
   const recovery = {
     version: 1 as const,
     canonicalRepoKey,
@@ -3251,10 +2994,7 @@ test("Manager authority and startup serialize across local sockets; discovery st
     assert.ok(statSync(path).isFile());
     assert.ok(statSync(path + ".lock").isDirectory());
     assert.ok(statSync(path + ".startup.lock").isDirectory());
-    assert.throws(
-      () => claimManagerLease(identity, foreign),
-      ProcessLockOccupiedError,
-    );
+    assert.throws(() => claimManagerLease(identity, foreign), ProcessLockOccupiedError);
     assert.throws(
       () => claimManagerStartupLock(foreign, canonicalRepoKey),
       ProcessLockOccupiedError,
@@ -3267,10 +3007,7 @@ test("Manager authority and startup serialize across local sockets; discovery st
     assert.deepEqual(listManagerDescriptors(foreign, true), [other.descriptor]);
     writeManagerRecoveryReference(local, recovery);
     assert.ok(statSync(join(local.managerRecovery, key + ".json")).isFile());
-    assert.deepEqual(
-      readManagerRecoveryReference(foreign, canonicalRepoKey),
-      recovery,
-    );
+    assert.deepEqual(readManagerRecoveryReference(foreign, canonicalRepoKey), recovery);
   } finally {
     removeManagerRecoveryReference(foreign, recovery);
     other.release();
@@ -3278,10 +3015,7 @@ test("Manager authority and startup serialize across local sockets; discovery st
     lease.release();
     startup.release();
   }
-  assert.equal(
-    readManagerDescriptorStatus(foreign, canonicalRepoKey),
-    undefined,
-  );
+  assert.equal(readManagerDescriptorStatus(foreign, canonicalRepoKey), undefined);
 });
 
 test("Manager authority spans profiles and repository aliases, but discovery and recovery stay profile scoped", async (t) => {
@@ -3317,11 +3051,7 @@ test("Manager authority spans profiles and repository aliases, but discovery and
   };
   const checkout = repository("repo");
   const alias = join(directory, "repo-alias");
-  symlinkSync(
-    checkout,
-    alias,
-    process.platform === "win32" ? "junction" : "dir",
-  );
+  symlinkSync(checkout, alias, process.platform === "win32" ? "junction" : "dir");
   const { gitRepositoryScope } = await import("./herdr.ts");
   const pi: Parameters<typeof gitRepositoryScope>[0] = {
     async exec(command, args, options) {
@@ -3340,14 +3070,8 @@ test("Manager authority spans profiles and repository aliases, but discovery and
   };
   const { canonicalRepoKey } = await gitRepositoryScope(pi, checkout);
   const { canonicalRepoKey: aliasKey } = await gitRepositoryScope(pi, alias);
-  const { canonicalRepoKey: otherKey } = await gitRepositoryScope(
-    pi,
-    repository("other-repo"),
-  );
-  assert.equal(
-    canonicalRepoKey,
-    realFs.realpathSync.native(join(checkout, ".git")),
-  );
+  const { canonicalRepoKey: otherKey } = await gitRepositoryScope(pi, repository("other-repo"));
+  assert.equal(canonicalRepoKey, realFs.realpathSync.native(join(checkout, ".git")));
   assert.equal(aliasKey, canonicalRepoKey);
   const identity = {
     build: BUILD,
@@ -3367,24 +3091,14 @@ test("Manager authority spans profiles and repository aliases, but discovery and
   t.after(startup.release);
   const lease = claimManagerLease(identity, first);
   t.after(lease.release);
+  assert.throws(() => claimManagerStartupLock(second, aliasKey), ProcessLockOccupiedError);
   assert.throws(
-    () => claimManagerStartupLock(second, aliasKey),
+    () => claimManagerLease({ ...identity, canonicalRepoKey: aliasKey }, second),
     ProcessLockOccupiedError,
   );
-  assert.throws(
-    () =>
-      claimManagerLease({ ...identity, canonicalRepoKey: aliasKey }, second),
-    ProcessLockOccupiedError,
-  );
-  assert.throws(
-    () => readManagerDescriptorStatus(second, canonicalRepoKey),
-    /another Pi profile/,
-  );
+  assert.throws(() => readManagerDescriptorStatus(second, canonicalRepoKey), /another Pi profile/);
   assert.deepEqual(listManagerDescriptors(second, true), []);
-  const other = claimManagerLease(
-    { ...identity, canonicalRepoKey: otherKey },
-    second,
-  );
+  const other = claimManagerLease({ ...identity, canonicalRepoKey: otherKey }, second);
   t.after(other.release);
   const otherStartup = claimManagerStartupLock(second, otherKey);
   t.after(otherStartup.release);
@@ -3397,15 +3111,9 @@ test("Manager authority spans profiles and repository aliases, but discovery and
     piSessionFile: identity.piSessionFile,
   };
   writeManagerRecoveryReference(first, reference);
-  assert.equal(
-    readManagerRecoveryReference(second, canonicalRepoKey),
-    undefined,
-  );
+  assert.equal(readManagerRecoveryReference(second, canonicalRepoKey), undefined);
   assert.equal(removeManagerRecoveryReference(second, reference), false);
-  assert.deepEqual(
-    readManagerRecoveryReference(first, canonicalRepoKey),
-    reference,
-  );
+  assert.deepEqual(readManagerRecoveryReference(first, canonicalRepoKey), reference);
 });
 
 test("Manager authority rejects a redirected account authority directory", (t) => {
@@ -3452,21 +3160,13 @@ test("Manager leases are exclusive per physical repository and fail closed on st
   );
   try {
     assert.throws(() =>
-      claimManagerLease(
-        { ...identity, workspaceId: "third", piSessionId: id() },
-        runtime,
-      ),
+      claimManagerLease({ ...identity, workspaceId: "third", piSessionId: id() }, runtime),
     );
     assert.deepEqual(
-      new Set(
-        listManagerDescriptors(runtime).map((record) => record.workspaceId),
-      ),
+      new Set(listManagerDescriptors(runtime).map((record) => record.workspaceId)),
       new Set(["root", "other"]),
     );
-    assert.deepEqual(
-      readManagerDescriptor(runtime, identity.canonicalRepoKey),
-      first.descriptor,
-    );
+    assert.deepEqual(readManagerDescriptor(runtime, identity.canonicalRepoKey), first.descriptor);
     assert.equal(first.descriptor.piSessionFile, identity.piSessionFile);
     const path = managerDescriptorPath(runtime, identity.canonicalRepoKey);
     writeFileSync(
@@ -3481,15 +3181,10 @@ test("Manager leases are exclusive per physical repository and fail closed on st
       /generation changed/,
     );
     assert.equal(
-      listManagerDescriptors(runtime).some(
-        (record) => record.workspaceId === "root",
-      ),
+      listManagerDescriptors(runtime).some((record) => record.workspaceId === "root"),
       false,
     );
-    assert.throws(
-      () => listManagerDescriptors(runtime, true),
-      /generation changed/,
-    );
+    assert.throws(() => listManagerDescriptors(runtime, true), /generation changed/);
     first.release();
     assert.equal(statSync(path).isFile(), true);
     unlinkSync(path);
@@ -3517,10 +3212,7 @@ test("Manager descriptor status distinguishes live, incomplete, and absent autho
   const runtime = supervisionRuntime(socket());
   const workspaceId = "root";
   const canonicalRepoKey = join(tmpdir(), "repo");
-  assert.equal(
-    readManagerDescriptorStatus(runtime, canonicalRepoKey),
-    undefined,
-  );
+  assert.equal(readManagerDescriptorStatus(runtime, canonicalRepoKey), undefined);
   const lease = claimManagerLease(
     {
       build: BUILD,
@@ -3546,10 +3238,7 @@ test("Manager descriptor status distinguishes live, incomplete, and absent autho
   } finally {
     lease.release();
   }
-  assert.equal(
-    readManagerDescriptorStatus(runtime, canonicalRepoKey),
-    undefined,
-  );
+  assert.equal(readManagerDescriptorStatus(runtime, canonicalRepoKey), undefined);
 });
 
 test("project assignments are scoped by repository and branch, strict, and removable", () => {
@@ -3568,16 +3257,9 @@ test("project assignments are scoped by repository and branch, strict, and remov
       }),
     /stale evidence authority/,
   );
-  assert.equal(
-    readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
-    undefined,
-  );
+  assert.equal(readProjectAssignment(runtime, assignment.repoKey, assignment.branch), undefined);
   writeProjectAssignment(runtime, assignment);
-  const path = projectAssignmentPath(
-    runtime,
-    assignment.repoKey,
-    assignment.branch,
-  );
+  const path = projectAssignmentPath(runtime, assignment.repoKey, assignment.branch);
   assert.equal(
     path,
     join(
@@ -3592,9 +3274,7 @@ test("project assignments are scoped by repository and branch, strict, and remov
   );
   assertPosixMode(path, 0o600);
   assertPosixMode(dirname(path), 0o700);
-  assert.deepEqual(listProjectAssignments(runtime, assignment.repoKey), [
-    assignment,
-  ]);
+  assert.deepEqual(listProjectAssignments(runtime, assignment.repoKey), [assignment]);
   assert.deepEqual(
     readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
     assignment,
@@ -3631,38 +3311,26 @@ test("project assignments are scoped by repository and branch, strict, and remov
     {
       id: persistedWithEvidence.requiredEvidence![0].id,
       name: persistedWithEvidence.requiredEvidence![0].name,
-      sourceAssignmentId:
-        persistedWithEvidence.requiredEvidence![0].sourceAssignmentId,
+      sourceAssignmentId: persistedWithEvidence.requiredEvidence![0].sourceAssignmentId,
       path: persistedWithEvidence.requiredEvidence![0].path,
       sha256: persistedWithEvidence.requiredEvidence![0].sha256,
     },
     withEvidence.requiredEvidence[0],
   );
-  assert.equal(
-    persistedWithEvidence.requiredEvidence![0].ref,
-    "evidence:plan#1",
-  );
+  assert.equal(persistedWithEvidence.requiredEvidence![0].ref, "evidence:plan#1");
   writeProjectAssignment(runtime, assignment);
   assert.equal(
-    findProjectAssignmentBySession(
-      runtime,
-      assignment.repoKey,
-      assignment.id,
-    )[0]?.branch,
+    findProjectAssignmentBySession(runtime, assignment.repoKey, assignment.id)[0]?.branch,
     assignment.branch,
   );
-  assert.deepEqual(
-    findProjectAssignmentBySession(runtime, assignment.repoKey, "elsewhere"),
-    [],
-  );
+  assert.deepEqual(findProjectAssignmentBySession(runtime, assignment.repoKey, "elsewhere"), []);
   const withCheckoutPath = {
     ...assignment,
     checkoutPath: join(tmpdir(), `checkout-${id()}`),
   };
   writeProjectAssignment(runtime, withCheckoutPath);
   assert.equal(
-    readProjectAssignment(runtime, assignment.repoKey, assignment.branch)
-      ?.checkoutPath,
+    readProjectAssignment(runtime, assignment.repoKey, assignment.branch)?.checkoutPath,
     withCheckoutPath.checkoutPath,
   );
   for (const invalid of [
@@ -3708,9 +3376,7 @@ test("project assignments are scoped by repository and branch, strict, and remov
       ],
     },
     {
-      resultBindings: [
-        { ref: "result:implementation#01", canonicalRef: `result:${id()}` },
-      ],
+      resultBindings: [{ ref: "result:implementation#01", canonicalRef: `result:${id()}` }],
     },
     ...["phase", "paneId", "tabId", "updatedAt", "base"].map((key) => ({
       [key]: "old",
@@ -3753,9 +3419,7 @@ test("project assignments are scoped by repository and branch, strict, and remov
     ...assignment,
     text: "x".repeat(PROJECT_ASSIGNMENT_MAX_BYTES - 512),
   };
-  assert.ok(
-    projectAssignmentBytes(nearLimitAssignment) < PROJECT_ASSIGNMENT_MAX_BYTES,
-  );
+  assert.ok(projectAssignmentBytes(nearLimitAssignment) < PROJECT_ASSIGNMENT_MAX_BYTES);
   assert.equal(
     projectAssignmentBytes({
       ...nearLimitAssignment,
@@ -3766,22 +3430,17 @@ test("project assignments are scoped by repository and branch, strict, and remov
   const exactLimitAssignment = {
     ...assignment,
     text: "x".repeat(
-      PROJECT_ASSIGNMENT_MAX_BYTES -
-        projectAssignmentBytes({ ...assignment, text: "" }),
+      PROJECT_ASSIGNMENT_MAX_BYTES - projectAssignmentBytes({ ...assignment, text: "" }),
     ),
   };
-  assert.equal(
-    projectAssignmentBytes(exactLimitAssignment),
-    PROJECT_ASSIGNMENT_MAX_BYTES,
-  );
+  assert.equal(projectAssignmentBytes(exactLimitAssignment), PROJECT_ASSIGNMENT_MAX_BYTES);
   const exactLimitWithCheckout = {
     ...exactLimitAssignment,
     checkoutPath: join(tmpdir(), `checkout-${id()}`),
   };
   writeProjectAssignment(runtime, exactLimitWithCheckout);
   assert.equal(
-    readProjectAssignment(runtime, assignment.repoKey, assignment.branch)
-      ?.checkoutPath,
+    readProjectAssignment(runtime, assignment.repoKey, assignment.branch)?.checkoutPath,
     exactLimitWithCheckout.checkoutPath,
   );
   writeProjectAssignment(runtime, {
@@ -3789,8 +3448,7 @@ test("project assignments are scoped by repository and branch, strict, and remov
     piSessionFile: "/custom/pi/sessions/lead.jsonl",
   });
   assert.equal(
-    readProjectAssignment(runtime, assignment.repoKey, assignment.branch)
-      ?.piSessionFile,
+    readProjectAssignment(runtime, assignment.repoKey, assignment.branch)?.piSessionFile,
     "/custom/pi/sessions/lead.jsonl",
   );
   assert.throws(
@@ -3816,24 +3474,18 @@ test("project assignments are scoped by repository and branch, strict, and remov
   };
   const oversizedPersistedContent = `${JSON.stringify(oversizedPersistedAssignment)}\n`;
   assert.ok(
-    Buffer.byteLength(oversizedPersistedContent, "utf8") <
-      PROJECT_ASSIGNMENT_MAX_BYTES * 2,
+    Buffer.byteLength(oversizedPersistedContent, "utf8") < PROJECT_ASSIGNMENT_MAX_BYTES * 2,
   );
   writeFileSync(path, oversizedPersistedContent);
   assert.throws(
     () => readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
     (error) => {
       assert.ok(error instanceof Error);
-      assert.ok(
-        error.message.includes(`${path}: assignment payload is too large`),
-      );
+      assert.ok(error.message.includes(`${path}: assignment payload is too large`));
       return true;
     },
   );
-  writeFileSync(
-    path,
-    JSON.stringify({ ...assignment, repoKey: "repo", unknown: 1 }),
-  );
+  writeFileSync(path, JSON.stringify({ ...assignment, repoKey: "repo", unknown: 1 }));
   assert.throws(
     () => listProjectAssignments(runtime, assignment.repoKey),
     (error) => {
@@ -3848,9 +3500,7 @@ test("project assignments are scoped by repository and branch, strict, and remov
     () => readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
     (error) => {
       assert.ok(error instanceof Error);
-      assert.ok(
-        error.message.includes(`${path}: assignment identity mismatch`),
-      );
+      assert.ok(error.message.includes(`${path}: assignment identity mismatch`));
       return true;
     },
   );
@@ -3881,9 +3531,7 @@ test("project assignments are scoped by repository and branch, strict, and remov
     () => readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
     (error) => {
       assert.ok(error instanceof Error);
-      assert.ok(
-        error.message.includes(`${path}: assignment identity mismatch`),
-      );
+      assert.ok(error.message.includes(`${path}: assignment identity mismatch`));
       assert.doesNotMatch(error.message, /private task details/);
       return true;
     },
@@ -3900,20 +3548,14 @@ test("project assignments are scoped by repository and branch, strict, and remov
   writeProjectAssignment(runtime, assignment);
   const second = { ...assignment, branch: "herdsman/second" };
   writeProjectAssignment(runtime, second);
-  assert.deepEqual(
-    findProjectAssignmentBySession(runtime, assignment.repoKey, assignment.id),
-    [second, assignment],
-  );
-  assert.deepEqual(listProjectAssignments(runtime, assignment.repoKey), [
+  assert.deepEqual(findProjectAssignmentBySession(runtime, assignment.repoKey, assignment.id), [
     second,
     assignment,
   ]);
+  assert.deepEqual(listProjectAssignments(runtime, assignment.repoKey), [second, assignment]);
   const draftPath = join(dirname(path), `${assignment.id}.json`);
   writeFileSync(draftPath, "draft");
-  assert.deepEqual(listProjectAssignments(runtime, assignment.repoKey), [
-    second,
-    assignment,
-  ]);
+  assert.deepEqual(listProjectAssignments(runtime, assignment.repoKey), [second, assignment]);
   unlinkSync(draftPath);
   writeFileSync(
     projectAssignmentPath(runtime, assignment.repoKey, "wrong"),
@@ -3926,10 +3568,7 @@ test("project assignments are scoped by repository and branch, strict, and remov
   removeProjectAssignment(runtime, assignment.repoKey, "wrong");
   removeProjectAssignment(runtime, assignment.repoKey, second.branch);
   removeProjectAssignment(runtime, assignment.repoKey, assignment.branch);
-  assert.equal(
-    readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
-    undefined,
-  );
+  assert.equal(readProjectAssignment(runtime, assignment.repoKey, assignment.branch), undefined);
 
   const otherRepo = { ...assignment, repoKey: "repo-B" };
   writeProjectAssignment(runtime, assignment);
@@ -3938,28 +3577,18 @@ test("project assignments are scoped by repository and branch, strict, and remov
     projectAssignmentPath(runtime, assignment.repoKey, assignment.branch),
     projectAssignmentPath(runtime, otherRepo.repoKey, otherRepo.branch),
   );
-  assert.deepEqual(listProjectAssignments(runtime, assignment.repoKey), [
-    assignment,
-  ]);
-  assert.deepEqual(listProjectAssignments(runtime, otherRepo.repoKey), [
-    otherRepo,
-  ]);
+  assert.deepEqual(listProjectAssignments(runtime, assignment.repoKey), [assignment]);
+  assert.deepEqual(listProjectAssignments(runtime, otherRepo.repoKey), [otherRepo]);
   assert.deepEqual(
     readProjectAssignment(runtime, assignment.repoKey, "herdsman/unassigned"),
     undefined,
   );
-  assert.deepEqual(
-    readProjectAssignment(runtime, otherRepo.repoKey, otherRepo.branch),
+  assert.deepEqual(readProjectAssignment(runtime, otherRepo.repoKey, otherRepo.branch), otherRepo);
+  assert.deepEqual(findProjectAssignmentBySession(runtime, otherRepo.repoKey, assignment.id), [
     otherRepo,
-  );
-  assert.deepEqual(
-    findProjectAssignmentBySession(runtime, otherRepo.repoKey, assignment.id),
-    [otherRepo],
-  );
-  removeProjectAssignment(runtime, otherRepo.repoKey, otherRepo.branch);
-  assert.deepEqual(listProjectAssignments(runtime, assignment.repoKey), [
-    assignment,
   ]);
+  removeProjectAssignment(runtime, otherRepo.repoKey, otherRepo.branch);
+  assert.deepEqual(listProjectAssignments(runtime, assignment.repoKey), [assignment]);
 });
 
 test("global assignment authority finds cross-socket matches and serializes the final callback", () => {
@@ -3975,15 +3604,9 @@ test("global assignment authority finds cross-socket matches and serializes the 
   });
   writeProjectAssignment(one, assignment("repo-one", "main"));
   try {
-    assert.equal(
-      globalProjectAssignmentSnapshot().get(assignmentId)?.length,
-      1,
-    );
+    assert.equal(globalProjectAssignmentSnapshot().get(assignmentId)?.length, 1);
     writeProjectAssignment(two, assignment("repo-two", "main"));
-    assert.equal(
-      globalProjectAssignmentSnapshot().get(assignmentId)?.length,
-      2,
-    );
+    assert.equal(globalProjectAssignmentSnapshot().get(assignmentId)?.length, 2);
     let called = false;
     const observed = withProjectAssignmentAuthority((snapshot) => {
       called = true;
@@ -3997,9 +3620,7 @@ test("global assignment authority finds cross-socket matches and serializes the 
         /project assignment authority is in progress/i,
       );
       const lockPath = projectAssignmentAuthorityLockPath();
-      const lockModule = pathToFileURL(
-        join(process.cwd(), "extension/lock.ts"),
-      );
+      const lockModule = pathToFileURL(join(process.cwd(), "extension/lock.ts"));
       const child = spawnSync(
         process.execPath,
         [
@@ -4012,10 +3633,7 @@ test("global assignment authority finds cross-socket matches and serializes the 
         { encoding: "utf8", timeout: 10_000 },
       );
       assert.equal(child.status, 0, child.stderr);
-      assert.match(
-        child.stdout,
-        /project assignment authority is in progress/i,
-      );
+      assert.match(child.stdout, /project assignment authority is in progress/i);
       return 42;
     });
     assert.equal(called, true);
@@ -4047,24 +3665,18 @@ test("final assignment publication serializes replacement and rejects prior inva
   writeProjectAssignment(runtime, original);
   let publications = 0;
   try {
-    withCurrentProjectAssignment(
-      runtime,
-      original.repoKey,
-      original.branch,
-      (current) => {
-        assert.equal(current?.id, original.id);
-        assert.throws(
-          () => writeProjectAssignment(runtime, replacement),
-          /project assignment authority is in progress/i,
-        );
-        assert.throws(
-          () =>
-            removeProjectAssignment(runtime, original.repoKey, original.branch),
-          /project assignment authority is in progress/i,
-        );
-        publications++;
-      },
-    );
+    withCurrentProjectAssignment(runtime, original.repoKey, original.branch, (current) => {
+      assert.equal(current?.id, original.id);
+      assert.throws(
+        () => writeProjectAssignment(runtime, replacement),
+        /project assignment authority is in progress/i,
+      );
+      assert.throws(
+        () => removeProjectAssignment(runtime, original.repoKey, original.branch),
+        /project assignment authority is in progress/i,
+      );
+      publications++;
+    });
     assert.equal(publications, 1);
     assert.equal(
       readProjectAssignment(runtime, original.repoKey, original.branch)?.id,
@@ -4073,16 +3685,10 @@ test("final assignment publication serializes replacement and rejects prior inva
     );
 
     const rejectInvalidated = () =>
-      withCurrentProjectAssignment(
-        runtime,
-        original.repoKey,
-        original.branch,
-        (current) => {
-          if (!current || current.id !== original.id)
-            throw new Error("assignment invalidated");
-          publications++;
-        },
-      );
+      withCurrentProjectAssignment(runtime, original.repoKey, original.branch, (current) => {
+        if (!current || current.id !== original.id) throw new Error("assignment invalidated");
+        publications++;
+      });
     writeProjectAssignment(runtime, replacement);
     assert.throws(rejectInvalidated, /assignment invalidated/);
     const sameIdEvidenceChange = {
@@ -4092,21 +3698,15 @@ test("final assignment publication serializes replacement and rejects prior inva
     writeProjectAssignment(runtime, sameIdEvidenceChange);
     assert.throws(
       () =>
-        withCurrentProjectAssignment(
-          runtime,
-          original.repoKey,
-          original.branch,
-          (current) => {
-            if (
-              !current ||
-              current.id !== original.id ||
-              JSON.stringify(current.requiredEvidence) !==
-                JSON.stringify(original.requiredEvidence)
-            )
-              throw new Error("evidence changed");
-            publications++;
-          },
-        ),
+        withCurrentProjectAssignment(runtime, original.repoKey, original.branch, (current) => {
+          if (
+            !current ||
+            current.id !== original.id ||
+            JSON.stringify(current.requiredEvidence) !== JSON.stringify(original.requiredEvidence)
+          )
+            throw new Error("evidence changed");
+          publications++;
+        }),
       /evidence changed/,
     );
     removeProjectAssignment(runtime, original.repoKey, original.branch);
@@ -4133,11 +3733,7 @@ test("global assignment scan ignores only regular incidental metadata", () => {
   const repositoryDirectory = dirname(recordPath);
   const assignmentsDirectory = dirname(repositoryDirectory);
   const socketDirectory = dirname(assignmentsDirectory);
-  const directories = [
-    dirname(socketDirectory),
-    assignmentsDirectory,
-    repositoryDirectory,
-  ];
+  const directories = [dirname(socketDirectory), assignmentsDirectory, repositoryDirectory];
   const metadataNames = [".DS_Store", "desktop.ini", "Thumbs.db", ".directory"];
   const metadata = directories.flatMap((directory) =>
     metadataNames.map((name) => join(directory, name)),
@@ -4172,10 +3768,7 @@ test("global assignment scan ignores only regular incidental metadata", () => {
 
     const unexpected = join(repositoryDirectory, "unrelated-file");
     writeFileSync(unexpected, "metadata", "utf8");
-    assert.throws(
-      () => globalProjectAssignmentSnapshot(),
-      /Unexpected project assignment record/,
-    );
+    assert.throws(() => globalProjectAssignmentSnapshot(), /Unexpected project assignment record/);
     unlinkSync(unexpected);
   } finally {
     for (const path of metadata) rmSync(path, { recursive: true, force: true });
@@ -4201,11 +3794,7 @@ test("global assignment scan recognizes canonical project-message directories", 
     text: "handoff",
     createdAt: 1,
   };
-  const path = projectAssignmentPath(
-    runtime,
-    assignment.repoKey,
-    assignment.branch,
-  );
+  const path = projectAssignmentPath(runtime, assignment.repoKey, assignment.branch);
   const directory = dirname(path);
   const messages = join(directory, `${basename(path, ".json")}.messages`);
   const unknown = join(directory, "unknown.messages");
@@ -4218,46 +3807,32 @@ test("global assignment scan recognizes canonical project-message directories", 
         ?.map((entry) => entry.assignment),
       [assignment],
     );
-    assert.deepEqual(
-      listProjectMessages(runtime, assignment.repoKey, assignment.branch),
-      [message],
-    );
+    assert.deepEqual(listProjectMessages(runtime, assignment.repoKey, assignment.branch), [
+      message,
+    ]);
 
     // Pending message storage alone does not grant authority.
     removeProjectAssignment(runtime, assignment.repoKey, assignment.branch);
-    assert.equal(
-      globalProjectAssignmentSnapshot().get(assignment.id),
-      undefined,
-    );
+    assert.equal(globalProjectAssignmentSnapshot().get(assignment.id), undefined);
     rmSync(
-      projectAssignmentPath(
-        runtime,
-        assignment.repoKey,
-        assignment.branch,
-      ).replace(/\.json$/, ".messages"),
+      projectAssignmentPath(runtime, assignment.repoKey, assignment.branch).replace(
+        /\.json$/,
+        ".messages",
+      ),
       { recursive: true, force: true },
     );
 
     // A canonical name with the wrong type remains invalid.
     writeFileSync(messages, "not a directory");
-    assert.throws(
-      () => globalProjectAssignmentSnapshot(),
-      /Invalid project message directory/,
-    );
+    assert.throws(() => globalProjectAssignmentSnapshot(), /Invalid project message directory/);
     unlinkSync(messages);
     realFs.symlinkSync(directory, messages, "dir");
-    assert.throws(
-      () => globalProjectAssignmentSnapshot(),
-      /Invalid project message directory/,
-    );
+    assert.throws(() => globalProjectAssignmentSnapshot(), /Invalid project message directory/);
     unlinkSync(messages);
 
     // Arbitrary neighboring directories remain forbidden.
     mkdirSync(unknown);
-    assert.throws(
-      () => globalProjectAssignmentSnapshot(),
-      /Unexpected project assignment record/,
-    );
+    assert.throws(() => globalProjectAssignmentSnapshot(), /Unexpected project assignment record/);
   } finally {
     rmSync(unknown, { recursive: true, force: true });
     rmSync(messages, { recursive: true, force: true });
@@ -4271,10 +3846,7 @@ test("global assignment scans fail closed on a malformed canonical record", () =
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, "{broken", "utf8");
   try {
-    assert.throws(
-      () => globalProjectAssignmentSnapshot(),
-      /Unable to read project assignment/,
-    );
+    assert.throws(() => globalProjectAssignmentSnapshot(), /Unable to read project assignment/);
   } finally {
     unlinkSync(path);
   }
@@ -4310,10 +3882,7 @@ test("global assignment scan ignores regular publication temporaries but rejects
 
     const unexpected = join(directory, "incomplete-publication");
     writeFileSync(unexpected, "partial", "utf8");
-    assert.throws(
-      () => globalProjectAssignmentSnapshot(),
-      /Unexpected project assignment record/,
-    );
+    assert.throws(() => globalProjectAssignmentSnapshot(), /Unexpected project assignment record/);
     unlinkSync(unexpected);
 
     const target = join(directory, "target");
@@ -4477,9 +4046,7 @@ test("project work derives active, paused, or conflict from runtime placement", 
       assignments: [assignment],
       worktrees: scenario.input.worktrees,
       leads: scenario.input.leads,
-      ...("unverified" in scenario.input
-        ? { unverified: scenario.input.unverified }
-        : {}),
+      ...("unverified" in scenario.input ? { unverified: scenario.input.unverified } : {}),
     });
     assert.equal(snapshot[0]!.status, scenario.status, scenario.name);
     assert.equal(snapshot[0]!.task, "implement work", scenario.name);
@@ -4531,10 +4098,7 @@ test("project work derives active, paused, or conflict from runtime placement", 
   });
   assert.equal(withVerifiedPlacement[0]!.status, "paused");
   assert.equal(withVerifiedPlacement[0]!.checkoutPath, verifiedCheckout);
-  assert.equal(
-    Object.hasOwn(withVerifiedPlacement[0]!, "gitBaselineSha"),
-    false,
-  );
+  assert.equal(Object.hasOwn(withVerifiedPlacement[0]!, "gitBaselineSha"), false);
   assert.equal(Object.hasOwn(switched[0]!, "checkoutPath"), false);
 
   const ineligibleWithPlacement = projectWorkSnapshot({
@@ -4560,14 +4124,8 @@ test("project work derives active, paused, or conflict from runtime placement", 
     ],
   });
   assert.equal(ineligibleWithPlacement[0]!.status, "unknown");
-  assert.equal(
-    Object.hasOwn(ineligibleWithPlacement[0]!, "checkoutPath"),
-    false,
-  );
-  assert.equal(
-    Object.hasOwn(ineligibleWithPlacement[0]!, "gitBaselineSha"),
-    false,
-  );
+  assert.equal(Object.hasOwn(ineligibleWithPlacement[0]!, "checkoutPath"), false);
+  assert.equal(Object.hasOwn(ineligibleWithPlacement[0]!, "gitBaselineSha"), false);
 
   const competing = { ...assignment, id: id(), branch: "feat/other" };
   for (const assignments of [
@@ -4636,14 +4194,10 @@ test("project messages are durable, assignment-scoped, bounded, and removable", 
   writeProjectMessage(record, runtime);
   writeProjectMessage(record, runtime);
   assert.throws(
-    () =>
-      writeProjectMessage({ ...record, text: "Conflicting replay" }, runtime),
+    () => writeProjectMessage({ ...record, text: "Conflicting replay" }, runtime),
     /identity conflicts with durable payload/,
   );
-  assert.deepEqual(
-    listProjectMessages(runtime, assignment.repoKey, assignment.branch),
-    [record],
-  );
+  assert.deepEqual(listProjectMessages(runtime, assignment.repoKey, assignment.branch), [record]);
   assert.deepEqual(
     listProjectMessages(runtime, assignment.repoKey, assignment.branch),
     [record],
@@ -4672,40 +4226,26 @@ test("project messages are durable, assignment-scoped, bounded, and removable", 
     semanticRecords.push(semantic);
     writeProjectMessage(semantic, runtime);
     assert.deepEqual(
-      readProjectMessage(
-        runtime,
-        assignment.repoKey,
-        assignment.branch,
-        semantic.id,
-      ),
+      readProjectMessage(runtime, assignment.repoKey, assignment.branch, semantic.id),
       semantic,
     );
   }
   assert.deepEqual(
     listProjectMessages(runtime, assignment.repoKey, assignment.branch),
-    [...semanticRecords, record]
-      .sort((a, b) => a.id.localeCompare(b.id))
-      .concat(failure),
+    [...semanticRecords, record].sort((a, b) => a.id.localeCompare(b.id)).concat(failure),
   );
-  assert.deepEqual(
-    listProjectMessages(runtime, "other-repo", assignment.branch),
-    [],
-  );
+  assert.deepEqual(listProjectMessages(runtime, "other-repo", assignment.branch), []);
   const large = {
     ...record,
     id: id(),
     text: "x".repeat(29_764),
-    resultBindings: [
-      { ref: "result:reviewer#1", canonicalRef: `result:${id()}` },
-    ],
+    resultBindings: [{ ref: "result:reviewer#1", canonicalRef: `result:${id()}` }],
   };
   writeProjectMessage(large, runtime);
   assert.ok(
     statSync(
       join(
-        dirname(
-          projectAssignmentPath(runtime, assignment.repoKey, assignment.branch),
-        ),
+        dirname(projectAssignmentPath(runtime, assignment.repoKey, assignment.branch)),
         `${basename(projectAssignmentPath(runtime, assignment.repoKey, assignment.branch), ".json")}.messages`,
         `${large.id}.json`,
       ),
@@ -4718,19 +4258,15 @@ test("project messages are durable, assignment-scoped, bounded, and removable", 
     large,
   );
   const largePath = join(
-    dirname(
-      projectAssignmentPath(runtime, assignment.repoKey, assignment.branch),
-    ),
+    dirname(projectAssignmentPath(runtime, assignment.repoKey, assignment.branch)),
     `${basename(projectAssignmentPath(runtime, assignment.repoKey, assignment.branch), ".json")}.messages`,
     `${large.id}.json`,
   );
   writeFileSync(`${largePath}.body`, "corrupt", "utf8");
   assert.ok(
-    listProjectMessageHeaders(
-      runtime,
-      assignment.repoKey,
-      assignment.branch,
-    ).some((message) => message.id === large.id && message.bodyRef),
+    listProjectMessageHeaders(runtime, assignment.repoKey, assignment.branch).some(
+      (message) => message.id === large.id && message.bodyRef,
+    ),
     "compact enumeration does not open the overflow body",
   );
   const malformedId = id();
@@ -4738,30 +4274,20 @@ test("project messages are durable, assignment-scoped, bounded, and removable", 
   writeFileSync(join(messageDirectory, `${malformedId}.json`), "{}", "utf8");
   const readErrors: unknown[] = [];
   assert.ok(
-    listProjectMessageHeaders(
-      runtime,
-      assignment.repoKey,
-      assignment.branch,
-      (error) => readErrors.push(error),
+    listProjectMessageHeaders(runtime, assignment.repoKey, assignment.branch, (error) =>
+      readErrors.push(error),
     ).some((message) => message.id === large.id),
     "independent scanning retains valid records",
   );
   assert.equal(readErrors.length, 1);
   assert.throws(
-    () =>
-      listProjectMessageHeaders(runtime, assignment.repoKey, assignment.branch),
+    () => listProjectMessageHeaders(runtime, assignment.repoKey, assignment.branch),
     /Unable to read project message/,
     "callers without an error handler remain fail-closed",
   );
   unlinkSync(join(messageDirectory, `${malformedId}.json`));
   assert.throws(
-    () =>
-      readProjectMessage(
-        runtime,
-        assignment.repoKey,
-        assignment.branch,
-        large.id,
-      ),
+    () => readProjectMessage(runtime, assignment.repoKey, assignment.branch, large.id),
     /Unable to read project message/,
   );
   assert.throws(
@@ -4782,26 +4308,20 @@ test("project messages are durable, assignment-scoped, bounded, and removable", 
       writeProjectMessage(
         {
           ...record,
-          resultBindings: [
-            { ref: "result:implementation#01", canonicalRef: `result:${id()}` },
-          ],
+          resultBindings: [{ ref: "result:implementation#01", canonicalRef: `result:${id()}` }],
         },
         runtime,
       ),
     /Invalid project message/,
   );
   rmSync(
-    projectAssignmentPath(
-      runtime,
-      assignment.repoKey,
-      assignment.branch,
-    ).replace(/\.json$/, ".messages"),
+    projectAssignmentPath(runtime, assignment.repoKey, assignment.branch).replace(
+      /\.json$/,
+      ".messages",
+    ),
     { recursive: true, force: true },
   );
-  assert.deepEqual(
-    listProjectMessages(runtime, assignment.repoKey, assignment.branch),
-    [],
-  );
+  assert.deepEqual(listProjectMessages(runtime, assignment.repoKey, assignment.branch), []);
 });
 
 test("project-message readiness probe is filename-based and fails open on uncertainty", (t) => {
@@ -4822,10 +4342,7 @@ test("project-message readiness probe is filename-based and fails open on uncert
 
   const candidateDirectory = (branch: string) => {
     const assignment = projectAssignmentPath(runtime, repoKey, branch);
-    const messages = join(
-      dirname(assignment),
-      `${basename(assignment, ".json")}.messages`,
-    );
+    const messages = join(dirname(assignment), `${basename(assignment, ".json")}.messages`);
     mkdirSync(messages, { recursive: true });
     return messages;
   };
@@ -5090,14 +4607,8 @@ test("project retirement compares exact authority and cleans only its pending me
     `${next.id}.json`,
   );
   assert.equal(retireProjectAssignment(runtime, original), false);
-  assert.deepEqual(
-    readProjectAssignment(runtime, original.repoKey, original.branch),
-    replacement,
-  );
-  assert.equal(
-    listProjectMessages(runtime, original.repoKey, original.branch).length,
-    2,
-  );
+  assert.deepEqual(readProjectAssignment(runtime, original.repoKey, original.branch), replacement);
+  assert.equal(listProjectMessages(runtime, original.repoKey, original.branch).length, 2);
   writeFileSync(`${nextPath}.body`, "corrupt", "utf8");
   removeProjectMessagesForAssignment(runtime, original);
   removeProjectMessagesForAssignment(runtime, original);
@@ -5108,10 +4619,7 @@ test("project retirement compares exact authority and cleans only its pending me
     [next.id],
   );
   assert.equal(retireProjectAssignment(runtime, replacement), true);
-  assert.equal(
-    readProjectAssignment(runtime, original.repoKey, original.branch),
-    undefined,
-  );
+  assert.equal(readProjectAssignment(runtime, original.repoKey, original.branch), undefined);
   assert.deepEqual(
     listProjectMessageHeaders(runtime, original.repoKey, original.branch).map(
       ({ id: messageId }) => messageId,
@@ -5156,42 +4664,26 @@ test("project message recovery preserves replacement authority and fails closed 
     writeProjectAssignment(runtime, assignment);
     writeProjectMessage(stale, runtime);
     writeProjectMessage(pending, runtime);
-    const path = projectAssignmentPath(
-      runtime,
-      assignment.repoKey,
-      assignment.branch,
-    );
-    const messagePath = join(
-      path.replace(/\.json$/, ".messages"),
-      `${stale.id}.json`,
-    );
+    const path = projectAssignmentPath(runtime, assignment.repoKey, assignment.branch);
+    const messagePath = join(path.replace(/\.json$/, ".messages"), `${stale.id}.json`);
     if (scenario === "corrupt authority") writeFileSync(path, "{");
     if (scenario === "wrong branch")
-      writeFileSync(
-        messagePath,
-        JSON.stringify({ ...stale, branch: "elsewhere" }),
-      );
+      writeFileSync(messagePath, JSON.stringify({ ...stale, branch: "elsewhere" }));
     if (scenario === "wrong repository")
-      writeFileSync(
-        messagePath,
-        JSON.stringify({ ...stale, repoKey: "elsewhere" }),
-      );
+      writeFileSync(messagePath, JSON.stringify({ ...stale, repoKey: "elsewhere" }));
     if (scenario === "malformed message") writeFileSync(messagePath, "{");
     if (scenario === "replacement") {
       recoverStaleProjectMessages(runtime, assignment.repoKey);
       recoverStaleProjectMessages(runtime, assignment.repoKey);
-      assert.deepEqual(
-        listProjectMessages(runtime, assignment.repoKey, assignment.branch),
-        [pending],
-      );
+      assert.deepEqual(listProjectMessages(runtime, assignment.repoKey, assignment.branch), [
+        pending,
+      ]);
       assert.deepEqual(
         readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
         assignment,
       );
     } else {
-      assert.throws(() =>
-        recoverStaleProjectMessages(runtime, assignment.repoKey),
-      );
+      assert.throws(() => recoverStaleProjectMessages(runtime, assignment.repoKey));
       assert.ok(existsSync(messagePath));
       assert.ok(existsSync(join(dirname(messagePath), `${pending.id}.json`)));
     }
@@ -5235,9 +4727,7 @@ test("stale project-message recovery removes overflow records without reading th
     writeProjectMessage(anotherStale, runtime);
     writeProjectMessage(pending, runtime);
     const directory = join(
-      dirname(
-        projectAssignmentPath(runtime, assignment.repoKey, assignment.branch),
-      ),
+      dirname(projectAssignmentPath(runtime, assignment.repoKey, assignment.branch)),
       `${basename(projectAssignmentPath(runtime, assignment.repoKey, assignment.branch), ".json")}.messages`,
     );
     const stalePath = join(directory, `${stale.id}.json`);
@@ -5287,22 +4777,15 @@ test("project retirement storage failure preserves pending messages", () => {
       readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
       assignment,
     );
-    assert.deepEqual(
-      listProjectMessages(runtime, assignment.repoKey, assignment.branch),
-      [pending],
-    );
+    assert.deepEqual(listProjectMessages(runtime, assignment.repoKey, assignment.branch), [
+      pending,
+    ]);
   } finally {
     lock.release();
   }
-  writeFileSync(
-    projectAssignmentPath(runtime, assignment.repoKey, assignment.branch),
-    "{",
-  );
+  writeFileSync(projectAssignmentPath(runtime, assignment.repoKey, assignment.branch), "{");
   assert.throws(() => retireProjectAssignment(runtime, assignment));
-  assert.deepEqual(
-    listProjectMessages(runtime, assignment.repoKey, assignment.branch),
-    [pending],
-  );
+  assert.deepEqual(listProjectMessages(runtime, assignment.repoKey, assignment.branch), [pending]);
 });
 
 test("global authority wait handles release, cancellation, and timeout without running early", async () => {
@@ -5319,10 +4802,7 @@ test("global authority wait handles release, cancellation, and timeout without r
 
     holder = acquireProcessLock(path, { name: "test authority holder" });
     const controller = new AbortController();
-    const cancelled = withProjectAssignmentAuthorityWait(
-      () => ++calls,
-      controller.signal,
-    );
+    const cancelled = withProjectAssignmentAuthorityWait(() => ++calls, controller.signal);
     controller.abort(new Error("cancel test"));
     await assert.rejects(cancelled, /cancel test/);
     assert.equal(calls, 1);
@@ -5421,16 +4901,12 @@ test("pending retirement validation fails closed without deleting evidence", () 
     const path = join(directory, readdirSync(directory)[0]!);
     if (scenario === "JSON") writeFileSync(path, "{");
     if (scenario === "schema") writeFileSync(path, "{}");
-    if (scenario === "identity")
-      writeFileSync(path, JSON.stringify({ ...a, id: id() }));
+    if (scenario === "identity") writeFileSync(path, JSON.stringify({ ...a, id: id() }));
     if (scenario === "oversized")
       writeFileSync(path, "x".repeat(PROJECT_ASSIGNMENT_MAX_BYTES * 2 + 1));
     if (scenario === "symlink") {
       unlinkSync(path);
-      realFs.symlinkSync(
-        projectAssignmentPath(runtime, a.repoKey, a.branch),
-        path,
-      );
+      realFs.symlinkSync(projectAssignmentPath(runtime, a.repoKey, a.branch), path);
     }
     if (scenario === "directory") {
       unlinkSync(path);
@@ -5466,16 +4942,13 @@ test("pending retirement validation fails closed without deleting evidence", () 
 
 test("pending retirement scan is bounded and advances fairly through records", () => {
   const runtime = supervisionRuntime(socket());
-  const records = Array.from(
-    { length: COORDINATION_INBOX_SCAN_LIMIT + 3 },
-    (_, i) => ({
-      version: 2 as const,
-      id: id(),
-      repoKey: "pending-scan",
-      branch: `feature-${i}`,
-      text: "task",
-    }),
-  );
+  const records = Array.from({ length: COORDINATION_INBOX_SCAN_LIMIT + 3 }, (_, i) => ({
+    version: 2 as const,
+    id: id(),
+    repoKey: "pending-scan",
+    branch: `feature-${i}`,
+    text: "task",
+  }));
   for (const record of records) {
     writeProjectAssignment(runtime, record);
     assert.equal(retireProjectAssignment(runtime, record), true);
@@ -5502,8 +4975,7 @@ test("pending retirement scan is bounded and advances fairly through records", (
     "retirements",
     basename(dirname(projectAssignmentPath(runtime, "pending-scan", "lookup"))),
   );
-  for (const entry of readdirSync(directory))
-    writeFileSync(join(directory, entry), "{");
+  for (const entry of readdirSync(directory)) writeFileSync(join(directory, entry), "{");
   after = undefined;
   for (const expectedAttempts of [
     COORDINATION_INBOX_SCAN_LIMIT,
@@ -5582,10 +5054,7 @@ test("retirement rename and post-commit sync failures preserve recoverable state
     writeProjectMessage(handoff, runtime);
     support.retirementFailure = failure;
     try {
-      assert.throws(
-        () => retireProjectAssignment(runtime, a),
-        /injected retirement/,
-      );
+      assert.throws(() => retireProjectAssignment(runtime, a), /injected retirement/);
     } finally {
       support.retirementFailure = undefined;
     }
@@ -5593,13 +5062,8 @@ test("retirement rename and post-commit sync failures preserve recoverable state
       readProjectAssignment(runtime, a.repoKey, a.branch),
       failure === "rename" ? a : undefined,
     );
-    assert.deepEqual(
-      listPendingRetirements(runtime, a.repoKey),
-      failure === "rename" ? [] : [a],
-    );
-    assert.deepEqual(listProjectMessages(runtime, a.repoKey, a.branch), [
-      handoff,
-    ]);
+    assert.deepEqual(listPendingRetirements(runtime, a.repoKey), failure === "rename" ? [] : [a]);
+    assert.deepEqual(listProjectMessages(runtime, a.repoKey, a.branch), [handoff]);
     if (failure === "sync") {
       assert.equal(retireProjectAssignment(runtime, a), false);
       removeProjectMessagesForAssignment(runtime, a);
@@ -5633,10 +5097,7 @@ test("project message recovery rejects symlinked ancestors without touching exte
       projectAssignmentPath(runtime, assignment.repoKey, assignment.branch),
     );
     const original = ancestor === "repository" ? repository : runtime[ancestor];
-    const outside = join(
-      mkdtempSync(join(tmpdir(), "recovery-outside-")),
-      "records",
-    );
+    const outside = join(mkdtempSync(join(tmpdir(), "recovery-outside-")), "records");
     const relativeMessage = join(
       repository,
       `${createHash("sha256").update(pending.branch).digest("hex")}.messages`,
@@ -5648,20 +5109,13 @@ test("project message recovery rejects symlinked ancestors without touching exte
       assignment.branch,
     ).slice(original.length + 1);
     realFs.renameSync(original, outside);
-    realFs.symlinkSync(
-      outside,
-      original,
-      process.platform === "win32" ? "junction" : "dir",
-    );
+    realFs.symlinkSync(outside, original, process.platform === "win32" ? "junction" : "dir");
     try {
       assert.throws(
         () => recoverStaleProjectMessages(runtime, assignment.repoKey),
         /Invalid project assignment authority directory/,
       );
-      assert.deepEqual(
-        JSON.parse(readFileSync(join(outside, relativeMessage), "utf8")),
-        pending,
-      );
+      assert.deepEqual(JSON.parse(readFileSync(join(outside, relativeMessage), "utf8")), pending);
       assert.deepEqual(
         JSON.parse(readFileSync(join(outside, relativeAssignment), "utf8")),
         assignment,
@@ -5822,11 +5276,11 @@ test("native Pi tree, fork and clone keep identity exact-session-bound", () => {
       assert.equal(sessionLeadRoleState(clone.getBranch(), clone.getSessionId()), undefined);
       assert.deepEqual(readSessionKind(SessionManager.open(path, directory).getEntries(), sessionId), identity);
     `;
-    const result = spawnSync(
-      process.execPath,
-      ["--input-type=module", "-e", program, directory],
-      { cwd: process.cwd(), encoding: "utf8", timeout: 10_000 },
-    );
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", program, directory], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      timeout: 10_000,
+    });
     assert.equal(result.status, 0, result.stderr || result.stdout);
   } finally {
     rmSync(directory, { recursive: true, force: true });

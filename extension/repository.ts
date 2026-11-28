@@ -48,21 +48,14 @@ export class CloneDestinationExistsError extends Error {
   }
 }
 
-export function parseRepositorySource(
-  value: string,
-  homeDirectory = homedir(),
-): RepositorySource {
-  if (hasControls(value))
-    throw new Error("Repository source contains control characters");
+export function parseRepositorySource(value: string, homeDirectory = homedir()): RepositorySource {
+  if (hasControls(value)) throw new Error("Repository source contains control characters");
 
   const url = /^(https|ssh):\/\/([^/?#]+)\/([^?#]+)$/.exec(value);
-  const scp =
-    /^([a-z\d_][a-z\d_.-]*)@(\[[a-f\d:.]+\]|[a-z\d.-]+):\/?(.+)$/i.exec(value);
+  const scp = /^([a-z\d_][a-z\d_.-]*)@(\[[a-f\d:.]+\]|[a-z\d.-]+):\/?(.+)$/i.exec(value);
   if (!url && !scp) {
     if (/^[a-z][a-z\d+.-]*:\/\//i.test(value))
-      throw new Error(
-        "Expected an HTTPS or SSH Git remote with a repository path",
-      );
+      throw new Error("Expected an HTTPS or SSH Git remote with a repository path");
     return { kind: "local", path: absolutePath(value, homeDirectory) };
   }
 
@@ -89,11 +82,7 @@ export function parseRepositorySource(
     } catch {
       throw new Error("Git remote has an unsupported host");
     }
-  } else if (
-    !host
-      .split(".")
-      .every((label) => /^[a-z\d](?:[a-z\d-]*[a-z\d])?$/i.test(label))
-  ) {
+  } else if (!host.split(".").every((label) => /^[a-z\d](?:[a-z\d-]*[a-z\d])?$/i.test(label))) {
     throw new Error("Git remote has an unsupported host");
   }
   const segments = remotePath.split("/").map((segment) => {
@@ -103,8 +92,7 @@ export function parseRepositorySource(
     } catch {
       throw new Error("Git remote path contains invalid URL encoding");
     }
-    if (!safeCloneSegment(decoded))
-      throw new Error("Git remote contains an unsafe path segment");
+    if (!safeCloneSegment(decoded)) throw new Error("Git remote contains an unsafe path segment");
     return decoded;
   });
   return { kind: "remote", url: value, pathSegments: segments };
@@ -135,9 +123,7 @@ function inspectDirectory(path: string) {
       };
     }
     if (!info.isDirectory() || info.isSymbolicLink())
-      throw new Error(
-        `Repository path contains a symlink or non-directory: ${next}`,
-      );
+      throw new Error(`Repository path contains a symlink or non-directory: ${next}`);
     current = next;
   }
   const anchor = realpathSync.native(current);
@@ -159,10 +145,7 @@ export function resolveLocalRepositoryPath(value: string) {
 
 type LocalSelection = ReturnType<typeof resolveLocalRepositoryPath>;
 
-function verifyLocalSelection(
-  selected: LocalSelection,
-  current: LocalSelection,
-): void {
+function verifyLocalSelection(selected: LocalSelection, current: LocalSelection): void {
   if (
     current.exists !== selected.exists ||
     current.anchor !== selected.anchor ||
@@ -177,13 +160,8 @@ export function verifyLocalRepositoryPath(selected: LocalSelection): void {
 }
 
 /** Create a missing, previously approved local path; never adopt a new leaf. */
-export function createLocalRepositoryDirectory(
-  target: LocalSelection,
-): LocalSelection {
-  if (target.exists)
-    throw new Error(
-      `Local repository directory already exists: ${target.path}`,
-    );
+export function createLocalRepositoryDirectory(target: LocalSelection): LocalSelection {
+  if (target.exists) throw new Error(`Local repository directory already exists: ${target.path}`);
   verifyLocalRepositoryPath(target);
   const missing = [];
   for (let path = target.path; path !== target.anchor; path = dirname(path)) {
@@ -199,16 +177,12 @@ export function createLocalRepositoryDirectory(
     // Exclusive mkdir: never adopt a directory created while approval was pending.
     mkdirSync(path);
     parent = resolveLocalRepositoryPath(path);
-    if (!parent.exists)
-      throw new Error("New local repository directory disappeared");
+    if (!parent.exists) throw new Error("New local repository directory disappeared");
   }
   return parent;
 }
 
-function ensureParentDirectory(
-  path: string,
-  onCreated?: (path: string) => void,
-): string {
+function ensureParentDirectory(path: string, onCreated?: (path: string) => void): string {
   const current = inspectDirectory(path);
   if (current.exists) return current.path;
   ensureParentDirectory(dirname(current.path), onCreated);
@@ -223,19 +197,14 @@ function cloneDestination(
   projectsDirectory: string,
   options: { destination?: string; homeDirectory?: string },
 ): string {
-  const path = resolveClonePath(
-    options.destination ?? projectsDirectory,
-    options.homeDirectory,
-  );
+  const path = resolveClonePath(options.destination ?? projectsDirectory, options.homeDirectory);
   if (options.destination !== undefined) {
-    if (dirname(path) === path)
-      throw new Error("A filesystem root cannot be a clone destination");
+    if (dirname(path) === path) throw new Error("A filesystem root cannot be a clone destination");
     return path;
   }
   const segments = [...source.pathSegments];
   const repository = segments.pop()!.replace(/\.git$/i, "");
-  if (!safeCloneSegment(repository))
-    throw new Error("Cannot derive a safe clone destination");
+  if (!safeCloneSegment(repository)) throw new Error("Cannot derive a safe clone destination");
   return join(path, ...segments, repository);
 }
 
@@ -250,9 +219,7 @@ function assertNoGitRedirection(): void {
       "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     ].some((key) => process.env[key] !== undefined)
   )
-    throw new Error(
-      "Cannot clone while Git repository redirection variables are set",
-    );
+    throw new Error("Cannot clone while Git repository redirection variables are set");
 }
 
 /** Read one supported effective origin without trusting source project config. */
@@ -273,12 +240,7 @@ export async function resolveCheckoutCloneSource(
         maxBuffer: 16 * 1024,
       });
       signal?.throwIfAborted();
-      if (
-        result.code !== 0 ||
-        result.killed ||
-        result.truncated ||
-        result.stderr
-      )
+      if (result.code !== 0 || result.killed || result.truncated || result.stderr)
         throw new Error("Git observation failed");
       return result;
     },
@@ -294,11 +256,9 @@ export async function resolveCheckoutCloneSource(
     const metadata = inspectLocalRepositoryPath(before.canonicalRepoKey);
     if (!metadata.exists) throw new Error("Git metadata directory is missing");
     verifyLocalRepositoryPath(selected);
-    const { stdout } = await bounded.exec(
-      "git",
-      ["remote", "get-url", "--all", "origin"],
-      { cwd: selected.path },
-    );
+    const { stdout } = await bounded.exec("git", ["remote", "get-url", "--all", "origin"], {
+      cwd: selected.path,
+    });
     // Remove exactly Git's line terminator; embedded or extra lines are invalid.
     if (!stdout.endsWith("\n")) throw new Error("Incomplete Git output");
     const source = parseRepositorySource(stdout.replace(/\r?\n$/, ""));
@@ -359,8 +319,7 @@ export async function cloneRepository(
       throw error;
     }
   } catch (error) {
-    if (createdParent)
-      throw new RepositoryCloneError("preparation", createdParent);
+    if (createdParent) throw new RepositoryCloneError("preparation", createdParent);
     throw error;
   }
 
@@ -469,8 +428,7 @@ export async function cloneRepository(
         effective.killed ||
         effective.truncated ||
         effective.stderr ||
-        (effective.stdout !== source.url + "\n" &&
-          effective.stdout !== source.url + "\r\n")
+        (effective.stdout !== source.url + "\n" && effective.stdout !== source.url + "\r\n")
       )
         throw new Error("Could not verify the effective origin in the clone");
       assertMetadata();

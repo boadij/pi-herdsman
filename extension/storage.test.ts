@@ -67,10 +67,7 @@ test("peer evidence is immutable and result identities cannot be rebound", () =>
   const attachment = persistPeerAttachment("spec.md", "specification\n");
   assert.equal(readFileSync(attachment, "utf8"), "specification\n");
   assert.equal(persistPeerAttachment("spec.md", "specification\n"), attachment);
-  assert.throws(
-    () => persistPeerAttachment("../escape", "unsafe"),
-    /invalid peer attachment/,
-  );
+  assert.throws(() => persistPeerAttachment("../escape", "unsafe"), /invalid peer attachment/);
 
   const canonicalRef = resultRef(randomUUID());
   const result = persistPeerResultArtifact(canonicalRef, "result\n");
@@ -85,10 +82,7 @@ test("recoverable Herdsman state lives under Pi agent data", () => {
   const root = join(getAgentDir(), "pi-herdsman");
   assert.equal(herdsmanDataRoot(), root);
   assert.equal(herdsmanConfigPath(), join(root, "config.json"));
-  assert.equal(
-    dirname(resultPath("550e8400-e29b-41d4-a716-446655440000")),
-    join(root, "results"),
-  );
+  assert.equal(dirname(resultPath("550e8400-e29b-41d4-a716-446655440000")), join(root, "results"));
   assert.equal(
     dirname(agentMailboxPath("workspace", "agent")),
     join(root, "runtime", "mailboxes-v5"),
@@ -140,10 +134,7 @@ test("scoped result publication is idempotent, collision-safe, and fails closed"
   try {
     const first = publishScopedResult(label, 1, canonical, "root-session-a");
     assert.deepEqual(first, { ref: `result:${label}#1`, index: 1 });
-    assert.deepEqual(
-      publishScopedResult(label, 1, canonical, "root-session-a"),
-      first,
-    );
+    assert.deepEqual(publishScopedResult(label, 1, canonical, "root-session-a"), first);
     assert.deepEqual(resolveScopedResult(first.ref), {
       version: 1,
       canonicalRef: canonical,
@@ -174,18 +165,8 @@ test("interrupted completion delivery retry reuses its published semantic refere
   persistPeerResultArtifact(canonical, "retryable completion\n");
   try {
     // Publication succeeded; owner notification was interrupted before acknowledgement.
-    const interruptedDelivery = publishScopedResult(
-      label,
-      1,
-      canonical,
-      "root-session-a",
-    );
-    const retriedDelivery = publishScopedResult(
-      label,
-      1,
-      canonical,
-      "root-session-a",
-    );
+    const interruptedDelivery = publishScopedResult(label, 1, canonical, "root-session-a");
+    const retriedDelivery = publishScopedResult(label, 1, canonical, "root-session-a");
     assert.deepEqual(retriedDelivery, interruptedDelivery);
     const resolved = resolveScopedResult(retriedDelivery.ref);
     assert.ok(resolved && typeof resolved === "object");
@@ -241,9 +222,7 @@ test("semantic evidence reservation verification is read-only and checks both di
   const first = reserveSemanticEvidenceRef(firstId, "reserved-one.md");
   const second = reserveSemanticEvidenceRef(secondId, "reserved-two.md");
   assert.doesNotThrow(() => verifySemanticEvidenceReservation(firstId, first));
-  assert.throws(() =>
-    verifySemanticEvidenceReservation(randomUUID(), "evidence:forged#1"),
-  );
+  assert.throws(() => verifySemanticEvidenceReservation(randomUUID(), "evidence:forged#1"));
   assert.throws(() => verifySemanticEvidenceReservation(firstId, second));
   const forged = {
     id: randomUUID(),
@@ -277,14 +256,8 @@ test("legacy snapshot records remain valid and upgrade without changing provenan
     assert.equal(upgraded.path, legacy.path);
     assert.equal(upgraded.sha256, legacy.sha256);
     assert.equal(upgraded.sourceAssignmentId, assignmentId);
-    assert.equal(
-      upgraded.ref,
-      reserveSemanticEvidenceRef(legacy.id, legacy.name),
-    );
-    assert.equal(
-      readRequiredEvidenceSnapshot(assignmentId, upgraded),
-      "plan\n",
-    );
+    assert.equal(upgraded.ref, reserveSemanticEvidenceRef(legacy.id, legacy.name));
+    assert.equal(readRequiredEvidenceSnapshot(assignmentId, upgraded), "plan\n");
     const upgradedAgain = upgradeRequiredEvidence(legacy);
     assert.ok(!("result" in upgradedAgain));
     assert.equal(upgradedAgain.ref, upgraded.ref);
@@ -323,14 +296,8 @@ test("required evidence accepts only exact legacy, semantic, and result record s
     assert.equal(isRequiredEvidence({ ...legacy, extra: true }), false);
     assert.equal(isRequiredEvidence({ ...snapshot, extra: true }), false);
     assert.equal(isRequiredEvidence({ ...snapshot, ref: undefined }), false);
-    assert.equal(
-      isRequiredEvidence({ ...legacy, ref: "evidence:shape#1" }),
-      true,
-    );
-    assert.equal(
-      isRequiredEvidence({ ...legacy, ref: "evidence:shape#01" }),
-      false,
-    );
+    assert.equal(isRequiredEvidence({ ...legacy, ref: "evidence:shape#1" }), true);
+    assert.equal(isRequiredEvidence({ ...legacy, ref: "evidence:shape#01" }), false);
     assert.equal(isRequiredEvidence({ ...result, extra: true }), false);
     assert.equal(
       isRequiredEvidence({
@@ -353,11 +320,7 @@ test("required evidence accepts only exact legacy, semantic, and result record s
 test("required evidence snapshots are private, immutable, and integrity checked", () => {
   const assignmentId = randomUUID();
   const directory = requiredEvidenceDirectory(assignmentId);
-  const entry = persistRequiredEvidenceSnapshot(
-    assignmentId,
-    "plan.md",
-    "café\n",
-  );
+  const entry = persistRequiredEvidenceSnapshot(assignmentId, "plan.md", "café\n");
   try {
     assert.equal(entry.name, "plan.md");
     assert.equal(entry.sourceAssignmentId, assignmentId);
@@ -376,19 +339,11 @@ test("required evidence snapshots are private, immutable, and integrity checked"
       /path mismatch/,
     );
     assert.throws(
-      () =>
-        persistRequiredEvidenceSnapshot(
-          assignmentId,
-          "large.txt",
-          "x".repeat(1024 * 1024 + 1),
-        ),
+      () => persistRequiredEvidenceSnapshot(assignmentId, "large.txt", "x".repeat(1024 * 1024 + 1)),
       /no larger than 1 MiB/,
     );
     rmSync(entry.path);
-    assert.throws(
-      () => readRequiredEvidenceSnapshot(assignmentId, entry),
-      /ENOENT/,
-    );
+    assert.throws(() => readRequiredEvidenceSnapshot(assignmentId, entry), /ENOENT/);
     writeFileSync(entry.path, "café\n");
     writeFileSync(entry.path, "changed\n");
     assert.throws(
@@ -398,10 +353,7 @@ test("required evidence snapshots are private, immutable, and integrity checked"
     rmSync(entry.path);
     writeFileSync(join(directory, "target"), "target");
     symlinkSync(join(directory, "target"), entry.path);
-    assert.throws(
-      () => readRequiredEvidenceSnapshot(assignmentId, entry),
-      /unsafe/,
-    );
+    assert.throws(() => readRequiredEvidenceSnapshot(assignmentId, entry), /unsafe/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -430,8 +382,7 @@ test("required evidence cleanup failures preserve publication and primary errors
       constants: fs.constants,
       fstatSync: fs.fstatSync,
       fsyncSync(fd: number) {
-        if (fd === directoryFd && failDirectoryFsync)
-          throw new Error("directory fsync failed");
+        if (fd === directoryFd && failDirectoryFsync) throw new Error("directory fsync failed");
         return fs.fsyncSync(fd);
       },
       mkdirSync: fs.mkdirSync,
@@ -455,23 +406,14 @@ test("required evidence cleanup failures preserve publication and primary errors
       `./storage.ts?cleanup-${randomUUID()}`
     );
     const entry = persist(assignmentId, "published.md", "published\n");
-    assert.equal(
-      readRequiredEvidenceSnapshot(assignmentId, entry),
-      "published\n",
-    );
+    assert.equal(readRequiredEvidenceSnapshot(assignmentId, entry), "published\n");
     if (process.platform !== "win32") {
       failDirectoryFsync = true;
-      assert.throws(
-        () => persist(assignmentId, "fsync.md", "body"),
-        /directory fsync failed/,
-      );
+      assert.throws(() => persist(assignmentId, "fsync.md", "body"), /directory fsync failed/);
       failDirectoryFsync = false;
     }
     primaryFailure = true;
-    assert.throws(
-      () => persist(assignmentId, "primary.md", "body"),
-      /primary failed/,
-    );
+    assert.throws(() => persist(assignmentId, "primary.md", "body"), /primary failed/);
     assert.equal(
       readdirSync(directory).some((name) => name.includes("primary.md")),
       true,
@@ -486,28 +428,17 @@ test("required evidence cleanup failures preserve publication and primary errors
 test("required evidence rejects a symlinked assignment directory on write and read", () => {
   const assignmentId = randomUUID();
   const directory = requiredEvidenceDirectory(assignmentId);
-  const entry = persistRequiredEvidenceSnapshot(
-    assignmentId,
-    "plan.md",
-    "plan\n",
-  );
-  const outside = join(
-    dirname(herdsmanDataRoot()),
-    `evidence-outside-${randomUUID()}`,
-  );
+  const entry = persistRequiredEvidenceSnapshot(assignmentId, "plan.md", "plan\n");
+  const outside = join(dirname(herdsmanDataRoot()), `evidence-outside-${randomUUID()}`);
   mkdirSync(outside, { mode: 0o700 });
   try {
     rmSync(directory, { recursive: true });
     symlinkSync(outside, directory);
     assert.throws(
-      () =>
-        persistRequiredEvidenceSnapshot(assignmentId, "review.md", "review\n"),
+      () => persistRequiredEvidenceSnapshot(assignmentId, "review.md", "review\n"),
       /directory is unsafe/,
     );
-    assert.throws(
-      () => readRequiredEvidenceSnapshot(assignmentId, entry),
-      /directory is unsafe/,
-    );
+    assert.throws(() => readRequiredEvidenceSnapshot(assignmentId, entry), /directory is unsafe/);
     assert.deepEqual(readdirSync(outside), []);
   } finally {
     rmSync(directory, { recursive: true, force: true });

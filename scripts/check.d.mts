@@ -30,11 +30,7 @@ type SnapshotExecFile = (
   file: string,
   args: string[],
   options: ExecFileOptionsWithStringEncoding,
-  callback: (
-    error: ExecFileException | null,
-    stdout: string,
-    stderr?: string,
-  ) => void,
+  callback: (error: ExecFileException | null, stdout: string, stderr?: string) => void,
 ) => ChildProcess;
 
 type ActiveProcessCleanup =
@@ -159,10 +155,7 @@ type RunnerResult =
       timedOut?: never;
       captureStopUnconfirmed?: never;
       workerDiagnostic?: never;
-    } & (
-      | (ActiveProcessCleanup & { pid: number })
-      | (NoProcessCleanup & { pid?: never })
-    ))
+    } & ((ActiveProcessCleanup & { pid: number }) | (NoProcessCleanup & { pid?: never })))
   | {
       ok: false;
       kind: "leaked-process-tree";

@@ -21,11 +21,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { registerSkillLoader } from "./skill-loader.ts";
 
-function testSkill(
-  cwd: string,
-  name: string,
-  disableModelInvocation = false,
-): Skill {
+function testSkill(cwd: string, name: string, disableModelInvocation = false): Skill {
   const filePath = join(cwd, `${name}.md`);
   return {
     name,
@@ -51,11 +47,7 @@ test("Pi exposes eligible skills to direct and Code Mode invocation", async (t) 
   const content = "---\nname: guide\n---\n# Full skill instructions\n";
   const userGuide = testSkill(cwd, "user-guide");
   userGuide.sourceInfo.scope = "user";
-  await Promise.all(
-    [guide, userGuide].map(({ filePath }) =>
-      writeFile(filePath, content, "utf8"),
-    ),
-  );
+  await Promise.all([guide, userGuide].map(({ filePath }) => writeFile(filePath, content, "utf8")));
 
   const faux = fauxProvider({
     provider: "session-skill-loader-test",
@@ -137,9 +129,7 @@ test("Pi exposes eligible skills to direct and Code Mode invocation", async (t) 
     call?: ReturnType<typeof fauxToolCall>,
     afterDeclaration?: () => void,
     target = session,
-    onNextDeclarations?: (
-      nextDeclarations: ReturnType<typeof getCurrentTools>,
-    ) => void,
+    onNextDeclarations?: (nextDeclarations: ReturnType<typeof getCurrentTools>) => void,
   ) {
     declarations = [];
     faux.setResponses([
@@ -186,11 +176,7 @@ test("Pi exposes eligible skills to direct and Code Mode invocation", async (t) 
     assert.ok(session.getActiveToolNames().includes("load_skill"));
   }
   tools = ["load_skill", "read", "codemode"];
-  assert.equal(
-    await prompt(),
-    undefined,
-    "native reader hides direct declaration",
-  );
+  assert.equal(await prompt(), undefined, "native reader hides direct declaration");
   assert.ok(
     !session.getCallableToolNames().includes("load_skill"),
     "native reader also removes Code Mode callability",
@@ -213,14 +199,10 @@ test("Pi exposes eligible skills to direct and Code Mode invocation", async (t) 
       assert.ok(codemode?.description.includes('- "guide":'));
       assert.ok(!codemode?.description.includes('"manual"'));
       assert.ok(!codemode?.description.includes(cwd));
-      const registered = session
-        .getAllTools()
-        .find(({ name }) => name === "load_skill");
+      const registered = session.getAllTools().find(({ name }) => name === "load_skill");
       assert.ok(registered?.description.includes("Do not reload a skill"));
       assert.ok(
-        registered?.description.includes(
-          `- "guide": ${JSON.stringify(guide.description)}`,
-        ),
+        registered?.description.includes(`- "guide": ${JSON.stringify(guide.description)}`),
       );
       assert.ok(!registered?.description.includes("manual"));
       assert.ok(!registered?.description.includes(cwd));
@@ -228,9 +210,7 @@ test("Pi exposes eligible skills to direct and Code Mode invocation", async (t) 
       assert.ok(declaration, nonReader);
       assert.ok(declaration.description.includes("Do not reload a skill"));
       assert.ok(
-        declaration.description.includes(
-          `- "guide": ${JSON.stringify(guide.description)}`,
-        ),
+        declaration.description.includes(`- "guide": ${JSON.stringify(guide.description)}`),
       );
       assert.ok(!declaration.description.includes("manual"));
       assert.ok(!declaration.description.includes(cwd));
@@ -262,10 +242,7 @@ test("Pi exposes eligible skills to direct and Code Mode invocation", async (t) 
 
   tools = ["load_skill", "codemode"];
   skills = [guide, manual];
-  const onSession = await startSession(
-    { tools: ["load_skill", "codemode"] },
-    "on",
-  );
+  const onSession = await startSession({ tools: ["load_skill", "codemode"] }, "on");
   const onDeclaration = await prompt(undefined, undefined, onSession);
   assert.ok(onDeclaration?.description.includes("Do not reload a skill"));
   assert.ok(onDeclaration?.description.includes('- "guide":'));
@@ -300,21 +277,16 @@ test("Pi exposes eligible skills to direct and Code Mode invocation", async (t) 
   assert.equal(lastToolResult().isError, false);
 
   skills = [guide, userGuide];
-  const beforeChief = await prompt(
-    fauxToolCall("load_skill", { name: "guide" }),
-    () => {
-      chief = true;
-    },
-  );
+  const beforeChief = await prompt(fauxToolCall("load_skill", { name: "guide" }), () => {
+    chief = true;
+  });
   assert.ok(beforeChief?.description.includes('- "guide":'));
   assert.equal(lastToolResult().isError, true);
   assert.deepEqual(lastToolResult().content, [
     { type: "text", text: "Skill unavailable in this session" },
   ]);
 
-  const chiefDeclaration = await prompt(
-    fauxToolCall("load_skill", { name: "user-guide" }),
-  );
+  const chiefDeclaration = await prompt(fauxToolCall("load_skill", { name: "user-guide" }));
   assert.ok(chiefDeclaration);
   assert.ok(chiefDeclaration.description.includes('- "user-guide":'));
   assert.ok(!chiefDeclaration.description.includes('- "guide":'));
@@ -389,9 +361,7 @@ test("Pi exposes eligible skills to direct and Code Mode invocation", async (t) 
   ]) {
     const restricted = await startSession(selection);
     restricted.setActiveToolsByName(["load_skill"]);
-    assert.ok(
-      !restricted.getAllTools().some(({ name }) => name === "load_skill"),
-    );
+    assert.ok(!restricted.getAllTools().some(({ name }) => name === "load_skill"));
     assert.ok(!restricted.getActiveToolNames().includes("load_skill"));
   }
   const managed = await startSession({
@@ -409,10 +379,7 @@ test("the loader rejects stale session identity and revoked tool access", async 
   assert.ok(start);
   assert.equal(tools[0].defaultActive, true);
   const context = fakeContext();
-  await start(
-    { systemPromptOptions: { skills: [testSkill("/unused", "guide")] } },
-    context,
-  );
+  await start({ systemPromptOptions: { skills: [testSkill("/unused", "guide")] } }, context);
 
   for (const [sessionChanged, activeTools] of [
     [true, ["load_skill"]],
@@ -421,20 +388,10 @@ test("the loader rejects stale session identity and revoked tool access", async 
     pi.setActiveTools([...activeTools]);
     const executeContext = fakeContext();
     if (sessionChanged) {
-      t.mock.method(
-        executeContext.sessionManager,
-        "getSessionId",
-        () => "different-session",
-      );
+      t.mock.method(executeContext.sessionManager, "getSessionId", () => "different-session");
     }
     await assert.rejects(
-      tools[0].execute(
-        "call",
-        { name: "guide" },
-        undefined,
-        undefined,
-        executeContext,
-      ),
+      tools[0].execute("call", { name: "guide" }, undefined, undefined, executeContext),
       { message: "Skill unavailable in this session" },
     );
   }

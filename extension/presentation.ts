@@ -26,10 +26,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
 import type { LeadExecutionMode } from "./core.ts";
-import {
-  matchesToolPattern,
-  type DefinitionLayerTrace,
-} from "./agent-definitions.ts";
+import { matchesToolPattern, type DefinitionLayerTrace } from "./agent-definitions.ts";
 import {
   projectMessageEnvelope,
   projectMessageLabel,
@@ -58,13 +55,9 @@ import type {
 import { formatRuntimeBuild, type RuntimeBuild } from "./compatibility.ts";
 import { herdsmanTempRoot, resultPath, resultRef } from "./storage.ts";
 
-type CustomMessageInput = Parameters<
-  Parameters<ExtensionAPI["registerMessageRenderer"]>[1]
->[0];
+type CustomMessageInput = Parameters<Parameters<ExtensionAPI["registerMessageRenderer"]>[1]>[0];
 
-export function summarizeDefinitionLayerChanges(
-  layer: DefinitionLayerTrace,
-): string[] {
+export function summarizeDefinitionLayerChanges(layer: DefinitionLayerTrace): string[] {
   const fields = [
     "enabled",
     "description",
@@ -103,9 +96,7 @@ export function summarizeDefinitionLayerChanges(
         field === "tools" &&
         Array.isArray(supplied) &&
         supplied.length > 0 &&
-        supplied.every(
-          (entry) => typeof entry === "string" && /^[+-]/u.test(entry),
-        )
+        supplied.every((entry) => typeof entry === "string" && /^[+-]/u.test(entry))
       ) {
         lines.push(`~ tools: relative ${supplied.join(" ")}`);
         continue;
@@ -113,13 +104,10 @@ export function summarizeDefinitionLayerChanges(
       const beforeArray = Array.isArray(before) ? before : undefined;
       const afterArray = Array.isArray(after) ? after : [];
       if (beforeArray === undefined) {
-        if (afterArray.length)
-          lines.push(`~ ${field}: set to ${afterArray.join(", ")}`);
+        if (afterArray.length) lines.push(`~ ${field}: set to ${afterArray.join(", ")}`);
         continue;
       }
-      const removed = beforeArray.filter(
-        (entry) => !afterArray.includes(entry),
-      );
+      const removed = beforeArray.filter((entry) => !afterArray.includes(entry));
       const added = afterArray.filter((entry) => !beforeArray.includes(entry));
       if (removed.length) lines.push(`- ${field}: ${removed.join(", ")}`);
       if (added.length) lines.push(`+ ${field}: ${added.join(", ")}`);
@@ -132,8 +120,7 @@ export function summarizeDefinitionLayerChanges(
       lines.push(`~ ${field}: ${previous} → ${next}`);
     }
   }
-  if (layer.bodyAction === "replace")
-    lines.push("~ body: replaced earlier body");
+  if (layer.bodyAction === "replace") lines.push("~ body: replaced earlier body");
   else if (layer.bodyAction === "append") lines.push("+ body: appended");
   else if (layer.bodyAction === "base") lines.push("+ body: base");
   return lines;
@@ -179,11 +166,8 @@ export function projectWorkspaceProvenance(
   fallbackCwd?: string,
   worktreeLookupFailed = false,
 ): WorkspaceProvenance {
-  const worktree = hasWorkspaceWorktree(workspace)
-    ? workspace.worktree
-    : undefined;
-  const workspaceLabel =
-    typeof workspace?.label === "string" ? workspace.label : undefined;
+  const worktree = hasWorkspaceWorktree(workspace) ? workspace.worktree : undefined;
+  const workspaceLabel = typeof workspace?.label === "string" ? workspace.label : undefined;
   const fallback = {
     ...(workspaceLabel ? { workspaceLabel } : {}),
     ...(typeof worktree?.checkout_path === "string"
@@ -193,9 +177,7 @@ export function projectWorkspaceProvenance(
         : {}),
   } satisfies WorkspaceProvenance;
   if (!worktree || worktreeLookupFailed) return fallback;
-  const worktrees = Array.isArray(worktreeInfo?.worktrees)
-    ? worktreeInfo.worktrees
-    : [];
+  const worktrees = Array.isArray(worktreeInfo?.worktrees) ? worktreeInfo.worktrees : [];
   const currentWorktree = worktrees.find(
     (candidate: any) => candidate?.open_workspace_id === workspaceId,
   );
@@ -205,10 +187,7 @@ export function projectWorkspaceProvenance(
       : typeof worktreeInfo?.source?.repo_name === "string"
         ? worktreeInfo.source.repo_name
         : undefined;
-  const branch =
-    typeof currentWorktree?.branch === "string"
-      ? currentWorktree.branch
-      : undefined;
+  const branch = typeof currentWorktree?.branch === "string" ? currentWorktree.branch : undefined;
   const workspaceCwd =
     typeof currentWorktree?.path === "string"
       ? currentWorktree.path
@@ -224,7 +203,12 @@ export function projectWorkspaceProvenance(
 }
 
 export type AgentLifecycleState =
-  "working" | "blocked" | "settling" | "starting" | "unknown" | "lost";
+  | "working"
+  | "blocked"
+  | "settling"
+  | "starting"
+  | "unknown"
+  | "lost";
 export type LocalHeaderActivity = "working" | "blocked" | "idle" | "unknown";
 export interface StatusAgent {
   label: string;
@@ -303,10 +287,7 @@ export type ManagedLeadUsageDisplay = {
   sessions: number;
 };
 
-export function formatRuntimeBuildDetails(
-  build: RuntimeBuild,
-  extensionPath: string,
-): string {
+export function formatRuntimeBuildDetails(build: RuntimeBuild, extensionPath: string): string {
   return [
     `Pi Herdsman ${formatRuntimeBuild(build)}`,
     `SHA-256: ${build.sha256}`,
@@ -322,8 +303,7 @@ export function formatSessionUsage(
   breakdown: Map<string, UsageDisplayTotals> = new Map(),
   managedLeads?: ManagedLeadUsageDisplay,
 ): string {
-  const row = (label: string, value: string) =>
-    `  ${label.padEnd(12)} ${value}`;
+  const row = (label: string, value: string) => `  ${label.padEnd(12)} ${value}`;
   const section = (title: string, usage: UsageDisplayTotals) => {
     const input = usage.input + usage.cacheRead + usage.cacheWrite;
     const uncached = usage.input + usage.cacheWrite;
@@ -346,14 +326,8 @@ export function formatSessionUsage(
   const total = {
     input: current.input + agents.input + (managedLeads?.usage.input ?? 0),
     output: current.output + agents.output + (managedLeads?.usage.output ?? 0),
-    cacheRead:
-      current.cacheRead +
-      agents.cacheRead +
-      (managedLeads?.usage.cacheRead ?? 0),
-    cacheWrite:
-      current.cacheWrite +
-      agents.cacheWrite +
-      (managedLeads?.usage.cacheWrite ?? 0),
+    cacheRead: current.cacheRead + agents.cacheRead + (managedLeads?.usage.cacheRead ?? 0),
+    cacheWrite: current.cacheWrite + agents.cacheWrite + (managedLeads?.usage.cacheWrite ?? 0),
     cost: current.cost + agents.cost + (managedLeads?.usage.cost ?? 0),
   };
   return [
@@ -377,8 +351,7 @@ export function formatSessionUsage(
       ...[...breakdown]
         .filter(
           ([, usage]) =>
-            usage.cost > 0 ||
-            usage.input + usage.output + usage.cacheRead + usage.cacheWrite > 0,
+            usage.cost > 0 || usage.input + usage.output + usage.cacheRead + usage.cacheWrite > 0,
         )
         .sort((a, b) => b[1].cost - a[1].cost)
         .map(
@@ -451,11 +424,7 @@ export function syncAutomaticSessionName(
         break;
       }
       // A marker can only own a name written before it.
-      if (
-        !owner &&
-        entry?.type === "custom" &&
-        entry.customType === SESSION_NAME_OWNER_ENTRY
-      ) {
+      if (!owner && entry?.type === "custom" && entry.customType === SESSION_NAME_OWNER_ENTRY) {
         owner = entry;
       }
     }
@@ -479,10 +448,7 @@ export function syncAutomaticSessionName(
   }
 }
 
-export function formatElapsed(
-  startedAt: number | undefined,
-  now: number,
-): string | undefined {
+export function formatElapsed(startedAt: number | undefined, now: number): string | undefined {
   if (
     !Number.isFinite(startedAt) ||
     !Number.isFinite(now) ||
@@ -499,31 +465,19 @@ export function formatElapsed(
 }
 export type StatusTreeRow = { agent: StatusAgent; tree: string };
 
-export function buildStatusTree(
-  agents: readonly StatusAgent[],
-): StatusTreeRow[] {
+export function buildStatusTree(agents: readonly StatusAgent[]): StatusTreeRow[] {
   const byLabel = new Map(agents.map((agent) => [agent.label, agent]));
   const children = new Map<string, StatusAgent[]>();
   const roots: StatusAgent[] = [];
   for (const agent of agents) {
-    if (!agent.parentLabel || !byLabel.has(agent.parentLabel))
-      roots.push(agent);
-    else
-      children.set(agent.parentLabel, [
-        ...(children.get(agent.parentLabel) ?? []),
-        agent,
-      ]);
+    if (!agent.parentLabel || !byLabel.has(agent.parentLabel)) roots.push(agent);
+    else children.set(agent.parentLabel, [...(children.get(agent.parentLabel) ?? []), agent]);
   }
-  const sort = (left: StatusAgent, right: StatusAgent) =>
-    left.label.localeCompare(right.label);
+  const sort = (left: StatusAgent, right: StatusAgent) => left.label.localeCompare(right.label);
   roots.sort(sort);
   for (const siblings of children.values()) siblings.sort(sort);
   const rows: StatusTreeRow[] = [];
-  const visit = (
-    agent: StatusAgent,
-    tree: string,
-    ancestors: ReadonlySet<string>,
-  ): void => {
+  const visit = (agent: StatusAgent, tree: string, ancestors: ReadonlySet<string>): void => {
     rows.push({ agent, tree });
     if (ancestors.has(agent.label)) return;
     const nextAncestors = new Set(ancestors).add(agent.label);
@@ -573,13 +527,10 @@ function lifecycleMarker(state: LifecyclePresentationState): string {
 }
 
 function attentionLabel(state: LifecyclePresentationState): string {
-  return state === "blocked" || state === "unknown" || state === "lost"
-    ? state
-    : "";
+  return state === "blocked" || state === "unknown" || state === "lost" ? state : "";
 }
 
-const animates = (state: AgentLifecycleState) =>
-  state === "working" || state === "starting";
+const animates = (state: AgentLifecycleState) => state === "working" || state === "starting";
 
 const STATE_COLOR: Record<string, string> = {
   [lifecycleLabel("working")]: "success",
@@ -594,14 +545,8 @@ export function compactModelToken(model: string | undefined): string {
   return model?.split("/").at(-1) ?? "";
 }
 
-function activityIndicator(
-  state: AgentLifecycleState,
-  frame: number,
-  animate = true,
-): string {
-  return animate && animates(state)
-    ? spinner[frame % spinner.length]!
-    : lifecycleMarker(state);
+function activityIndicator(state: AgentLifecycleState, frame: number, animate = true): string {
+  return animate && animates(state) ? spinner[frame % spinner.length]! : lifecycleMarker(state);
 }
 
 export function managedExecutionLabel(
@@ -648,34 +593,22 @@ export function buildStatusRows(
       ...(agent.paneId ? { paneId: agent.paneId } : {}),
       ...(agent.sessionId ? { sessionId: agent.sessionId } : {}),
       tree,
-      indicator: activityIndicator(
-        agent.state,
-        options.frame ?? 0,
-        options.animate,
-      ),
+      indicator: activityIndicator(agent.state, options.frame ?? 0, options.animate),
       definition: agent.definition || "?",
       agentLabel: agent.label,
       state: lifecycleLabel(agent.state),
       ambientState: attentionLabel(agent.state),
-      elapsed:
-        options.now === undefined
-          ? ""
-          : (formatElapsed(agent.startedAt, options.now) ?? ""),
+      elapsed: options.now === undefined ? "" : (formatElapsed(agent.startedAt, options.now) ?? ""),
       model: compactModelToken(agent.model),
       thinking: agent.thinking ?? "",
-      context: Number.isInteger(agent.contextPercent)
-        ? `${agent.contextPercent}%`
-        : "",
+      context: Number.isInteger(agent.contextPercent) ? `${agent.contextPercent}%` : "",
       inactivity,
       task: collapseDisplayText(agent.task) ?? "",
     };
   });
 }
 
-export type StatusDisplayRow = Pick<
-  StatusRow,
-  "label" | "paneId" | "sessionId"
-> & {
+export type StatusDisplayRow = Pick<StatusRow, "label" | "paneId" | "sessionId"> & {
   text: string;
 };
 
@@ -692,10 +625,7 @@ function themed(theme: any, color: string, text: string): string {
 }
 
 function statusColumns(rows: readonly StatusRow[]) {
-  const definitionWidth = Math.max(
-    0,
-    ...rows.map((row) => visibleWidth(row.definition)),
-  );
+  const definitionWidth = Math.max(0, ...rows.map((row) => visibleWidth(row.definition)));
   const identities = rows.map(
     (row) =>
       `${row.tree}${row.indicator} ${padVisible(row.definition, definitionWidth)}  ${row.agentLabel}`,
@@ -715,10 +645,7 @@ function statusColumns(rows: readonly StatusRow[]) {
 
 type StatusLayout = (typeof STATUS_LAYOUTS)[number];
 
-function layoutWidth(
-  columns: ReturnType<typeof statusColumns>,
-  layout: StatusLayout,
-): number {
+function layoutWidth(columns: ReturnType<typeof statusColumns>, layout: StatusLayout): number {
   const widths = columns.widths;
   const values = [
     widths.identity,
@@ -729,10 +656,7 @@ function layoutWidth(
     ...(layout.context && widths.context ? [widths.context] : []),
     ...(widths.inactivity ? [widths.inactivity] : []),
   ];
-  return (
-    values.reduce((total, width) => total + width, 0) +
-    Math.max(0, values.length - 1) * 2
-  );
+  return values.reduce((total, width) => total + width, 0) + Math.max(0, values.length - 1) * 2;
 }
 
 function renderIdentity(
@@ -774,12 +698,8 @@ function renderStatusLine(
     ...(layout.elapsed && widths.elapsed
       ? [themed(theme, "muted", padVisible(row.elapsed, widths.elapsed))]
       : []),
-    ...(widths.model
-      ? [themed(theme, "muted", padVisible(row.model, widths.model))]
-      : []),
-    ...(widths.thinking
-      ? [themed(theme, "muted", padVisible(row.thinking, widths.thinking))]
-      : []),
+    ...(widths.model ? [themed(theme, "muted", padVisible(row.model, widths.model))] : []),
+    ...(widths.thinking ? [themed(theme, "muted", padVisible(row.thinking, widths.thinking))] : []),
     ...(layout.context && widths.context
       ? [themed(theme, "muted", padVisible(row.context, widths.context))]
       : []),
@@ -807,16 +727,12 @@ export function layoutStatusRows(
   options: { compact?: boolean; theme?: any } = {},
 ): StatusDisplayRow[] {
   const columns = statusColumns(rows);
-  const available =
-    width === undefined ? Number.MAX_SAFE_INTEGER : Math.max(0, width);
+  const available = width === undefined ? Number.MAX_SAFE_INTEGER : Math.max(0, width);
   const layouts = options.compact ? STATUS_LAYOUTS.slice(1) : STATUS_LAYOUTS;
   const layout =
     layouts.find((candidate) => {
       const fixed = layoutWidth(columns, candidate);
-      return (
-        fixed <= available &&
-        (!candidate.task || available - fixed >= MIN_TASK_WIDTH + 2)
-      );
+      return fixed <= available && (!candidate.task || available - fixed >= MIN_TASK_WIDTH + 2);
     }) ?? layouts.at(-1)!;
   return rows.map((row) => ({
     label: row.label,
@@ -870,11 +786,7 @@ function formatAmbientStatusCounts(agents: readonly StatusAgent[]): string {
   return ["●", "◐", "◌", "?", "×"]
     .map(
       (marker) =>
-        [
-          marker,
-          agents.filter((agent) => lifecycleMarker(agent.state) === marker)
-            .length,
-        ] as const,
+        [marker, agents.filter((agent) => lifecycleMarker(agent.state) === marker).length] as const,
     )
     .filter(([, count]) => count > 0)
     .map(([marker, count]) => `${marker} ${count}`)
@@ -921,9 +833,7 @@ export type SupervisedLeadSnapshot = Readonly<{
   }>;
 }>;
 
-function managerPresentationSnapshot(
-  manager: SupervisedManager,
-): SupervisedLeadSnapshot {
+function managerPresentationSnapshot(manager: SupervisedManager): SupervisedLeadSnapshot {
   return {
     role: "manager",
     lead: manager.session,
@@ -943,9 +853,7 @@ function managerPresentationSnapshot(
       ...("paneId" in lead ? { paneId: lead.paneId } : {}),
       ...("tabId" in lead ? { tabId: lead.tabId } : {}),
       ...("workspaceId" in lead ? { workspaceId: lead.workspaceId } : {}),
-      ...("branch" in lead && typeof lead.branch === "string"
-        ? { branch: lead.branch }
-        : {}),
+      ...("branch" in lead && typeof lead.branch === "string" ? { branch: lead.branch } : {}),
       display_name: lead.displayName,
       runtime_state: lead.runtimeState,
       ...(lead.agentCounts ? { agent_counts: lead.agentCounts } : {}),
@@ -1003,9 +911,7 @@ function presentationReports(
 ): readonly SupervisedLeadSnapshot[] {
   return Array.isArray(reports)
     ? reports.map((report) => ({ ...report, role: report.role ?? "lead" }))
-    : supervisionPresentationReports(
-        reports as SupervisionPresentationSnapshot,
-      );
+    : supervisionPresentationReports(reports as SupervisionPresentationSnapshot);
 }
 
 export type SupervisedLeadDisplay = SupervisedLeadSnapshot &
@@ -1014,8 +920,7 @@ export type SupervisedLeadDisplay = SupervisedLeadSnapshot &
     displayName: string;
   }>;
 
-export type SupervisedLeadGroup =
-  "ACTIVE/TRANSITIONAL" | "BLOCKED" | "IDLE/DONE" | "UNRESOLVED";
+export type SupervisedLeadGroup = "ACTIVE/TRANSITIONAL" | "BLOCKED" | "IDLE/DONE" | "UNRESOLVED";
 
 const SUPERVISION_GROUPS: readonly SupervisedLeadGroup[] = [
   "ACTIVE/TRANSITIONAL",
@@ -1024,9 +929,7 @@ const SUPERVISION_GROUPS: readonly SupervisedLeadGroup[] = [
   "UNRESOLVED",
 ];
 
-export function classifySupervisedLead(
-  lead: SupervisedLeadSnapshot,
-): SupervisedLeadGroup {
+export function classifySupervisedLead(lead: SupervisedLeadSnapshot): SupervisedLeadGroup {
   if (
     lead.runtimeState === "working" ||
     lead.runtimeState === "starting" ||
@@ -1034,8 +937,7 @@ export function classifySupervisedLead(
   )
     return "ACTIVE/TRANSITIONAL";
   if (lead.runtimeState === "blocked") return "BLOCKED";
-  if (lead.runtimeState === "idle" || lead.runtimeState === "done")
-    return "IDLE/DONE";
+  if (lead.runtimeState === "idle" || lead.runtimeState === "done") return "IDLE/DONE";
   return "UNRESOLVED";
 }
 
@@ -1058,14 +960,10 @@ export function buildSupervisedLeadDisplays(
         prefixLength: undefined,
         fallback: 0,
       };
-    const prefixLength = Array.from(
-      { length: lead.lead.length - 7 },
-      (_, i) => i + 8,
-    ).find(
+    const prefixLength = Array.from({ length: lead.lead.length - 7 }, (_, i) => i + 8).find(
       (length) =>
-        peers.filter(
-          (peer) => peer.lead.slice(0, length) === lead.lead.slice(0, length),
-        ).length === 1,
+        peers.filter((peer) => peer.lead.slice(0, length) === lead.lead.slice(0, length)).length ===
+        1,
     );
     const id = lead.lead.slice(0, prefixLength ?? lead.lead.length);
     return {
@@ -1097,10 +995,7 @@ export function buildSupervisedLeadDisplays(
     for (const peers of collisions.values()) {
       if (peers.length < 2) continue;
       for (const item of peers) {
-        if (
-          item.prefixLength !== undefined &&
-          item.prefixLength < item.lead.lead.length
-        ) {
+        if (item.prefixLength !== undefined && item.prefixLength < item.lead.lead.length) {
           item.prefixLength += 1;
           changed = true;
           refreshDisplay(item);
@@ -1108,9 +1003,7 @@ export function buildSupervisedLeadDisplays(
       }
     }
     if (changed) continue;
-    const unresolved = [...collisions.values()].filter(
-      (peers) => peers.length > 1,
-    );
+    const unresolved = [...collisions.values()].filter((peers) => peers.length > 1);
     if (!unresolved.length) break;
     for (const peers of unresolved)
       for (const item of peers) {
@@ -1126,15 +1019,10 @@ export function buildSupervisedLeadDisplays(
 export function groupSupervisedLeads(
   leads: readonly SupervisedLeadDisplay[],
 ): ReadonlyMap<SupervisedLeadGroup, SupervisedLeadDisplay[]> {
-  const groups = new Map(
-    SUPERVISION_GROUPS.map((group) => [group, [] as SupervisedLeadDisplay[]]),
-  );
-  for (const lead of leads)
-    groups.get(classifySupervisedLead(lead))!.push(lead);
+  const groups = new Map(SUPERVISION_GROUPS.map((group) => [group, [] as SupervisedLeadDisplay[]]));
+  for (const lead of leads) groups.get(classifySupervisedLead(lead))!.push(lead);
   for (const group of SUPERVISION_GROUPS)
-    groups
-      .get(group)!
-      .sort((a, b) => a.displayName.localeCompare(b.displayName));
+    groups.get(group)!.sort((a, b) => a.displayName.localeCompare(b.displayName));
   return groups;
 }
 
@@ -1168,9 +1056,7 @@ function supervisionCountLabel(managers: number, directLeads: number): string {
   return (
     [
       managers ? `${managers} manager${managers === 1 ? "" : "s"}` : "",
-      directLeads
-        ? `${directLeads} direct lead${directLeads === 1 ? "" : "s"}`
-        : "",
+      directLeads ? `${directLeads} direct lead${directLeads === 1 ? "" : "s"}` : "",
     ]
       .filter(Boolean)
       .join(" · ") || "no reports"
@@ -1182,13 +1068,9 @@ export type ManagerSupervisionItem =
   | { kind: "lead"; lead: SupervisedLeadDisplay };
 
 /** The single ordered relationship projection used by Manager views. */
-export function managerSupervisionItems(
-  snapshot: SupervisionSnapshot,
-): ManagerSupervisionItem[] {
+export function managerSupervisionItems(snapshot: SupervisionSnapshot): ManagerSupervisionItem[] {
   const leads = orderedSupervisionLeads(
-    supervisionPresentationReports(snapshot).filter(
-      (lead) => lead.role === "lead",
-    ),
+    supervisionPresentationReports(snapshot).filter((lead) => lead.role === "lead"),
   );
   const bySession = new Map(leads.map((lead) => [lead.lead, lead]));
   const work = snapshot.work ?? [];
@@ -1216,9 +1098,7 @@ function supervisionActivityMarker(
   state: LifecyclePresentationState | LocalHeaderActivity,
   activeAgents: number,
 ): string {
-  return (state === "idle" || state === "done") && activeAgents > 0
-    ? "◉"
-    : lifecycleMarker(state);
+  return (state === "idle" || state === "done") && activeAgents > 0 ? "◉" : lifecycleMarker(state);
 }
 
 function supervisionLeadMarker(lead: SupervisedLeadDisplay): string {
@@ -1257,9 +1137,7 @@ function activeStaffSnapshot(
 }
 
 function supervisionLeadColor(lead: SupervisedLeadDisplay): string {
-  return supervisionLeadMarker(lead) === "◉"
-    ? "accent"
-    : lifecycleColor(lead.runtimeState);
+  return supervisionLeadMarker(lead) === "◉" ? "accent" : lifecycleColor(lead.runtimeState);
 }
 
 export type GitChangeSummary = Readonly<{
@@ -1286,33 +1164,19 @@ function formatGitHeaderNumeric(git: GitChangeSummary, theme: any): string {
   const stats = formatGitChangeStats(git);
   if (!stats) return "";
   const lineChanges =
-    git.additions !== undefined &&
-    git.deletions !== undefined &&
-    git.additions + git.deletions > 0;
+    git.additions !== undefined && git.deletions !== undefined && git.additions + git.deletions > 0;
   return [
     lineChanges
-      ? themed(
-          theme,
-          git.additions! > 0 ? "success" : "muted",
-          `+${git.additions}`,
-        )
+      ? themed(theme, git.additions! > 0 ? "success" : "muted", `+${git.additions}`)
       : themed(theme, "muted", stats),
     lineChanges
-      ? ` ${themed(
-          theme,
-          git.deletions! > 0 ? "error" : "muted",
-          `-${git.deletions}`,
-        )}`
+      ? ` ${themed(theme, git.deletions! > 0 ? "error" : "muted", `-${git.deletions}`)}`
       : "",
     git.dirty ? themed(theme, "warning", "*") : "",
   ].join("");
 }
 
-function formatGitHeaderSuffix(
-  git: GitChangeSummary,
-  theme: any,
-  width: number,
-): string {
+function formatGitHeaderSuffix(git: GitChangeSummary, theme: any, width: number): string {
   const stats = formatGitChangeStats(git);
   const numeric = stats ? `${stats}${git.dirty ? "*" : ""}` : "";
   const styledNumeric = formatGitHeaderNumeric(git, theme);
@@ -1324,10 +1188,7 @@ function formatGitHeaderSuffix(
         ? themed(theme, "warning", "*")
         : "";
   const dirtyMarker = !numeric && git.dirty ? "*" : "";
-  const branchWidth =
-    width -
-    (numeric ? visibleWidth(numeric) + 1 : 0) -
-    visibleWidth(dirtyMarker);
+  const branchWidth = width - (numeric ? visibleWidth(numeric) + 1 : 0) - visibleWidth(dirtyMarker);
   if (branchWidth < visibleWidth("⎇ …"))
     return numeric && visibleWidth(numeric) <= width ? styledNumeric : "";
   const shownBranch = truncateToWidth(branch, branchWidth, "…");
@@ -1342,16 +1203,10 @@ type SupervisionRow = {
   clickRegion?: { from: number; to: number };
 };
 
-function identifyingLabelVisible(
-  text: string,
-  label: string,
-  width: number,
-): boolean {
+function identifyingLabelVisible(text: string, label: string, width: number): boolean {
   const start = text.lastIndexOf(label);
   return (
-    label.length > 0 &&
-    start >= 0 &&
-    visibleWidth(text.slice(0, start + label.length)) <= width
+    label.length > 0 && start >= 0 && visibleWidth(text.slice(0, start + label.length)) <= width
   );
 }
 
@@ -1364,18 +1219,13 @@ function renderSupervisionHeader(
   local: LocalHeaderActivity = "unknown",
   activeDescendants = false,
 ): string {
-  const { marker: markerValue, color } = headerActivity(
-    local,
-    activeDescendants,
-  );
+  const { marker: markerValue, color } = headerActivity(local, activeDescendants);
   const marker = themed(theme, color, markerValue);
   const markerWidth = visibleWidth(markerValue);
   const roleText = themed(theme, "text", theme?.bold?.(role) ?? role);
   const identity = `${roleText}${themed(theme, "muted", label.slice(role.length))}`;
   const freshnessText = status === "fresh" ? "" : `· ${status}`;
-  const freshness = freshnessText
-    ? themed(theme, "warning", freshnessText)
-    : "";
+  const freshness = freshnessText ? themed(theme, "warning", freshnessText) : "";
   if (!freshness)
     return safeLine(
       `${marker} ${truncateToWidth(identity, Math.max(0, width - markerWidth - 1), "…")}`,
@@ -1439,25 +1289,19 @@ function renderSupervisionRows(
   const cap = options.ordinaryCap ?? 6;
   const shown = ordinary.slice(0, Math.max(0, cap));
   const hidden = ordinary.length - Math.min(ordinary.length, Math.max(0, cap));
-  const incompatible = displays.filter(
-    (report) => report.compatibility === "incompatible",
-  ).length;
+  const incompatible = displays.filter((report) => report.compatibility === "incompatible").length;
   const managers = displays.filter(
-    (report) =>
-      report.role !== "lead" && report.compatibility !== "incompatible",
+    (report) => report.role !== "lead" && report.compatibility !== "incompatible",
   ).length;
   const leads = displays.filter(
-    (report) =>
-      report.role === "lead" && report.compatibility !== "incompatible",
+    (report) => report.role === "lead" && report.compatibility !== "incompatible",
   ).length;
   const managerSnapshot =
     role === "manager" && !Array.isArray(reports)
       ? (reports as SupervisionPresentationSnapshot)
       : undefined;
   const project =
-    managerSnapshot && "project" in managerSnapshot
-      ? managerSnapshot.project
-      : undefined;
+    managerSnapshot && "project" in managerSnapshot ? managerSnapshot.project : undefined;
   const headerText =
     role === "manager"
       ? `manager${project ? ` · ${project}` : ""}`
@@ -1471,11 +1315,7 @@ function renderSupervisionRows(
     options.localActivity,
     options.activeDescendants,
   );
-  if (
-    managerSnapshot &&
-    "leads" in managerSnapshot &&
-    !("managers" in managerSnapshot)
-  ) {
+  if (managerSnapshot && "leads" in managerSnapshot && !("managers" in managerSnapshot)) {
     const items = managerSupervisionItems(managerSnapshot);
     const visible = items.slice(0, Math.max(0, cap));
     const remaining = items.length - visible.length;
@@ -1484,13 +1324,9 @@ function renderSupervisionRows(
       elapsed:
         status === "stale"
           ? ""
-          : (formatElapsed(
-              item.kind === "work" ? item.lead?.herdRunStartedAt : undefined,
-              now,
-            ) ?? ""),
-      context: Number.isInteger(
-        item.kind === "work" ? item.lead?.contextPercent : undefined,
-      )
+          : (formatElapsed(item.kind === "work" ? item.lead?.herdRunStartedAt : undefined, now) ??
+            ""),
+      context: Number.isInteger(item.kind === "work" ? item.lead?.contextPercent : undefined)
         ? `${item.kind === "work" ? item.lead!.contextPercent : ""}%`
         : "",
       git:
@@ -1511,11 +1347,7 @@ function renderSupervisionRows(
       { text: safeLine(header, width) },
       ...visible.map((item, index) => {
         const branch =
-          index === visible.length - 1 &&
-          !remaining &&
-          !options.hasFollowingGroup
-            ? "└─"
-            : "├─";
+          index === visible.length - 1 && !remaining && !options.hasFollowingGroup ? "└─" : "├─";
         const lead = item.lead;
         const navigation = lead && lead.lead === selectedLead ? ">" : "";
         if (item.kind === "lead")
@@ -1552,11 +1384,7 @@ function renderSupervisionRows(
                   ? attentionLabel(lead.runtimeState)
                   : "";
         let suffix = detail ? ` · ${detail}` : "";
-        if (
-          visibleWidth(`${branch} ${navigation}${marker} `) +
-            visibleWidth(suffix) >
-          width
-        )
+        if (visibleWidth(`${branch} ${navigation}${marker} `) + visibleWidth(suffix) > width)
           suffix = "";
         const detailColor =
           lead?.compatibility === "incompatible" ||
@@ -1571,8 +1399,7 @@ function renderSupervisionRows(
         const git = metadata[index]!.git;
         const diff = git ? formatGitChangeStats(git) : "";
         const changedBranch =
-          git?.checkedOutBranch !== undefined &&
-          git.checkedOutBranch !== item.work.branch;
+          git?.checkedOutBranch !== undefined && git.checkedOutBranch !== item.work.branch;
         const optionsToFit = [
           ...(context ? [{ value: context, kind: "context" }] : []),
           ...(git?.dirty ? [{ value: "*", kind: "dirty" }] : []),
@@ -1609,20 +1436,11 @@ function renderSupervisionRows(
               (total, option, index, telemetry) =>
                 total +
                 visibleWidth(option.value) +
-                (option.kind === "dirty" &&
-                telemetry[index - 1]?.kind === "stats"
-                  ? 0
-                  : 2),
+                (option.kind === "dirty" && telemetry[index - 1]?.kind === "stats" ? 0 : 2),
               0,
             ) <=
           width;
-        for (const kind of [
-          "stats",
-          "dirty",
-          "context",
-          "checked-out-branch",
-          "elapsed",
-        ]) {
+        for (const kind of ["stats", "dirty", "context", "checked-out-branch", "elapsed"]) {
           const option = optionsToFit.find((item) => item.kind === kind);
           if (!option) continue;
           kept.push(option);
@@ -1644,10 +1462,7 @@ function renderSupervisionRows(
           (total, option, index) =>
             total +
             visibleWidth(option.value) +
-            (option.kind === "dirty" &&
-            outputTelemetry[index - 1]?.kind === "stats"
-              ? 0
-              : 2),
+            (option.kind === "dirty" && outputTelemetry[index - 1]?.kind === "stats" ? 0 : 2),
           0,
         );
         const leftTelemetry = outputTelemetry.filter(
@@ -1663,8 +1478,7 @@ function renderSupervisionRows(
               ? supervisionLeadColor(lead)
               : item.work.status === "active"
                 ? "muted"
-                : item.work.status === "conflict" ||
-                    item.work.status === "unknown"
+                : item.work.status === "conflict" || item.work.status === "unknown"
                   ? "warning"
                   : "muted";
         const markerText = themed(options.theme, markerColor, marker);
@@ -1678,15 +1492,13 @@ function renderSupervisionRows(
         const branchText = themed(options.theme, "muted", displayedBranch);
         const truncatedBranch = displayedBranch !== item.work.branch;
         const clickRegion =
-          visibleWidth(displayedBranch) >
-          (truncatedBranch ? visibleWidth("…") : 0)
+          visibleWidth(displayedBranch) > (truncatedBranch ? visibleWidth("…") : 0)
             ? {
                 from: visibleWidth(prefix),
                 to: visibleWidth(prefix) + visibleWidth(displayedBranch),
               }
             : undefined;
-        const canFocusLead =
-          status === "fresh" && item.work.status === "active" && lead;
+        const canFocusLead = status === "fresh" && item.work.status === "active" && lead;
         const left = `${themed(options.theme, "muted", `${branch} ${navigation}`)}${markerText} ${branchText}${branchSwitch ? themed(options.theme, "muted", branchSwitch) : ""}${themed(options.theme, detailColor, suffix)}${leftTelemetry.map((option) => themed(options.theme, "muted", `  ${option.value}`)).join("")}`;
         const right = gitTelemetry
           .map((option) =>
@@ -1695,16 +1507,10 @@ function renderSupervisionRows(
             git.deletions !== undefined &&
             git.additions + git.deletions > 0
               ? `${themed(options.theme, git.additions > 0 ? "success" : "muted", `+${git.additions}`)} ${themed(options.theme, git.deletions > 0 ? "error" : "muted", `-${git.deletions}`)}`
-              : themed(
-                  options.theme,
-                  option.kind === "dirty" ? "warning" : "muted",
-                  option.value,
-                ),
+              : themed(options.theme, option.kind === "dirty" ? "warning" : "muted", option.value),
           )
           .join("");
-        const padding = right
-          ? Math.max(0, width - visibleWidth(left) - visibleWidth(right))
-          : 0;
+        const padding = right ? Math.max(0, width - visibleWidth(left) - visibleWidth(right)) : 0;
         return {
           text: safeLine(`${left}${" ".repeat(padding)}${right}`, width),
           ...(canFocusLead && clickRegion
@@ -1732,31 +1538,24 @@ function renderSupervisionRows(
     { text: safeLine(header, width) },
     ...shown.flatMap((lead, index) => {
       const branch =
-        index === shown.length - 1 && hidden === 0 && !options.hasFollowingGroup
-          ? "└─"
-          : "├─";
+        index === shown.length - 1 && hidden === 0 && !options.hasFollowingGroup ? "└─" : "├─";
       const isIncompatible = lead.compatibility === "incompatible";
       const marker = isIncompatible ? "!" : supervisionLeadMarker(lead);
-      const navigation =
-        !isIncompatible && lead.lead === selectedLead ? ">" : "";
+      const navigation = !isIncompatible && lead.lead === selectedLead ? ">" : "";
       const indicators = navigation;
       const counts = lead.leadCounts;
       const incompatibleLeads =
         lead.incompatibleLeadCount ??
-        lead.leads?.filter((child) => child.compatibility === "incompatible")
-          .length ??
+        lead.leads?.filter((child) => child.compatibility === "incompatible").length ??
         0;
       const attention = attentionLabel(lead.runtimeState);
       const showAttention =
         !isIncompatible &&
         !!attention &&
-        visibleWidth(
-          `${branch} ${indicators}${marker} ${lead.displayName} · ${attention}`,
-        ) <= width;
+        visibleWidth(`${branch} ${indicators}${marker} ${lead.displayName} · ${attention}`) <=
+          width;
       const intent =
-        status === "fresh"
-          ? { kind: "session" as const, sessionId: lead.lead }
-          : undefined;
+        status === "fresh" ? { kind: "session" as const, sessionId: lead.lead } : undefined;
       const row = {
         text: safeLine(
           `${themed(options.theme, isIncompatible ? "warning" : supervisionLeadColor(lead), `${branch} ${indicators}${marker}`)} ${themed(options.theme, "muted", lead.displayName)}${isIncompatible ? themed(options.theme, "warning", " · build mismatch") : `${showAttention ? themed(options.theme, lifecycleColor(lead.runtimeState), ` · ${attention}`) : ""}${themed(options.theme, "muted", `${counts?.total ? ` · ${counts.total} compatible lead${counts.total === 1 ? "" : "s"}` : ""}${incompatibleLeads ? ` · ${incompatibleLeads} incompatible` : ""}${lead.agentCounts?.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}`)}`}`,
@@ -1765,9 +1564,7 @@ function renderSupervisionRows(
         ...(intent ? { intent } : {}),
         ...(intent ? { label: lead.displayName } : {}),
       };
-      const children = isIncompatible
-        ? []
-        : (lead.leads ?? []).slice(0, options.childCap ?? 3);
+      const children = isIncompatible ? [] : (lead.leads ?? []).slice(0, options.childCap ?? 3);
       const childIndent = branch === "└─" ? "   " : "│  ";
       return [
         row,
@@ -1836,10 +1633,7 @@ export function renderSupervisionLeads(
     width,
     {
       ...options,
-      activeDescendants: activeStaffSnapshot(
-        reports,
-        options.status === "fresh",
-      ),
+      activeDescendants: activeStaffSnapshot(reports, options.status === "fresh"),
     },
     selectedLead,
   ).map(({ text }) => text);
@@ -1853,8 +1647,7 @@ export function formatSupervisionNotification(
   if (status === "unavailable") return "Pi Herdsman · unavailable";
   const ordered = orderedSupervisionLeads(presentationReports(reports));
   const managers = ordered.filter(
-    (report) =>
-      report.role !== "lead" && report.compatibility !== "incompatible",
+    (report) => report.role !== "lead" && report.compatibility !== "incompatible",
   ).length;
   const incompatible = ordered.reduce(
     (count, report) =>
@@ -1864,8 +1657,7 @@ export function formatSupervisionNotification(
     0,
   );
   const leads = ordered.filter(
-    (report) =>
-      report.role === "lead" && report.compatibility !== "incompatible",
+    (report) => report.role === "lead" && report.compatibility !== "incompatible",
   ).length;
   const lines = [
     `Pi Herdsman · ${supervisionCountLabel(managers, leads)}${incompatible ? ` · ${incompatible} incompatible` : ""}${status === "stale" ? " · stale" : ""}`,
@@ -1924,14 +1716,8 @@ export function formatSupervisionContext(
         head: string;
       };
       manager?: { branch: string | null; head: string };
-      assignments?: ReadonlyMap<
-        string,
-        { branch: string | null; head: string }
-      >;
-      supervisedLeads?: ReadonlyMap<
-        string,
-        { branch: string | null; head: string }
-      >;
+      assignments?: ReadonlyMap<string, { branch: string | null; head: string }>;
+      supervisedLeads?: ReadonlyMap<string, { branch: string | null; head: string }>;
     };
   },
 ): string {
@@ -2014,25 +1800,20 @@ export function formatSupervisionContext(
       ([assignment, observation]) =>
         `  assignment ${supervisionValue(assignment)}: checkout_branch=${supervisionValue(observation.branch ?? "detached")} head=${observation.head}`,
     ),
-    ...[...(options.git?.supervisedLeads ?? [])].flatMap(
-      ([session, observation]) =>
-        options.targets?.has(session)
-          ? [
-              `  supervised_lead ${supervisionValue(options.targets.get(session)!)}: checkout_branch=${supervisionValue(observation.branch ?? "detached")} head=${observation.head}`,
-            ]
-          : [],
+    ...[...(options.git?.supervisedLeads ?? [])].flatMap(([session, observation]) =>
+      options.targets?.has(session)
+        ? [
+            `  supervised_lead ${supervisionValue(options.targets.get(session)!)}: checkout_branch=${supervisionValue(observation.branch ?? "detached")} head=${observation.head}`,
+          ]
+        : [],
     ),
   ];
-  const gitSection = gitLines.length
-    ? ["git_observations:", ...gitLines].join("\n")
-    : undefined;
+  const gitSection = gitLines.length ? ["git_observations:", ...gitLines].join("\n") : undefined;
   if (snapshot?.diagnostics?.length)
     sections.push(
       [
         "diagnostics:",
-        ...snapshot.diagnostics.map(
-          (diagnostic) => `  - ${supervisionValue(diagnostic)}`,
-        ),
+        ...snapshot.diagnostics.map((diagnostic) => `  - ${supervisionValue(diagnostic)}`),
       ].join("\n"),
     );
   if (
@@ -2044,23 +1825,13 @@ export function formatSupervisionContext(
     sections.push("open_workspaces:");
     sections.push(
       ...snapshot.openWorkspaces.map((workspace) => {
-        const branch = workspace.branch
-          ? `${supervisionValue(workspace.branch)} · `
-          : "";
+        const branch = workspace.branch ? `${supervisionValue(workspace.branch)} · ` : "";
         const relation = workspace.linked ? "linked" : "primary";
-        return (
-          `  ${branch}workspace=${supervisionValue(workspace.workspaceId)}` +
-          ` · ${relation}`
-        );
+        return `  ${branch}workspace=${supervisionValue(workspace.workspaceId)}` + ` · ${relation}`;
       }),
     );
   }
-  if (
-    role === "manager" &&
-    snapshot &&
-    "work" in snapshot &&
-    snapshot.work?.length
-  ) {
+  if (role === "manager" && snapshot && "work" in snapshot && snapshot.work?.length) {
     sections.push("project_work:");
     sections.push(
       ...snapshot.work.map(
@@ -2074,31 +1845,20 @@ export function formatSupervisionContext(
   for (const displayed of orderedSupervisionLeads(reports)) {
     const lead = leads.get(displayed.lead);
     if (!lead) continue;
-    const lines = [
-      "",
-      `display_name: ${supervisionValue(displayed.displayName)}`,
-    ];
+    const lines = ["", `display_name: ${supervisionValue(displayed.displayName)}`];
     if (role === "manager" && lead.relationship === "assigned" && lead.branch)
       lines.push(`  branch: ${supervisionValue(lead.branch)}`);
     else if (options.targets?.has(lead.lead))
-      lines.push(
-        `  target: ${supervisionValue(options.targets.get(lead.lead))}`,
-      );
+      lines.push(`  target: ${supervisionValue(options.targets.get(lead.lead))}`);
     if (displayed.compatibility === "incompatible") {
-      lines.push(
-        "  compatibility: incompatible (observed; no available staff tools)",
-      );
+      lines.push("  compatibility: incompatible (observed; no available staff tools)");
       if (displayed.build)
-        lines.push(
-          `  build: ${supervisionValue(formatRuntimeBuild(displayed.build))}`,
-        );
+        lines.push(`  build: ${supervisionValue(formatRuntimeBuild(displayed.build))}`);
       lines.push("  available_tools: ");
       sections.push(lines.join("\n"));
       continue;
     }
-    lines.push(
-      `  workspace: ${supervisionValue(lead.workspaceLabel ?? lead.workspaceId)}`,
-    );
+    lines.push(`  workspace: ${supervisionValue(lead.workspaceLabel ?? lead.workspaceId)}`);
     lines.push(`  workspace_id: ${supervisionValue(lead.workspaceId)}`);
     lines.push(`  runtime: ${supervisionValue(lead.runtimeState)}`);
     lines.push(
@@ -2127,8 +1887,7 @@ export function formatSupervisionContext(
   }
   const closing = "</supervision_state>";
   const fits = (lines: readonly string[]): boolean =>
-    Buffer.byteLength([...lines, closing].join("\n"), "utf8") <=
-    SUPERVISION_CONTEXT_MAX_BYTES;
+    Buffer.byteLength([...lines, closing].join("\n"), "utf8") <= SUPERVISION_CONTEXT_MAX_BYTES;
   const included = [...prefix];
   let truncated = false;
   for (const section of sections) {
@@ -2140,8 +1899,7 @@ export function formatSupervisionContext(
       "truncated: true",
       "Omitted supervision state is not shown. Use list_staff for current omitted state.",
     ];
-    while (included.length > prefix.length && !fits([...included, ...notice]))
-      included.pop();
+    while (included.length > prefix.length && !fits([...included, ...notice])) included.pop();
     included.push(...notice);
   }
   if (gitSection && fits([...included, gitSection])) included.push(gitSection);
@@ -2154,8 +1912,7 @@ function boundedWidgetRows<T extends { text: string }>(
   maxRows: number,
   width: number,
 ): T[] {
-  if (supervision.length + agents.length <= maxRows)
-    return [...supervision, ...agents];
+  if (supervision.length + agents.length <= maxRows) return [...supervision, ...agents];
   if (maxRows === 1) return supervision.slice(0, 1);
   const capacity = maxRows - 2;
   const reserve = agents.length
@@ -2173,8 +1930,7 @@ function boundedWidgetRows<T extends { text: string }>(
 
 /** Width-aware compact widget for the ambient status area. */
 export function createSupervisionWidget(
-  getLeads: () =>
-    readonly SupervisedLeadSnapshot[] | SupervisionPresentationSnapshot,
+  getLeads: () => readonly SupervisedLeadSnapshot[] | SupervisionPresentationSnapshot,
   getStatus: () => SupervisionContextStatus,
   role: "chief" | "manager" = "chief",
   theme?: any,
@@ -2211,14 +1967,10 @@ export function createSupervisionWidget(
         !!snapshot &&
         !snapshot.stale &&
         !snapshot.unavailable &&
-        snapshot.agents.some((agent) =>
-          ["working", "starting", "settling"].includes(agent.state),
-        );
-      const activeDescendants =
-        activeStaffSnapshot(supervision, status === "fresh") || activeOwned;
+        snapshot.agents.some((agent) => ["working", "starting", "settling"].includes(agent.state));
+      const activeDescendants = activeStaffSnapshot(supervision, status === "fresh") || activeOwned;
       const showAgents =
-        !!snapshot &&
-        (snapshot.agents.length > 0 || snapshot.stale || snapshot.unavailable);
+        !!snapshot && (snapshot.agents.length > 0 || snapshot.stale || snapshot.unavailable);
       const rows = renderSupervisionRows(
         supervision,
         width,
@@ -2239,15 +1991,8 @@ export function createSupervisionWidget(
         const git = getHeaderGitSummary?.();
         if (git && rows[0]) {
           const header = rows[0].text;
-          const suffix = formatGitHeaderSuffix(
-            git,
-            theme,
-            width - visibleWidth(header) - 2,
-          );
-          if (
-            suffix &&
-            visibleWidth(header) + 2 + visibleWidth(suffix) <= width
-          )
+          const suffix = formatGitHeaderSuffix(git, theme, width - visibleWidth(header) - 2);
+          if (suffix && visibleWidth(header) + 2 + visibleWidth(suffix) <= width)
             rows[0]!.text = `${header}${" ".repeat(width - visibleWidth(header) - visibleWidth(suffix))}${suffix}`;
         }
       }
@@ -2268,16 +2013,13 @@ export function createSupervisionWidget(
         });
         for (const row of rendered) {
           const agent = snapshot.agents.find(
-            ({ label, sessionId }) =>
-              label === row.label && sessionId === row.sessionId,
+            ({ label, sessionId }) => label === row.label && sessionId === row.sessionId,
           );
           const eligible =
             !snapshot.stale &&
             !snapshot.unavailable &&
             row.sessionId &&
-            snapshot.agents.filter(
-              ({ sessionId }) => sessionId === row.sessionId,
-            ).length === 1 &&
+            snapshot.agents.filter(({ sessionId }) => sessionId === row.sessionId).length === 1 &&
             agent &&
             agent.state !== "unknown" &&
             agent.state !== "lost" &&
@@ -2313,10 +2055,7 @@ export function createSupervisionWidget(
             intent: row.intent,
             origin: row.origin ?? "supervision",
           });
-        } else if (
-          row.origin === "agent" ||
-          identifyingLabelVisible(row.text, row.label, width)
-        ) {
+        } else if (row.origin === "agent" || identifyingLabelVisible(row.text, row.label, width)) {
           hits.push({
             row: index,
             from: 0,
@@ -2329,15 +2068,10 @@ export function createSupervisionWidget(
       return visible.map(({ text }) => text);
     },
     handleMouse(event) {
-      if (
-        event.type !== "click" ||
-        event.button !== "left" ||
-        event.width !== renderedWidth
-      )
+      if (event.type !== "click" || event.button !== "left" || event.width !== renderedWidth)
         return;
       const hit = hits.find(
-        ({ row, from, to }) =>
-          row === event.y && event.x >= from && event.x < to,
+        ({ row, from, to }) => row === event.y && event.x >= from && event.x < to,
       );
       if (!hit) return;
       const focus = hit.origin === "agent" ? ownedAgents?.onFocus : onFocus;
@@ -2363,9 +2097,7 @@ export type SupervisionPeekEvidence = Readonly<{
   agents?: readonly string[];
 }>;
 
-function renderProcessEvidence(
-  process: NonNullable<SupervisionPeekEvidence["process"]>,
-): string[] {
+function renderProcessEvidence(process: NonNullable<SupervisionPeekEvidence["process"]>): string[] {
   const lines: string[] = [];
   for (const foreground of process.foreground_processes?.slice(0, 8) ?? []) {
     const fields = [
@@ -2400,9 +2132,7 @@ export function renderSupervisionPeek(
       const end = evidence.recentOutput.indexOf("\n", start);
       if (
         !add(
-          end === -1
-            ? evidence.recentOutput.slice(start)
-            : evidence.recentOutput.slice(start, end),
+          end === -1 ? evidence.recentOutput.slice(start) : evidence.recentOutput.slice(start, end),
         )
       )
         break;
@@ -2413,8 +2143,7 @@ export function renderSupervisionPeek(
   if (evidence.agents?.length && add("agents"))
     for (const agent of evidence.agents) if (!add(agent)) break;
   if (evidence.process)
-    for (const line of renderProcessEvidence(evidence.process))
-      if (!add(line)) break;
+    for (const line of renderProcessEvidence(evidence.process)) if (!add(line)) break;
   return lines;
 }
 
@@ -2423,9 +2152,7 @@ export function retainSupervisionSelection(
   leads: readonly SupervisedLeadSnapshot[],
 ): string | undefined {
   const ordered = orderedSupervisionLeads(leads);
-  return ordered.some((lead) => lead.lead === selected)
-    ? selected
-    : ordered[0]?.lead;
+  return ordered.some((lead) => lead.lead === selected) ? selected : ordered[0]?.lead;
 }
 
 export function moveSupervisionSelection(
@@ -2462,10 +2189,7 @@ function peerMessageStatus(details: Record<string, unknown>): string {
 }
 
 const remoteDiagnosticMessages: Record<string, [string, string]> = {
-  machine_list_failed: [
-    "Saved Herdr machines could not be listed",
-    "Check Herdr machine status.",
-  ],
+  machine_list_failed: ["Saved Herdr machines could not be listed", "Check Herdr machine status."],
   herdr_not_reachable: [
     "Herdr reachability not confirmed",
     "Check Herdr machine status; reconnect interactively if needed.",
@@ -2491,10 +2215,7 @@ const remoteDiagnosticMessages: Record<string, [string, string]> = {
 
 const maxRemoteDiagnostics = 20;
 
-function peerRemoteDiagnosticLines(
-  diagnostics: unknown[],
-  reportedOmitted: number,
-): string[] {
+function peerRemoteDiagnosticLines(diagnostics: unknown[], reportedOmitted: number): string[] {
   const lines: string[] = [];
   const visibleDiagnostics = diagnostics.slice(0, maxRemoteDiagnostics);
   for (const item of visibleDiagnostics) {
@@ -2512,23 +2233,14 @@ function peerRemoteDiagnosticLines(
     if (remoteBuild) lines.push(`    remote ${remoteBuild}`);
     lines.push(`    Check: ${message[1]}`);
   }
-  const omitted =
-    reportedOmitted +
-    Math.max(0, diagnostics.length - visibleDiagnostics.length);
-  if (omitted)
-    lines.push(
-      `  ${omitted} additional diagnostic${omitted === 1 ? "" : "s"} omitted`,
-    );
+  const omitted = reportedOmitted + Math.max(0, diagnostics.length - visibleDiagnostics.length);
+  if (omitted) lines.push(`  ${omitted} additional diagnostic${omitted === 1 ? "" : "s"} omitted`);
   return lines;
 }
 
-function remoteDiagnosticOmittedCount(
-  details: Record<string, unknown>,
-): number {
+function remoteDiagnosticOmittedCount(details: Record<string, unknown>): number {
   const count = details.remote_diagnostics_omitted;
-  return typeof count === "number" && Number.isSafeInteger(count) && count > 0
-    ? count
-    : 0;
+  return typeof count === "number" && Number.isSafeInteger(count) && count > 0 ? count : 0;
 }
 
 function agentDefinitionSuffix(label: string, definition: unknown): string {
@@ -2540,8 +2252,7 @@ function tailTruncate(value: string, width: number): string {
   if (width <= 0) return "";
   if (visibleWidth(value) <= width) return value;
   const ellipsis = "…";
-  if (visibleWidth(ellipsis) >= width)
-    return truncateToWidth(ellipsis, width, "");
+  if (visibleWidth(ellipsis) >= width) return truncateToWidth(ellipsis, width, "");
   const characters = Array.from(value);
   for (let start = 0; start < characters.length; start++) {
     const candidate = ellipsis + characters.slice(start).join("");
@@ -2565,10 +2276,7 @@ function safeDisplaySegment(value: string): string {
       let cursor = index + 2;
       while (cursor < value.length) {
         if (value.charCodeAt(cursor) === 0x07) break;
-        if (
-          value.charCodeAt(cursor) === 0x1b &&
-          value.charCodeAt(cursor + 1) === 0x5c
-        ) {
+        if (value.charCodeAt(cursor) === 0x1b && value.charCodeAt(cursor + 1) === 0x5c) {
           cursor++;
           break;
         }
@@ -2601,8 +2309,7 @@ function renderBreadcrumb(
     .map((segment) => ({ ...segment, text: safeDisplaySegment(segment.text) }))
     .filter((segment) => segment.text);
   const current = visible.at(-1) ?? { text: "?" };
-  if (width <= visibleWidth(marker))
-    return { text: truncateToWidth(marker, width, ""), hits: [] };
+  if (width <= visibleWidth(marker)) return { text: truncateToWidth(marker, width, ""), hits: [] };
   const prefix = `${marker}${themed(theme, "muted", " ")}`;
   const available = width - visibleWidth(prefix);
   if (available <= 0) return { text: marker, hits: [] };
@@ -2617,9 +2324,7 @@ function renderBreadcrumb(
   const text = `${prefix}${included
     .map((segment, index) => {
       const role =
-        index === included.length - 1 &&
-        segment.role &&
-        segment.text.startsWith(segment.role)
+        index === included.length - 1 && segment.role && segment.text.startsWith(segment.role)
           ? segment.role
           : undefined;
       return role
@@ -2642,10 +2347,7 @@ function renderBreadcrumb(
   });
   return { text, hits };
 }
-function renderToolMetadata(
-  tools: readonly string[] | undefined,
-  width: number,
-): string {
+function renderToolMetadata(tools: readonly string[] | undefined, width: number): string {
   if (!tools?.length || width <= 0) return "";
   const tokens = [...tools];
   const full = `  [${tokens.join(", ")}]`;
@@ -2687,13 +2389,8 @@ export function formatTools(definition: Record<string, unknown>): string {
       : summary;
   }
   if (definition.noTools === true) return "none";
-  const baseline =
-    definition.noBuiltinTools === true
-      ? "default without built-ins"
-      : "default";
-  return excluded.length
-    ? `${baseline} except ${excluded.join(", ")}`
-    : baseline;
+  const baseline = definition.noBuiltinTools === true ? "default without built-ins" : "default";
+  return excluded.length ? `${baseline} except ${excluded.join(", ")}` : baseline;
 }
 export function formatSkills(definition: Record<string, unknown>): string {
   if (typeof definition.skills === "string") return definition.skills;
@@ -2702,13 +2399,9 @@ export function formatSkills(definition: Record<string, unknown>): string {
     definition.noSkills === false ||
     (definition.noSkills === undefined && definition.inheritSkills === true);
   if (!discovered) return skills.length ? skills.join(", ") : "none";
-  return skills.length
-    ? `native discovery + ${skills.join(", ")}`
-    : "native discovery";
+  return skills.length ? `native discovery + ${skills.join(", ")}` : "native discovery";
 }
-export function formatAgentDefinitions(
-  definitions: Record<string, unknown>[],
-): string[] {
+export function formatAgentDefinitions(definitions: Record<string, unknown>[]): string[] {
   return definitions.flatMap((definition) => {
     const name = value(definition.name ?? definition.agent);
     const description = value(definition.description);
@@ -2721,9 +2414,7 @@ export function formatAgentDefinitions(
         ? [`delegates ${definition.agents.join(", ")}`]
         : []),
     ];
-    return [
-      `  ${name}${description ? ` — ${description}` : ""} | ${routing.join(" | ")}`,
-    ];
+    return [`  ${name}${description ? ` — ${description}` : ""} | ${routing.join(" | ")}`];
   });
 }
 
@@ -2735,8 +2426,7 @@ export function displayHomePath(path: string): string {
   if (!isAbsolute(path)) return path;
   const remainder = relative(home, path);
   if (remainder === "") return "~";
-  if (remainder !== ".." && !remainder.startsWith(`..${sep}`))
-    return `~/${remainder}`;
+  if (remainder !== ".." && !remainder.startsWith(`..${sep}`)) return `~/${remainder}`;
   return path;
 }
 
@@ -2751,9 +2441,7 @@ export function displaySkillName(skill: string): string {
 
 type HumanDefinitionSource = "bundled" | "overridden" | "custom";
 
-function humanDefinitionSource(
-  definition: Record<string, unknown>,
-): HumanDefinitionSource {
+function humanDefinitionSource(definition: Record<string, unknown>): HumanDefinitionSource {
   if (value(definition.extensionSource))
     return value(definition.overrideSource) ||
       value(definition.projectSource) ||
@@ -2767,8 +2455,7 @@ function humanTools(definition: Record<string, unknown>): string | undefined {
   const formatted = formatTools(definition);
   if (formatted === "default") return undefined;
   if (formatted !== "none") return formatted;
-  const intentionalRestriction =
-    definition.noTools === true || Array.isArray(definition.tools);
+  const intentionalRestriction = definition.noTools === true || Array.isArray(definition.tools);
   return intentionalRestriction ? formatted : undefined;
 }
 
@@ -2776,8 +2463,7 @@ function humanSkills(definition: Record<string, unknown>): string | undefined {
   const skillPaths = [...new Set(names(definition.skills))];
   const displayNames = skillPaths.map(displaySkillName);
   const counts = new Map<string, number>();
-  for (const name of displayNames)
-    counts.set(name, (counts.get(name) ?? 0) + 1);
+  for (const name of displayNames) counts.set(name, (counts.get(name) ?? 0) + 1);
   const skills = displayNames.map((name, index) =>
     counts.get(name)! > 1
       ? compactSkillPath(skillPaths[index] ?? "", skillPaths, name, index)
@@ -2787,15 +2473,12 @@ function humanSkills(definition: Record<string, unknown>): string | undefined {
     ...definition,
     skills,
   });
-  return formatted === "none" || formatted === "default"
-    ? undefined
-    : formatted;
+  return formatted === "none" || formatted === "default" ? undefined : formatted;
 }
 
 function humanExtensions(definition: Record<string, unknown>): string {
   const extensions = names(definition.extensions).map(displayHomePath);
-  if (!extensions.length)
-    return definition.noExtensions === true ? "none" : "default";
+  if (!extensions.length) return definition.noExtensions === true ? "none" : "default";
   return definition.noExtensions === true
     ? extensions.join(", ")
     : `default + ${extensions.join(", ")}`;
@@ -2828,8 +2511,7 @@ function compactSkillPath(
     const suffix = segments.slice(-length).join("/");
     if (
       peerSegments.every(
-        (peer, index) =>
-          index === skillIndex || peer.slice(-length).join("/") !== suffix,
+        (peer, index) => index === skillIndex || peer.slice(-length).join("/") !== suffix,
       )
     )
       return suffix;
@@ -2846,9 +2528,7 @@ function createWidthSafeBox(
   const render = box.render.bind(box);
   box.render = (width) =>
     render(width).map((line) =>
-      visibleWidth(line) > width
-        ? truncateToWidth(line, Math.max(0, width), "")
-        : line,
+      visibleWidth(line) > width ? truncateToWidth(line, Math.max(0, width), "") : line,
     );
   return box;
 }
@@ -2894,8 +2574,7 @@ export function renderAgentDefinitionsOverview(
     lines.push(`${theme.bold(theme.fg("customMessageText", name))}${badge}`);
     const description = value(definition.description);
     if (description) lines.push(theme.fg("customMessageText", description));
-    if (definition.enabled === false)
-      lines.push(humanRow(theme, "status", "disabled", "warning"));
+    if (definition.enabled === false) lines.push(humanRow(theme, "status", "disabled", "warning"));
 
     const model = value(definition.model);
     const thinking = value(definition.thinking);
@@ -2914,8 +2593,7 @@ export function renderAgentDefinitionsOverview(
     if (options.expanded === true)
       lines.push(humanRow(theme, "extensions", humanExtensions(definition)));
     const delegates = names(definition.agents);
-    if (delegates.length)
-      lines.push(humanRow(theme, "delegates", delegates.join(", ")));
+    if (delegates.length) lines.push(humanRow(theme, "delegates", delegates.join(", ")));
 
     const sourcePath = value(definition.overrideSource);
     if (sourcePath)
@@ -2930,71 +2608,37 @@ export function renderAgentDefinitionsOverview(
 
     const projectSourcePath = value(definition.projectSource);
     if (projectSourcePath)
-      lines.push(
-        humanRow(theme, "project", displayHomePath(projectSourcePath), "dim"),
-      );
-    const privateRepositorySourcePath = value(
-      definition.privateRepositorySource,
-    );
+      lines.push(humanRow(theme, "project", displayHomePath(projectSourcePath), "dim"));
+    const privateRepositorySourcePath = value(definition.privateRepositorySource);
     if (privateRepositorySourcePath)
       lines.push(
-        humanRow(
-          theme,
-          "private repo",
-          displayHomePath(privateRepositorySourcePath),
-          "dim",
-        ),
+        humanRow(theme, "private repo", displayHomePath(privateRepositorySourcePath), "dim"),
       );
   });
   if (options.inspector) {
     lines.push(...options.inspector.summary);
     if (options.expanded !== true) lines.push("Ctrl+O to expand");
-  } else if (
-    typeof options.instructions === "string" &&
-    options.expanded !== true
-  ) {
+  } else if (typeof options.instructions === "string" && options.expanded !== true) {
     const characters = Array.from(options.instructions).length;
-    lines.push(
-      humanRow(theme, "instructions", `${characters} chars · Ctrl+O to expand`),
-    );
+    lines.push(humanRow(theme, "instructions", `${characters} chars · Ctrl+O to expand`));
   }
-  const box = createWidthSafeBox(1, 1, (line) =>
-    theme.bg("customMessageBg", line),
-  );
+  const box = createWidthSafeBox(1, 1, (line) => theme.bg("customMessageBg", line));
   box.addChild(new WidthSafeText(lines.join("\n"), 0, 0));
   if (options.expanded === true && options.inspector?.sections) {
     box.addChild(new Spacer(1));
     box.addChild(new DynamicBorder((line) => theme.fg("border", line)));
     box.addChild(
-      new Text(
-        theme.fg("accent", theme.bold("INSTRUCTIONS · Known-input order")),
-        0,
-        0,
-      ),
+      new Text(theme.fg("accent", theme.bold("INSTRUCTIONS · Known-input order")), 0, 0),
     );
     options.inspector.sections.forEach((section, index) => {
       box.addChild(new Spacer(1));
-      if (index > 0)
-        box.addChild(new DynamicBorder((line) => theme.fg("border", line)));
+      if (index > 0) box.addChild(new DynamicBorder((line) => theme.fg("border", line)));
       box.addChild(
-        new Text(
-          theme.fg("accent", theme.bold(`${index + 1}. ${section.title}`)),
-          0,
-          0,
-        ),
+        new Text(theme.fg("accent", theme.bold(`${index + 1}. ${section.title}`)), 0, 0),
       );
-      if (section.source)
-        box.addChild(
-          new WidthSafeText(theme.fg("muted", section.source), 0, 0),
-        );
+      if (section.source) box.addChild(new WidthSafeText(theme.fg("muted", section.source), 0, 0));
       if (section.changes?.length)
-        box.addChild(
-          new WidthSafeText(
-            theme.fg("muted", section.changes.join("\n")),
-            0,
-            0,
-          ),
-        );
+        box.addChild(new WidthSafeText(theme.fg("muted", section.changes.join("\n")), 0, 0));
       if (section.content) {
         box.addChild(new DynamicBorder((line) => theme.fg("muted", line)));
         box.addChild(new Spacer(1));
@@ -3005,38 +2649,19 @@ export function renderAgentDefinitionsOverview(
         );
       }
     });
-  } else if (
-    options.expanded === true &&
-    options.inspector?.tree !== undefined
-  ) {
+  } else if (options.expanded === true && options.inspector?.tree !== undefined) {
     box.addChild(new Spacer(1));
     box.addChild(new WidthSafeText(options.inspector.tree, 0, 0));
-  } else if (
-    typeof options.instructions === "string" &&
-    options.expanded === true
-  ) {
+  } else if (typeof options.instructions === "string" && options.expanded === true) {
     box.addChild(new Spacer(1));
-    box.addChild(
-      new Text(
-        theme.bold(theme.fg("customMessageLabel", "Instructions")),
-        0,
-        0,
-      ),
-    );
-    box.addChild(
-      new Markdown(options.instructions || "(empty)", 0, 0, getMarkdownTheme()),
-    );
+    box.addChild(new Text(theme.bold(theme.fg("customMessageLabel", "Instructions")), 0, 0));
+    box.addChild(new Markdown(options.instructions || "(empty)", 0, 0, getMarkdownTheme()));
   }
   return box;
 }
 
-export function renderStopSummary(
-  message: { details?: unknown },
-  theme: any,
-): TuiBox {
-  const summary = isRecord(message.details)
-    ? message.details.summary
-    : undefined;
+export function renderStopSummary(message: { details?: unknown }, theme: any): TuiBox {
+  const summary = isRecord(message.details) ? message.details.summary : undefined;
   return renderMessageBox(
     new WidthSafeText(
       [
@@ -3050,13 +2675,9 @@ export function renderStopSummary(
     1,
   );
 }
-export function renderHerdRunEntry(
-  entry: { data?: unknown },
-  theme: any,
-): Component | undefined {
+export function renderHerdRunEntry(entry: { data?: unknown }, theme: any): Component | undefined {
   const data = entry.data;
-  if (!data || typeof data !== "object" || Array.isArray(data))
-    return undefined;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
   const value = data as Record<string, unknown>;
   if (
     value.phase !== "finished" ||
@@ -3075,8 +2696,7 @@ export function renderHerdRunEntry(
 }
 function evidenceLine(label: string, input: unknown): string | undefined {
   if (input === undefined || input === null) return undefined;
-  if (typeof input === "string")
-    return input ? `${label}: ${input}` : undefined;
+  if (typeof input === "string") return input ? `${label}: ${input}` : undefined;
   if (typeof input === "object") {
     const entries = Object.entries(input as Record<string, unknown>).filter(
       ([, item]) => item !== undefined && item !== null && item !== "",
@@ -3086,10 +2706,7 @@ function evidenceLine(label: string, input: unknown): string | undefined {
   }
   return `${label}: ${String(input)}`;
 }
-export function formatToolModelResult(
-  action: string,
-  v: Record<string, unknown>,
-): string {
+export function formatToolModelResult(action: string, v: Record<string, unknown>): string {
   action = value(action) || "agent";
   const definition = value(v.definition);
   const cleanup = value(v.cleanup_error)
@@ -3098,10 +2715,7 @@ export function formatToolModelResult(
       ? ["", "Cleanup warnings:", JSON.stringify(v.cleanup_errors, null, 2)]
       : [];
   const descendantWarning = value(v.descendant_continuation_warning)
-    ? [
-        "",
-        `Descendant continuation warning: ${value(v.descendant_continuation_warning)}`,
-      ]
+    ? ["", `Descendant continuation warning: ${value(v.descendant_continuation_warning)}`]
     : [];
   if (v.ok === false) {
     const e = (v.error ?? {}) as Record<string, unknown>;
@@ -3121,12 +2735,8 @@ export function formatToolModelResult(
               !!process && typeof process === "object",
           )
           .map((process) => ({
-            ...(typeof process.argv0 === "string"
-              ? { argv0: process.argv0.slice(0, 256) }
-              : {}),
-            ...(typeof process.state === "string"
-              ? { state: process.state.slice(0, 64) }
-              : {}),
+            ...(typeof process.argv0 === "string" ? { argv0: process.argv0.slice(0, 256) } : {}),
+            ...(typeof process.state === "string" ? { state: process.state.slice(0, 64) } : {}),
           }))
       : [];
     const startupProcessText = startupProcess
@@ -3134,8 +2744,7 @@ export function formatToolModelResult(
           ...(typeof startupProcess.pane_id === "string"
             ? { pane_id: startupProcess.pane_id.slice(0, 256) }
             : {}),
-          ...(Number.isInteger(startupProcess.shell_pid) &&
-          (startupProcess.shell_pid as number) > 0
+          ...(Number.isInteger(startupProcess.shell_pid) && (startupProcess.shell_pid as number) > 0
             ? { shell_pid: startupProcess.shell_pid }
             : {}),
           foreground_processes: foreground,
@@ -3151,9 +2760,7 @@ export function formatToolModelResult(
         evidenceLine("Retry attempted", e.retryAttempted),
       ].filter((line): line is string => line !== undefined),
       ...(e.ids && typeof e.ids === "object"
-        ? [evidenceLine("Identity", e.ids)].filter(
-            (line): line is string => line !== undefined,
-          )
+        ? [evidenceLine("Identity", e.ids)].filter((line): line is string => line !== undefined)
         : []),
       ...(details
         ? [
@@ -3162,9 +2769,7 @@ export function formatToolModelResult(
               "Startup diagnostic",
               typeof details.startupDiagnostic === "string"
                 ? new TextDecoder().decode(
-                    new TextEncoder()
-                      .encode(details.startupDiagnostic)
-                      .subarray(0, 4096),
+                    new TextEncoder().encode(details.startupDiagnostic).subarray(0, 4096),
                   )
                 : undefined,
             ),
@@ -3172,14 +2777,10 @@ export function formatToolModelResult(
           ].filter((line): line is string => line !== undefined)
         : []),
       ...(e.primary
-        ? [evidenceLine("Primary", e.primary)].filter(
-            (line): line is string => line !== undefined,
-          )
+        ? [evidenceLine("Primary", e.primary)].filter((line): line is string => line !== undefined)
         : []),
       ...(e.cleanup
-        ? [evidenceLine("Cleanup", e.cleanup)].filter(
-            (line): line is string => line !== undefined,
-          )
+        ? [evidenceLine("Cleanup", e.cleanup)].filter((line): line is string => line !== undefined)
         : []),
       ...(value(e.nextAction) ? [`Next action: ${value(e.nextAction)}`] : []),
       ...cleanup,
@@ -3204,12 +2805,8 @@ export function formatToolModelResult(
       ...(value(v.session_id) ? [`Session: ${v.session_id}`] : []),
       ...(value(v.pane_id) ? [`Pane: ${v.pane_id}`] : []),
       ...(foreground.length ? [`Foreground: ${foreground.join(" · ")}`] : []),
-      ...(value(v.recent_output)
-        ? ["Recent output:", value(v.recent_output)]
-        : []),
-      ...(v.recent_output_truncated === true
-        ? ["Recent output truncated: yes"]
-        : []),
+      ...(value(v.recent_output) ? ["Recent output:", value(v.recent_output)] : []),
+      ...(v.recent_output_truncated === true ? ["Recent output truncated: yes"] : []),
     ].join("\n");
   }
   if (action === "transcript") {
@@ -3232,9 +2829,7 @@ export function formatToolModelResult(
       "Pi will deliver it after the current assistant turn and its tool calls reach a steering boundary; it does not preempt the current operation.",
       ...(value(v.session_id) ? [`Session: ${v.session_id}`] : []),
       ...(value(v.request_id) ? [`Request: ${v.request_id}`] : []),
-      ...(value(v.assignment_request_id)
-        ? [`Assignment request: ${v.assignment_request_id}`]
-        : []),
+      ...(value(v.assignment_request_id) ? [`Assignment request: ${v.assignment_request_id}`] : []),
       ...cleanup,
     ].join("\n");
   }
@@ -3249,33 +2844,26 @@ export function formatToolModelResult(
         : "The current Pi operation was asked to stop and the replacement instruction continues the same assignment.",
       ...(value(v.session_id) ? [`Session: ${v.session_id}`] : []),
       ...(value(v.request_id) ? [`Request: ${v.request_id}`] : []),
-      ...(value(v.assignment_request_id)
-        ? [`Assignment request: ${v.assignment_request_id}`]
-        : []),
+      ...(value(v.assignment_request_id) ? [`Assignment request: ${v.assignment_request_id}`] : []),
       ...cleanup,
     ].join("\n");
   }
   if (action === "list") {
-    const agents = Array.isArray(v.agents)
-      ? (v.agents as Record<string, unknown>[])
-      : [];
+    const agents = Array.isArray(v.agents) ? (v.agents as Record<string, unknown>[]) : [];
     const definitions = Array.isArray(v.agent_definitions)
       ? (v.agent_definitions as Record<string, unknown>[])
       : [];
     const roots = agents.filter((agent) => !value(agent.parent_label));
     const children = (parent: Record<string, unknown>) => {
       const parentLabel = value(parent.agent);
-      return parentLabel
-        ? agents.filter((agent) => value(agent.parent_label) === parentLabel)
-        : [];
+      return parentLabel ? agents.filter((agent) => value(agent.parent_label) === parentLabel) : [];
     };
     const agentLines = (
       agent: Record<string, unknown>,
       indent = "",
       fallback = false,
     ): string[] => {
-      const session =
-        value(agent.pi_session_id) || value(agent.pi_session_path);
+      const session = value(agent.pi_session_id) || value(agent.pi_session_path);
       const identity = value(agent.agent) || "unknown";
       const definition = value(agent.agent_definition);
       const status = value(agent.state) || "unknown";
@@ -3288,9 +2876,7 @@ export function formatToolModelResult(
         ...(thinking ? [`thinking ${thinking}`] : []),
         ...(fallback ? ["non-actionable"] : []),
         ...(!fallback && Array.isArray(agent.available_tools)
-          ? [
-              `available_tools: ${agent.available_tools.map(String).join(", ") || "nothing"}`,
-            ]
+          ? [`available_tools: ${agent.available_tools.map(String).join(", ") || "nothing"}`]
           : []),
         ...(agent.stale === true
           ? [
@@ -3317,10 +2903,7 @@ export function formatToolModelResult(
     };
     const rendered = new Set<Record<string, unknown>>();
     // Ownership may be nested to any depth; each level indents under its owner.
-    const renderTree = (
-      agent: Record<string, unknown>,
-      depth: number,
-    ): string[] => {
+    const renderTree = (agent: Record<string, unknown>, depth: number): string[] => {
       rendered.add(agent);
       const nested = children(agent).filter((child) => !rendered.has(child));
       return [
@@ -3329,10 +2912,7 @@ export function formatToolModelResult(
         ...nested.flatMap((child) => renderTree(child, depth + 1)),
       ];
     };
-    const renderedAgents = roots.flatMap((root) => [
-      ...renderTree(root, 0),
-      "",
-    ]);
+    const renderedAgents = roots.flatMap((root) => [...renderTree(root, 0), ""]);
     const fallbackAgents = agents.filter((agent) => !rendered.has(agent));
     return [
       `Agents: ${agents.length}`,
@@ -3345,9 +2925,7 @@ export function formatToolModelResult(
             "",
           ]
         : []),
-      ...(definitions.length
-        ? ["Agent definitions:", ...formatAgentDefinitions(definitions)]
-        : []),
+      ...(definitions.length ? ["Agent definitions:", ...formatAgentDefinitions(definitions)] : []),
       ...(Array.isArray(v.agent_models)
         ? [
             "",
@@ -3368,33 +2946,24 @@ export function formatToolModelResult(
       : []),
     ...(value(v.session_id) ? [`Session: ${v.session_id}`] : []),
     ...(value(v.request_id) ? [`Request: ${v.request_id}`] : []),
-    ...(value(v.assignment_request_id)
-      ? [`Assignment request: ${v.assignment_request_id}`]
-      : []),
+    ...(value(v.assignment_request_id) ? [`Assignment request: ${v.assignment_request_id}`] : []),
     ...(action === "reply" && value(v.ask_id) ? [`Ask: ${v.ask_id}`] : []),
-    ...(value(v.history_warning)
-      ? [`History warning: ${value(v.history_warning)}`]
-      : []),
+    ...(value(v.history_warning) ? [`History warning: ${value(v.history_warning)}`] : []),
     ...((action === "delegate" || action === "continue") &&
     v.evidence &&
     typeof v.evidence === "object"
       ? (() => {
           const evidence = v.evidence as Record<string, unknown>;
-          const lines = [
-            "Assignment accepted. Evidence included in the accepted task:",
-          ];
+          const lines = ["Assignment accepted. Evidence included in the accepted task:"];
           for (const [key, title] of [
             ["currentInline", "Current evidence — inline"],
             ["explicitInline", "Explicit attachments — inline"],
             ["referenced", "Evidence — references"],
           ] as const) {
             const items = Array.isArray(evidence[key])
-              ? evidence[key].filter(
-                  (item): item is string => typeof item === "string",
-                )
+              ? evidence[key].filter((item): item is string => typeof item === "string")
               : [];
-            if (items.length)
-              lines.push(`${title}:`, ...items.map((item) => `- ${item}`));
+            if (items.length) lines.push(`${title}:`, ...items.map((item) => `- ${item}`));
           }
           return lines;
         })()
@@ -3409,12 +2978,7 @@ function humanText(theme: any, color: string, text: string): string {
   return theme?.fg ? theme.fg(color, text) : text;
 }
 
-function statusLine(
-  theme: any,
-  color: string,
-  marker: string,
-  text: string,
-): string {
+function statusLine(theme: any, color: string, marker: string, text: string): string {
   return `${humanText(theme, color, marker)} ${text}`;
 }
 
@@ -3434,10 +2998,7 @@ function resultContent(result: any): string {
   return contentText(content);
 }
 
-function hydrateCoordinationAgent(
-  details: Record<string, unknown>,
-  context: any,
-): void {
+function hydrateCoordinationAgent(details: Record<string, unknown>, context: any): void {
   if (!context?.state || typeof context.state !== "object") return;
   const agent = value(details.agent);
   const definition =
@@ -3497,9 +3058,7 @@ function inspectEvidence(
       lines.push(
         "",
         humanText(theme, "customMessageLabel", "foreground:"),
-        ...(commands.length
-          ? commands.map((command) => `  ${command}`)
-          : ["  (none)"]),
+        ...(commands.length ? commands.map((command) => `  ${command}`) : ["  (none)"]),
       );
     }
     if (output.length) {
@@ -3510,18 +3069,14 @@ function inspectEvidence(
       );
     }
     if (details.recent_output_truncated === true)
-      lines.push(
-        "",
-        humanText(theme, "warning", "recent output truncated: yes"),
-      );
+      lines.push("", humanText(theme, "warning", "recent output truncated: yes"));
     return lines;
   }
   const command = commands[0] ? collapseDisplayText(commands[0]) : undefined;
   const tail = output.at(-1) ? collapseDisplayText(output.at(-1)) : undefined;
   if (command && tail) lines.push(`${command} · ${tail}`);
   else if (command || tail) lines.push(command || tail!);
-  if (details.recent_output_truncated === true)
-    lines.push("output truncated · Ctrl+O");
+  if (details.recent_output_truncated === true) lines.push("output truncated · Ctrl+O");
   return lines.slice(0, 3);
 }
 
@@ -3534,8 +3089,7 @@ function coordinationBody(
   action: string,
   args: Record<string, unknown>,
 ): CoordinationBody | undefined {
-  const label =
-    action === "delegate" || action === "continue" ? "task" : "message";
+  const label = action === "delegate" || action === "continue" ? "task" : "message";
   const text = args[label];
   return typeof text === "string" && text.trim() ? { label, text } : undefined;
 }
@@ -3580,8 +3134,7 @@ function renderExpandedCoordinationCall(
     if (action === "delegate") {
       if (args.definition) fields.push(["definition", args.definition]);
       if (args.label) fields.push(["label", args.label]);
-      if (typeof args.cwd === "string" && args.cwd)
-        fields.push(["cwd", displayHomePath(args.cwd)]);
+      if (typeof args.cwd === "string" && args.cwd) fields.push(["cwd", displayHomePath(args.cwd)]);
     } else if (action === "continue") {
       if (args.session) fields.push(["session", args.session]);
     } else if (args.agent) fields.push(["agent", args.agent]);
@@ -3638,40 +3191,22 @@ export function renderCoordinationCall(
   const a = (context?.args ?? args ?? {}) as Record<string, unknown>;
   const verb = action;
   let target = "";
-  if (tool === "agent" && action === "delegate")
-    target = value(a.label) || value(a.definition);
-  else if (tool === "agent" && action === "continue")
-    target = value(context?.state?.agentLabel);
+  if (tool === "agent" && action === "delegate") target = value(a.label) || value(a.definition);
+  else if (tool === "agent" && action === "continue") target = value(context?.state?.agentLabel);
   else if (tool === "agent") target = value(a.agent);
   else if (tool === "staff")
-    target =
-      action === "list"
-        ? ""
-        : typeof a.branch === "string"
-          ? a.branch
-          : value(a.target);
+    target = action === "list" ? "" : typeof a.branch === "string" ? a.branch : value(a.target);
   else if (tool === "peer") target = action === "list" ? "" : value(a.target);
   const definition =
     tool === "agent"
-      ? value(a.definition) ||
-        value(context?.state?.agentDefinition) ||
-        context?.agentDefinition
+      ? value(a.definition) || value(context?.state?.agentDefinition) || context?.agentDefinition
       : undefined;
   const header = coordinationHeader(tool, verb, target, theme);
   const partial = context?.isPartial || context?.argsComplete === false;
   if (humanExpanded(context, undefined))
-    return renderExpandedCoordinationCall(
-      tool,
-      action,
-      a,
-      theme,
-      partial ? `${header}…` : header,
-    );
+    return renderExpandedCoordinationCall(tool, action, a, theme, partial ? `${header}…` : header);
   const compactHeader =
-    header +
-    (target
-      ? humanText(theme, "muted", agentDefinitionSuffix(target, definition))
-      : "");
+    header + (target ? humanText(theme, "muted", agentDefinitionSuffix(target, definition)) : "");
   const partialHeader = partial ? `${compactHeader}…` : compactHeader;
   const content = new Container();
   content.addChild(new Text(partialHeader, 0, 0));
@@ -3725,16 +3260,11 @@ function errorLines(
       evidenceLine("retry attempted", error.retryAttempted),
     ].filter((line): line is string => line !== undefined),
     ...(value(error.nextAction) ? [`next: ${value(error.nextAction)}`] : []),
-    ...(error.ids && typeof error.ids === "object"
-      ? [evidenceLine("identity", error.ids)!]
-      : []),
+    ...(error.ids && typeof error.ids === "object" ? [evidenceLine("identity", error.ids)!] : []),
     ...(error.details && typeof error.details === "object"
-      ? ([
-          evidenceLine(
-            "stage",
-            (error.details as Record<string, unknown>).stage,
-          ),
-        ].filter(Boolean) as string[])
+      ? ([evidenceLine("stage", (error.details as Record<string, unknown>).stage)].filter(
+          Boolean,
+        ) as string[])
       : []),
     ...(error.primary
       ? [evidenceLine("primary", error.primary)].filter(
@@ -3762,10 +3292,7 @@ function agentListSummary(details: Record<string, unknown>): string {
     const agent = item as Record<string, unknown>;
     if (agent.state === "working") working++;
     if (agent.state === "blocked") blocked++;
-    if (
-      Array.isArray(agent.available_tools) &&
-      agent.available_tools.includes("reply_agent")
-    )
+    if (Array.isArray(agent.available_tools) && agent.available_tools.includes("reply_agent"))
       needsReply++;
   }
   return [
@@ -3780,8 +3307,7 @@ function agentListSummary(details: Record<string, unknown>): string {
 
 function agentHierarchy(details: Record<string, unknown>): string[] {
   const agents = (Array.isArray(details.agents) ? details.agents : []).filter(
-    (item): item is Record<string, unknown> =>
-      !!item && typeof item === "object",
+    (item): item is Record<string, unknown> => !!item && typeof item === "object",
   );
   const byParent = new Map<string, Record<string, unknown>[]>();
   const byLabel = new Map<string, Record<string, unknown>>();
@@ -3793,11 +3319,7 @@ function agentHierarchy(details: Record<string, unknown>): string[] {
   }
   const lines: string[] = [];
   const seen = new Set<Record<string, unknown>>();
-  const visit = (
-    agent: Record<string, unknown>,
-    indent: string,
-    ancestors: Set<string>,
-  ) => {
+  const visit = (agent: Record<string, unknown>, indent: string, ancestors: Set<string>) => {
     if (seen.has(agent)) return;
     seen.add(agent);
     const label = value(agent.agent) || "unknown";
@@ -3824,8 +3346,7 @@ function agentHierarchy(details: Record<string, unknown>): string[] {
     ];
     lines.push(`${indent}${label}  ${controls.join(" · ")}`);
     if (session) lines.push(`${indent}  session: ${session}`);
-    if (value(agent.diagnostic))
-      lines.push(`${indent}  diagnostic: ${value(agent.diagnostic)}`);
+    if (value(agent.diagnostic)) lines.push(`${indent}  diagnostic: ${value(agent.diagnostic)}`);
     if (value(agent.cleanup_error))
       lines.push(`${indent}  cleanup warning: ${value(agent.cleanup_error)}`);
     if (agent.result_error !== undefined && agent.result_error !== null)
@@ -3836,8 +3357,7 @@ function agentHierarchy(details: Record<string, unknown>): string[] {
             : String(agent.result_error)
         }`,
       );
-    if (parent && !byLabel.has(parent))
-      lines.push(`${indent}  parent: ${parent} (not present)`);
+    if (parent && !byLabel.has(parent)) lines.push(`${indent}  parent: ${parent} (not present)`);
     const next = new Set(ancestors).add(label);
     for (const child of byParent.get(label) ?? []) {
       if (!next.has(value(child.agent))) visit(child, `${indent}  `, next);
@@ -3850,9 +3370,7 @@ function agentHierarchy(details: Record<string, unknown>): string[] {
 }
 
 function peerMachine(peer: any): string | undefined {
-  return peer && typeof peer === "object"
-    ? collapseDisplayText(value(peer.machine))
-    : undefined;
+  return peer && typeof peer === "object" ? collapseDisplayText(value(peer.machine)) : undefined;
 }
 
 function expandedResultLines(
@@ -3867,9 +3385,7 @@ function expandedResultLines(
     value(details.display_name) ||
     value(details.agent) ||
     value(details.label) ||
-    (tool === "staff" || tool === "peer"
-      ? value(details.target)
-      : value(details.session)) ||
+    (tool === "staff" || tool === "peer" ? value(details.target) : value(details.session)) ||
     value(args.agent) ||
     value(args.label) ||
     "agent";
@@ -3920,24 +3436,14 @@ function expandedResultLines(
     ...(tool === "staff" || tool === "peer"
       ? [["target", details.target] as [string, unknown]]
       : [
-          [
-            "session",
-            details.session ?? details.session_id ?? details.pi_session_id,
-          ] as [string, unknown],
+          ["session", details.session ?? details.session_id ?? details.pi_session_id] as [
+            string,
+            unknown,
+          ],
         ]),
     ["branch", tool === "staff" ? details.branch : undefined],
-    [
-      "checkout path",
-      tool === "staff" && action === "remove"
-        ? details.checkout_path
-        : undefined,
-    ],
-    [
-      "task",
-      tool === "staff" && action === "resume"
-        ? details.presentation_task
-        : undefined,
-    ],
+    ["checkout path", tool === "staff" && action === "remove" ? details.checkout_path : undefined],
+    ["task", tool === "staff" && action === "resume" ? details.presentation_task : undefined],
     ["request", details.request_id],
     ["assignment request", details.assignment_request_id],
     ["pane", details.pane_id],
@@ -3953,8 +3459,7 @@ function expandedResultLines(
   if (tool === "agent" && action === "reply")
     fields.push(["ask", details.ask_id ?? details.askId ?? args.askId]);
   for (const [label, field] of fields)
-    if (field !== undefined && field !== "")
-      lines.push(`${label}: ${String(field)}`);
+    if (field !== undefined && field !== "") lines.push(`${label}: ${String(field)}`);
   if (tool === "staff" && action === "remove") {
     lines.push(
       `checkout: ${details.checkout_removed === true ? "removed" : details.checkout_state === "present" ? "preserved" : `unconfirmed (${value(details.checkout_state) || "unknown"})`}`,
@@ -3968,14 +3473,12 @@ function expandedResultLines(
       ["checkout removed", "checkout_removed"],
       ["assignment retired", "assignment_retired"],
     ] as const)
-      if (details[key] !== undefined)
-        lines.push(`${label}: ${String(details[key])}`);
+      if (details[key] !== undefined) lines.push(`${label}: ${String(details[key])}`);
   if (action === "list" && tool === "agent")
     lines.push(
       "",
       ...agentHierarchy(details),
-      ...(Array.isArray(details.agent_definitions) &&
-      details.agent_definitions.length
+      ...(Array.isArray(details.agent_definitions) && details.agent_definitions.length
         ? [
             "",
             "Agent definitions:",
@@ -3992,20 +3495,14 @@ function expandedResultLines(
           ]
         : []),
     );
-  if (
-    tool === "agent" &&
-    action === "stop" &&
-    value(details.descendant_continuation_warning)
-  )
+  if (tool === "agent" && action === "stop" && value(details.descendant_continuation_warning))
     lines.push(
       `descendant continuation warning: ${value(details.descendant_continuation_warning)}`,
     );
   if (action === "list" && (tool === "staff" || tool === "peer")) {
     if (tool === "peer") {
       const peers = Array.isArray(details.peers) ? details.peers : [];
-      const self = value(
-        (details.self as Record<string, unknown> | undefined)?.role,
-      );
+      const self = value((details.self as Record<string, unknown> | undefined)?.role);
       const local = peers.filter((peer: any) => !peerMachine(peer));
       const remote = peers.filter((peer: any) => peerMachine(peer));
       const renderPeer = (peer: any): string[] => {
@@ -4017,9 +3514,7 @@ function expandedResultLines(
         const machine = peerMachine(peer);
         return [
           `    ${name}${target ? ` · target: ${target}` : ""}${branch ? ` · branch: ${branch}` : ""}`,
-          ...(workspace && workspace !== name
-            ? [`      workspace: ${workspace}`]
-            : []),
+          ...(workspace && workspace !== name ? [`      workspace: ${workspace}`] : []),
           ...(machine ? [`      machine: ${machine}`] : []),
         ];
       };
@@ -4027,19 +3522,14 @@ function expandedResultLines(
         "",
         `self ${self}`,
         `discovered peers ${peers.length}`,
-        ...(local.length
-          ? ["", `  local (${local.length})`, ...local.flatMap(renderPeer)]
-          : []),
+        ...(local.length ? ["", `  local (${local.length})`, ...local.flatMap(renderPeer)] : []),
         ...(remote.length
           ? ["", `  remote (${remote.length})`, ...remote.flatMap(renderPeer)]
           : []),
       );
-      const replyOnly = Array.isArray(details.reply_only)
-        ? details.reply_only
-        : [];
+      const replyOnly = Array.isArray(details.reply_only) ? details.reply_only : [];
       const role = self || activeRole;
-      const roleLabel =
-        role === "lead" ? "Leads" : role === "manager" ? "Managers" : "peers";
+      const roleLabel = role === "lead" ? "Leads" : role === "manager" ? "Managers" : "peers";
       if (replyOnly.length)
         lines.push(
           "",
@@ -4067,8 +3557,7 @@ function expandedResultLines(
         remoteDiagnostics,
         remoteDiagnosticOmittedCount(details),
       );
-      if (diagnosticLines.length)
-        lines.push("", "remote diagnostics", ...diagnosticLines);
+      if (diagnosticLines.length) lines.push("", "remote diagnostics", ...diagnosticLines);
       return lines;
     }
     const reports = Array.isArray(details.reports) ? details.reports : [];
@@ -4118,33 +3607,23 @@ function expandedResultLines(
               ]
             : []),
           ...(Array.isArray(lead.available_tools)
-            ? [
-                `  can: ${lead.available_tools.map(String).join(", ") || "nothing"}`,
-              ]
+            ? [`  can: ${lead.available_tools.map(String).join(", ") || "nothing"}`]
             : []),
         ];
       }),
     );
   }
-  if (action === "inspect")
-    lines.push(...inspectEvidence(details, true, theme));
+  if (action === "inspect") lines.push(...inspectEvidence(details, true, theme));
   if (action === "transcript") {
     const transcript = textLines(details.transcript);
     lines.push(
       "",
       "persisted transcript:",
-      ...(transcript.length
-        ? transcript.map((line) => `  ${line}`)
-        : ["  (empty)"]),
+      ...(transcript.length ? transcript.map((line) => `  ${line}`) : ["  (empty)"]),
     );
-    if (details.transcript_truncated === true)
-      lines.push("", "transcript content omitted");
+    if (details.transcript_truncated === true) lines.push("", "transcript content omitted");
   }
-  if (
-    tool === "staff" &&
-    action === "inspect" &&
-    Array.isArray(details.agents)
-  ) {
+  if (tool === "staff" && action === "inspect" && Array.isArray(details.agents)) {
     lines.push(
       "",
       "agents:",
@@ -4157,14 +3636,9 @@ function expandedResultLines(
       }),
     );
   }
-  if (details.cleanup_error)
-    lines.push("", `cleanup warning: ${String(details.cleanup_error)}`);
+  if (details.cleanup_error) lines.push("", `cleanup warning: ${String(details.cleanup_error)}`);
   if (details.cleanup_errors && typeof details.cleanup_errors === "object")
-    lines.push(
-      "",
-      "cleanup errors:",
-      JSON.stringify(details.cleanup_errors, null, 2),
-    );
+    lines.push("", "cleanup errors:", JSON.stringify(details.cleanup_errors, null, 2));
   return lines;
 }
 
@@ -4180,11 +3654,7 @@ export function renderCoordinationResult(
   const args = (context?.args ?? {}) as Record<string, unknown>;
   hydrateCoordinationAgent(details, context);
   const expanded = humanExpanded(context, options);
-  if (
-    tool === "staff" &&
-    action === "remove" &&
-    details.confirmation_required === true
-  )
+  if (tool === "staff" && action === "remove" && details.confirmation_required === true)
     return new WidthSafeText(
       statusLine(
         theme,
@@ -4200,12 +3670,7 @@ export function renderCoordinationResult(
   const failed = details.ok === false || context?.isError === true;
   if (failed && details.error && typeof details.error === "object")
     return new WidthSafeText(
-      errorLines(
-        details,
-        theme,
-        expanded,
-        coordinationHeader(tool, action, "", theme),
-      ).join("\n"),
+      errorLines(details, theme, expanded, coordinationHeader(tool, action, "", theme)).join("\n"),
       0,
       0,
     );
@@ -4214,29 +3679,16 @@ export function renderCoordinationResult(
     tool === "staff" &&
     action === "remove" &&
     expanded &&
-    (details.checkout_state !== undefined ||
-      details.checkout_removed !== undefined)
+    (details.checkout_state !== undefined || details.checkout_removed !== undefined)
   )
     return new WidthSafeText(
-      expandedResultLines(
-        tool,
-        action,
-        details,
-        args,
-        theme,
-        context?.activeRole,
-      ).join("\n"),
+      expandedResultLines(tool, action, details, args, theme, context?.activeRole).join("\n"),
       0,
       0,
     );
   if (failed) {
     const raw = resultContent(result);
-    if (
-      !expanded &&
-      tool === "staff" &&
-      action === "merge" &&
-      details.status === "cleanup_pending"
-    )
+    if (!expanded && tool === "staff" && action === "merge" && details.status === "cleanup_pending")
       return new WidthSafeText(
         statusLine(
           theme,
@@ -4255,9 +3707,7 @@ export function renderCoordinationResult(
           theme,
           "error",
           "✗",
-          raw.length > 4000
-            ? `${raw.slice(0, 3999)}…`
-            : raw || "Operation failed",
+          raw.length > 4000 ? `${raw.slice(0, 3999)}…` : raw || "Operation failed",
         ) +
           `\n${expandedResultLines(tool, action, details, args, theme, context?.activeRole).slice(1).join("\n")}`,
         0,
@@ -4287,12 +3737,7 @@ export function renderCoordinationResult(
       : `merge incomplete · ${branch}`;
     if (!expanded)
       return new WidthSafeText(
-        statusLine(
-          theme,
-          complete ? "success" : "warning",
-          complete ? "✓" : "!",
-          outcome,
-        ),
+        statusLine(theme, complete ? "success" : "warning", complete ? "✓" : "!", outcome),
         0,
         0,
       );
@@ -4318,14 +3763,7 @@ export function renderCoordinationResult(
   }
   if (expanded)
     return new WidthSafeText(
-      expandedResultLines(
-        tool,
-        action,
-        details,
-        args,
-        theme,
-        context?.activeRole,
-      ).join("\n"),
+      expandedResultLines(tool, action, details, args, theme, context?.activeRole).join("\n"),
       0,
       0,
     );
@@ -4333,9 +3771,7 @@ export function renderCoordinationResult(
     const label =
       value(details.agent) ||
       value(details.display_name) ||
-      (tool === "staff"
-        ? value(details.target)
-        : shortIdentity(details.session)) ||
+      (tool === "staff" ? value(details.target) : shortIdentity(details.session)) ||
       "target";
     const tail = textLines(details.transcript).at(-1);
     const preview = tail ? collapseDisplayText(tail) : undefined;
@@ -4353,11 +3789,7 @@ export function renderCoordinationResult(
   }
   if (tool === "agent") {
     if (action === "list")
-      return new WidthSafeText(
-        humanText(theme, "toolTitle", agentListSummary(details)),
-        0,
-        0,
-      );
+      return new WidthSafeText(humanText(theme, "toolTitle", agentListSummary(details)), 0, 0);
     if (action === "inspect") {
       const label = value(details.agent) || "agent";
       return new WidthSafeText(
@@ -4395,9 +3827,7 @@ export function renderCoordinationResult(
         (details.cleanup_errors && typeof details.cleanup_errors === "object")
           ? `\n${humanText(theme, "warning", `  ! cleanup warning · Ctrl+O`)}`
           : "") +
-        (tool === "agent" &&
-        action === "stop" &&
-        value(details.descendant_continuation_warning)
+        (tool === "agent" && action === "stop" && value(details.descendant_continuation_warning)
           ? `\n${humanText(theme, "warning", `  ! descendant continuation warning · Ctrl+O`)}`
           : ""),
       0,
@@ -4405,22 +3835,13 @@ export function renderCoordinationResult(
     );
   }
   if (tool === "manager" || tool === "chief") {
-    return new WidthSafeText(
-      statusLine(theme, "success", "✓", `sent to ${tool}`),
-      0,
-      0,
-    );
+    return new WidthSafeText(statusLine(theme, "success", "✓", `sent to ${tool}`), 0, 0);
   }
   if (tool === "peer" && action === "list") {
     const peers = Array.isArray(details.peers) ? details.peers : [];
-    const replyOnly = Array.isArray(details.reply_only)
-      ? details.reply_only
-      : [];
-    const diagnostics = Array.isArray(details.remote_diagnostics)
-      ? details.remote_diagnostics
-      : [];
-    const warningCount =
-      diagnostics.length + remoteDiagnosticOmittedCount(details);
+    const replyOnly = Array.isArray(details.reply_only) ? details.reply_only : [];
+    const diagnostics = Array.isArray(details.remote_diagnostics) ? details.remote_diagnostics : [];
+    const warningCount = diagnostics.length + remoteDiagnosticOmittedCount(details);
     const remoteCount = peers.filter((peer: any) => peerMachine(peer)).length;
     const peerCount =
       warningCount || replyOnly.length || remoteCount
@@ -4430,18 +3851,12 @@ export function renderCoordinationResult(
       `peer · ${peerCount}`,
       ...(remoteCount ? [`${remoteCount} remote`] : []),
       ...(replyOnly.length ? [`${replyOnly.length} reply-only`] : []),
-      ...(warningCount
-        ? [`${warningCount} warning${warningCount === 1 ? "" : "s"}`]
-        : []),
+      ...(warningCount ? [`${warningCount} warning${warningCount === 1 ? "" : "s"}`] : []),
     ].join(" · ");
     return new WidthSafeText(humanText(theme, "toolTitle", summary), 0, 0);
   }
   if (tool === "peer" && action === "message")
-    return new WidthSafeText(
-      statusLine(theme, "success", "✓", peerMessageStatus(details)),
-      0,
-      0,
-    );
+    return new WidthSafeText(statusLine(theme, "success", "✓", peerMessageStatus(details)), 0, 0);
   if (action === "list") {
     const reports = Array.isArray(details.reports) ? details.reports : [];
     const active = reports.filter(
@@ -4450,9 +3865,7 @@ export function renderCoordinationResult(
         lead?.runtime_state === "settling" ||
         lead?.runtime_state === "starting",
     ).length;
-    const role = value(
-      (details.self as Record<string, unknown> | undefined)?.role,
-    );
+    const role = value((details.self as Record<string, unknown> | undefined)?.role);
     return new WidthSafeText(
       humanText(
         theme,
@@ -4468,8 +3881,7 @@ export function renderCoordinationResult(
       0,
     );
   }
-  const display =
-    value(details.display_name) || value(details.target) || "lead";
+  const display = value(details.display_name) || value(details.target) || "lead";
   if (action === "inspect")
     return new WidthSafeText(
       [
@@ -4493,11 +3905,7 @@ export function renderCoordinationResult(
           : `removal outcome unknown · ${branch}`;
     return new WidthSafeText(statusLine(theme, "success", "✓", outcome), 0, 0);
   }
-  return new WidthSafeText(
-    statusLine(theme, "success", "✓", `sent to ${display}`),
-    0,
-    0,
-  );
+  return new WidthSafeText(statusLine(theme, "success", "✓", `sent to ${display}`), 0, 0);
 }
 function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -4514,12 +3922,7 @@ function savePrivateOutput(
     const path =
       kind === "result"
         ? resultPath(key)
-        : join(
-            herdsmanTempRoot(),
-            "output",
-            hash(sessionId),
-            `${hash(key)}.txt`,
-          );
+        : join(herdsmanTempRoot(), "output", hash(sessionId), `${hash(key)}.txt`);
     const root = dirname(path);
     mkdirSync(root, { recursive: true, mode: 0o700 });
     chmodSync(root, 0o700);
@@ -4567,9 +3970,7 @@ export function truncateModelText(
   const ref = path ? resultRef(options.requestId ?? options.key) : undefined;
   const persistenceError = completion && !path;
   const displayText =
-    completion && persistenceError
-      ? `Result file could not be saved.\n\n${text}`
-      : text;
+    completion && persistenceError ? `Result file could not be saved.\n\n${text}` : text;
   const truncate = options.keep === "tail" ? truncateTail : truncateHead;
   let result = truncate(displayText, {
     maxBytes: DEFAULT_MAX_BYTES,
@@ -4580,9 +3981,7 @@ export function truncateModelText(
       content: displayText,
       truncated: false,
       ...(ref ? { resultRef: ref } : {}),
-      ...(persistenceError
-        ? { persistenceError: "Result file could not be saved." }
-        : {}),
+      ...(persistenceError ? { persistenceError: "Result file could not be saved." } : {}),
     };
   }
   const overflowPath = completion
@@ -4611,15 +4010,11 @@ export function truncateModelText(
   // after every rebuild and keep the final model-visible value bounded.
   suffix = suffixFor(result.content);
   while (
-    (Buffer.byteLength(result.content) + Buffer.byteLength(suffix) + 1 >
-      DEFAULT_MAX_BYTES ||
+    (Buffer.byteLength(result.content) + Buffer.byteLength(suffix) + 1 > DEFAULT_MAX_BYTES ||
       result.outputLines + 1 > DEFAULT_MAX_LINES) &&
     result.content.length > 0
   ) {
-    const maxBytes = Math.max(
-      1,
-      DEFAULT_MAX_BYTES - Buffer.byteLength(suffix) - 1,
-    );
+    const maxBytes = Math.max(1, DEFAULT_MAX_BYTES - Buffer.byteLength(suffix) - 1);
     const maxLines = Math.max(1, DEFAULT_MAX_LINES - 1);
     const next = truncate(result.content, { maxBytes, maxLines });
     if (next.content === result.content) break;
@@ -4631,29 +4026,19 @@ export function truncateModelText(
     truncated: true,
     ...(overflowPath ? { fullOutputPath: overflowPath } : {}),
     ...(ref ? { resultRef: ref } : {}),
-    ...(persistenceError
-      ? { persistenceError: "Result file could not be saved." }
-      : {}),
+    ...(persistenceError ? { persistenceError: "Result file could not be saved." } : {}),
   };
 }
 export class WidthSafeText extends Text {
   render(width: number): string[] {
     return super
       .render(width)
-      .map((line) =>
-        visibleWidth(line) > width ? truncateToWidth(line, width, "") : line,
-      );
+      .map((line) => (visibleWidth(line) > width ? truncateToWidth(line, width, "") : line));
   }
 }
 
-function renderMessageBox(
-  content: Component,
-  theme: any,
-  outputPad = 0,
-): TuiBox {
-  const box = createWidthSafeBox(outputPad, 1, (line) =>
-    theme.bg("customMessageBg", line),
-  );
+function renderMessageBox(content: Component, theme: any, outputPad = 0): TuiBox {
+  const box = createWidthSafeBox(outputPad, 1, (line) => theme.bg("customMessageBg", line));
   box.addChild(content);
   return box;
 }
@@ -4670,22 +4055,17 @@ export function renderCoordinationMessage(
   const rawDetails = isRecord(message.details) ? message.details : {};
   const optionalString = (key: string) =>
     typeof rawDetails[key] === "string" ? rawDetails[key] : undefined;
-  const projectKinds: readonly import("./supervision.ts").ProjectMessageKind[] =
-    [
-      "supervisor_message",
-      "direct_response",
-      "herd_settlement",
-      "execution_failure",
-      "execution_cancelled",
-    ];
-  const projectKind = projectKinds.find(
-    (candidate) => candidate === rawDetails.kind,
-  );
+  const projectKinds: readonly import("./supervision.ts").ProjectMessageKind[] = [
+    "supervisor_message",
+    "direct_response",
+    "herd_settlement",
+    "execution_failure",
+    "execution_cancelled",
+  ];
+  const projectKind = projectKinds.find((candidate) => candidate === rawDetails.kind);
   const rawRole = rawDetails.toRole;
   const toRole: "chief" | "manager" | "lead" | undefined =
-    rawRole === "chief" || rawRole === "manager" || rawRole === "lead"
-      ? rawRole
-      : undefined;
+    rawRole === "chief" || rawRole === "manager" || rawRole === "lead" ? rawRole : undefined;
   const d = {
     fromSessionId: optionalString("fromSessionId"),
     senderTarget: optionalString("senderTarget"),
@@ -4714,8 +4094,7 @@ export function renderCoordinationMessage(
           ? "lead"
           : undefined;
   const endpoint = (role: CoordinationRole, displayName?: string): string => {
-    const label =
-      role === "chief" ? "Chief" : role === "manager" ? "Manager" : "Lead";
+    const label = role === "chief" ? "Chief" : role === "manager" ? "Manager" : "Lead";
     const name = displayName ? safeDisplaySegment(displayName) : "";
     return name ? `${label} · ${name}` : label;
   };
@@ -4748,8 +4127,7 @@ export function renderCoordinationMessage(
         break;
       case "project_assignment":
         heading = statusLine(theme, "accent", "→", `${branch} assigned`);
-        if (d?.branch)
-          prefix = `Project assignment for branch ${d.branch}:\n\n`;
+        if (d?.branch) prefix = `Project assignment for branch ${d.branch}:\n\n`;
         break;
       case "project_message":
         heading = d?.branch
@@ -4760,9 +4138,7 @@ export function renderCoordinationMessage(
         break;
     }
   }
-  const annotation = senderEnvironment
-    ? senderEnvironmentAnnotation(senderEnvironment)
-    : "";
+  const annotation = senderEnvironment ? senderEnvironmentAnnotation(senderEnvironment) : "";
   let body =
     annotation && messageContent.endsWith(annotation)
       ? messageContent.slice(0, -annotation.length)
@@ -4773,13 +4149,9 @@ export function renderCoordinationMessage(
   if (options.expanded) {
     const metadata = [
       ...(d?.branch ? [`branch: ${d.branch}`] : []),
-      ...(senderRole && d?.fromSessionId
-        ? [`from session: ${d.fromSessionId}`]
-        : []),
+      ...(senderRole && d?.fromSessionId ? [`from session: ${d.fromSessionId}`] : []),
       ...(senderRole && d?.toSessionId ? [`to session: ${d.toSessionId}`] : []),
-      ...(!senderRole &&
-      kind !== "project_assignment" &&
-      (d?.fromSessionId ?? d?.leadSessionId)
+      ...(!senderRole && kind !== "project_assignment" && (d?.fromSessionId ?? d?.leadSessionId)
         ? [`session: ${d?.fromSessionId ?? d?.leadSessionId}`]
         : []),
       ...(senderEnvironment
@@ -4823,20 +4195,15 @@ export function renderCompletionMessage(
   options: { expanded?: boolean; outputPad?: number },
   theme: any,
 ): TuiBox {
-  const d = isCompletionMessageDetails(message.details)
-    ? message.details
-    : undefined;
+  const d = isCompletionMessageDetails(message.details) ? message.details : undefined;
   const status: CompletionMessageDetails["status"] | undefined =
     isRecord(message.details) &&
-    (message.details.status === "completed" ||
-      message.details.status === "failed")
+    (message.details.status === "completed" || message.details.status === "failed")
       ? message.details.status
       : undefined;
   const failed = status === "failed";
   const elapsed =
-    Number.isFinite(d?.elapsedMs) &&
-    d?.elapsedMs !== undefined &&
-    d.elapsedMs >= 0
+    Number.isFinite(d?.elapsedMs) && d?.elapsedMs !== undefined && d.elapsedMs >= 0
       ? formatElapsed(0, d.elapsedMs)
       : undefined;
   const label =
@@ -4871,13 +4238,7 @@ export function renderCompletionMessage(
         ? [`result ref: result:${d.agentLabel}#${d.resultIndex}`]
         : []),
       ...(d?.resultPersistenceError
-        ? [
-            humanText(
-              theme,
-              "warning",
-              `result persistence error: ${d.resultPersistenceError}`,
-            ),
-          ]
+        ? [humanText(theme, "warning", `result persistence error: ${d.resultPersistenceError}`)]
         : []),
       ...(d?.error ? [`error: ${d.error.code}: ${d.error.message}`] : []),
     ];
@@ -4922,9 +4283,7 @@ export function renderCompletionMessage(
   return renderMessageBox(content, theme, options.outputPad ?? 0);
 }
 
-function isCompletionMessageDetails(
-  value: unknown,
-): value is CompletionMessageDetails {
+function isCompletionMessageDetails(value: unknown): value is CompletionMessageDetails {
   if (!isRecord(value)) return false;
   if (
     typeof value.requestId !== "string" ||
@@ -4941,11 +4300,7 @@ function isCompletionMessageDetails(
     "fullOutputPath",
     "resultPersistenceError",
   ] as const;
-  if (
-    optionalStrings.some(
-      (key) => value[key] !== undefined && typeof value[key] !== "string",
-    )
-  )
+  if (optionalStrings.some((key) => value[key] !== undefined && typeof value[key] !== "string"))
     return false;
   if (
     value.sessionRetired !== undefined &&
@@ -4960,18 +4315,15 @@ function isCompletionMessageDetails(
     return false;
   if (
     value.resultIndex !== undefined &&
-    (typeof value.resultIndex !== "number" ||
-      !Number.isInteger(value.resultIndex))
+    (typeof value.resultIndex !== "number" || !Number.isInteger(value.resultIndex))
   )
     return false;
   if (value.contextUsage !== undefined) {
     if (
       !isRecord(value.contextUsage) ||
-      (value.contextUsage.tokens !== null &&
-        typeof value.contextUsage.tokens !== "number") ||
+      (value.contextUsage.tokens !== null && typeof value.contextUsage.tokens !== "number") ||
       typeof value.contextUsage.contextWindow !== "number" ||
-      (value.contextUsage.percent !== null &&
-        typeof value.contextUsage.percent !== "number")
+      (value.contextUsage.percent !== null && typeof value.contextUsage.percent !== "number")
     )
       return false;
   }
@@ -5003,12 +4355,8 @@ export function renderAgentAskMessage(
     content.addChild(new Markdown(question, 0, 0, getMarkdownTheme()));
     const metadata = [
       ...(value(details.askId) ? [`ask: ${value(details.askId)}`] : []),
-      ...(value(details.requestId)
-        ? [`request: ${value(details.requestId)}`]
-        : []),
-      ...(value(details.piSessionId)
-        ? [`session: ${value(details.piSessionId)}`]
-        : []),
+      ...(value(details.requestId) ? [`request: ${value(details.requestId)}`] : []),
+      ...(value(details.piSessionId) ? [`session: ${value(details.piSessionId)}`] : []),
       ...(value(details.paneId) ? [`pane: ${value(details.paneId)}`] : []),
     ];
     if (metadata.length) {
@@ -5036,9 +4384,7 @@ export function renderAgentOwnerMessage(
 ): TuiBox {
   const details = isRecord(message.details) ? message.details : {};
   const agentLabel = value(details.agentLabel);
-  const label = /^[a-z][a-z0-9_-]{0,31}$/u.test(agentLabel)
-    ? agentLabel
-    : "agent";
+  const label = /^[a-z][a-z0-9_-]{0,31}$/u.test(agentLabel) ? agentLabel : "agent";
   const heading = `${humanText(theme, "accent", "✉")} ${theme.bold(label)} notified owner`;
   const rawBody = contentText(message.content ?? "");
   const body = rawBody.startsWith(`Agent ${label} notification:\n\n`)
@@ -5054,15 +4400,9 @@ export function renderAgentOwnerMessage(
       content.addChild(new Markdown(body, 0, 0, getMarkdownTheme()));
     }
     const metadata = [
-      ...(value(details.messageId)
-        ? [`message: ${value(details.messageId)}`]
-        : []),
-      ...(value(details.requestId)
-        ? [`request: ${value(details.requestId)}`]
-        : []),
-      ...(value(details.piSessionId)
-        ? [`session: ${value(details.piSessionId)}`]
-        : []),
+      ...(value(details.messageId) ? [`message: ${value(details.messageId)}`] : []),
+      ...(value(details.requestId) ? [`request: ${value(details.requestId)}`] : []),
+      ...(value(details.piSessionId) ? [`session: ${value(details.piSessionId)}`] : []),
     ];
     if (metadata.length) {
       content.addChild(new Spacer(1));
@@ -5092,14 +4432,11 @@ export function renderAgentAttentionMessage(
   const label = value(details.agentLabel) || "agent";
   const reason = (value(details.reason) || "recovery").replaceAll("_", " ");
   const summary = value(details.summary);
-  const summaryPreview = summary
-    ? collapseDisplayText(summary, 160)
-    : undefined;
+  const summaryPreview = summary ? collapseDisplayText(summary, 160) : undefined;
   const diagnostic = value(details.diagnostic);
   const actions = Array.isArray(details.availableActions)
     ? details.availableActions.filter(
-        (action): action is string =>
-          typeof action === "string" && action.length > 0,
+        (action): action is string => typeof action === "string" && action.length > 0,
       )
     : [];
   const nextReminder =
@@ -5116,30 +4453,17 @@ export function renderAgentAttentionMessage(
         ...(summary ? [summary] : []),
         ...(diagnostic ? [`diagnostic: ${diagnostic}`] : []),
         ...(actions.length ? [`actions: ${actions.join(" · ")}`] : []),
-        ...(value(details.requestId)
-          ? [`request: ${value(details.requestId)}`]
-          : []),
-        ...(value(details.piSessionId)
-          ? [`session: ${value(details.piSessionId)}`]
-          : []),
+        ...(value(details.requestId) ? [`request: ${value(details.requestId)}`] : []),
+        ...(value(details.piSessionId) ? [`session: ${value(details.piSessionId)}`] : []),
         ...(value(details.paneId) ? [`pane: ${value(details.paneId)}`] : []),
         ...(nextReminder ? [`next reminder: ~${nextReminder}`] : []),
         ...(value(details.nextAction) ? ["", value(details.nextAction)] : []),
       ]
     : [
-        statusLine(
-          theme,
-          "warning",
-          "!",
-          `${label} needs attention · ${reason}`,
-        ),
+        statusLine(theme, "warning", "!", `${label} needs attention · ${reason}`),
         ...(summaryPreview ? [`  ${summaryPreview}`] : []),
       ];
-  return renderMessageBox(
-    new WidthSafeText(lines.join("\n"), 0, 0),
-    theme,
-    options.outputPad ?? 0,
-  );
+  return renderMessageBox(new WidthSafeText(lines.join("\n"), 0, 0), theme, options.outputPad ?? 0);
 }
 
 export function renderAgentStaleMessage(
@@ -5158,8 +4482,7 @@ export function renderAgentStaleMessage(
       : "unknown";
   const availableActions = Array.isArray(details.availableActions)
     ? details.availableActions.filter(
-        (action): action is string =>
-          typeof action === "string" && action.length > 0,
+        (action): action is string => typeof action === "string" && action.length > 0,
       )
     : [];
   const nextReminder =
@@ -5175,20 +4498,12 @@ export function renderAgentStaleMessage(
         "state: working",
         `inactive: ${duration}`,
         ...(Number.isFinite(details.thresholdMs)
-          ? [
-              `threshold: ${formatElapsed(0, Number(details.thresholdMs)) ?? "unknown"}`,
-            ]
+          ? [`threshold: ${formatElapsed(0, Number(details.thresholdMs)) ?? "unknown"}`]
           : []),
-        ...(availableActions.length
-          ? [`actions: ${availableActions.join(" · ")}`]
-          : []),
+        ...(availableActions.length ? [`actions: ${availableActions.join(" · ")}`] : []),
         ...(nextReminder ? [`next reminder: ~${nextReminder}`] : []),
-        ...(value(details.requestId)
-          ? [`request: ${value(details.requestId)}`]
-          : []),
-        ...(value(details.piSessionId)
-          ? [`session: ${value(details.piSessionId)}`]
-          : []),
+        ...(value(details.requestId) ? [`request: ${value(details.requestId)}`] : []),
+        ...(value(details.piSessionId) ? [`session: ${value(details.piSessionId)}`] : []),
         ...(value(details.paneId) ? [`pane: ${value(details.paneId)}`] : []),
         ...inspectEvidence(details, true, theme),
         "",
@@ -5209,11 +4524,7 @@ export function renderAgentStaleMessage(
         statusLine(theme, "warning", "!", `${label} inactive · ${duration}`),
         "  working · no qualifying execution progress is not proof of a hang",
       ];
-  return renderMessageBox(
-    new WidthSafeText(lines.join("\n"), 0, 0),
-    theme,
-    options.outputPad ?? 0,
-  );
+  return renderMessageBox(new WidthSafeText(lines.join("\n"), 0, 0), theme, options.outputPad ?? 0);
 }
 
 export function renderAgentLostMessage(
@@ -5228,8 +4539,7 @@ export function renderAgentLostMessage(
   const label = value(details.agentLabel) || "agent";
   const availableActions = Array.isArray(details.availableActions)
     ? details.availableActions.filter(
-        (action): action is string =>
-          typeof action === "string" && action.length > 0,
+        (action): action is string => typeof action === "string" && action.length > 0,
       )
     : [];
   const stopAvailable = availableActions.includes("stop");
@@ -5245,16 +4555,10 @@ export function renderAgentLostMessage(
         "",
         "state: lost",
         "The assignment remains unresolved; loss is not completion or task failure.",
-        ...(availableActions.length
-          ? [`actions: ${availableActions.join(" · ")}`]
-          : []),
+        ...(availableActions.length ? [`actions: ${availableActions.join(" · ")}`] : []),
         ...(nextReminder ? [`next reminder: ~${nextReminder}`] : []),
-        ...(value(details.requestId)
-          ? [`request: ${value(details.requestId)}`]
-          : []),
-        ...(value(details.piSessionId)
-          ? [`session: ${value(details.piSessionId)}`]
-          : []),
+        ...(value(details.requestId) ? [`request: ${value(details.requestId)}`] : []),
+        ...(value(details.piSessionId) ? [`session: ${value(details.piSessionId)}`] : []),
         ...(value(details.paneId) ? [`pane: ${value(details.paneId)}`] : []),
         "",
         ...(stopAvailable
@@ -5269,11 +4573,7 @@ export function renderAgentLostMessage(
           ? "  assignment remains unresolved · stop before replacing or continuing"
           : "  assignment remains unresolved · stop unavailable; resolve the blocking stop-preflight condition first",
       ];
-  return renderMessageBox(
-    new WidthSafeText(lines.join("\n"), 0, 0),
-    theme,
-    options.outputPad ?? 0,
-  );
+  return renderMessageBox(new WidthSafeText(lines.join("\n"), 0, 0), theme, options.outputPad ?? 0);
 }
 
 const spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -5340,9 +4640,7 @@ export class StatusWidget {
       local,
       !s.stale &&
         !s.unavailable &&
-        s.agents.some((agent) =>
-          ["working", "starting", "settling"].includes(agent.state),
-        ),
+        s.agents.some((agent) => ["working", "starting", "settling"].includes(agent.state)),
     ).marker;
     this.renderedWidth = width;
     this.hits = [];
@@ -5352,14 +4650,9 @@ export class StatusWidget {
       : "";
     const observedNow = s.stale ? s.refreshedAt : Date.now();
     const elapsed =
-      observedNow === undefined
-        ? undefined
-        : formatElapsed(s.herdRunStartedAt, observedNow);
+      observedNow === undefined ? undefined : formatElapsed(s.herdRunStartedAt, observedNow);
     let run = !s.identityOnly && elapsed ? ` · ${elapsed}` : "";
-    const counts =
-      s.identityOnly || s.unavailable
-        ? ""
-        : formatAmbientStatusCounts(s.agents);
+    const counts = s.identityOnly || s.unavailable ? "" : formatAmbientStatusCounts(s.agents);
     const freshness = s.unavailable ? "unavailable" : s.stale ? "stale" : "";
     const freshnessSuffix = freshness ? `  ${freshness}` : "";
     const fullSuffix = s.unavailable
@@ -5371,20 +4664,13 @@ export class StatusWidget {
     const freshnessSuffixWidth = visibleWidth(freshnessSuffix);
     const breadcrumbSegments = s.breadcrumb ?? [{ text: "?" }];
     const fullIdentityWidth = visibleWidth(
-      renderBreadcrumb(
-        breadcrumbSegments,
-        Number.MAX_SAFE_INTEGER,
-        marker,
-        this.theme,
-      ).text,
+      renderBreadcrumb(breadcrumbSegments, Number.MAX_SAFE_INTEGER, marker, this.theme).text,
     );
     const reservedSuffixWidth =
       freshness && fullSuffixWidth + fullIdentityWidth <= availableWidth
         ? fullSuffixWidth
         : freshnessSuffixWidth ||
-          (fullSuffixWidth + fullIdentityWidth <= availableWidth
-            ? fullSuffixWidth
-            : 0);
+          (fullSuffixWidth + fullIdentityWidth <= availableWidth ? fullSuffixWidth : 0);
     const renderedBreadcrumb = renderBreadcrumb(
       breadcrumbSegments,
       Math.max(0, availableWidth - reservedSuffixWidth),
@@ -5393,21 +4679,12 @@ export class StatusWidget {
     );
     const breadcrumb = renderedBreadcrumb.text;
     if (!s.stale && !s.unavailable) this.hits.push(...renderedBreadcrumb.hits);
-    const remainingWidth = Math.max(
-      0,
-      availableWidth - visibleWidth(breadcrumb),
-    );
-    const includeCounts =
-      !!counts && visibleWidth(fullSuffix) <= remainingWidth;
-    const suffixBody = includeCounts
-      ? `${counts}${s.stale ? " · stale" : ""}`
-      : freshness;
-    const suffixText = suffixBody
-      ? `${breadcrumb ? "  " : ""}${suffixBody}`
-      : "";
+    const remainingWidth = Math.max(0, availableWidth - visibleWidth(breadcrumb));
+    const includeCounts = !!counts && visibleWidth(fullSuffix) <= remainingWidth;
+    const suffixBody = includeCounts ? `${counts}${s.stale ? " · stale" : ""}` : freshness;
+    const suffixText = suffixBody ? `${breadcrumb ? "  " : ""}${suffixBody}` : "";
     const executionFits =
-      !!execution &&
-      visibleWidth(execution) + visibleWidth(suffixText) <= remainingWidth;
+      !!execution && visibleWidth(execution) + visibleWidth(suffixText) <= remainingWidth;
     const shownExecution = executionFits ? execution : "";
     if (
       !s.stale &&
@@ -5426,12 +4703,7 @@ export class StatusWidget {
     }
     const tools = renderToolMetadata(
       s.ownTools,
-      Math.max(
-        0,
-        remainingWidth -
-          visibleWidth(shownExecution) -
-          visibleWidth(suffixText),
-      ),
+      Math.max(0, remainingWidth - visibleWidth(shownExecution) - visibleWidth(suffixText)),
     );
     if (
       visibleWidth(breadcrumb) +
@@ -5446,9 +4718,7 @@ export class StatusWidget {
     const styledBreadcrumb = breadcrumb.startsWith(marker)
       ? `${this.theme.fg(markerColor, marker)}${breadcrumb.slice(marker.length)}`
       : breadcrumb;
-    const styledExecution = shownExecution
-      ? this.theme.fg("muted", shownExecution)
-      : "";
+    const styledExecution = shownExecution ? this.theme.fg("muted", shownExecution) : "";
     const styledTools = tools ? this.theme.fg("muted", tools) : "";
     const styledRun = run ? this.theme.fg("accent", run) : "";
     const styledSuffix = !suffixText
@@ -5460,19 +4730,13 @@ export class StatusWidget {
           : this.theme.fg("muted", suffixText);
     const builtHeader = `${styledBreadcrumb}${styledExecution}${styledTools}${styledRun}${styledSuffix}`;
     const compactStaleHeader =
-      s.stale &&
-      !s.unavailable &&
-      !breadcrumb &&
-      visibleWidth(`${marker} stale`) <= availableWidth
+      s.stale && !s.unavailable && !breadcrumb && visibleWidth(`${marker} stale`) <= availableWidth
         ? `${this.theme.fg(markerColor, marker)} ${this.theme.fg("warning", "stale")}`
         : builtHeader;
     let header = truncateToWidth(compactStaleHeader, availableWidth, "…");
-    const observedGit =
-      !s.stale && !s.unavailable ? this.getGitSummary?.() : undefined;
+    const observedGit = !s.stale && !s.unavailable ? this.getGitSummary?.() : undefined;
     const gitSummary =
-      observedGit &&
-      s.execution?.kind === "managed" &&
-      s.execution.lifecycle !== "assigned"
+      observedGit && s.execution?.kind === "managed" && s.execution.lifecycle !== "assigned"
         ? observedGit.checkedOutBranch
           ? {
               dirty: observedGit.dirty,
@@ -5486,10 +4750,7 @@ export class StatusWidget {
         this.theme,
         availableWidth - visibleWidth(header) - 2,
       );
-      if (
-        suffix &&
-        visibleWidth(header) + 2 + visibleWidth(suffix) <= availableWidth
-      )
+      if (suffix && visibleWidth(header) + 2 + visibleWidth(suffix) <= availableWidth)
         header = `${header}${" ".repeat(availableWidth - visibleWidth(header) - visibleWidth(suffix))}${suffix}`;
     }
     const out = [header];
@@ -5511,13 +4772,11 @@ export class StatusWidget {
       rows.forEach((row, index) => {
         if (visible[index + 1] !== row) return;
         const agent = s.agents.find(
-          ({ label, sessionId }) =>
-            label === row.label && sessionId === row.sessionId,
+          ({ label, sessionId }) => label === row.label && sessionId === row.sessionId,
         );
         if (
           !row.sessionId ||
-          s.agents.filter(({ sessionId }) => sessionId === row.sessionId)
-            .length !== 1 ||
+          s.agents.filter(({ sessionId }) => sessionId === row.sessionId).length !== 1 ||
           !agent ||
           agent.state === "unknown" ||
           agent.state === "lost" ||
@@ -5540,11 +4799,7 @@ export class StatusWidget {
     x: number;
     y: number;
   }): { handled: true; render: false } | undefined {
-    if (
-      event.type !== "click" ||
-      event.button !== "left" ||
-      event.width !== this.renderedWidth
-    )
+    if (event.type !== "click" || event.button !== "left" || event.width !== this.renderedWidth)
       return;
     const hit = this.hits.find(
       ({ row, from, to }) => row === event.y && event.x >= from && event.x < to,
@@ -5570,13 +4825,6 @@ export function createStatusWidget(
   getGitSummary?: () => GitChangeSummary | undefined,
   getLocalActivity?: () => LocalHeaderActivity,
 ): StatusWidget {
-  return new StatusWidget(
-    invalidate,
-    theme,
-    onFocus,
-    getMaxRows,
-    getGitSummary,
-    getLocalActivity,
-  );
+  return new StatusWidget(invalidate, theme, onFocus, getMaxRows, getGitSummary, getLocalActivity);
 }
 export { Text, truncateToWidth, visibleWidth };

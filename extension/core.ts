@@ -13,26 +13,17 @@ import { basename, resolve } from "node:path";
 import { TextDecoder } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
 import type { RequiredEvidence, ResultBinding } from "./storage.ts";
-import {
-  persistRequiredEvidenceSnapshot,
-  resolveResultRef,
-} from "./storage.ts";
+import { persistRequiredEvidenceSnapshot, resolveResultRef } from "./storage.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-export function currentTurnIsSoleToolCall(
-  ctx: ExtensionContext,
-  name: string,
-): boolean {
-  const turn = (
-    ctx.sessionManager.getBranch().at(-1) as { message?: any } | undefined
-  )?.message;
+export function currentTurnIsSoleToolCall(ctx: ExtensionContext, name: string): boolean {
+  const turn = (ctx.sessionManager.getBranch().at(-1) as { message?: any } | undefined)?.message;
   if (turn?.role !== "assistant" || !Array.isArray(turn.content)) return false;
   const calls = turn.content.filter((part: any) => part?.type === "toolCall");
   return calls.length === 1 && calls[0]?.name === name;
 }
 
-export const MANAGED_AGENT_BOOTSTRAP_EVENT =
-  "pi-herdsman:managed-agent-bootstrap";
+export const MANAGED_AGENT_BOOTSTRAP_EVENT = "pi-herdsman:managed-agent-bootstrap";
 
 export const FILE_HANDOFF_GUIDANCE =
   "Pass user-supplied or already-available artifacts relevant to the " +
@@ -78,8 +69,7 @@ export type RetainedEvidenceFileInput = Readonly<{
   sha256: string;
 }>;
 
-export type MessageFileInput =
-  string | ResultBinding | RetainedEvidenceFileInput;
+export type MessageFileInput = string | ResultBinding | RetainedEvidenceFileInput;
 
 function failUnknownResultRef(input: string, operation: string): never {
   fail(
@@ -100,12 +90,7 @@ function resolveRegularFiles(
   return inputs.flatMap((value) => {
     const retained = typeof value !== "string" && "kind" in value;
     const input = typeof value === "string" ? value : value.ref;
-    const target =
-      typeof value === "string"
-        ? value
-        : retained
-          ? value.path
-          : value.canonicalRef;
+    const target = typeof value === "string" ? value : retained ? value.path : value.canonicalRef;
     let path: string;
     let resolvedResultPath: string | undefined;
     let canonicalPath: string;
@@ -124,10 +109,7 @@ function resolveRegularFiles(
       }
       const beforeOpen = statSync(canonicalPath);
       if (!beforeOpen.isFile()) throw new Error("not a regular file");
-      const fd = openSync(
-        canonicalPath,
-        constants.O_RDONLY | constants.O_NONBLOCK,
-      );
+      const fd = openSync(canonicalPath, constants.O_RDONLY | constants.O_NONBLOCK);
       try {
         const opened = fstatSync(fd);
         if (!opened.isFile()) throw new Error("not a regular file");
@@ -152,10 +134,7 @@ function resolveRegularFiles(
         closeSync(fd);
       }
     } catch (error) {
-      if (
-        resolvedResultPath &&
-        (error as NodeJS.ErrnoException).code === "ENOENT"
-      )
+      if (resolvedResultPath && (error as NodeJS.ErrnoException).code === "ENOENT")
         failUnknownResultRef(input, operation);
       fail(
         "invalid_request",
@@ -181,12 +160,7 @@ export function snapshotTextFiles(
   options: SnapshotTextFilesOptions = {},
 ): TextFileSnapshot[] {
   const maxBytes = options.maxBytes ?? MAILBOX_PROTOCOL_LIMIT_BYTES;
-  const files = resolveRegularFiles(
-    inputs,
-    cwd,
-    operation,
-    options.skipCanonicalPaths,
-  );
+  const files = resolveRegularFiles(inputs, cwd, operation, options.skipCanonicalPaths);
   const snapshots: TextFileSnapshot[] = [];
   let totalBytes = 0;
   for (const { input, path, canonicalPath, dev, ino } of files) {
@@ -195,34 +169,19 @@ export function snapshotTextFiles(
       fd = openSync(canonicalPath, constants.O_RDONLY | constants.O_NONBLOCK);
       const stat = fstatSync(fd);
       if (!stat.isFile()) throw new Error("not a regular file");
-      if (stat.dev !== dev || stat.ino !== ino)
-        throw new Error("file changed during validation");
+      if (stat.dev !== dev || stat.ino !== ino) throw new Error("file changed during validation");
       if (stat.size + totalBytes > maxBytes)
-        fail(
-          "invalid_request",
-          "Request exceeds the mailbox size limit",
-          operation,
-        );
+        fail("invalid_request", "Request exceeds the mailbox size limit", operation);
       const buffer = Buffer.allocUnsafe(maxBytes - totalBytes + 1);
       let bytesRead = 0;
       while (bytesRead < buffer.length) {
-        const count = readSync(
-          fd,
-          buffer,
-          bytesRead,
-          buffer.length - bytesRead,
-          bytesRead,
-        );
+        const count = readSync(fd, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
         if (count === 0) break;
         bytesRead += count;
       }
       const bytes = buffer.subarray(0, bytesRead);
       if (bytes.length + totalBytes > maxBytes)
-        fail(
-          "invalid_request",
-          "Request exceeds the mailbox size limit",
-          operation,
-        );
+        fail("invalid_request", "Request exceeds the mailbox size limit", operation);
       if (bytes.includes(0)) throw new Error("binary content");
       const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
       snapshots.push({
@@ -267,11 +226,7 @@ export function persistRequiredTextFiles(
     }
   }
   return snapshots.map((snapshot) =>
-    persistRequiredEvidenceSnapshot(
-      assignmentId,
-      snapshot.input,
-      snapshot.text,
-    ),
+    persistRequiredEvidenceSnapshot(assignmentId, snapshot.input, snapshot.text),
   );
 }
 
@@ -295,10 +250,7 @@ export type MessagePreparationOptions = {
   fits?: (text: string, resultBindings: readonly ResultBinding[]) => boolean;
   inlineLimitBytes?: number;
   mailboxLimitBytes?: number;
-  serializedBytes?: (
-    text: string,
-    resultBindings: readonly ResultBinding[],
-  ) => number;
+  serializedBytes?: (text: string, resultBindings: readonly ResultBinding[]) => number;
   verifiedEvidence?: readonly Pick<
     Extract<RequiredEvidence, { path: string }>,
     "path" | "sha256"
@@ -311,8 +263,7 @@ function escapeMessageFileName(path: string): string {
   return [...path]
     .map((character) => {
       const code = character.charCodeAt(0);
-      if (code <= 0x1f || (code >= 0x7f && code <= 0x9f))
-        return `&#x${code.toString(16)};`;
+      if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return `&#x${code.toString(16)};`;
       if (character === "&") return "&amp;";
       if (character === '"') return "&quot;";
       if (character === "<") return "&lt;";
@@ -323,16 +274,12 @@ function escapeMessageFileName(path: string): string {
 }
 
 function renderMessageFile(file: RegularFile, content?: string): string {
-  const semantic =
-    file.binding || file.retainedEvidence || file.input.startsWith("result:");
-  const name = escapeMessageFileName(
-    semantic ? file.input : file.canonicalPath,
-  );
+  const semantic = file.binding || file.retainedEvidence || file.input.startsWith("result:");
+  const name = escapeMessageFileName(semantic ? file.input : file.canonicalPath);
   const label = file.retainedEvidence
     ? ` label="${escapeMessageFileName(file.retainedEvidence.name)}"`
     : "";
-  if (content === undefined)
-    return `<file name="${name}"${label} bytes="${file.bytes}" />`;
+  if (content === undefined) return `<file name="${name}"${label} bytes="${file.bytes}" />`;
   return `<file name="${name}"${label} bytes="${file.bytes}">\n${content}\n</file>`;
 }
 
@@ -344,8 +291,7 @@ export function prepareMessageInput(
   heading: "Task" | "Steer" | "Reply" | "Question" | "Message" | "Interrupt",
   options: MessagePreparationOptions = {},
 ): PreparedMessageInput {
-  if (!text.trim())
-    fail("invalid_request", "Message must not be empty", operation);
+  if (!text.trim()) fail("invalid_request", "Message must not be empty", operation);
   if (!files.length) {
     const fits =
       options.fits ??
@@ -366,9 +312,7 @@ export function prepareMessageInput(
     return { text, canonicalPaths: [], resultBindings: [], attachments: [] };
   }
   const regular = resolveRegularFiles(files, cwd, operation);
-  const resultBindings = regular.flatMap((file) =>
-    file.binding ? [file.binding] : [],
-  );
+  const resultBindings = regular.flatMap((file) => (file.binding ? [file.binding] : []));
   const sections = regular.map((file) => renderMessageFile(file));
   const transportSections = [...sections];
   const markers = regular.map(() => `pi-herdsman-peer-${randomUUID()}`);
@@ -414,10 +358,7 @@ export function prepareMessageInput(
       );
       // O_NONBLOCK prevents a path replaced by a FIFO from blocking this
       // preparation step. The descriptor is also the one that gets read.
-      fd = openSync(
-        file.canonicalPath,
-        constants.O_RDONLY | constants.O_NONBLOCK,
-      );
+      fd = openSync(file.canonicalPath, constants.O_RDONLY | constants.O_NONBLOCK);
       const current = fstatSync(fd);
       const readVersion = fstatSync(fd, { bigint: true });
       if (!current.isFile()) throw new Error("not a regular file");
@@ -429,11 +370,7 @@ export function prepareMessageInput(
         : options.verifiedEvidence?.find(
             (entry) => realpathSync(entry.path) === file.canonicalPath,
           );
-      if (
-        current.dev !== file.dev ||
-        current.ino !== file.ino ||
-        current.size !== file.bytes
-      ) {
+      if (current.dev !== file.dev || current.ino !== file.ino || current.size !== file.bytes) {
         if (verified)
           fail(
             "invalid_request",
@@ -449,25 +386,19 @@ export function prepareMessageInput(
         continue;
       }
       const cannotInline =
-        current.size >
-          (options.inlineLimitBytes ?? MAILBOX_PROTOCOL_LIMIT_BYTES) ||
-        ((options.fits !== undefined ||
-          options.serializedBytes === undefined) &&
+        current.size > (options.inlineLimitBytes ?? MAILBOX_PROTOCOL_LIMIT_BYTES) ||
+        ((options.fits !== undefined || options.serializedBytes === undefined) &&
           !fits(
             (options.fileOrder === "textFirst"
               ? [
                   `${heading}:\n${text}`,
                   ...sections.map((section, i) =>
-                    i === index
-                      ? renderMessageFile(file, "x".repeat(current.size))
-                      : section,
+                    i === index ? renderMessageFile(file, "x".repeat(current.size)) : section,
                   ),
                 ]
               : [
                   ...sections.map((section, i) =>
-                    i === index
-                      ? renderMessageFile(file, "x".repeat(current.size))
-                      : section,
+                    i === index ? renderMessageFile(file, "x".repeat(current.size)) : section,
                   ),
                   `${heading}:\n${text}`,
                 ]
@@ -484,13 +415,7 @@ export function prepareMessageInput(
       bytes = Buffer.allocUnsafe(current.size);
       let offset = 0;
       while (offset < current.size) {
-        const count = readSync(
-          fd,
-          bytes,
-          offset,
-          current.size - offset,
-          offset,
-        );
+        const count = readSync(fd, bytes, offset, current.size - offset, offset);
         if (!count) break;
         offset += count;
       }
@@ -504,18 +429,11 @@ export function prepareMessageInput(
         afterRead.ctimeNs !== readVersion.ctimeNs
       ) {
         if (options.requireInline)
-          fail(
-            "invalid_request",
-            `Attachment changed while being read: ${file.input}`,
-            operation,
-          );
+          fail("invalid_request", `Attachment changed while being read: ${file.input}`, operation);
         continue;
       }
       bytes = bytes.subarray(0, offset);
-      if (
-        verified &&
-        createHash("sha256").update(bytes).digest("hex") !== verified.sha256
-      )
+      if (verified && createHash("sha256").update(bytes).digest("hex") !== verified.sha256)
         fail(
           "invalid_request",
           `Required evidence integrity check failed: ${file.input}`,
@@ -530,17 +448,10 @@ export function prepareMessageInput(
       }
     } catch (error) {
       if (error instanceof OperationError) throw error;
-      if (
-        resolvedResultPath &&
-        (error as NodeJS.ErrnoException).code === "ENOENT"
-      )
+      if (resolvedResultPath && (error as NodeJS.ErrnoException).code === "ENOENT")
         failUnknownResultRef(file.input, operation);
       if (options.requireInline)
-        fail(
-          "invalid_request",
-          `Attachment could not be fully embedded: ${file.input}`,
-          operation,
-        );
+        fail("invalid_request", `Attachment could not be fully embedded: ${file.input}`, operation);
       fail(
         "invalid_request",
         `Cannot read file ${file.input}: ${error instanceof Error ? error.message : String(error)}`,
@@ -551,11 +462,7 @@ export function prepareMessageInput(
     }
     if (bytes.includes(0)) {
       if (options.requireInline)
-        fail(
-          "invalid_request",
-          `Attachment is not supported UTF-8 text: ${file.input}`,
-          operation,
-        );
+        fail("invalid_request", `Attachment is not supported UTF-8 text: ${file.input}`, operation);
       continue;
     }
     let content: string;
@@ -563,11 +470,7 @@ export function prepareMessageInput(
       content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     } catch {
       if (options.requireInline)
-        fail(
-          "invalid_request",
-          `Attachment is not supported UTF-8 text: ${file.input}`,
-          operation,
-        );
+        fail("invalid_request", `Attachment is not supported UTF-8 text: ${file.input}`, operation);
       continue;
     }
     sections[index] = renderMessageFile(file, content);
@@ -606,19 +509,12 @@ export function prepareMessageInput(
           : escapeMessageFileName(basename(file.canonicalPath)),
       inline: sections[index] !== renderMessageFile(file),
       ...(file.retainedEvidence || file.binding ? { ref: file.input } : {}),
-      ...(attachmentTexts[index] !== undefined
-        ? { text: attachmentTexts[index] }
-        : {}),
-      ...(attachmentTexts[index] !== undefined
-        ? { marker: markers[index] }
-        : {}),
+      ...(attachmentTexts[index] !== undefined ? { text: attachmentTexts[index] } : {}),
+      ...(attachmentTexts[index] !== undefined ? { marker: markers[index] } : {}),
     })),
   };
 }
-export function displayIdentity(
-  agentDefinition: string,
-  label: string,
-): string {
+export function displayIdentity(agentDefinition: string, label: string): string {
   return `${agentDefinition}:${label}`;
 }
 export type SpawnPlacement = "tab" | "subtree" | "split";
@@ -629,9 +525,7 @@ export function hasTaskText(task: string | undefined): boolean {
 export function isSpawnPlacement(value: unknown): value is SpawnPlacement {
   return value === "tab" || value === "subtree" || value === "split";
 }
-export function isLeadExecutionMode(
-  value: unknown,
-): value is LeadExecutionMode {
+export function isLeadExecutionMode(value: unknown): value is LeadExecutionMode {
   return value === "flexible" || value === "orchestrate";
 }
 export function spawnPlacementMenuOptions(
@@ -647,9 +541,7 @@ export function spawnPlacementMenuOptions(
     label: x.value === current ? `${x.label} (current)` : x.label,
   }));
 }
-export function spawnPlacementFromMenuSelection(
-  value: unknown,
-): SpawnPlacement | undefined {
+export function spawnPlacementFromMenuSelection(value: unknown): SpawnPlacement | undefined {
   return isSpawnPlacement(value) ? value : undefined;
 }
 export function chooseLabel(base: string, labels: Set<string>): string {
@@ -660,8 +552,7 @@ export function chooseLabel(base: string, labels: Set<string>): string {
   }
   throw new Error("Unable to choose agent label");
 }
-export type ManagedAgentControlState =
-  "working" | "blocked" | "settling" | "unknown";
+export type ManagedAgentControlState = "working" | "blocked" | "settling" | "unknown";
 export function agentControlState(
   lifecycle: "idle" | "working" | "blocked" | "done" | "unknown",
   activeRequestId: string | undefined,
@@ -696,11 +587,7 @@ export function steerAcceptanceAllowed(
   completionPending: boolean,
   idleContinuationAllowed = false,
 ): boolean {
-  return (
-    !!activeRequestId &&
-    !completionPending &&
-    (!isIdle || idleContinuationAllowed)
-  );
+  return !!activeRequestId && !completionPending && (!isIdle || idleContinuationAllowed);
 }
 export function resultStillPending(
   activeRequestId: string | undefined,

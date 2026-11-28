@@ -2,31 +2,23 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { resolve } from "node:path";
-import {
-  discoverAndLoadExtensions,
-  loadSkillsFromDir,
-} from "@earendil-works/pi-coding-agent";
+import { discoverAndLoadExtensions, loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 
 const root = process.cwd();
 const normalize = (path) => path.replace(/^package\//u, "");
 const npmExecPath = process.env.npm_execpath;
 if (!npmExecPath) throw new Error("package audit must run through npm");
 const packed = JSON.parse(
-  execFileSync(
-    process.execPath,
-    [npmExecPath, "pack", "--dry-run", "--json", "--ignore-scripts"],
-    {
-      cwd: root,
-      encoding: "utf8",
-    },
-  ),
+  execFileSync(process.execPath, [npmExecPath, "pack", "--dry-run", "--json", "--ignore-scripts"], {
+    cwd: root,
+    encoding: "utf8",
+  }),
 );
 const files = packed[0]?.files ?? [];
 const peerBridge = readFileSync(resolve(root, "dist/peer-bridge.js"), "utf8");
 if (peerBridge.includes("@earendil-works/pi-coding-agent"))
   throw new Error("standalone peer endpoint must not import the Pi SDK");
-const allowed =
-  /^(?:package\.json|README\.md|CHANGELOG\.md|LICENSE|docs\/|dist\/|skills\/)/u;
+const allowed = /^(?:package\.json|README\.md|CHANGELOG\.md|LICENSE|docs\/|dist\/|skills\/)/u;
 const expectedRoot = new Set([
   "package.json",
   "README.md",
@@ -40,37 +32,23 @@ const expectedRoot = new Set([
 const definitionDirectories = [
   ["agents", []],
   ["coordinators", ["chief.md"]],
-  [
-    "coordinators/leads",
-    ["flexible-lead.md", "managed-lead.md", "orchestrator-lead.md"],
-  ],
+  ["coordinators/leads", ["flexible-lead.md", "managed-lead.md", "orchestrator-lead.md"]],
   ["coordinators/managers", ["manager.md"]],
 ];
-const reservedProfiles = new Set(
-  definitionDirectories.flatMap(([, names]) => names),
-);
-const expectedDefinitions = definitionDirectories.flatMap(
-  ([directory, required]) => {
-    const files = readdirSync(resolve(root, "extension", directory)).filter(
-      (name) => name.endsWith(".md"),
-    );
-    for (const name of required)
-      if (!files.includes(name))
-        throw new Error(
-          "missing bundled coordinator profile: " + directory + "/" + name,
-        );
-    return files.map((name) => {
-      if (
-        (reservedProfiles.has(name) || directory === "coordinators") &&
-        !required.includes(name)
-      )
-        throw new Error(
-          "misplaced bundled definition: " + directory + "/" + name,
-        );
-      return "dist/" + directory + "/" + name;
-    });
-  },
-);
+const reservedProfiles = new Set(definitionDirectories.flatMap(([, names]) => names));
+const expectedDefinitions = definitionDirectories.flatMap(([directory, required]) => {
+  const files = readdirSync(resolve(root, "extension", directory)).filter((name) =>
+    name.endsWith(".md"),
+  );
+  for (const name of required)
+    if (!files.includes(name))
+      throw new Error("missing bundled coordinator profile: " + directory + "/" + name);
+  return files.map((name) => {
+    if ((reservedProfiles.has(name) || directory === "coordinators") && !required.includes(name))
+      throw new Error("misplaced bundled definition: " + directory + "/" + name);
+    return "dist/" + directory + "/" + name;
+  });
+});
 const expectedDist = new Set([
   "dist/index.js",
   "dist/index.js.map",
@@ -135,15 +113,12 @@ for (const entry of files) {
     if (homedir() === "/home/herdsman" && documentedExamples)
       for (const example of documentedExamples) {
         if (!text.includes(example))
-          throw new Error(
-            `missing documented container path example: ${example}`,
-          );
+          throw new Error(`missing documented container path example: ${example}`);
         text = text.replace(example, example.replaceAll("/home/herdsman", ""));
       }
   }
   for (const [name, rule] of rules) {
-    const matched =
-      typeof rule === "string" ? text.includes(rule) : rule.test(text);
+    const matched = typeof rule === "string" ? text.includes(rule) : rule.test(text);
     if (matched) {
       console.error(`private material rule ${name} matched in ${path}`);
       process.exitCode = 1;
@@ -156,11 +131,7 @@ if (process.exitCode) process.exit(process.exitCode);
 const isolated = mkdtempSync(resolve(tmpdir(), "pi-herdsman-package-audit-"));
 
 try {
-  const { extensions, errors } = await discoverAndLoadExtensions(
-    [root],
-    isolated,
-    isolated,
-  );
+  const { extensions, errors } = await discoverAndLoadExtensions([root], isolated, isolated);
 
   if (errors.length)
     throw new Error(
@@ -188,10 +159,7 @@ try {
     );
   const expectedSkills = [
     ["agent-definitions", "skills/agent-definitions/SKILL.md"],
-    [
-      "agent-specialization-audit",
-      "skills/agent-specialization-audit/SKILL.md",
-    ],
+    ["agent-specialization-audit", "skills/agent-specialization-audit/SKILL.md"],
     ["herdsman-guide", "skills/herdsman-guide/SKILL.md"],
     ["machine-pairing", "skills/machine-pairing/SKILL.md"],
   ];
@@ -199,10 +167,7 @@ try {
     skills.length !== expectedSkills.length ||
     expectedSkills.some(
       ([name, path]) =>
-        !skills.some(
-          (skill) =>
-            skill.name === name && skill.filePath === resolve(root, path),
-        ),
+        !skills.some((skill) => skill.name === name && skill.filePath === resolve(root, path)),
     )
   )
     throw new Error(

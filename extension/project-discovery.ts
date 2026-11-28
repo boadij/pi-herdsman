@@ -1,7 +1,4 @@
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { lstatSync } from "node:fs";
 import { opendir } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
@@ -53,9 +50,7 @@ const MAX_WORKSPACE_PATHS = 400;
 const MAX_SESSION_BYTES = 16 * 1024 * 1024;
 
 function validPath(value: unknown): value is string {
-  return (
-    typeof value === "string" && isAbsolute(value) && !value.includes("\0")
-  );
+  return typeof value === "string" && isAbsolute(value) && !value.includes("\0");
 }
 
 export async function discoverProjects(
@@ -75,19 +70,12 @@ export async function discoverProjects(
 ): Promise<ProjectDiscoveryResult> {
   const { runtime } = options;
   const callerSignal = options.signal ?? ctx.signal;
-  const deadline = AbortSignal.timeout(
-    options.includeProjectsDirectory ? 30_000 : 5_000,
-  );
-  const signal = callerSignal
-    ? AbortSignal.any([callerSignal, deadline])
-    : deadline;
+  const deadline = AbortSignal.timeout(options.includeProjectsDirectory ? 30_000 : 5_000);
+  const signal = callerSignal ? AbortSignal.any([callerSignal, deadline]) : deadline;
   const diagnostics = new Set<string>();
   const projects = new Map<string, Project>();
   const scopes = new Map<string, Promise<Repository>>();
-  const recoveryResults = new Map<
-    string,
-    { path: string; id: string; valid: boolean }
-  >();
+  const recoveryResults = new Map<string, { path: string; id: string; valid: boolean }>();
 
   const scope = (path: string) => {
     signal.throwIfAborted();
@@ -112,8 +100,7 @@ export async function discoverProjects(
       };
       projects.set(key, project);
     }
-    if (repository.isPrimary)
-      project.primaryCheckoutPath = repository.checkoutPath;
+    if (repository.isPrimary) project.primaryCheckoutPath = repository.checkoutPath;
     if (
       workspaceId &&
       !project.workspaces.some(
@@ -159,10 +146,7 @@ export async function discoverProjects(
         continue;
       }
       const membership = item.worktree;
-      const paths =
-        membership == null
-          ? (panePaths.get(id) ?? [])
-          : [membership.checkout_path];
+      const paths = membership == null ? (panePaths.get(id) ?? []) : [membership.checkout_path];
       for (const path of paths) {
         if (++observations > MAX_WORKSPACE_PATHS) {
           diagnostics.add("Herdr workspace observation limit reached");
@@ -172,37 +156,27 @@ export async function discoverProjects(
           if (!validPath(path)) throw new Error("Invalid workspace checkout");
           // Ordinary workspaces lack worktree metadata. Only an actual pane
           // at an exact repository root proves such a checkout placement.
-          if (
-            membership == null &&
-            !lstatSync(join(path, ".git"), { throwIfNoEntry: false })
-          )
+          if (membership == null && !lstatSync(join(path, ".git"), { throwIfNoEntry: false }))
             continue;
           const repository = await scope(path);
           if (
             !sameDirectory(path, repository.checkoutPath) ||
             (membership != null &&
               (!validPath(membership.repo_key) ||
-                !sameDirectory(
-                  membership.repo_key,
-                  repository.canonicalRepoKey,
-                ) ||
+                !sameDirectory(membership.repo_key, repository.canonicalRepoKey) ||
                 membership.is_linked_worktree !== !repository.isPrimary))
           )
             throw new Error("Herdr checkout identity disagrees with Git");
           add(repository, id);
         } catch {
           signal.throwIfAborted();
-          diagnostics.add(
-            "Some Herdr checkout placements could not be verified",
-          );
+          diagnostics.add("Some Herdr checkout placements could not be verified");
         }
       }
     }
   }
 
-  async function observeRecovery(
-    reference: ManagerRecoveryReference,
-  ): Promise<boolean> {
+  async function observeRecovery(reference: ManagerRecoveryReference): Promise<boolean> {
     let valid = false;
     try {
       signal.throwIfAborted();
@@ -222,8 +196,7 @@ export async function discoverProjects(
     } catch {
       signal.throwIfAborted();
     }
-    if (!valid)
-      diagnostics.add("Some saved Manager sessions could not be verified");
+    if (!valid) diagnostics.add("Some saved Manager sessions could not be verified");
     recoveryResults.set(reference.canonicalRepoKey, {
       path: reference.piSessionFile,
       id: reference.piSessionId,
@@ -252,13 +225,10 @@ export async function discoverProjects(
           throw new Error("Projects directory changed during observation");
         const marker = lstatSync(join(path, ".git"), { throwIfNoEntry: false });
         if (marker) {
-          if (!marker.isDirectory() && !marker.isFile())
-            throw new Error("Unsupported Git marker");
+          if (!marker.isDirectory() && !marker.isFile()) throw new Error("Unsupported Git marker");
           const repository = await scope(path);
           if (!sameDirectory(repository.checkoutPath, path))
-            throw new Error(
-              "Git checkout root does not match discovery candidate",
-            );
+            throw new Error("Git checkout root does not match discovery candidate");
           add(repository);
           continue;
         }
@@ -278,9 +248,7 @@ export async function discoverProjects(
         }
       } catch {
         signal.throwIfAborted();
-        diagnostics.add(
-          "Some projects directory locations could not be verified",
-        );
+        diagnostics.add("Some projects directory locations could not be verified");
       }
     }
   }
@@ -309,16 +277,12 @@ export async function discoverProjects(
         );
         signal.throwIfAborted();
         const confirmed = readManagerDescriptorStatus(runtime, key);
-        if (
-          !confirmed?.live ||
-          !sameManagerDescriptor(confirmed.descriptor, status.descriptor)
-        )
+        if (!confirmed?.live || !sameManagerDescriptor(confirmed.descriptor, status.descriptor))
           throw new Error("Manager lease changed during observation");
         project.managerStatus = "running";
         return;
       }
-      if (!workspaceObservationComplete)
-        throw new Error("Herdr workspace observation incomplete");
+      if (!workspaceObservationComplete) throw new Error("Herdr workspace observation incomplete");
       const checkNoPendingLaunch = () => {
         const path = managerDescriptorPath(runtime, key);
         if (
@@ -329,17 +293,14 @@ export async function discoverProjects(
           throw new Error("Manager launch is unsettled or in progress");
       };
       checkNoPendingLaunch();
-      const workspaceId = project.workspaces.find(
-        (workspace) => workspace.isPrimary,
-      )?.workspaceId;
+      const workspaceId = project.workspaces.find((workspace) => workspace.isPrimary)?.workspaceId;
       await requireNoLiveLegacyManager(pi, runtime, key, workspaceId, signal);
       signal.throwIfAborted();
       const reference = readManagerRecoveryReference(runtime, key);
       const known = recoveryResults.get(key);
       const valid =
         reference &&
-        (known?.path === reference.piSessionFile &&
-        known.id === reference.piSessionId
+        (known?.path === reference.piSessionFile && known.id === reference.piSessionId
           ? known.valid
           : await observeRecovery(reference));
       checkNoPendingLaunch();
@@ -349,9 +310,7 @@ export async function discoverProjects(
       project.managerStatus = reference ? "recoverable" : "none";
     } catch {
       signal.throwIfAborted();
-      diagnostics.add(
-        "Some Manager authority or readiness observations were inconclusive",
-      );
+      diagnostics.add("Some Manager authority or readiness observations were inconclusive");
     }
   }
 
@@ -363,20 +322,15 @@ export async function discoverProjects(
         options.inventory === undefined
           ? await herdrSessionSnapshot(pi, ctx, signal)
           : options.inventory;
-      if (!inventory)
-        throw new Error("Herdr workspace observation unavailable");
+      if (!inventory) throw new Error("Herdr workspace observation unavailable");
       await observeWorkspaces(inventory);
       workspaceObservationComplete = diagnostics.size === 0;
     } catch {
       signal.throwIfAborted();
       diagnostics.add("Herdr workspace observation unavailable");
     }
-    const { references, complete } = listManagerRecoveryReferences(
-      runtime,
-      signal,
-    );
-    if (!complete)
-      diagnostics.add("Manager recovery record observation incomplete");
+    const { references, complete } = listManagerRecoveryReferences(runtime, signal);
+    if (!complete) diagnostics.add("Manager recovery record observation incomplete");
     for (const reference of references) {
       if (recoveryResults.size >= MAX_PROJECTS) {
         diagnostics.add("Manager recovery observation limit reached");
@@ -389,9 +343,7 @@ export async function discoverProjects(
         await observeProjectsDirectory();
       } catch {
         signal.throwIfAborted();
-        diagnostics.add(
-          "Configured projects directory observation unavailable",
-        );
+        diagnostics.add("Configured projects directory observation unavailable");
       }
     }
     for (const project of projects.values()) {
@@ -402,10 +354,7 @@ export async function discoverProjects(
         if (join(possiblePrimary, ".git") === project.canonicalRepoKey) {
           try {
             const repository = await scope(possiblePrimary);
-            if (
-              repository.canonicalRepoKey === project.canonicalRepoKey &&
-              repository.isPrimary
-            )
+            if (repository.canonicalRepoKey === project.canonicalRepoKey && repository.isPrimary)
               add(repository);
           } catch {
             signal.throwIfAborted();

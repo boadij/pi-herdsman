@@ -66,10 +66,7 @@ const support = await import("./support.ts");
 test("startup hands one held assignment-lock claim through task publication", async (t) => {
   support.setLeadEnvironment();
   const label = "deterministic-startup-lock";
-  const startup = support.startupExecutor(
-    label,
-    () => support.DEFAULT_PI_SESSION_ID,
-  );
+  const startup = support.startupExecutor(label, () => support.DEFAULT_PI_SESSION_ID);
   assignmentMailbox = startup.mailbox;
   let releaseChildLock: (() => void) | undefined;
   let agentGetCount = 0;
@@ -78,12 +75,9 @@ test("startup hands one held assignment-lock claim through task publication", as
       const result = await startup.exec(command, args, options);
       if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
         assignmentClaims.delete(startup.mailbox);
-        releaseChildLock = realLock.claimProcessLock(
-          realLock.assignmentLockPath(startup.mailbox),
-        );
+        releaseChildLock = realLock.claimProcessLock(realLock.assignmentLockPath(startup.mailbox));
       }
-      if (command === "herdr" && args[0] === "agent" && args[1] === "get")
-        agentGetCount++;
+      if (command === "herdr" && args[0] === "agent" && args[1] === "get") agentGetCount++;
       return result;
     },
   });
@@ -110,9 +104,7 @@ test("startup hands one held assignment-lock claim through task publication", as
         "initial submission must finish integration validation while the child lock is held",
       );
     });
-    assert.throws(() =>
-      realLock.claimProcessLock(realLock.assignmentLockPath(startup.mailbox)),
-    );
+    assert.throws(() => realLock.claimProcessLock(realLock.assignmentLockPath(startup.mailbox)));
     const release = releaseChildLock;
     assert.ok(release, "child lock release was not captured");
     release();

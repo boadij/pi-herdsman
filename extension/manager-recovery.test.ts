@@ -40,10 +40,7 @@ test("recovery removal compares the repository and both parts of exact Pi identi
     piSessionId: randomUUID(),
     piSessionFile: join(runtime.root, "manager.jsonl"),
   };
-  assert.equal(
-    readManagerRecoveryReference(runtime, reference.canonicalRepoKey),
-    undefined,
-  );
+  assert.equal(readManagerRecoveryReference(runtime, reference.canonicalRepoKey), undefined);
   writeManagerRecoveryReference(runtime, reference);
   assert.equal(
     removeManagerRecoveryReference(runtime, {
@@ -59,17 +56,12 @@ test("recovery removal compares the repository and both parts of exact Pi identi
     }),
     false,
   );
-  assert.deepEqual(
-    readManagerRecoveryReference(runtime, reference.canonicalRepoKey),
-    reference,
-  );
+  assert.deepEqual(readManagerRecoveryReference(runtime, reference.canonicalRepoKey), reference);
   assert.equal(removeManagerRecoveryReference(runtime, reference), true);
   assert.equal(removeManagerRecoveryReference(runtime, reference), false);
 
   writeManagerRecoveryReference(runtime, reference);
-  const key = createHash("sha256")
-    .update(reference.canonicalRepoKey)
-    .digest("hex");
+  const key = createHash("sha256").update(reference.canonicalRepoKey).digest("hex");
   writeFileSync(
     join(runtime.root, "manager-recovery", key + ".json"),
     JSON.stringify({
@@ -99,10 +91,7 @@ test("startup intents are exact, one-shot, and reject invalid or expired state",
     createdAt: Date.now(),
   };
   writeManagerStartIntent(runtime, intent);
-  assert.throws(
-    () => writeManagerStartIntent(runtime, intent),
-    /already exists/,
-  );
+  assert.throws(() => writeManagerStartIntent(runtime, intent), /already exists/);
   assert.equal(getManagerStartIntent(runtime, randomUUID()), undefined);
   assert.throws(
     () => consumeManagerStartIntent(runtime, { ...intent, paneId: "other" }),
@@ -122,10 +111,7 @@ test("startup intents are exact, one-shot, and reject invalid or expired state",
   assert.equal(removeManagerStartIntent(runtime, intent.sessionId), true);
   writeManagerStartIntent(runtime, intent);
   writeFileSync(record, "{broken");
-  assert.throws(
-    () => getManagerStartIntent(runtime, intent.sessionId),
-    SyntaxError,
-  );
+  assert.throws(() => getManagerStartIntent(runtime, intent.sessionId), SyntaxError);
 });
 
 test("the Chief startup mutex does not hold the Manager supervision lease", (t) => {
@@ -133,10 +119,7 @@ test("the Chief startup mutex does not hold the Manager supervision lease", (t) 
   const canonicalRepoKey = join(runtime.root, ".git");
   const startup = claimManagerStartupLock(runtime, canonicalRepoKey);
   t.after(() => startup.release());
-  assert.throws(
-    () => claimManagerStartupLock(runtime, canonicalRepoKey),
-    ProcessLockOccupiedError,
-  );
+  assert.throws(() => claimManagerStartupLock(runtime, canonicalRepoKey), ProcessLockOccupiedError);
   const manager = claimManagerLease(
     {
       build: { version: "test", sha256: "a".repeat(64) },
@@ -168,10 +151,7 @@ test("Pi's buffered role is not durable, and recovery verifies exact disk identi
     role: "manager",
     leadTools: [],
   });
-  assert.equal(
-    durableManagerRecoveryReference(descriptor, runtime.root),
-    undefined,
-  );
+  assert.equal(durableManagerRecoveryReference(descriptor, runtime.root), undefined);
   // Simulate Pi persisting a genuine user's first conversation message.
   session.appendMessage({
     role: "user",
@@ -188,10 +168,7 @@ test("Pi's buffered role is not durable, and recovery verifies exact disk identi
   assert.equal(readFileSync(piSessionFile, "utf8"), before);
   assert.throws(
     () =>
-      durableManagerRecoveryReference(
-        { ...descriptor, piSessionId: randomUUID() },
-        runtime.root,
-      ),
+      durableManagerRecoveryReference({ ...descriptor, piSessionId: randomUUID() }, runtime.root),
     /does not match/,
   );
   session.appendCustomEntry("pi-herdsman-role", {

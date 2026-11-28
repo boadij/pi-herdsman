@@ -1,22 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import {
-  chmodSync,
-  mkdtempSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 const packageJson = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
-const packageLock = JSON.parse(
-  readFileSync(resolve("package-lock.json"), "utf8"),
-);
+const packageLock = JSON.parse(readFileSync(resolve("package-lock.json"), "utf8"));
 const installer = resolve("install.sh");
 const windowsInstaller = resolve("install.ps1");
 
@@ -46,17 +37,10 @@ test("Windows bootstrap uses official temporary installers and preserves native 
   assert.match(source, /Node\.js and\/or npm are unavailable/u);
   const currentIntegration = /^pi: current \(v\d+\)(?: .+)?$/u;
   assert.ok(source.includes("'(?m)^pi: current \\(v\\d+\\)(?: .+)?$'"));
-  for (const line of [
-    "pi: current (v9)",
-    "pi: current (v9) (C:\\Users\\user\\.herdr)",
-  ]) {
+  for (const line of ["pi: current (v9)", "pi: current (v9) (C:\\Users\\user\\.herdr)"]) {
     assert.match(line, currentIntegration);
   }
-  for (const line of [
-    "pi: outdated (v8)",
-    "pi: repair required (v9)",
-    "pi: not installed",
-  ]) {
+  for (const line of ["pi: outdated (v8)", "pi: repair required (v9)", "pi: not installed"]) {
     assert.doesNotMatch(line, currentIntegration);
   }
 });
@@ -127,14 +111,7 @@ try { Invoke-Bootstrap } catch { $failed = $true; [Console]::Error.WriteLine($_.
   );
   const result = spawnSync(
     "powershell.exe",
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-File",
-      harness,
-    ],
+    ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", harness],
     { encoding: "utf8" },
   );
   rmSync(root, { recursive: true, force: true });
@@ -164,10 +141,7 @@ test(
     assert.doesNotMatch(skipped.stdout, /pi install npm:pi-web-access/u);
     const installed = runWindowsBootstrap({ webAccess: "install" });
     assert.equal(installed.status, 0, installed.stderr);
-    assert.match(
-      installed.stdout,
-      /pi install npm:pi-web-access --no-approve/u,
-    );
+    assert.match(installed.stdout, /pi install npm:pi-web-access --no-approve/u);
     assert.doesNotMatch(installed.stdout, /prompt Install pi-web-access/u);
     const unavailable = runWindowsBootstrap({
       webAccess: "",
@@ -194,15 +168,11 @@ test(
       assert.equal(result.status, 0, result.stderr);
       assert.match(result.stdout, /Please enter y or n\./u);
       assert.equal(
-        (result.stdout.match(/prompt Install pi-web-access\? \[y\/N\]/gu) ?? [])
-          .length,
+        (result.stdout.match(/prompt Install pi-web-access\? \[y\/N\]/gu) ?? []).length,
         2,
         result.stdout,
       );
-      assert.match(
-        result.stdout,
-        new RegExp(`Optional pi-web-access: ${expectedStatus}\\.`),
-      );
+      assert.match(result.stdout, new RegExp(`Optional pi-web-access: ${expectedStatus}\\.`));
       assert.equal(
         result.stdout.includes("pi install npm:pi-web-access --no-approve"),
         expectedInstall,
@@ -234,14 +204,7 @@ try {
     );
     const result = spawnSync(
       "powershell.exe",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        harness,
-      ],
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", harness],
       { encoding: "utf8" },
     );
     rmSync(root, { recursive: true, force: true });
@@ -277,14 +240,7 @@ $remaining = @(Get-ChildItem -Path $env:TEMP -Filter '*.ps1' | Where-Object { $_
     try {
       const result = spawnSync(
         "powershell.exe",
-        [
-          "-NoProfile",
-          "-NonInteractive",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-File",
-          harness,
-        ],
+        ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", harness],
         { encoding: "utf8" },
       );
       assert.equal(result.status, 0, result.stderr);
@@ -326,10 +282,7 @@ test(
     assert.match(result.stdout, /RESULT failed=False/u);
     assert.doesNotMatch(result.stdout, /installer https:\/\/herdr\.dev/u);
     assert.match(result.stdout, /herdr integration install pi/u);
-    assert.doesNotMatch(
-      result.stdout,
-      /-Channel|installer https:\/\/herdr\.dev/u,
-    );
+    assert.doesNotMatch(result.stdout, /-Channel|installer https:\/\/herdr\.dev/u);
     const malformedPreview = runWindowsBootstrap({ herdr: "0.9.6-previewX1" });
     assert.match(malformedPreview.stdout, /RESULT failed=True/u);
   },
@@ -343,10 +296,7 @@ test(
       const result = runWindowsBootstrap({ fail });
       assert.equal(result.status, 0, result.stderr);
       assert.match(result.stdout, /RESULT failed=True/u);
-      assert.doesNotMatch(
-        result.stdout,
-        /Next steps:|package operation completed/u,
-      );
+      assert.doesNotMatch(result.stdout, /Next steps:|package operation completed/u);
     }
   },
 );
@@ -382,23 +332,13 @@ exit $LASTEXITCODE
     try {
       const result = spawnSync(
         "powershell.exe",
-        [
-          "-NoProfile",
-          "-NonInteractive",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-File",
-          harness,
-        ],
+        ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", harness],
         { encoding: "utf8" },
       );
       assert.notEqual(result.status, null, result.error?.message);
       assert.notEqual(result.status, 0, result.stdout);
       assert.match(result.stdout, /MOCK_PI_INSTALL_FAILED/u);
-      assert.doesNotMatch(
-        result.stdout,
-        /Next steps:|package operation completed/u,
-      );
+      assert.doesNotMatch(result.stdout, /Next steps:|package operation completed/u);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -418,10 +358,7 @@ test(
       const result = runWindowsBootstrap({ status });
       assert.match(result.stdout, /RESULT failed=True/u);
       assert.match(result.stderr, /not enabled\/current/u);
-      assert.doesNotMatch(
-        result.stdout,
-        /Next steps:|package operation completed/u,
-      );
+      assert.doesNotMatch(result.stdout, /Next steps:|package operation completed/u);
     }
   },
 );
@@ -435,10 +372,7 @@ test("released runtime metadata matches locked Pi packages and has Herdr checksu
   ];
   for (const name of piPackages) {
     assert.equal(packageJson.devDependencies[name], runtime?.pi);
-    assert.equal(
-      packageLock.packages[`node_modules/${name}`]?.version,
-      runtime?.pi,
-    );
+    assert.equal(packageLock.packages[`node_modules/${name}`]?.version, runtime?.pi);
   }
   assert.match(runtime?.herdr?.version ?? "", /^\d+\.\d+\.\d+$/u);
   assert.deepEqual(Object.keys(runtime?.herdr?.sha256 ?? {}).sort(), [
@@ -656,9 +590,7 @@ test(
         assert.equal(result.status, 0, result.stderr);
         assert.match(
           result.stdout,
-          new RegExp(
-            `Optional pi-web-access: ${expected ? "installed" : "skipped"}\\.`,
-          ),
+          new RegExp(`Optional pi-web-access: ${expected ? "installed" : "skipped"}\\.`),
         );
         assert.equal(
           (
@@ -857,9 +789,7 @@ sys.exit(os.waitstatus_to_exitcode(status))`;
           timeout: 30_000,
         });
         const timedOut =
-          result.error !== undefined &&
-          "code" in result.error &&
-          result.error.code === "ETIMEDOUT";
+          result.error !== undefined && "code" in result.error && result.error.code === "ETIMEDOUT";
         assert.equal(
           timedOut,
           false,
@@ -874,12 +804,8 @@ sys.exit(os.waitstatus_to_exitcode(status))`;
         );
         assert.equal(result.status, 0, result.stderr);
         assert.ok(result.stdout.includes("Install pi-web-access? [y/N]"));
-        if (input.startsWith("perhaps"))
-          assert.ok(result.stdout.includes("Please enter y or n"));
-        assert.match(
-          result.stdout,
-          new RegExp(`Optional pi-web-access: ${status}\\.`),
-        );
+        if (input.startsWith("perhaps")) assert.ok(result.stdout.includes("Please enter y or n"));
+        assert.match(result.stdout, new RegExp(`Optional pi-web-access: ${status}\\.`));
         if (input.startsWith("perhaps") && process.platform === "linux") {
           const hangingSetup = fixture({ piWebAccessHangs: true });
           try {
@@ -909,14 +835,8 @@ sys.exit(os.waitstatus_to_exitcode(status))`;
               readFileSync(hangingSetup.log, "utf8"),
               /^pi install npm:pi-web-access --no-approve$/mu,
             );
-            assert.match(
-              hanging.stderr,
-              /TimeoutError: PTY runner deadline expired/u,
-            );
-            assert.match(
-              hanging.stderr,
-              /PTY_CLEANUP group_gone=true leader_reaped=true/u,
-            );
+            assert.match(hanging.stderr, /TimeoutError: PTY runner deadline expired/u);
+            assert.match(hanging.stderr, /PTY_CLEANUP group_gone=true leader_reaped=true/u);
             assert.doesNotMatch(
               hanging.stderr,
               /Process group remained|PTY child leader remained unreaped/u,
@@ -946,9 +866,8 @@ test(
       assert.match(second.stdout, /Optional pi-web-access: already installed/u);
       assert.equal(
         (
-          readFileSync(setup.log, "utf8").match(
-            /^pi install npm:pi-web-access --no-approve$/gmu,
-          ) ?? []
+          readFileSync(setup.log, "utf8").match(/^pi install npm:pi-web-access --no-approve$/gmu) ??
+          []
         ).length,
         1,
       );
@@ -970,10 +889,7 @@ test(
       });
       assert.notEqual(result.status, 0);
       assert.match(result.stderr, /PI_HERDSMAN_WEB_ACCESS must be/u);
-      assert.doesNotMatch(
-        readFileSync(setup.log, "utf8"),
-        /^(?:curl |herdr |pi )/mu,
-      );
+      assert.doesNotMatch(readFileSync(setup.log, "utf8"), /^(?:curl |herdr |pi )/mu);
     } finally {
       rmSync(setup.root, { recursive: true, force: true });
     }
@@ -998,14 +914,8 @@ test(
           encoding: "utf8",
         });
         assert.equal(result.status, 0, result.stderr);
-        assert.match(
-          result.stdout,
-          /Optional pi-web-access: already installed/u,
-        );
-        assert.doesNotMatch(
-          readFileSync(setup.log, "utf8"),
-          /^pi install npm:pi-web-access/mu,
-        );
+        assert.match(result.stdout, /Optional pi-web-access: already installed/u);
+        assert.doesNotMatch(readFileSync(setup.log, "utf8"), /^pi install npm:pi-web-access/mu);
       } finally {
         rmSync(setup.root, { recursive: true, force: true });
       }
@@ -1029,14 +939,8 @@ test(
         encoding: "utf8",
       });
       assert.notEqual(failureResult.status, 0);
-      assert.match(
-        failureResult.stderr,
-        /Pi Herdsman and Herdr installed successfully/u,
-      );
-      assert.match(
-        failureResult.stderr,
-        /Optional pi-web-access installation failed/u,
-      );
+      assert.match(failureResult.stderr, /Pi Herdsman and Herdr installed successfully/u);
+      assert.match(failureResult.stderr, /Optional pi-web-access installation failed/u);
       assert.match(failureResult.stderr, /pi install npm:pi-web-access/u);
     } finally {
       rmSync(similar.root, { recursive: true, force: true });
@@ -1058,10 +962,7 @@ test(
       });
       assert.equal(result.status, 0, result.stderr);
       assert.match(result.stdout, /Optional pi-web-access: skipped/u);
-      assert.doesNotMatch(
-        readFileSync(setup.log, "utf8"),
-        /^pi install npm:pi-web-access/mu,
-      );
+      assert.doesNotMatch(readFileSync(setup.log, "utf8"), /^pi install npm:pi-web-access/mu);
     } finally {
       rmSync(setup.root, { recursive: true, force: true });
     }
@@ -1080,10 +981,7 @@ test(
       });
       assert.notEqual(result.status, 0);
       assert.match(result.stderr, /requires Node >=99\.0\.0/u);
-      assert.doesNotMatch(
-        readFileSync(setup.log, "utf8"),
-        /^(?:pi |curl |herdr )/mu,
-      );
+      assert.doesNotMatch(readFileSync(setup.log, "utf8"), /^(?:pi |curl |herdr )/mu);
     } finally {
       rmSync(setup.root, { recursive: true, force: true });
     }
@@ -1169,10 +1067,7 @@ test(
           `Pi Herdsman package operation completed (target release ${packageJson.version})`,
         ),
       );
-      assert.match(
-        readFileSync(setup.log, "utf8"),
-        /curl .*https:\/\/pi\.dev\/install\.sh/u,
-      );
+      assert.match(readFileSync(setup.log, "utf8"), /curl .*https:\/\/pi\.dev\/install\.sh/u);
     } finally {
       rmSync(setup.root, { recursive: true, force: true });
     }
@@ -1229,10 +1124,7 @@ test(
         encoding: "utf8",
       });
       assert.equal(result.status, 0, result.stderr);
-      assert.match(
-        readFileSync(setup.log, "utf8"),
-        /^pi update npm:pi-herdsman --no-approve$/mu,
-      );
+      assert.match(readFileSync(setup.log, "utf8"), /^pi update npm:pi-herdsman --no-approve$/mu);
       assert.doesNotMatch(result.stdout, /installed version/u);
     } finally {
       rmSync(setup.root, { recursive: true, force: true });
@@ -1265,10 +1157,7 @@ test(
         pinnedResult.stderr,
         /version-pinned; this bootstrap cannot reconcile it to the latest release\. Change or remove the pin with Pi's package manager to reconcile to the latest release/u,
       );
-      assert.doesNotMatch(
-        readFileSync(pinned.log, "utf8"),
-        /^pi (install|update) /mu,
-      );
+      assert.doesNotMatch(readFileSync(pinned.log, "utf8"), /^pi (install|update) /mu);
       assert.doesNotMatch(pinnedResult.stdout, /package operation completed/u);
 
       const unavailableResult = spawnSync("sh", [installer], {
@@ -1277,18 +1166,9 @@ test(
       });
       assert.notEqual(unavailableResult.status, 0);
       assert.doesNotMatch(unavailableResult.stdout, /Next steps:/u);
-      assert.match(
-        unavailableResult.stderr,
-        /could not inspect installed Pi packages/u,
-      );
-      assert.doesNotMatch(
-        readFileSync(unavailable.log, "utf8"),
-        /^pi (install|update) /mu,
-      );
-      assert.doesNotMatch(
-        unavailableResult.stdout,
-        /package operation completed/u,
-      );
+      assert.match(unavailableResult.stderr, /could not inspect installed Pi packages/u);
+      assert.doesNotMatch(readFileSync(unavailable.log, "utf8"), /^pi (install|update) /mu);
+      assert.doesNotMatch(unavailableResult.stdout, /package operation completed/u);
     } finally {
       rmSync(pinned.root, { recursive: true, force: true });
       rmSync(unavailable.root, { recursive: true, force: true });
@@ -1315,14 +1195,8 @@ test(
         assert.doesNotMatch(result.stdout, /Next steps:/u);
         assert.doesNotMatch(result.stdout, /package operation completed/u);
       }
-      assert.match(
-        readFileSync(absent.log, "utf8"),
-        /^pi install npm:pi-herdsman --no-approve$/mu,
-      );
-      assert.match(
-        readFileSync(present.log, "utf8"),
-        /^pi update npm:pi-herdsman --no-approve$/mu,
-      );
+      assert.match(readFileSync(absent.log, "utf8"), /^pi install npm:pi-herdsman --no-approve$/mu);
+      assert.match(readFileSync(present.log, "utf8"), /^pi update npm:pi-herdsman --no-approve$/mu);
     } finally {
       rmSync(absent.root, { recursive: true, force: true });
       rmSync(present.root, { recursive: true, force: true });
@@ -1342,10 +1216,7 @@ test(
       });
       assert.notEqual(result.status, 0);
       assert.match(result.stderr, /downloaded Herdr checksum did not match/u);
-      assert.match(
-        readFileSync(join(setup.bin, "herdr"), "utf8"),
-        /FAKE_HERDR_VERSION/u,
-      );
+      assert.match(readFileSync(join(setup.bin, "herdr"), "utf8"), /FAKE_HERDR_VERSION/u);
     } finally {
       rmSync(setup.root, { recursive: true, force: true });
     }

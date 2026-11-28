@@ -17,15 +17,7 @@ import {
 } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir, tmpdir, userInfo } from "node:os";
-import {
-  basename,
-  dirname,
-  isAbsolute,
-  join,
-  relative,
-  resolve,
-  sep,
-} from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs, promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -37,10 +29,7 @@ import {
 } from "./chief-manager-smoke.mjs";
 
 export { matchesProjectMessageContent };
-import {
-  ProjectTrustStore,
-  SessionManager,
-} from "@earendil-works/pi-coding-agent";
+import { ProjectTrustStore, SessionManager } from "@earendil-works/pi-coding-agent";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -108,8 +97,7 @@ const MANAGED_AGENT_IDENTITY_KEYS = [
 export function parseScenario(args) {
   if (args.length > 1) throw new Error(`unexpected smoke argument: ${args[1]}`);
   const scenario = args[0] ?? "core";
-  if (!scenarioNames.includes(scenario))
-    throw new Error(`unknown smoke scenario: ${scenario}`);
+  if (!scenarioNames.includes(scenario)) throw new Error(`unknown smoke scenario: ${scenario}`);
   return scenario;
 }
 
@@ -147,8 +135,7 @@ export function parseSmokeArgs(args) {
   )
     throw new Error(`${scenario} requires --simulated`);
   const timeout = values["manager-ready-timeout-ms"];
-  const managerReadyTimeoutMs =
-    timeout === undefined ? undefined : Number(timeout);
+  const managerReadyTimeoutMs = timeout === undefined ? undefined : Number(timeout);
   if (
     timeout !== undefined &&
     (scenario !== "manager-recovery" ||
@@ -160,23 +147,15 @@ export function parseSmokeArgs(args) {
     throw new Error(
       `--manager-ready-timeout-ms must be a positive integer no greater than ${MAX_MANAGER_READY_TIMEOUT_MS}, and is only valid for manager-recovery`,
     );
-  const managerRecoveryDiagnostics =
-    values["manager-recovery-diagnostics"] ?? false;
+  const managerRecoveryDiagnostics = values["manager-recovery-diagnostics"] ?? false;
   if (managerRecoveryDiagnostics && scenario !== "manager-recovery")
-    throw new Error(
-      "--manager-recovery-diagnostics is only valid for manager-recovery",
-    );
+    throw new Error("--manager-recovery-diagnostics is only valid for manager-recovery");
   const managerExternalRemoval = values["manager-external-removal"] ?? false;
   if (managerExternalRemoval && scenario !== "manager-recovery")
-    throw new Error(
-      "--manager-external-removal is only valid for manager-recovery",
-    );
-  const managerRemovalAcceptance =
-    values["manager-removal-acceptance"] ?? false;
+    throw new Error("--manager-external-removal is only valid for manager-recovery");
+  const managerRemovalAcceptance = values["manager-removal-acceptance"] ?? false;
   if (managerRemovalAcceptance && scenario !== "manager-recovery")
-    throw new Error(
-      "--manager-removal-acceptance is only valid for manager-recovery",
-    );
+    throw new Error("--manager-removal-acceptance is only valid for manager-recovery");
   return {
     scenario,
     model: values.model,
@@ -197,9 +176,7 @@ export function managerDiagnosticLines(contents) {
     if (prefixIndex < 0) continue;
     let diagnostic;
     try {
-      diagnostic = JSON.parse(
-        line.slice(prefixIndex + MANAGER_DIAGNOSTIC_PREFIX.length),
-      );
+      diagnostic = JSON.parse(line.slice(prefixIndex + MANAGER_DIAGNOSTIC_PREFIX.length));
     } catch {
       continue;
     }
@@ -218,11 +195,9 @@ export function managerDiagnosticLines(contents) {
     )
       safe = { event: diagnostic.event };
     else if (
-      [
-        "inbox_preflight",
-        "inbox_preflight_recheck",
-        "inbox_peer_presence",
-      ].includes(diagnostic?.event) &&
+      ["inbox_preflight", "inbox_preflight_recheck", "inbox_peer_presence"].includes(
+        diagnostic?.event,
+      ) &&
       (diagnostic.event === "inbox_peer_presence"
         ? ["pass", "missing"]
         : diagnostic.event === "inbox_preflight_recheck"
@@ -232,14 +207,11 @@ export function managerDiagnosticLines(contents) {
     )
       safe = { event: diagnostic.event, reason: diagnostic.reason };
     else if (
-      ["inbox_candidates", "inbox_drain_complete"].includes(
-        diagnostic?.event,
-      ) &&
+      ["inbox_candidates", "inbox_drain_complete"].includes(diagnostic?.event) &&
       Number.isInteger(diagnostic.count) &&
       diagnostic.count >= 0 &&
       diagnostic.count <= 1000 &&
-      (diagnostic.event !== "inbox_drain_complete" ||
-        typeof diagnostic.sessionStable === "boolean")
+      (diagnostic.event !== "inbox_drain_complete" || typeof diagnostic.sessionStable === "boolean")
     )
       safe = {
         event: diagnostic.event,
@@ -293,8 +265,7 @@ export function managerDiagnosticLines(contents) {
         triggerTurn: diagnostic.triggerTurn,
       };
     if (safe) {
-      const safeLine =
-        `${MANAGER_DIAGNOSTIC_PREFIX}${JSON.stringify(safe)}`.slice(0, 512);
+      const safeLine = `${MANAGER_DIAGNOSTIC_PREFIX}${JSON.stringify(safe)}`.slice(0, 512);
       if (!seen.has(safeLine)) {
         seen.add(safeLine);
         safeLines.push(safeLine);
@@ -305,11 +276,7 @@ export function managerDiagnosticLines(contents) {
   return safeLines;
 }
 
-export async function captureManagerLeadDiagnostics(
-  ctx,
-  paneId,
-  readPane = nestedPaneText,
-) {
+export async function captureManagerLeadDiagnostics(ctx, paneId, readPane = nestedPaneText) {
   if (!ctx.managerRecoveryDiagnostics) return;
   ctx.managerRecovery.leadDiagnostics = [];
   try {
@@ -317,16 +284,13 @@ export async function captureManagerLeadDiagnostics(
       await readPane(ctx, paneId, "recent-unwrapped"),
     );
   } catch (error) {
-    ctx.managerRecovery.leadDiagnosticsError = String(
-      error?.message ?? error,
-    ).slice(0, 200);
+    ctx.managerRecovery.leadDiagnosticsError = String(error?.message ?? error).slice(0, 200);
   }
 }
 
 export function formatSmokeFailure(error, stage) {
   const name = typeof error?.name === "string" ? error.name : typeof error;
-  const message =
-    typeof error?.message === "string" ? error.message : String(error);
+  const message = typeof error?.message === "string" ? error.message : String(error);
   if (error?.code === "SMOKE_STALLED" || error?.code === "SMOKE_TIMEOUT") {
     const smoke = error.smoke ?? {};
     if (smoke.stage === "manager-bootstrap-correlated-child")
@@ -339,8 +303,7 @@ export function formatSmokeFailure(error, stage) {
 export function managerBootstrapDelegationProjection(progress = {}) {
   return {
     delegateCalls:
-      Number.isSafeInteger(progress.delegateCalls) &&
-      progress.delegateCalls >= 0
+      Number.isSafeInteger(progress.delegateCalls) && progress.delegateCalls >= 0
         ? Math.min(progress.delegateCalls, 100)
         : 0,
     expectedBranchDelegateCalls:
@@ -368,9 +331,7 @@ export function managerBootstrapDelegationState(contents, branch) {
         )
       : [],
   );
-  const expectedCalls = delegateCalls.filter(
-    (call) => call.arguments?.branch === branch,
-  );
+  const expectedCalls = delegateCalls.filter((call) => call.arguments?.branch === branch);
   const matchingResults = staffDelegateResults(contents).filter(
     (result) => result.branch === branch,
   );
@@ -493,11 +454,9 @@ export async function resolveSmokeModel(override, execute = run) {
     return model;
   }
   try {
-    const { stdout } = await execute(
-      "git",
-      ["config", "--get", SMOKE_MODEL_KEY],
-      { cwd: repoRoot },
-    );
+    const { stdout } = await execute("git", ["config", "--get", SMOKE_MODEL_KEY], {
+      cwd: repoRoot,
+    });
     const model = stdout.trim();
     if (model) return model;
   } catch (error) {
@@ -550,8 +509,7 @@ export function rootCandidateCommand(args) {
 export function nestedHerdrApiSocketPath(paths, sessionName) {
   const directory = join(paths.xdgConfig, "herdr", "sessions", sessionName);
   for (const name of ["herdr.sock", "herdr-client.sock"]) {
-    const bytesIncludingTerminator =
-      Buffer.byteLength(join(directory, name)) + 1;
+    const bytesIncludingTerminator = Buffer.byteLength(join(directory, name)) + 1;
     assert.ok(
       bytesIncludingTerminator <= MAX_SOCKET_PATH_BYTES,
       `nested Herdr ${name} path is too long (${bytesIncludingTerminator} bytes; maximum ${MAX_SOCKET_PATH_BYTES})`,
@@ -562,13 +520,11 @@ export function nestedHerdrApiSocketPath(paths, sessionName) {
 
 export function candidateArgs(config) {
   assert.ok(
-    typeof config.candidateExtension === "string" &&
-      isAbsolute(config.candidateExtension),
+    typeof config.candidateExtension === "string" && isAbsolute(config.candidateExtension),
     "candidate extension path must be absolute",
   );
   assert.ok(
-    typeof config.herdrStateExtension === "string" &&
-      isAbsolute(config.herdrStateExtension),
+    typeof config.herdrStateExtension === "string" && isAbsolute(config.herdrStateExtension),
     "Herdr state extension path must be absolute",
   );
   const args = [
@@ -584,17 +540,12 @@ export function candidateArgs(config) {
     ...(config.simulatedProviderExtension
       ? ["--extension", config.simulatedProviderExtension]
       : []),
-    ...(config.chiefTreeProbeExtension
-      ? ["--extension", config.chiefTreeProbeExtension]
-      : []),
+    ...(config.chiefTreeProbeExtension ? ["--extension", config.chiefTreeProbeExtension] : []),
     "--model",
     config.model,
   ];
   if (config.chiefTreeProbeExtension)
-    assert.ok(
-      isAbsolute(config.chiefTreeProbeExtension),
-      "Chief tree probe path must be absolute",
-    );
+    assert.ok(isAbsolute(config.chiefTreeProbeExtension), "Chief tree probe path must be absolute");
   return args;
 }
 
@@ -621,8 +572,7 @@ export default function (pi) {
 
 export function parseToolSnapshots(contents) {
   assert.ok(
-    typeof contents === "string" &&
-      Buffer.byteLength(contents) <= MAX_CHIEF_TREE_RESULT_BYTES,
+    typeof contents === "string" && Buffer.byteLength(contents) <= MAX_CHIEF_TREE_RESULT_BYTES,
   );
   const snapshots = new Map();
   for (const line of contents.trim().split("\n")) {
@@ -632,12 +582,7 @@ export function parseToolSnapshots(contents) {
     assert.ok(tools.every((tool) => typeof tool === "string"));
     const normalized = [...tools].sort();
     const previous = snapshots.get(label);
-    if (previous)
-      assert.deepEqual(
-        normalized,
-        previous,
-        `conflicting ${label} tool snapshots`,
-      );
+    if (previous) assert.deepEqual(normalized, previous, `conflicting ${label} tool snapshots`);
     else snapshots.set(label, normalized);
   }
   return snapshots;
@@ -655,9 +600,7 @@ export function chiefTreeBranchPlan(
   chiefMarker,
 ) {
   const entries = sessionEntries(contents);
-  const byId = new Map(
-    entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
-  );
+  const byId = new Map(entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]));
   const isAncestor = (ancestorId, descendantId) => {
     const visited = new Set();
     let parentId = byId.get(descendantId)?.parentId;
@@ -758,12 +701,7 @@ export function countChiefTreeEvents(contents, baseline = 0) {
   );
 }
 
-export function chiefTreeBranchTransition(
-  text,
-  snapshots,
-  treeEventsBefore,
-  treeEvents,
-) {
+export function chiefTreeBranchTransition(text, snapshots, treeEventsBefore, treeEvents) {
   if (text.includes("Summarize branch?"))
     return {
       done: true,
@@ -827,8 +765,7 @@ export function assertNoFailedProjectDelegation(contents, branch) {
   if (!failed) return;
 
   const category =
-    messageText(failed.message.content).trim() ===
-    "Project assignment lock is in progress"
+    messageText(failed.message.content).trim() === "Project assignment lock is in progress"
       ? "assignment_lock_occupied"
       : "tool_error";
   const error = new Error(`delegate_work failed (${category})`);
@@ -881,18 +818,13 @@ export function managerAssignmentDiagnostics({
     messageSupervisorResult: supervisorResult ?? "not_called",
     exactManagerReadinessDelivery: readiness ?? "not_observed",
     fauxSupervisorToolAvailability:
-      fauxSupervisorToolAvailability === "not_offered"
-        ? "not_offered"
-        : "not_observed",
+      fauxSupervisorToolAvailability === "not_offered" ? "not_offered" : "not_observed",
     supervisorCallObserved: supervisorCallObserved ?? false,
     supervisorResultState: supervisorResultState ?? "not_observed",
     supervisorErrorCategory: supervisorErrorCategory ?? "none",
-    ...([
-      "abort_error",
-      "lock_occupied",
-      "dispatch_error",
-      "unstructured_error_unknown",
-    ].includes(supervisorUnstructuredErrorClass)
+    ...(["abort_error", "lock_occupied", "dispatch_error", "unstructured_error_unknown"].includes(
+      supervisorUnstructuredErrorClass,
+    )
       ? { supervisorUnstructuredErrorClass }
       : {}),
     supervisorHandlerBranchStatus:
@@ -964,11 +896,7 @@ const AGENT_ACTION_DIAGNOSTIC_OUTCOMES = new Set([
   "invalid_agent_label",
 ]);
 
-export function supervisorAgentCompletionMatches(
-  message,
-  requestId,
-  childSessionId,
-) {
+export function supervisorAgentCompletionMatches(message, requestId, childSessionId) {
   const details = message?.details;
   const text = messageText(message?.content);
   const semanticHeader =
@@ -1018,12 +946,8 @@ export function supervisorMessageDiagnostics(path, expectedSessionId, text) {
         (count, entry) =>
           count +
           (entry.type === "message" && entry.message?.role === "assistant"
-            ? (Array.isArray(entry.message.content)
-                ? entry.message.content
-                : []
-              ).filter(
-                (block) =>
-                  block?.type === "toolCall" && block.id === candidate.call.id,
+            ? (Array.isArray(entry.message.content) ? entry.message.content : []).filter(
+                (block) => block?.type === "toolCall" && block.id === candidate.call.id,
               ).length
             : 0),
         0,
@@ -1049,9 +973,7 @@ export function supervisorMessageDiagnostics(path, expectedSessionId, text) {
   const result = matchingResult;
   const success = result && !result.isError && result.details?.ok !== false;
   const failed =
-    result && (result.isError === true || result.details?.ok === false)
-      ? result
-      : undefined;
+    result && (result.isError === true || result.details?.ok === false) ? result : undefined;
   const category = failed?.details?.error?.category;
   const errorDetails = failed?.details?.error;
   const handlerBranchStatus = errorDetails?.branchStatus;
@@ -1070,9 +992,7 @@ export function supervisorMessageDiagnostics(path, expectedSessionId, text) {
             .join("\n")
         : "";
   const unstructuredErrorClass =
-    failed?.isError === true &&
-    !STRUCTURED_TOOL_ERROR_CATEGORIES.has(category) &&
-    resultText
+    failed?.isError === true && !STRUCTURED_TOOL_ERROR_CATEGORIES.has(category) && resultText
       ? /\bAbortError\b/u.test(resultText)
         ? "abort_error"
         : /\bProcessLockOccupiedError\b/u.test(resultText)
@@ -1102,14 +1022,10 @@ export function supervisorMessageDiagnostics(path, expectedSessionId, text) {
           : "tool_error"
         : "none",
     supervisorHandlerBranchStatus:
-      handlerBranchStatus === "operation_error_returned"
-        ? handlerBranchStatus
-        : "not_observed",
+      handlerBranchStatus === "operation_error_returned" ? handlerBranchStatus : "not_observed",
     supervisorPersistedErrorCategoryPresent: categoryPresent,
     supervisorPersistedErrorCategory:
-      categoryPresent && STRUCTURED_TOOL_ERROR_CATEGORIES.has(category)
-        ? category
-        : "not_observed",
+      categoryPresent && STRUCTURED_TOOL_ERROR_CATEGORIES.has(category) ? category : "not_observed",
     ...(unstructuredErrorClass !== "not_applicable"
       ? { supervisorUnstructuredErrorClass: unstructuredErrorClass }
       : {}),
@@ -1144,9 +1060,7 @@ export function managerAssignmentBranchMismatch(row, branch) {
 
 export function staffActionResults(contents, toolName, action, prompt) {
   const entries = sessionEntries(contents);
-  const byId = new Map(
-    entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
-  );
+  const byId = new Map(entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]));
   const promptEntry =
     prompt === undefined
       ? null
@@ -1193,12 +1107,7 @@ export function projectMessageEntries(contents, branch, sessionId) {
   );
 }
 
-export function retirementNoticeEntries(
-  contents,
-  repoKey,
-  branch,
-  assignmentId,
-) {
+export function retirementNoticeEntries(contents, repoKey, branch, assignmentId) {
   return sessionEntries(contents).filter(
     (entry) =>
       entry.type === "custom_message" &&
@@ -1209,13 +1118,7 @@ export function retirementNoticeEntries(
   );
 }
 
-export function assertPassiveRetirementEvidence(
-  before,
-  after,
-  repoKey,
-  branch,
-  assignmentId,
-) {
+export function assertPassiveRetirementEvidence(before, after, repoKey, branch, assignmentId) {
   const notices = retirementNoticeEntries(after, repoKey, branch, assignmentId);
   assert.equal(notices.length, 1, "expected one exact retirement notice");
   assert.equal(notices[0].display, false);
@@ -1240,13 +1143,7 @@ export function retainedProjectMessageRecord(records, branch, sessionId, text) {
   );
 }
 
-export function managerHandoffRetainedRecord(
-  records,
-  repoKey,
-  branch,
-  sessionId,
-  text,
-) {
+export function managerHandoffRetainedRecord(records, repoKey, branch, sessionId, text) {
   const matches = records.filter(
     (record) =>
       record?.repoKey === repoKey &&
@@ -1256,8 +1153,7 @@ export function managerHandoffRetainedRecord(
       typeof record?.id === "string" &&
       record.id.length > 0,
   );
-  if (matches.length > 1)
-    throw new Error("Manager handoff retained message is ambiguous");
+  if (matches.length > 1) throw new Error("Manager handoff retained message is ambiguous");
   return matches[0] ?? null;
 }
 
@@ -1299,17 +1195,14 @@ export function managerCleanupTarget(
     throw new Error("captured workspace identity is unavailable");
   const matches = worktrees.filter((item) => item.branch === branch);
   if (matches.length === 0 && retirementRequested) return null;
-  if (matches.length !== 1)
-    throw new Error("exact branch must identify one worktree");
+  if (matches.length !== 1) throw new Error("exact branch must identify one worktree");
   const [target] = matches;
   if (target.path !== worktreePath)
     throw new Error("exact branch worktree path does not match captured path");
   if (typeof target.open_workspace_id !== "string" || !target.open_workspace_id)
     throw new Error("exact branch worktree has no workspace identity");
   if (target.open_workspace_id !== workspaceId)
-    throw new Error(
-      "exact branch worktree workspace identity does not match captured identity",
-    );
+    throw new Error("exact branch worktree workspace identity does not match captured identity");
   return target;
 }
 
@@ -1349,22 +1242,11 @@ export async function removeManagerRecoveryWorktree(
     const currentBranch = await execute("git", ["branch", "--show-current"], {
       cwd: checkout,
     });
-    assert.equal(
-      currentBranch.stdout.trim(),
-      branch,
-      "checkout branch changed before removal",
-    );
-    const commonArgs = [
-      "rev-parse",
-      "--path-format=absolute",
-      "--git-common-dir",
-    ];
+    assert.equal(currentBranch.stdout.trim(), branch, "checkout branch changed before removal");
+    const commonArgs = ["rev-parse", "--path-format=absolute", "--git-common-dir"];
     const primaryCommon = await execute("git", commonArgs, { cwd: primary });
     const checkoutCommon = await execute("git", commonArgs, { cwd: checkout });
-    assert.ok(
-      isAbsolute(primaryCommon.stdout.trim()) &&
-        isAbsolute(checkoutCommon.stdout.trim()),
-    );
+    assert.ok(isAbsolute(primaryCommon.stdout.trim()) && isAbsolute(checkoutCommon.stdout.trim()));
     assert.equal(
       await realpath(checkoutCommon.stdout.trim()),
       await realpath(primaryCommon.stdout.trim()),
@@ -1382,16 +1264,13 @@ export async function removeManagerRecoveryWorktree(
 export function captureTerminalFailureWorktree(ctx, worktrees, branch) {
   const matches = worktrees.filter((item) => item.branch === branch);
   if (matches.length === 0) return null;
-  if (matches.length !== 1)
-    throw new Error("exact branch must identify one worktree");
+  if (matches.length !== 1) throw new Error("exact branch must identify one worktree");
   const [worktree] = matches;
   const path = worktree.path ?? worktree.worktree_path;
   const workspaceId = worktree.open_workspace_id;
   if (
     (path !== undefined && path !== null && typeof path !== "string") ||
-    (workspaceId !== undefined &&
-      workspaceId !== null &&
-      typeof workspaceId !== "string")
+    (workspaceId !== undefined && workspaceId !== null && typeof workspaceId !== "string")
   )
     throw new Error("exact branch worktree identity is malformed");
   if (!path || !workspaceId)
@@ -1400,21 +1279,11 @@ export function captureTerminalFailureWorktree(ctx, worktrees, branch) {
   return worktree;
 }
 
-export function captureManagerHandoffWorktree(
-  ctx,
-  worktrees,
-  branch,
-  expectedWorkspaceId,
-) {
+export function captureManagerHandoffWorktree(ctx, worktrees, branch, expectedWorkspaceId) {
   const worktree = captureTerminalFailureWorktree(ctx, worktrees, branch);
   if (!worktree) return null;
-  if (
-    expectedWorkspaceId !== undefined &&
-    worktree.open_workspace_id !== expectedWorkspaceId
-  )
-    throw new Error(
-      "Manager assignment workspace does not match exact worktree",
-    );
+  if (expectedWorkspaceId !== undefined && worktree.open_workspace_id !== expectedWorkspaceId)
+    throw new Error("Manager assignment workspace does not match exact worktree");
   return worktree;
 }
 
@@ -1422,13 +1291,8 @@ export function captureTerminalFailureAssignment(ctx, path, workspaceId) {
   if (typeof path !== "string" || !path || !workspaceId)
     throw new Error("exact assigned worktree identity is incomplete");
   if (ctx.owned.managerWorktreePath || ctx.owned.managerWorkspaceId) {
-    if (
-      ctx.owned.managerWorktreePath !== path ||
-      ctx.owned.managerWorkspaceId !== workspaceId
-    )
-      throw new Error(
-        "exact assigned worktree identity conflicts with captured identity",
-      );
+    if (ctx.owned.managerWorktreePath !== path || ctx.owned.managerWorkspaceId !== workspaceId)
+      throw new Error("exact assigned worktree identity conflicts with captured identity");
     return;
   }
   ctx.owned.managerWorktreePath = path;
@@ -1448,17 +1312,8 @@ export async function readParentHostPane(ctx, paneId, execute = run) {
   );
 }
 
-export async function captureTerminalFailureTopology(
-  ctx,
-  branch,
-  execute = nestedCommand,
-) {
-  const topology = await execute(ctx, [
-    "worktree",
-    "list",
-    "--workspace",
-    ctx.rootWorkspaceId,
-  ]);
+export async function captureTerminalFailureTopology(ctx, branch, execute = nestedCommand) {
+  const topology = await execute(ctx, ["worktree", "list", "--workspace", ctx.rootWorkspaceId]);
   return captureTerminalFailureWorktree(ctx, topology.worktrees ?? [], branch);
 }
 
@@ -1472,9 +1327,7 @@ export async function terminalFailureAssignmentPoll(
 ) {
   const session = await root();
   const delegated = session
-    ? staffDelegateResults(session.contents).filter(
-        (item) => item.branch === branch,
-      )
+    ? staffDelegateResults(session.contents).filter((item) => item.branch === branch)
     : [];
   try {
     await captureTerminalFailureTopology(ctx, branch, execute);
@@ -1492,17 +1345,8 @@ export async function terminalFailureAssignmentPoll(
   let processObservation;
   if (child?.pane_id) {
     try {
-      const info = await execute(ctx, [
-        "pane",
-        "process-info",
-        "--pane",
-        child.pane_id,
-      ]);
-      const matches = candidateProcess(
-        info,
-        ctx.candidateExtension,
-        ctx.herdrStateExtension,
-      );
+      const info = await execute(ctx, ["pane", "process-info", "--pane", child.pane_id]);
+      const matches = candidateProcess(info, ctx.candidateExtension, ctx.herdrStateExtension);
       if (matches.length === 1)
         processObservation = {
           paneId: child.pane_id,
@@ -1543,12 +1387,7 @@ export async function prepareManagerRepository(paths, execute = run) {
   return cwd;
 }
 
-export function assertManagerFreshPrimary(
-  workspaceId,
-  primaryCheckoutPath,
-  workspace,
-  topology,
-) {
+export function assertManagerFreshPrimary(workspaceId, primaryCheckoutPath, workspace, topology) {
   assert.equal(workspace?.workspace_id, workspaceId);
   const repoKey = topology?.source?.repo_key;
   assert.ok(
@@ -1566,31 +1405,19 @@ export function assertManagerFreshPrimary(
   );
   assert.equal(resolve(sourceCheckoutPath), primaryCheckoutPath);
   assert.ok(Array.isArray(topology.worktrees));
-  assert.ok(
-    topology.worktrees.length <= 1,
-    "bootstrap must have no linked worktrees",
-  );
+  assert.ok(topology.worktrees.length <= 1, "bootstrap must have no linked worktrees");
   assert.ok(
     topology.worktrees.every(
-      (item) =>
-        !item.open_workspace_id || item.open_workspace_id === workspaceId,
+      (item) => !item.open_workspace_id || item.open_workspace_id === workspaceId,
     ),
     "bootstrap unexpectedly contains a linked workspace",
   );
   return repoKey;
 }
 
-export async function deleteBranchIfPresent(
-  branch,
-  execute = run,
-  cwd = repoRoot,
-) {
+export async function deleteBranchIfPresent(branch, execute = run, cwd = repoRoot) {
   try {
-    await execute(
-      "git",
-      ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
-      { cwd },
-    );
+    await execute("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], { cwd });
   } catch (error) {
     if (error?.code === 1) return false;
     throw error;
@@ -1675,9 +1502,7 @@ export function leadReadyCompleted(contents, text) {
       entry.message?.role === "toolResult" &&
       entry.message.toolName === "message_manager" &&
       !entry.message.isError &&
-      calls.some(
-        (call) => call.index < index && call.id === entry.message.toolCallId,
-      ),
+      calls.some((call) => call.index < index && call.id === entry.message.toolCallId),
   );
   return (
     resultIndex >= 0 &&
@@ -1725,19 +1550,14 @@ export function managerReadyAnswer(contents, branch, leadSessionId) {
       ? [{ entry, index }]
       : [],
   );
-  const answer = readyMarkers.find(
-    ({ entry }) => entry.message.stopReason === "stop",
-  )?.entry;
+  const answer = readyMarkers.find(({ entry }) => entry.message.stopReason === "stop")?.entry;
   const answerAfterReceipt =
     receipt < 0
       ? null
       : (readyMarkers.find(
-          ({ entry, index }) =>
-            index > receipt && entry.message.stopReason === "stop",
+          ({ entry, index }) => index > receipt && entry.message.stopReason === "stop",
         )?.entry ?? null);
-  const prematureReady = readyMarkers.some(
-    ({ index }) => receipt < 0 || index < receipt,
-  );
+  const prematureReady = readyMarkers.some(({ index }) => receipt < 0 || index < receipt);
   const prematureFinish = entries.some(
     (entry) =>
       entry.type === "message" &&
@@ -1778,17 +1598,11 @@ export function managerReadyEntryEvidence(contents, branch, leadSessionId) {
     if (
       entry.type === "message" &&
       entry.message?.role === "assistant" &&
-      messageText(entry.message.content).includes(
-        "PI_HERDSMAN_MANAGER_RECOVERY_READY",
-      )
+      messageText(entry.message.content).includes("PI_HERDSMAN_MANAGER_RECOVERY_READY")
     )
       markers.push(index);
   });
-  const centers = [
-    ...receipts.slice(-1),
-    ...markers.slice(0, 1),
-    ...markers.slice(-2),
-  ];
+  const centers = [...receipts.slice(-1), ...markers.slice(0, 1), ...markers.slice(-2)];
   const indices = new Set();
   for (const center of centers)
     for (
@@ -1812,19 +1626,13 @@ export function managerReadyEntryEvidence(contents, branch, leadSessionId) {
         receipt: receipts.includes(index),
         readyMarker:
           entry.type === "message" &&
-          messageText(entry.message?.content).includes(
-            "PI_HERDSMAN_MANAGER_RECOVERY_READY",
-          ),
+          messageText(entry.message?.content).includes("PI_HERDSMAN_MANAGER_RECOVERY_READY"),
       };
     });
 }
 
 function shellCommand(args) {
-  assert.ok(
-    Array.isArray(args) &&
-      args.length > 0 &&
-      args.every((arg) => typeof arg === "string"),
-  );
+  assert.ok(Array.isArray(args) && args.length > 0 && args.every((arg) => typeof arg === "string"));
   return args.map((arg) => `'${arg.replaceAll("'", "'\\''")}'`).join(" ");
 }
 
@@ -1847,9 +1655,7 @@ export function latestPostRestartListAgentsResult(entries) {
       entry.type === "message" &&
       entry.message?.role === "user" &&
       typeof entry.message.content === "string" &&
-      entry.message.content.includes(
-        "PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART",
-      ),
+      entry.message.content.includes("PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART"),
   );
   return entries.findLast(
     (entry, index) =>
@@ -1869,12 +1675,7 @@ export function isPackageReadPath(path, cwd) {
   );
 }
 
-export function managerProjectMessageSettled(
-  contents,
-  branch,
-  fromSessionId,
-  marker,
-) {
+export function managerProjectMessageSettled(contents, branch, fromSessionId, marker) {
   const entries = sessionEntries(contents);
   const receipt = entries.find(
     (entry) =>
@@ -1885,9 +1686,7 @@ export function managerProjectMessageSettled(
       String(entry.content).includes(marker),
   );
   if (!receipt?.id) return false;
-  const byId = new Map(
-    entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
-  );
+  const byId = new Map(entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]));
   return entries.some((entry) => {
     if (
       entry.type !== "message" ||
@@ -1907,9 +1706,7 @@ export function managerProjectMessageSettled(
 }
 
 export function savedSessionHeaderEvidence(contents, expectedSessionId) {
-  const header = sessionEntries(contents).find(
-    (entry) => entry.type === "session",
-  );
+  const header = sessionEntries(contents).find((entry) => entry.type === "session");
   return {
     expectedSessionId,
     actualSessionId: typeof header?.id === "string" ? header.id : null,
@@ -1932,9 +1729,7 @@ export function continuationSessionEvidence(contents, expectedSessionId, task) {
         (entry) =>
           entry.type === "message" &&
           entry.message?.role === "user" &&
-          normalize(messageText(entry.message.content)).includes(
-            normalize(task),
-          ),
+          normalize(messageText(entry.message.content)).includes(normalize(task)),
       ),
   };
 }
@@ -1947,9 +1742,7 @@ export function correlatedContinuationTask(
   identity = null,
 ) {
   const entries = sessionEntries(contents);
-  const byId = new Map(
-    entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
-  );
+  const byId = new Map(entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]));
   const ancestors = [];
   const visited = new Set();
   let entry = byId.get(resultId);
@@ -2004,17 +1797,10 @@ export function correlatedContinuationTask(
       );
       if (!call) continue;
       const task = call.arguments?.task;
-      if (
-        identity &&
-        ![identity.sessionId, identity.sessionPath].includes(
-          call.arguments?.session,
-        )
-      )
+      if (identity && ![identity.sessionId, identity.sessionPath].includes(call.arguments?.session))
         continue;
       // Keep the exact task in memory only; reject oversized tasks rather than truncate them.
-      return typeof task === "string" &&
-        task.trim() &&
-        Buffer.byteLength(task) <= 16 * 1024
+      return typeof task === "string" && task.trim() && Buffer.byteLength(task) <= 16 * 1024
         ? identity
           ? {
               task,
@@ -2044,17 +1830,9 @@ export function activeStopContinuationEvidence(
     prompt,
     identity,
   );
-  if (
-    !continuation ||
-    typeof boundary !== "string" ||
-    !childContents.startsWith(boundary)
-  )
+  if (!continuation || typeof boundary !== "string" || !childContents.startsWith(boundary))
     return null;
-  if (
-    !savedSessionHeaderEvidence(childContents, identity.sessionId)
-      .sessionIdMatches
-  )
-    return null;
+  if (!savedSessionHeaderEvidence(childContents, identity.sessionId).sessionIdMatches) return null;
   const childEntries = sessionEntries(childContents);
   const boundaryLeaf = sessionEntries(boundary).at(-1)?.id;
   if (typeof boundaryLeaf !== "string" || !boundaryLeaf) return null;
@@ -2078,18 +1856,14 @@ export function activeStopContinuationEvidence(
       appendedIds.has(childEntry.id) &&
       childEntry.type === "message" &&
       childEntry.message?.role === "user" &&
-      normalize(messageText(childEntry.message.content)).includes(
-        normalize(continuation.task),
-      )
+      normalize(messageText(childEntry.message.content)).includes(normalize(continuation.task))
     )
       taskFound = true;
     childEntry = childById.get(childEntry.parentId);
   }
   if (!taskFound || !boundaryFound) return null;
   const entries = sessionEntries(contents);
-  const byId = new Map(
-    entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
-  );
+  const byId = new Map(entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]));
   const ancestors = [];
   const visited = new Set();
   let current = byId.get(resultId);
@@ -2106,17 +1880,14 @@ export function activeStopContinuationEvidence(
   );
   if (receipts.length !== 1) return null;
   const { details, content } = receipts[0];
-  const resultIndex = ancestors.findIndex(
-    (entry) => entry.id === continuation.resultId,
-  );
+  const resultIndex = ancestors.findIndex((entry) => entry.id === continuation.resultId);
   if (resultIndex <= ancestors.indexOf(receipts[0])) return null;
   if (
     details.ownerSessionId !== identity.ownerSessionId ||
     details.agentLabel !== identity.label ||
     details.agentDefinition !== identity.definition ||
     details.piSessionId !== identity.sessionId ||
-    (details.piSessionFile !== undefined &&
-      details.piSessionFile !== identity.sessionPath) ||
+    (details.piSessionFile !== undefined && details.piSessionFile !== identity.sessionPath) ||
     typeof details.runId !== "string" ||
     !details.runId.trim() ||
     details.runId === identity.runId ||
@@ -2136,10 +1907,7 @@ export function activeStopContinuationEvidence(
     return null;
   const parts = content.split("\n\n");
   if (!parts.shift()?.startsWith("Agent result · ")) return null;
-  if (
-    Object.hasOwn(details, "resultRef") &&
-    !parts.shift()?.startsWith("Result ref: ")
-  )
+  if (Object.hasOwn(details, "resultRef") && !parts.shift()?.startsWith("Result ref: "))
     return null;
   if (details.sessionRetired === true || details.sessionRetired === null) {
     const retirement = parts.shift();
@@ -2151,10 +1919,7 @@ export function activeStopContinuationEvidence(
     )
       return null;
   }
-  if (
-    details.delegationStatus !== undefined &&
-    parts.pop() !== details.delegationStatus
-  )
+  if (details.delegationStatus !== undefined && parts.pop() !== details.delegationStatus)
     return null;
   if (!parts.join("\n\n").includes(marker)) return null;
   return {
@@ -2189,19 +1954,12 @@ async function sessionPathEvidence(ctx, path, expectedSessionId) {
     return { ...evidence, error: String(error.message).slice(0, 200) };
   }
   evidence.exists = true;
-  if (
-    !details.isFile() ||
-    details.isSymbolicLink() ||
-    details.size > MAX_SESSION_BYTES
-  )
+  if (!details.isFile() || details.isSymbolicLink() || details.size > MAX_SESSION_BYTES)
     return { ...evidence, error: "not a bounded regular session file" };
   try {
     return {
       ...evidence,
-      ...savedSessionHeaderEvidence(
-        await readFile(absolutePath, "utf8"),
-        expectedSessionId,
-      ),
+      ...savedSessionHeaderEvidence(await readFile(absolutePath, "utf8"), expectedSessionId),
     };
   } catch (error) {
     if (error.code === "ENOENT") return { ...evidence, exists: false };
@@ -2209,29 +1967,17 @@ async function sessionPathEvidence(ctx, path, expectedSessionId) {
   }
 }
 
-export async function managerChildSessionEvidence(
-  ctx,
-  agents,
-  workspaceId,
-  expectedSessionId,
-) {
+export async function managerChildSessionEvidence(ctx, agents, workspaceId, expectedSessionId) {
   const candidates = [];
-  for (const agent of agents
-    .filter((item) => item.workspace_id === workspaceId)
-    .slice(0, 10)) {
+  for (const agent of agents.filter((item) => item.workspace_id === workspaceId).slice(0, 10)) {
     const identity = agent.agent_session;
     const candidate = {
       identityKind: identity?.kind ?? null,
       reportedSessionId:
-        identity?.kind === "id" && typeof identity.value === "string"
-          ? identity.value
-          : null,
+        identity?.kind === "id" && typeof identity.value === "string" ? identity.value : null,
     };
     if (identity?.kind === "path" && typeof identity.value === "string")
-      Object.assign(
-        candidate,
-        await sessionPathEvidence(ctx, identity.value, expectedSessionId),
-      );
+      Object.assign(candidate, await sessionPathEvidence(ctx, identity.value, expectedSessionId));
     else if (identity?.kind === "id" && typeof identity.value === "string") {
       try {
         const session = await exactIsolatedSession(ctx, identity.value);
@@ -2273,12 +2019,7 @@ function messageText(content) {
     : "";
 }
 
-export function acceptsFailedAgentHandoff(
-  entry,
-  requestId,
-  sessionId,
-  ownerSessionId,
-) {
+export function acceptsFailedAgentHandoff(entry, requestId, sessionId, ownerSessionId) {
   const details = entry?.details;
   return (
     entry?.type === "custom_message" &&
@@ -2296,12 +2037,7 @@ export function acceptsFailedAgentHandoff(
   );
 }
 
-export function failedAgentHandoff(
-  entries,
-  requestId,
-  sessionId,
-  ownerSessionId,
-) {
+export function failedAgentHandoff(entries, requestId, sessionId, ownerSessionId) {
   const handoffs = entries.filter(
     (entry) =>
       entry?.type === "custom_message" &&
@@ -2309,17 +2045,9 @@ export function failedAgentHandoff(
       entry.details?.requestId === requestId &&
       entry.details?.piSessionId === sessionId,
   );
-  if (handoffs.length > 1)
-    throw new Error("Agent assignment delivered multiple final results");
+  if (handoffs.length > 1) throw new Error("Agent assignment delivered multiple final results");
   if (handoffs.length === 0) return null;
-  if (
-    !acceptsFailedAgentHandoff(
-      handoffs[0],
-      requestId,
-      sessionId,
-      ownerSessionId,
-    )
-  )
+  if (!acceptsFailedAgentHandoff(handoffs[0], requestId, sessionId, ownerSessionId))
     throw new Error("Agent assignment delivered the wrong terminal outcome");
   return handoffs[0];
 }
@@ -2339,12 +2067,7 @@ export function agentRetirementConverged({
 }
 
 async function exactAgentMailboxPending(ctx, identity) {
-  const root = join(
-    ctx.paths.piAgent,
-    "pi-herdsman",
-    "runtime",
-    "mailboxes-v5",
-  );
+  const root = join(ctx.paths.piAgent, "pi-herdsman", "runtime", "mailboxes-v5");
   let dirs;
   try {
     dirs = await readdir(root, { withFileTypes: true });
@@ -2354,19 +2077,14 @@ async function exactAgentMailboxPending(ctx, identity) {
   }
   for (const dir of dirs) {
     if (!/^[0-9a-f]{32}$/.test(dir.name)) continue;
-    if (dir.isSymbolicLink())
-      throw new Error("Agent mailbox inventory contains a symlink");
+    if (dir.isSymbolicLink()) throw new Error("Agent mailbox inventory contains a symlink");
     if (!dir.isDirectory()) continue;
     const mailbox = join(root, dir.name);
     let state;
     try {
       const path = join(mailbox, "state.json");
       const details = await lstat(path);
-      if (
-        !details.isFile() ||
-        details.isSymbolicLink() ||
-        details.size > 64 * 1024
-      )
+      if (!details.isFile() || details.isSymbolicLink() || details.size > 64 * 1024)
         throw new Error("exact Agent mailbox state is not a safe file");
       state = JSON.parse(await readFile(path, "utf8"));
     } catch (error) {
@@ -2382,14 +2100,8 @@ async function exactAgentMailboxPending(ctx, identity) {
       const path = join(mailbox, `${prefix}-${identity.requestId}.json`);
       try {
         const details = await lstat(path);
-        if (
-          !details.isFile() ||
-          details.isSymbolicLink() ||
-          details.size > 4 * 1024 * 1024
-        )
-          throw new Error(
-            "exact Agent mailbox request/result is not a safe file",
-          );
+        if (!details.isFile() || details.isSymbolicLink() || details.size > 4 * 1024 * 1024)
+          throw new Error("exact Agent mailbox request/result is not a safe file");
         const record = JSON.parse(await readFile(path, "utf8"));
         if (
           record.requestId === identity.requestId &&
@@ -2416,14 +2128,7 @@ export function managerHandoffCanReenter(
 ) {
   return (
     !managerLeasePresent &&
-    !managerHandoffDeliveredEntry(
-      contents,
-      repoKey,
-      branch,
-      sessionId,
-      messageId,
-      text,
-    )
+    !managerHandoffDeliveredEntry(contents, repoKey, branch, sessionId, messageId, text)
   );
 }
 
@@ -2444,9 +2149,7 @@ function assistantResultsForPrompt(contents, prompt, marker, matchesMarker) {
       messageText(entry.message.content) === prompt,
   );
   if (!promptEntry) return [];
-  const byId = new Map(
-    entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
-  );
+  const byId = new Map(entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]));
   const descendsFromPrompt = (entry) => {
     let parentId = entry.parentId;
     const visited = new Set();
@@ -2489,10 +2192,7 @@ export function assistantResultForSession(session, prompt, marker) {
 
 // Transcript evidence of a completed response, not Pi's whole-run settlement signal.
 export function assistantResponseCompletedForSession(session, prompt) {
-  return (
-    assistantResultsForPrompt(session.contents, prompt, "", () => true).length >
-    0
-  );
+  return assistantResultsForPrompt(session.contents, prompt, "", () => true).length > 0;
 }
 
 export function rootDelegationDiagnostics(contents, expectedLabel) {
@@ -2503,14 +2203,11 @@ export function rootDelegationDiagnostics(contents, expectedLabel) {
   let result;
   for (const message of messages) {
     if (message.role === "assistant") {
-      for (const block of Array.isArray(message.content)
-        ? message.content
-        : []) {
+      for (const block of Array.isArray(message.content) ? message.content : []) {
         if (
           block?.type === "toolCall" &&
           block.name === "delegate_agent" &&
-          (expectedLabel === undefined ||
-            block.arguments?.label === expectedLabel)
+          (expectedLabel === undefined || block.arguments?.label === expectedLabel)
         ) {
           call = block;
           result = undefined;
@@ -2538,9 +2235,7 @@ export function rootDelegationDiagnostics(contents, expectedLabel) {
     : undefined;
   return {
     expectedLabelMatched:
-      expectedLabel === undefined
-        ? false
-        : Boolean(call && args?.label === expectedLabel),
+      expectedLabel === undefined ? false : Boolean(call && args?.label === expectedLabel),
     matchingResult: !call
       ? "absent"
       : !result
@@ -2607,10 +2302,7 @@ function coreDelegationEdge(contents, label, _ownerSessionId) {
   const result = matches[0].message;
   if (result.isError !== false || result.details?.ok === false)
     return {
-      delegation:
-        result.isError === true || result.details?.ok === false
-          ? "rejected"
-          : "unknown",
+      delegation: result.isError === true || result.details?.ok === false ? "rejected" : "unknown",
       session: "unknown",
       terminalResult: "unknown",
       resultDelivered: "unknown",
@@ -2638,9 +2330,7 @@ function coreDelegationEdge(contents, label, _ownerSessionId) {
 }
 
 async function coreNestedDelegationDiagnostics(ctx, rootContents) {
-  const ownerId = sessionEntries(rootContents).find(
-    (entry) => entry.type === "session",
-  )?.id;
+  const ownerId = sessionEntries(rootContents).find((entry) => entry.type === "session")?.id;
   const inspect = async (contents, label, ownerSessionId) => {
     const edge = coreDelegationEdge(contents, label, ownerSessionId);
     if (!edge.identity) return { edge, child: null };
@@ -2657,12 +2347,7 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
     edge.terminalResult = "unknown";
     edge.terminalStatus = "unknown";
     try {
-      const root = join(
-        ctx.paths.piAgent,
-        "pi-herdsman",
-        "runtime",
-        "mailboxes-v5",
-      );
+      const root = join(ctx.paths.piAgent, "pi-herdsman", "runtime", "mailboxes-v5");
       if (
         !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
           edge.identity.requestId,
@@ -2683,8 +2368,7 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
         try {
           const path = join(mailbox, "state.json");
           const stat = await lstat(path);
-          if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536)
-            continue;
+          if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536) continue;
           state = JSON.parse(await readFile(path, "utf8"));
         } catch (error) {
           if (error.code !== "ENOENT") throw error;
@@ -2740,10 +2424,9 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
               }
             : null,
           stateIdentityMatches: true,
-          requestMatches: [
-            state.activeRequestId,
-            state.completedRequestId,
-          ].includes(edge.identity.requestId),
+          requestMatches: [state.activeRequestId, state.completedRequestId].includes(
+            edge.identity.requestId,
+          ),
           resultIdentityMatches,
         });
       }
@@ -2751,8 +2434,7 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
         edge.terminalResult = "published";
         if (["completed", "failed"].includes(matches[0].status))
           edge.terminalStatus = matches[0].status;
-      } else if (matches.length > 1 || matches.includes(null))
-        edge.terminalResult = "ambiguous";
+      } else if (matches.length > 1 || matches.includes(null)) edge.terminalResult = "ambiguous";
       else edge.terminalResult = "not_observed";
       if (mailboxIdentities.length === 1) {
         const [state] = mailboxIdentities;
@@ -2774,17 +2456,9 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
     }
     return { edge, child, mailboxRecords: [] };
   };
-  const implementer = await inspect(
-    rootContents,
-    "smoke-core-implementer",
-    ownerId,
-  );
+  const implementer = await inspect(rootContents, "smoke-core-implementer", ownerId);
   const scout = implementer.child
-    ? await inspect(
-        implementer.child.contents,
-        "smoke-core-scout",
-        implementer.child.id,
-      )
+    ? await inspect(implementer.child.contents, "smoke-core-scout", implementer.child.id)
     : { edge: null, child: null };
   const next = await inspect(rootContents, "smoke-core-next", ownerId);
   const mailboxEvidence = (observation) => {
@@ -2855,12 +2529,7 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
       /^result:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/iu,
     )?.[1];
     if (canonicalId) {
-      const path = join(
-        ctx.paths.piAgent,
-        "pi-herdsman",
-        "results",
-        canonicalId,
-      );
+      const path = join(ctx.paths.piAgent, "pi-herdsman", "results", canonicalId);
       artifact.path = relative(ctx.paths.piAgent, path);
       try {
         const stat = await lstat(path);
@@ -2869,9 +2538,7 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
         if (!artifact.exists) artifact.error = "invalid_file";
         else if (stat.size > MAX_SESSION_BYTES) artifact.error = "too_large";
         else {
-          new TextDecoder("utf-8", { fatal: true }).decode(
-            await readFile(path),
-          );
+          new TextDecoder("utf-8", { fatal: true }).decode(await readFile(path));
           artifact.readableUtf8 = artifactValid = true;
           artifact.error = null;
         }
@@ -2884,9 +2551,7 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
       entry.message?.role === "assistant" &&
       Array.isArray(entry.message.content)
         ? entry.message.content.flatMap((call) =>
-            call?.type === "toolCall" &&
-            call.name === "attach_handoff" &&
-            call.id
+            call?.type === "toolCall" && call.name === "attach_handoff" && call.id
               ? [{ index, call }]
               : [],
           )
@@ -2896,22 +2561,15 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
       messageText(content)
         .replaceAll(ctx.paths.root, "<smoke-isolation>")
         .replaceAll(homedir(), "<home>")
-        .replace(
-          /\b(api[-_ ]?key|token|secret|password)\b\s*[:=]\s*[^\s,;]+/giu,
-          "$1=<redacted>",
-        )
+        .replace(/\b(api[-_ ]?key|token|secret|password)\b\s*[:=]\s*[^\s,;]+/giu, "$1=<redacted>")
         .replace(/\bBearer\s+\S+/giu, "Bearer <redacted>")
-        .replace(
-          /(?:\/Users\/|\/private\/|\/tmp\/|\/var\/|\/home\/)[^\s"'<>]+/gu,
-          "<path>",
-        )
+        .replace(/(?:\/Users\/|\/private\/|\/tmp\/|\/var\/|\/home\/)[^\s"'<>]+/gu, "<path>")
         .slice(0, 600);
     const calls = attachCalls.slice(0, 4).map(({ index, call }) => {
       const files = Array.isArray(call.arguments?.files)
         ? call.arguments.files.filter(
             (file) =>
-              typeof file === "string" &&
-              /^result:[a-z][a-z0-9_-]{0,31}#[1-9][0-9]*$/u.test(file),
+              typeof file === "string" && /^result:[a-z][a-z0-9_-]{0,31}#[1-9][0-9]*$/u.test(file),
           )
         : [];
       const results = entries.flatMap((entry, resultIndex) => {
@@ -2938,9 +2596,7 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
               agentLabel: details.agentLabel ?? null,
               paneId: details.paneId ?? null,
               piSessionId: details.piSessionId ?? null,
-              errorCategory: STRUCTURED_TOOL_ERROR_CATEGORIES.has(
-                details.error?.category,
-              )
+              errorCategory: STRUCTURED_TOOL_ERROR_CATEGORIES.has(details.error?.category)
                 ? details.error.category
                 : null,
               resultBindings: Array.isArray(details.resultBindings)
@@ -2955,9 +2611,7 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
       return {
         index,
         callId: call.id,
-        fileCount: Array.isArray(call.arguments?.files)
-          ? call.arguments.files.length
-          : 0,
+        fileCount: Array.isArray(call.arguments?.files) ? call.arguments.files.length : 0,
         files: files.slice(0, 4),
         results: results.slice(0, 2),
       };
@@ -2999,9 +2653,7 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
       ? inventoryLine
           .slice("Forwardable result evidence: ".length)
           .split(/,\s*/u)
-          .filter((candidate) =>
-            /^result:[a-z][a-z0-9_-]{0,31}#[1-9][0-9]*$/u.test(candidate),
-          )
+          .filter((candidate) => /^result:[a-z][a-z0-9_-]{0,31}#[1-9][0-9]*$/u.test(candidate))
       : [];
     const importedBindings = ownerEntries.flatMap((entry) =>
       entry.type === "custom" &&
@@ -3053,15 +2705,11 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
       : [];
     const nextResult = nextResults.length === 1 ? nextResults[0] : null;
     const nextResultText = nextResult ? messageText(nextResult.content) : "";
-    const nextSessionEntries = next.child
-      ? sessionEntries(next.child.contents)
-      : [];
+    const nextSessionEntries = next.child ? sessionEntries(next.child.contents) : [];
     const attachedArtifacts = nextSessionEntries.flatMap((entry) => {
       if (entry.type !== "message" || entry.message?.role !== "user") return [];
       return [
-        ...messageText(entry.message.content).matchAll(
-          /<file\b([^>]*)>([\s\S]*?)<\/file>/gu,
-        ),
+        ...messageText(entry.message.content).matchAll(/<file\b([^>]*)>([\s\S]*?)<\/file>/gu),
       ].flatMap((match) => {
         const name = match[1].match(/\bname="([^"]+)"/u)?.[1];
         const bytes = match[1].match(/\bbytes="([0-9]+)"/u)?.[1];
@@ -3085,8 +2733,7 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
     const packageDetails = (content) => {
       try {
         const value = JSON.parse(content.trim());
-        return typeof value.name === "string" &&
-          typeof value.version === "string"
+        return typeof value.name === "string" && typeof value.version === "string"
           ? { name: value.name, version: value.version }
           : null;
       } catch {
@@ -3096,9 +2743,7 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
     const expectedSourceAgent =
       ref?.match(/^result:([a-z][a-z0-9_-]{0,31})#[1-9][0-9]*$/u)?.[1] ?? null;
     const attachedArtifactDetails = (content) => {
-      const match = content
-        .trim()
-        .match(/^Agent result source: ([^\n]+)\n\n([\s\S]+)$/u);
+      const match = content.trim().match(/^Agent result source: ([^\n]+)\n\n([\s\S]+)$/u);
       if (!match) return null;
       try {
         const provenance = JSON.parse(match[1]);
@@ -3118,21 +2763,15 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
       }
     };
     const attachedArtifact =
-      attachedArtifacts.length === 1
-        ? attachedArtifactDetails(attachedArtifacts[0].content)
-        : null;
+      attachedArtifacts.length === 1 ? attachedArtifactDetails(attachedArtifacts[0].content) : null;
     const attachedDetails = attachedArtifact?.package ?? null;
     const nextResponses = nextSessionEntries
-      .filter(
-        (entry) =>
-          entry.type === "message" && entry.message?.role === "assistant",
-      )
+      .filter((entry) => entry.type === "message" && entry.message?.role === "assistant")
       .map((entry) => packageDetails(messageText(entry.message.content)))
       .filter(Boolean);
     const matchingResponse = nextResponses.find(
       (details) =>
-        details.name === attachedDetails?.name &&
-        details.version === attachedDetails?.version,
+        details.name === attachedDetails?.name && details.version === attachedDetails?.version,
     );
     const responseMatchesArtifact = Boolean(
       attachedArtifact?.provenanceMatches &&
@@ -3161,9 +2800,7 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
       },
       scout: {
         sessionId: scoutIdentity?.piSessionId ?? null,
-        sessionPath: scout.child
-          ? relative(ctx.paths.piSessions, scout.child.path)
-          : null,
+        sessionPath: scout.child ? relative(ctx.paths.piSessions, scout.child.path) : null,
         requestId: scoutIdentity?.requestId ?? null,
         mailbox: scoutMailbox,
       },
@@ -3191,9 +2828,7 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
       },
       nextAgent: {
         sessionId: next.child?.id ?? next.edge.identity?.piSessionId ?? null,
-        sessionPath: next.child
-          ? relative(ctx.paths.piSessions, next.child.path)
-          : null,
+        sessionPath: next.child ? relative(ctx.paths.piSessions, next.child.path) : null,
         requestId: next.edge.identity?.requestId ?? null,
         callCount: nextCalls.length,
         callId: nextCall?.call.id ?? null,
@@ -3210,9 +2845,7 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
             ? { name: attachedDetails.name, version: attachedDetails.version }
             : null,
           provenanceMatches: attachedArtifact?.provenanceMatches === true,
-          readback: readback
-            ? { name: readback.name, version: readback.version }
-            : null,
+          readback: readback ? { name: readback.name, version: readback.version } : null,
           responseMatchesArtifact,
         },
       },
@@ -3222,9 +2855,7 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
   const deliver = (parentContents, edge) => {
     if (!edge?.identity) return { state: "unknown", terminalStatus: "unknown" };
     const entries = sessionEntries(parentContents);
-    const ownerSessionId = entries.find(
-      (entry) => entry.type === "session",
-    )?.id;
+    const ownerSessionId = entries.find((entry) => entry.type === "session")?.id;
     const receipts = entries.filter(
       (entry) =>
         entry.type === "custom_message" &&
@@ -3232,29 +2863,19 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
         entry.details?.requestId === edge.identity.requestId &&
         entry.details?.piSessionId === edge.identity.piSessionId &&
         entry.details?.ownerSessionId === ownerSessionId &&
-        (!edge.identity.runId ||
-          entry.details?.runId === edge.identity.runId) &&
-        (!edge.identity.workspaceId ||
-          entry.details?.workspaceId === edge.identity.workspaceId) &&
-        (!edge.identity.agentLabel ||
-          entry.details?.agentLabel === edge.identity.agentLabel) &&
-        (!edge.identity.paneId ||
-          entry.details?.paneId === edge.identity.paneId) &&
+        (!edge.identity.runId || entry.details?.runId === edge.identity.runId) &&
+        (!edge.identity.workspaceId || entry.details?.workspaceId === edge.identity.workspaceId) &&
+        (!edge.identity.agentLabel || entry.details?.agentLabel === edge.identity.agentLabel) &&
+        (!edge.identity.paneId || entry.details?.paneId === edge.identity.paneId) &&
         (!edge.identity.agentDefinition ||
           entry.details?.agentDefinition === edge.identity.agentDefinition),
     );
     return {
-      state:
-        receipts.length === 1
-          ? "observed"
-          : receipts.length
-            ? "ambiguous"
-            : "not_observed",
+      state: receipts.length === 1 ? "observed" : receipts.length ? "ambiguous" : "not_observed",
       terminalStatus:
         edge.terminalStatus !== "unknown"
           ? edge.terminalStatus
-          : receipts.length === 1 &&
-              ["completed", "failed"].includes(receipts[0].details?.status)
+          : receipts.length === 1 && ["completed", "failed"].includes(receipts[0].details?.status)
             ? receipts[0].details.status
             : "unknown",
     };
@@ -3271,22 +2892,18 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
     ),
   );
   let firstUnverifiedBoundary = "none_observed";
-  if (implementer.edge.delegation !== "accepted")
-    firstUnverifiedBoundary = "root_to_implementer";
+  if (implementer.edge.delegation !== "accepted") firstUnverifiedBoundary = "root_to_implementer";
   else if (rootReceipt.state === "observed") {
     if (!completionMarker) firstUnverifiedBoundary = "root_completion";
   } else if (implementer.edge.terminalResult === "published")
     firstUnverifiedBoundary = "implementer_result_delivery";
-  else if (implementer.edge.session !== "observed")
-    firstUnverifiedBoundary = "implementer_session";
-  else if (scout.edge?.delegation !== "accepted")
-    firstUnverifiedBoundary = "implementer_to_scout";
+  else if (implementer.edge.session !== "observed") firstUnverifiedBoundary = "implementer_session";
+  else if (scout.edge?.delegation !== "accepted") firstUnverifiedBoundary = "implementer_to_scout";
   else if (implementerReceipt.state === "observed")
     firstUnverifiedBoundary = "implementer_result_delivery";
   else if (scout.edge.terminalResult === "published")
     firstUnverifiedBoundary = "scout_result_delivery";
-  else if (scout.edge.session !== "observed")
-    firstUnverifiedBoundary = "scout_session";
+  else if (scout.edge.session !== "observed") firstUnverifiedBoundary = "scout_session";
   else if (implementerReceipt.state !== "observed")
     firstUnverifiedBoundary = "scout_result_delivery";
   else firstUnverifiedBoundary = "implementer_result_delivery";
@@ -3296,11 +2913,8 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
         delegation: implementer.edge.delegation,
         session: implementer.edge.session,
         terminalResult:
-          rootReceipt.state === "observed"
-            ? "delivered"
-            : implementer.edge.terminalResult,
-        terminalStatus:
-          rootReceipt.terminalStatus ?? implementer.edge.terminalStatus,
+          rootReceipt.state === "observed" ? "delivered" : implementer.edge.terminalResult,
+        terminalStatus: rootReceipt.terminalStatus ?? implementer.edge.terminalStatus,
         resultDelivered: rootReceipt.state,
       },
       rootCompletionMarker: completionMarker,
@@ -3309,11 +2923,8 @@ async function coreNestedDelegationDiagnostics(ctx, rootContents) {
             delegation: scout.edge.delegation,
             session: scout.edge.session,
             terminalResult:
-              implementerReceipt.state === "observed"
-                ? "delivered"
-                : scout.edge.terminalResult,
-            terminalStatus:
-              implementerReceipt.terminalStatus ?? scout.edge.terminalStatus,
+              implementerReceipt.state === "observed" ? "delivered" : scout.edge.terminalResult,
+            terminalStatus: implementerReceipt.terminalStatus ?? scout.edge.terminalStatus,
             resultDelivered: implementerReceipt.state,
           }
         : {
@@ -3337,21 +2948,13 @@ function summarizeSession(contents) {
   for (const entry of entries) {
     if (entry.type !== "message") continue;
     const message = entry.message ?? {};
-    for (const tool of message.toolsAdded ?? [])
-      if (tool.name) tools.add(tool.name);
+    for (const tool of message.toolsAdded ?? []) if (tool.name) tools.add(tool.name);
     const text = messageText(message.content);
     const calls = Array.isArray(message.content)
-      ? message.content
-          .filter((block) => block?.type === "toolCall")
-          .map((block) => block.name)
+      ? message.content.filter((block) => block?.type === "toolCall").map((block) => block.name)
       : [];
-    if (
-      message.role === "system" &&
-      typeof message.sections?.tools === "string"
-    ) {
-      for (const [, name] of message.sections.tools.matchAll(
-        /^\s*-\s+([\w-]+):/gm,
-      ))
+    if (message.role === "system" && typeof message.sections?.tools === "string") {
+      for (const [, name] of message.sections.tools.matchAll(/^\s*-\s+([\w-]+):/gm))
         tools.add(name);
     }
     if (message.role !== "system" || calls.length || text)
@@ -3359,9 +2962,7 @@ function summarizeSession(contents) {
         role: message.role,
         stopReason: message.stopReason,
         errorMessage:
-          typeof message.errorMessage === "string"
-            ? message.errorMessage.slice(0, 500)
-            : undefined,
+          typeof message.errorMessage === "string" ? message.errorMessage.slice(0, 500) : undefined,
         toolName: message.toolName,
         isError: message.isError,
         tools: calls,
@@ -3395,9 +2996,7 @@ export function parseHerdrOutput(stdout, args) {
   try {
     value = JSON.parse(stdout.trim());
   } catch {
-    protocolError(
-      `herdr ${args.slice(0, 2).join(" ")} returned malformed JSON`,
-    );
+    protocolError(`herdr ${args.slice(0, 2).join(" ")} returned malformed JSON`);
   }
   if (args[0] === "status" && args[1] === "--json") return value;
   // Session JSON is emitted by the CLI rather than the API response envelope.
@@ -3408,9 +3007,7 @@ export function parseHerdrOutput(stdout, args) {
     !Object.hasOwn(value, "id") ||
     !Object.hasOwn(value, "result")
   )
-    protocolError(
-      `herdr ${args.slice(0, 2).join(" ")} returned no result envelope`,
-    );
+    protocolError(`herdr ${args.slice(0, 2).join(" ")} returned no result envelope`);
   return value.result;
 }
 
@@ -3435,37 +3032,24 @@ async function tryHerdr(args, options = {}) {
 export function herdrErrorCode(error) {
   try {
     const value = JSON.parse(String(error?.stderr ?? "").trim());
-    return typeof value?.error?.code === "string"
-      ? value.error.code
-      : undefined;
+    return typeof value?.error?.code === "string" ? value.error.code : undefined;
   } catch {
     return undefined;
   }
 }
 
 export async function classifyOldExecution(snapshot, target, inspect) {
-  if (!Array.isArray(snapshot?.agents) || !Array.isArray(snapshot?.panes))
-    return "unknown";
+  if (!Array.isArray(snapshot?.agents) || !Array.isArray(snapshot?.panes)) return "unknown";
   const matches = (entry) =>
     entry?.pane_id === target.paneId ||
-    (entry?.agent_session?.kind === "id" &&
-      entry.agent_session.value === target.sessionId) ||
+    (entry?.agent_session?.kind === "id" && entry.agent_session.value === target.sessionId) ||
     (entry?.agent_session?.kind === "path" &&
       typeof entry.agent_session.value === "string" &&
       resolve(entry.agent_session.value) === target.sessionPath);
-  const matchingEntries = [...snapshot.agents, ...snapshot.panes].filter(
-    matches,
-  );
-  if (
-    matchingEntries.some(
-      (entry) => typeof entry.pane_id !== "string" || !entry.pane_id,
-    )
-  )
+  const matchingEntries = [...snapshot.agents, ...snapshot.panes].filter(matches);
+  if (matchingEntries.some((entry) => typeof entry.pane_id !== "string" || !entry.pane_id))
     return "unknown";
-  const paneIds = new Set([
-    target.paneId,
-    ...matchingEntries.map((entry) => entry.pane_id),
-  ]);
+  const paneIds = new Set([target.paneId, ...matchingEntries.map((entry) => entry.pane_id)]);
   let uncertain = false;
   for (const paneId of paneIds) {
     const state = await inspect(paneId);
@@ -3484,8 +3068,7 @@ export function candidateStartObservationError(observed, paneId) {
 
 export function requireTestedBaseline(name, actualVersion, baselineVersion) {
   const parse = (version, kind) => {
-    const match =
-      typeof version === "string" && /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+    const match = typeof version === "string" && /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
     if (!match)
       throw new Error(
         kind === "baseline"
@@ -3510,9 +3093,7 @@ export function requireTestedBaseline(name, actualVersion, baselineVersion) {
 export async function preflight(pkg, runCommand = run) {
   const nodeEngine = pkg?.engines?.node;
   const nodeBaseline =
-    typeof nodeEngine === "string"
-      ? /^>=(\d+\.\d+\.\d+)$/.exec(nodeEngine)?.[1]
-      : undefined;
+    typeof nodeEngine === "string" ? /^>=(\d+\.\d+\.\d+)$/.exec(nodeEngine)?.[1] : undefined;
   const piBaseline = pkg?.piHerdsman?.runtime?.pi;
   const herdrBaseline = pkg?.piHerdsman?.runtime?.herdr?.version;
   requireTestedBaseline("Node", process.versions.node, nodeBaseline);
@@ -3531,11 +3112,7 @@ export async function preflight(pkg, runCommand = run) {
 export async function startParent(
   paths,
   owned,
-  {
-    spawnProcess = spawn,
-    tryHerdrCommand = tryHerdr,
-    wait = waitForEvidence,
-  } = {},
+  { spawnProcess = spawn, tryHerdrCommand = tryHerdr, wait = waitForEvidence } = {},
 ) {
   const name = `phs-${randomUUID().slice(0, 12)}`;
   nestedHerdrApiSocketPath(paths, name);
@@ -3562,9 +3139,7 @@ export async function startParent(
     async () => {
       if (parent.spawnError) throw parent.spawnError;
       if (parent.exit)
-        throw new Error(
-          `owned Herdr server exited (${JSON.stringify(parent.exit)})`,
-        );
+        throw new Error(`owned Herdr server exited (${JSON.stringify(parent.exit)})`);
       const result = await tryHerdrCommand(["status", "--json"], {
         env,
         timeout: OBSERVATION_TIMEOUT_MS,
@@ -3590,23 +3165,9 @@ export async function startParent(
   return { name, env };
 }
 
-export async function createParentWorkspace(
-  paths,
-  parent,
-  owned,
-  cwd,
-  herdrCommand = herdr,
-) {
+export async function createParentWorkspace(paths, parent, owned, cwd, herdrCommand = herdr) {
   const created = await herdrCommand(
-    [
-      "workspace",
-      "create",
-      "--cwd",
-      cwd,
-      "--label",
-      "pi-herdsman-smoke",
-      "--no-focus",
-    ],
+    ["workspace", "create", "--cwd", cwd, "--label", "pi-herdsman-smoke", "--no-focus"],
     { env: parent.env, timeout: OBSERVATION_TIMEOUT_MS },
   );
   const workspaceId = created?.workspace?.workspace_id;
@@ -3628,16 +3189,11 @@ async function preflightParent(pkg, parentEnv) {
     timeout: OBSERVATION_TIMEOUT_MS,
   });
   if (!status?.server?.running) throw new Error("Herdr server is not running");
-  if (!status?.server?.compatible)
-    throw new Error("Herdr client/server are incompatible");
+  if (!status?.server?.compatible) throw new Error("Herdr client/server are incompatible");
   const herdrClientVersion = status.client?.version;
   if (typeof herdrClientVersion !== "string")
     throw new Error("Herdr client version is unavailable or invalid");
-  requireTestedBaseline(
-    "Herdr",
-    herdrClientVersion,
-    pkg.piHerdsman.runtime.herdr.version,
-  );
+  requireTestedBaseline("Herdr", herdrClientVersion, pkg.piHerdsman.runtime.herdr.version);
   return { herdrClientVersion };
 }
 
@@ -3650,12 +3206,7 @@ async function createIsolation() {
     herdrConfig: join(root, "herdr.toml"),
     piAgent: join(root, "pi-agent"),
     piSessions: join(root, "pi-sessions"),
-    herdrStateExtension: join(
-      root,
-      "pi-agent",
-      "extensions",
-      "herdr-agent-state.ts",
-    ),
+    herdrStateExtension: join(root, "pi-agent", "extensions", "herdr-agent-state.ts"),
     authLink: join(root, "pi-agent", "auth.json"),
   };
   try {
@@ -3687,8 +3238,7 @@ async function linkIfPresent(source, target) {
 }
 
 export async function preparePi(paths, model, execute = run) {
-  const sourceAgentDir =
-    process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+  const sourceAgentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
   const env = isolatedEnv(process.env, paths);
   const authArgs = ["auth", "check", "--model", model, "--no-refresh"];
   try {
@@ -3698,12 +3248,8 @@ export async function preparePi(paths, model, execute = run) {
     });
     return "ambient";
   } catch {
-    if (
-      !(await linkIfPresent(join(sourceAgentDir, "auth.json"), paths.authLink))
-    )
-      throw new Error(
-        "Pi auth check failed and no current auth.json is available",
-      );
+    if (!(await linkIfPresent(join(sourceAgentDir, "auth.json"), paths.authLink)))
+      throw new Error("Pi auth check failed and no current auth.json is available");
     try {
       await execute("pi", authArgs, {
         env,
@@ -3711,9 +3257,7 @@ export async function preparePi(paths, model, execute = run) {
       });
       return "auth.json symlink";
     } catch {
-      throw new Error(
-        "Pi auth check failed with ambient credentials and auth.json",
-      );
+      throw new Error("Pi auth check failed with ambient credentials and auth.json");
     }
   }
 }
@@ -3774,19 +3318,14 @@ async function startNestedHerdr(
       `PI_CODING_AGENT_DIR=${paths.piAgent}`,
       "--env",
       `PI_CODING_AGENT_SESSION_DIR=${paths.piSessions}`,
-      ...(managerRecoveryDiagnostics
-        ? ["--env", "PI_HERDSMAN_MANAGER_DIAGNOSTICS=1"]
-        : []),
+      ...(managerRecoveryDiagnostics ? ["--env", "PI_HERDSMAN_MANAGER_DIAGNOSTICS=1"] : []),
     ],
     { env: parentEnv },
   );
   const result = host;
   owned.hostTabId = result.tab?.tab_id;
   owned.hostPaneId = result.root_pane?.pane_id;
-  assert.ok(
-    owned.hostTabId && owned.hostPaneId,
-    "Herdr tab response omitted owned IDs",
-  );
+  assert.ok(owned.hostTabId && owned.hostPaneId, "Herdr tab response omitted owned IDs");
   owned.sessionName = sessionName;
   await run(
     "herdr",
@@ -3810,8 +3349,7 @@ async function startNestedHerdr(
 
 function nestedHost(args) {
   const [sessionName, root] = args;
-  if (!sessionName || !root)
-    throw new Error("nested host requires a session and temp root");
+  if (!sessionName || !root) throw new Error("nested host requires a session and temp root");
   const paths = {
     root,
     xdgConfig: join(root, "xdg-config"),
@@ -3874,9 +3412,7 @@ export async function promptContinuationRoot(
       async () => {
         const result = await list(ctx, ["agent", "list"]);
         if (!result.ok) return { done: false, observationError: result.error };
-        const agent = (result.value.agents ?? []).find(
-          (item) => item.pane_id === ctx.rootPaneId,
-        );
+        const agent = (result.value.agents ?? []).find((item) => item.pane_id === ctx.rootPaneId);
         return {
           done:
             typeof agent?.agent_session?.value === "string" &&
@@ -3892,17 +3428,14 @@ export async function promptContinuationRoot(
       { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS, pollMs: 200 },
     );
   } catch (error) {
-    if (error.code !== "SMOKE_TIMEOUT" && error.code !== "SMOKE_STALLED")
-      throw error;
+    if (error.code !== "SMOKE_TIMEOUT" && error.code !== "SMOKE_STALLED") throw error;
     const [terminal, process] = await Promise.allSettled([
       nestedPaneText(ctx, ctx.rootPaneId, "recent-unwrapped"),
       tryNestedCommand(ctx, ["pane", "process-info", "--pane", ctx.rootPaneId]),
     ]);
     const terminalText = terminal.status === "fulfilled" ? terminal.value : "";
     const processInfo =
-      process.status === "fulfilled" && process.value.ok
-        ? process.value.value?.process_info
-        : null;
+      process.status === "fulfilled" && process.value.ok ? process.value.value?.process_info : null;
     const lines = sanitizeManagerBootstrapText(terminalText, ctx)
       .split("\n")
       .slice(-40)
@@ -3937,21 +3470,9 @@ async function waitForNestedHerdr(ctx) {
 }
 
 export function requireNestedHerdrServer(status, sessionName, baseline) {
-  assert.equal(
-    status?.server?.running,
-    true,
-    "nested Herdr server is not running",
-  );
-  assert.equal(
-    status.server.session,
-    sessionName,
-    "nested Herdr session mismatch",
-  );
-  assert.equal(
-    status.server.compatible,
-    true,
-    "nested Herdr client/server incompatible",
-  );
+  assert.equal(status?.server?.running, true, "nested Herdr server is not running");
+  assert.equal(status.server.session, sessionName, "nested Herdr session mismatch");
+  assert.equal(status.server.compatible, true, "nested Herdr client/server incompatible");
 
   requireTestedBaseline("Herdr server", status.server.version, baseline);
 
@@ -3964,33 +3485,23 @@ async function startCandidate(ctx) {
     ctx.herdrStateExtension,
     join(ctx.paths.piAgent, "extensions", "herdr-agent-state.ts"),
   );
-  assert.ok(
-    isAbsolute(ctx.herdrStateExtension),
-    "Herdr state extension path must be absolute",
-  );
+  assert.ok(isAbsolute(ctx.herdrStateExtension), "Herdr state extension path must be absolute");
   await Promise.all([
     access(ctx.candidateExtension),
     access(ctx.herdrStateExtension),
-    ...(ctx.simulatedProviderExtension
-      ? [access(ctx.simulatedProviderExtension)]
-      : []),
-    ...(ctx.chiefTreeProbeExtension
-      ? [access(ctx.chiefTreeProbeExtension)]
-      : []),
+    ...(ctx.simulatedProviderExtension ? [access(ctx.simulatedProviderExtension)] : []),
+    ...(ctx.chiefTreeProbeExtension ? [access(ctx.chiefTreeProbeExtension)] : []),
   ]);
   const panes = await nestedCommand(ctx, ["pane", "list"]);
   assert.ok(Array.isArray(panes.panes), "Herdr pane list result is malformed");
-  const pane = panes.panes.find(
-    (item) => resolve(item.cwd ?? "") === ctx.rootCwd,
-  );
+  const pane = panes.panes.find((item) => resolve(item.cwd ?? "") === ctx.rootCwd);
   const paneId = pane?.pane_id;
   assert.ok(paneId, "nested primary pane ID was not found");
   assert.ok(pane.workspace_id, "nested primary workspace ID was not found");
   ctx.rootWorkspaceId = pane.workspace_id;
   assert.equal(resolve(pane.cwd), ctx.rootCwd);
   ctx.rootPaneId = paneId;
-  const prompt =
-    ctx.scenario === "continuation" ? undefined : ctx.initialPrompt;
+  const prompt = ctx.scenario === "continuation" ? undefined : ctx.initialPrompt;
   assert.ok(
     prompt === undefined || typeof prompt === "string",
     "candidate initial prompt must be a string when present",
@@ -4006,10 +3517,7 @@ async function startCandidate(ctx) {
       : {}),
     model: ctx.model,
   });
-  let candidateCommand = worktreePiCommand([
-    ...args,
-    ...(prompt === undefined ? [] : [prompt]),
-  ]);
+  let candidateCommand = worktreePiCommand([...args, ...(prompt === undefined ? [] : [prompt])]);
   if (ctx.scenario === "manager-bootstrap") {
     const diagnosticDir = join(ctx.paths.root, "manager-bootstrap-diagnostics");
     await mkdir(diagnosticDir, { recursive: true });
@@ -4028,24 +3536,15 @@ async function startCandidate(ctx) {
     );
     candidateCommand = [wrapper, ...candidateCommand];
   }
-  await run(
-    "herdr",
-    ["pane", "run", paneId, rootCandidateCommand(candidateCommand)],
-    {
-      env: nestedControlEnv(process.env, ctx.paths, ctx.sessionName),
-    },
-  );
+  await run("herdr", ["pane", "run", paneId, rootCandidateCommand(candidateCommand)], {
+    env: nestedControlEnv(process.env, ctx.paths, ctx.sessionName),
+  });
   const simulatedCore = ctx.scenario === "core" && ctx.simulated;
   const started = await waitForEvidence(
     ctx,
     "candidate-start",
     async () => {
-      const observed = await tryNestedCommand(ctx, [
-        "pane",
-        "process-info",
-        "--pane",
-        paneId,
-      ]);
+      const observed = await tryNestedCommand(ctx, ["pane", "process-info", "--pane", paneId]);
       const observationError = candidateStartObservationError(observed, paneId);
       if (observationError) return observationError;
       const matches = candidateProcess(
@@ -4062,13 +3561,9 @@ async function startCandidate(ctx) {
         "candidate-start",
       );
       if (matches.length > 0 && ctx.scenario === "core")
-        ctx.coreCandidateStartRecords = sanitizedProcessRecords(
-          inspection.records,
-        );
+        ctx.coreCandidateStartRecords = sanitizedProcessRecords(inspection.records);
       const root =
-        matches.length === 1 &&
-        Number.isSafeInteger(matches[0].pid) &&
-        matches[0].pid > 0
+        matches.length === 1 && Number.isSafeInteger(matches[0].pid) && matches[0].pid > 0
           ? { paneId, pid: matches[0].pid }
           : null;
       return {
@@ -4120,9 +3615,7 @@ export function terminalFailureEvidence(contents, branch, sessionId) {
     ),
   );
   const success = reports.some((entry) =>
-    /Project complete|execution completed successfully/i.test(
-      String(entry.content),
-    ),
+    /Project complete|execution completed successfully/i.test(String(entry.content)),
   );
   const toolCalls = entries.flatMap((entry) =>
     entry.message?.role === "assistant" && Array.isArray(entry.message.content)
@@ -4133,8 +3626,7 @@ export function terminalFailureEvidence(contents, branch, sessionId) {
     executionFailures: failures.length,
     logicalReports: reports.length,
     actionable:
-      failures.length === 1 &&
-      /inspect|unresolved|failed/i.test(String(failures[0].content)),
+      failures.length === 1 && /inspect|unresolved|failed/i.test(String(failures[0].content)),
     successHandoff: success,
     toolCalls: toolCalls.length,
     toolNames: toolCalls.map((part) => part.name),
@@ -4152,11 +3644,7 @@ export function matchPiProvenance(
 ) {
   try {
     const matches = records.filter((record) => record.sessionId === sessionId);
-    assert.equal(
-      matches.length,
-      1,
-      `expected one provenance row for ${sessionId}`,
-    );
+    assert.equal(matches.length, 1, `expected one provenance row for ${sessionId}`);
     const [record] = matches;
     assert.equal(record.packageName, "@earendil-works/pi-coding-agent");
     assert.equal(
@@ -4166,14 +3654,8 @@ export function matchPiProvenance(
     );
     assert.equal(record.model, expectedModel);
     assert.equal(record.hasAgentDefinitions, requireAgentDefinitions);
-    const processes = foregroundProcesses.filter(
-      (process) => process.pid === record.pid,
-    );
-    assert.equal(
-      processes.length,
-      1,
-      `expected one foreground PID match in pane ${paneId}`,
-    );
+    const processes = foregroundProcesses.filter((process) => process.pid === record.pid);
+    assert.equal(processes.length, 1, `expected one foreground PID match in pane ${paneId}`);
     assert.ok(Number.isSafeInteger(record.pid) && record.pid > 0);
     return { paneId, pid: record.pid, sessionId, piVersion: record.piVersion };
   } catch (error) {
@@ -4182,31 +3664,18 @@ export function matchPiProvenance(
   }
 }
 
-export function assertContinuationFauxEvidence(
-  sessionStarts,
-  provenance,
-  sessionId,
-  pids,
-) {
+export function assertContinuationFauxEvidence(sessionStarts, provenance, sessionId, pids) {
   assert.equal(pids.length, 2, "expected two continuation generation PIDs");
-  assert.notEqual(
-    pids[0],
-    pids[1],
-    "continuation generations must use distinct PIDs",
-  );
+  assert.notEqual(pids[0], pids[1], "continuation generations must use distinct PIDs");
   for (const pid of pids) {
     assert.ok(
-      sessionStarts.some(
-        (record) => record.sessionId === sessionId && record.pid === pid,
-      ),
+      sessionStarts.some((record) => record.sessionId === sessionId && record.pid === pid),
       `missing faux session_start evidence for ${sessionId} PID ${pid}`,
     );
     assert.ok(
       provenance.some(
         (record) =>
-          record.sessionId === sessionId &&
-          record.pid === pid &&
-          record.model === "continuation",
+          record.sessionId === sessionId && record.pid === pid && record.model === "continuation",
       ),
       `missing faux continuation provider request for ${sessionId} PID ${pid}`,
     );
@@ -4214,11 +3683,7 @@ export function assertContinuationFauxEvidence(
 }
 
 export function rootFailureProvenance(contents, sessionId) {
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(
-      sessionId ?? "",
-    )
-  )
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(sessionId ?? ""))
     return null;
   try {
     const matches = contents
@@ -4243,11 +3708,7 @@ export function rootFailureProvenance(contents, sessionId) {
   }
 }
 
-export function scenarioVersionProvenance(
-  contents,
-  sessionIds,
-  expectedVersion,
-) {
+export function scenarioVersionProvenance(contents, sessionIds, expectedVersion) {
   const rows = contents
     .split(/\r?\n/u)
     .filter(Boolean)
@@ -4256,13 +3717,9 @@ export function scenarioVersionProvenance(
     const records = rows
       .filter((row) => row.sessionId === sessionId)
       .map((row) => rootFailureProvenance(JSON.stringify(row), sessionId));
+    requireSmokeEvidence(records.every(Boolean), `invalid Pi provenance for ${sessionId}`);
     requireSmokeEvidence(
-      records.every(Boolean),
-      `invalid Pi provenance for ${sessionId}`,
-    );
-    requireSmokeEvidence(
-      records.length > 0 &&
-        new Set(records.map((record) => record.pid)).size === records.length,
+      records.length > 0 && new Set(records.map((record) => record.pid)).size === records.length,
       `missing unique Pi provenance for ${sessionId}`,
     );
     for (const provenance of records)
@@ -4331,8 +3788,7 @@ export function coreAgentDefinitionsExpectations(sessions, rootId) {
             entry.type === "message" &&
             entry.message?.role === "assistant" &&
             entry.message.content?.some(
-              (part) =>
-                part.type === "toolCall" && part.name === "delegate_agent",
+              (part) => part.type === "toolCall" && part.name === "delegate_agent",
             ),
         ),
     ]),
@@ -4362,23 +3818,13 @@ export function coreObservationReady({
     sessionIds.size > 0 &&
     [...sessionIds].every((sessionId) => {
       const record = provenance.find((item) => item.sessionId === sessionId);
-      return (
-        Number.isSafeInteger(record?.pid) &&
-        record.pid > 0 &&
-        observedPids.has(record.pid)
-      );
+      return Number.isSafeInteger(record?.pid) && record.pid > 0 && observedPids.has(record.pid);
     })
   );
 }
 
-export function coreCorrelationSummary(
-  provenanceObservation,
-  observedPids,
-  done,
-) {
-  const pids = [...observedPids].filter(
-    (pid) => Number.isSafeInteger(pid) && pid > 0,
-  );
+export function coreCorrelationSummary(provenanceObservation, observedPids, done) {
+  const pids = [...observedPids].filter((pid) => Number.isSafeInteger(pid) && pid > 0);
   if (!provenanceObservation)
     return {
       observedPids: pids.slice(0, 40),
@@ -4390,11 +3836,7 @@ export function coreCorrelationSummary(
   let matched = 0;
   for (const sessionId of sessionIds) {
     const record = provenance.find((item) => item.sessionId === sessionId);
-    if (
-      Number.isSafeInteger(record?.pid) &&
-      record.pid > 0 &&
-      observedPids.has(record.pid)
-    )
+    if (Number.isSafeInteger(record?.pid) && record.pid > 0 && observedPids.has(record.pid))
       matched++;
   }
   return {
@@ -4424,14 +3866,14 @@ async function coreObservationProvenance(ctx) {
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-  const sessionFiles = (
-    await readdir(ctx.paths.piSessions, { recursive: true })
-  ).filter((file) => file.endsWith(".jsonl"));
+  const sessionFiles = (await readdir(ctx.paths.piSessions, { recursive: true })).filter((file) =>
+    file.endsWith(".jsonl"),
+  );
   const sessionIds = new Set();
   for (const file of sessionFiles) {
-    const header = sessionEntries(
-      await readFile(join(ctx.paths.piSessions, file), "utf8"),
-    ).find((entry) => entry.type === "session");
+    const header = sessionEntries(await readFile(join(ctx.paths.piSessions, file), "utf8")).find(
+      (entry) => entry.type === "session",
+    );
     if (typeof header?.id === "string" && header.id) sessionIds.add(header.id);
   }
   return { provenance, sessionIds };
@@ -4455,11 +3897,7 @@ async function prepareTrustedFixtureWorktree(ctx, branch) {
     "--workspace",
     ctx.rootWorkspaceId,
   ]);
-  const worktree = captureTerminalFailureWorktree(
-    ctx,
-    topology.worktrees ?? [],
-    branch,
-  );
+  const worktree = captureTerminalFailureWorktree(ctx, topology.worktrees ?? [], branch);
   assert.ok(worktree, "fixture worktree was not created");
   ctx.owned.managerWorktreeRetirementRequested = true;
   const trustStore = new ProjectTrustStore(ctx.paths.piAgent);
@@ -4476,8 +3914,7 @@ async function prepareTrustedFixtureWorktree(ctx, branch) {
 
 async function runTerminalFailureSmoke(ctx) {
   const branch = `herdsman/smoke-terminal-failure-${randomUUID()}`;
-  const task =
-    "Do not call tools or perform work. Wait for your first model response.";
+  const task = "Do not call tools or perform work. Wait for your first model response.";
   const providerPath = ctx.simulatedProviderExtension;
   const evidenceDir = join(ctx.paths.piAgent, "pi-herdsman", "runtime");
   await mkdir(evidenceDir, { recursive: true });
@@ -4534,8 +3971,7 @@ async function runTerminalFailureSmoke(ctx) {
   ctx.managerRecovery = { branch };
   await prepareTrustedFixtureWorktree(ctx, branch);
   const root = async () => rootSessionSnapshot(ctx);
-  const agents = async () =>
-    (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
+  const agents = async () => (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
   const prompt = `Use delegate_work exactly once. Set branch to exactly ${branch}, task to exactly ${JSON.stringify(task)}, and omit base and files. After it returns, wait for the Lead's report. Do not create or resume other work.`;
   markStage(ctx, "terminal-failure-manager-start");
   await waitForEvidence(
@@ -4544,8 +3980,7 @@ async function runTerminalFailureSmoke(ctx) {
     async () => {
       const rootAgent = (await agents()).find(
         (agent) =>
-          agent.pane_id === ctx.rootPaneId &&
-          typeof agent.agent_session?.value === "string",
+          agent.pane_id === ctx.rootPaneId && typeof agent.agent_session?.value === "string",
       );
       return {
         done: !!rootAgent,
@@ -4588,15 +4023,12 @@ async function runTerminalFailureSmoke(ctx) {
     "--workspace",
     ctx.rootWorkspaceId,
   ]);
-  const exactWorktree = (worktrees.worktrees ?? []).filter(
-    (item) => item.branch === branch,
-  );
+  const exactWorktree = (worktrees.worktrees ?? []).filter((item) => item.branch === branch);
   assert.equal(exactWorktree.length, 1);
   const paneCwd = (await nestedCommand(ctx, ["pane", "list"])).panes.find(
     (pane) => pane.pane_id === paneId,
   )?.cwd;
-  const worktreePath =
-    exactWorktree[0].path ?? exactWorktree[0].worktree_path ?? paneCwd;
+  const worktreePath = exactWorktree[0].path ?? exactWorktree[0].worktree_path ?? paneCwd;
   assert.ok(
     typeof worktreePath === "string" && isAbsolute(worktreePath),
     "exact assigned Lead pane must identify its worktree path",
@@ -4615,16 +4047,13 @@ async function runTerminalFailureSmoke(ctx) {
       const manager = await root();
       const requests = await readFile(attemptsPath, "utf8").catch(() => "");
       const settled = await readFile(settledPath, "utf8").catch(() => "");
-      const reports = manager
-        ? terminalFailureEvidence(manager.contents, branch, sessionId)
-        : null;
+      const reports = manager ? terminalFailureEvidence(manager.contents, branch, sessionId) : null;
       const failureMessage =
         manager &&
-        projectMessageEntries(manager.contents, branch, sessionId).find(
-          (entry) =>
-            /Lead model execution failed|Lead execution settled without verified completion/.test(
-              String(entry.content),
-            ),
+        projectMessageEntries(manager.contents, branch, sessionId).find((entry) =>
+          /Lead model execution failed|Lead execution settled without verified completion/.test(
+            String(entry.content),
+          ),
         );
       const managerResponded = !!(
         manager &&
@@ -4655,17 +4084,13 @@ async function runTerminalFailureSmoke(ctx) {
       const finalError =
         leadSession &&
         sessionEntries(leadSession.contents).some(
-          (entry) =>
-            entry.message?.role === "assistant" &&
-            entry.message.stopReason === "error",
+          (entry) => entry.message?.role === "assistant" && entry.message.stopReason === "error",
         );
       const partialObserved =
-        leadSession &&
-        leadSession.contents.includes("CONTROLLED_PARTIAL_RESPONSE");
+        leadSession && leadSession.contents.includes("CONTROLLED_PARTIAL_RESPONSE");
       const leadToolCalls = leadSession
         ? sessionEntries(leadSession.contents).flatMap((entry) =>
-            entry.message?.role === "assistant" &&
-            Array.isArray(entry.message.content)
+            entry.message?.role === "assistant" && Array.isArray(entry.message.content)
               ? entry.message.content.filter((part) => part.type === "toolCall")
               : [],
           ).length
@@ -4703,8 +4128,7 @@ async function runTerminalFailureSmoke(ctx) {
           managerReceipt: failureMessage ? "observed" : "not_observed",
           managerFollowup: managerResponded ? "observed" : "not_observed",
           settledCount: settledRows.length,
-          settledNonAborted:
-            settledRows.length === 1 && settledRows[0].aborted === false,
+          settledNonAborted: settledRows.length === 1 && settledRows[0].aborted === false,
           finalError: !!finalError,
           partialObserved: !!partialObserved,
           leadToolCalls,
@@ -4724,12 +4148,7 @@ async function runTerminalFailureSmoke(ctx) {
     ctx.sessionStartObserved = Boolean(
       (
         await readFile(
-          join(
-            ctx.paths.piAgent,
-            "pi-herdsman",
-            "runtime",
-            "smoke-faux-session-start.jsonl",
-          ),
+          join(ctx.paths.piAgent, "pi-herdsman", "runtime", "smoke-faux-session-start.jsonl"),
           "utf8",
         )
       ).trim(),
@@ -4748,23 +4167,16 @@ async function runTerminalFailureSmoke(ctx) {
   );
   ctx.versionChildSessionIds = [sessionId];
   ctx.firstRequestVerified = true;
-  const report = terminalFailureEvidence(
-    managerSession.contents,
-    branch,
-    sessionId,
-  );
+  const report = terminalFailureEvidence(managerSession.contents, branch, sessionId);
   assert.equal(report.executionFailures, 1);
   assert.equal(report.logicalReports, 1);
   assert.equal(report.actionable, true);
   assert.equal(report.successHandoff, false);
-  const failureMessage = projectMessageEntries(
-    managerSession.contents,
-    branch,
-    sessionId,
-  ).find((entry) =>
-    /Lead model execution failed|Lead execution settled without verified completion/.test(
-      String(entry.content),
-    ),
+  const failureMessage = projectMessageEntries(managerSession.contents, branch, sessionId).find(
+    (entry) =>
+      /Lead model execution failed|Lead execution settled without verified completion/.test(
+        String(entry.content),
+      ),
   );
   assert.ok(failureMessage);
   assert.equal(
@@ -4777,25 +4189,14 @@ async function runTerminalFailureSmoke(ctx) {
     true,
     "Manager must complete its response to the exact delivered Lead failure report",
   );
-  assert.equal(
-    report.toolCalls,
-    1,
-    "Manager should make only the requested delegate_work call",
-  );
+  assert.equal(report.toolCalls, 1, "Manager should make only the requested delegate_work call");
   assert.deepEqual(report.toolNames, ["delegate_work"]);
   const preservedLead = [];
   for (const agent of await agents())
-    if ((await agentSessionId(ctx, agent)) === sessionId)
-      preservedLead.push(agent);
-  assert.ok(
-    preservedLead.length <= 1,
-    "assignment must not have a second live Lead writer",
-  );
+    if ((await agentSessionId(ctx, agent)) === sessionId) preservedLead.push(agent);
+  assert.ok(preservedLead.length <= 1, "assignment must not have a second live Lead writer");
   const session = await exactIsolatedSession(ctx, sessionId);
-  assert.ok(
-    session,
-    "the exact assigned Pi session must remain persisted after failure",
-  );
+  assert.ok(session, "the exact assigned Pi session must remain persisted after failure");
   const topology = await nestedCommand(ctx, [
     "worktree",
     "list",
@@ -4809,9 +4210,7 @@ async function runTerminalFailureSmoke(ctx) {
     "pi-herdsman",
     "runtime",
     "supervision-v2",
-    createHash("sha256")
-      .update(nestedHerdrApiSocketPath(ctx.paths, ctx.sessionName))
-      .digest("hex"),
+    createHash("sha256").update(nestedHerdrApiSocketPath(ctx.paths, ctx.sessionName)).digest("hex"),
     "assignments",
     createHash("sha256").update(repoKey).digest("hex"),
     `${createHash("sha256").update(branch).digest("hex")}.json`,
@@ -4821,20 +4220,14 @@ async function runTerminalFailureSmoke(ctx) {
   assert.equal(assignment.branch, branch);
   assert.equal(
     resolve(
-      (await nestedCommand(ctx, ["pane", "list"])).panes.find(
-        (pane) => pane.pane_id === paneId,
-      ).cwd,
+      (await nestedCommand(ctx, ["pane", "list"])).panes.find((pane) => pane.pane_id === paneId)
+        .cwd,
     ),
     resolve(worktreePath),
   );
   assert.equal(
     (
-      await nestedCommand(ctx, [
-        "worktree",
-        "list",
-        "--workspace",
-        ctx.rootWorkspaceId,
-      ])
+      await nestedCommand(ctx, ["worktree", "list", "--workspace", ctx.rootWorkspaceId])
     ).worktrees.filter((item) => item.branch === branch).length,
     1,
   );
@@ -4857,8 +4250,7 @@ async function runAgentTerminalFailureSmoke(ctx) {
       done:
         (await nestedCommand(ctx, ["agent", "list"])).agents?.some(
           (agent) =>
-            agent.pane_id === ctx.rootPaneId &&
-            typeof agent.agent_session?.value === "string",
+            agent.pane_id === ctx.rootPaneId && typeof agent.agent_session?.value === "string",
         ) ?? false,
     }),
     { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS },
@@ -4876,20 +4268,14 @@ async function runAgentTerminalFailureSmoke(ctx) {
       if (!owner) return { done: false };
       const entries = sessionEntries(owner.contents);
       const calls = entries
-        .filter(
-          (entry) =>
-            entry.type === "message" && entry.message?.role === "assistant",
-        )
+        .filter((entry) => entry.type === "message" && entry.message?.role === "assistant")
         .flatMap((entry) =>
           (entry.message.content ?? []).filter(
-            (part) =>
-              part.type === "toolCall" && part.name === "delegate_agent",
+            (part) => part.type === "toolCall" && part.name === "delegate_agent",
           ),
         );
-      if (calls.length > 1)
-        throw new Error("Agent failure scenario delegated more than once");
-      if (!calls.length)
-        return { done: false, progress: { delegationCount: 0 } };
+      if (calls.length > 1) throw new Error("Agent failure scenario delegated more than once");
+      if (!calls.length) return { done: false, progress: { delegationCount: 0 } };
       const call = calls[0];
       if (
         call.arguments?.definition !== "smoke-failure-agent" ||
@@ -4904,18 +4290,14 @@ async function runAgentTerminalFailureSmoke(ctx) {
           entry.message.toolCallId === call.id &&
           !entry.message.isError,
       );
-      if (!result)
-        return { done: false, progress: { delegationCount: calls.length } };
+      if (!result) return { done: false, progress: { delegationCount: calls.length } };
       const raw = messageText(result.message.content);
       const sessionId = raw.match(/^Session: ([^\n]+)$/m)?.[1];
       const requestId = raw.match(/^Request: ([^\n]+)$/m)?.[1];
       if (!sessionId || !requestId)
         throw new Error("Agent delegation omitted session/request identity");
-      const ownerSessionId = entries.find(
-        (entry) => entry.type === "session",
-      )?.id;
-      if (!ownerSessionId)
-        throw new Error("Agent owner session identity is missing");
+      const ownerSessionId = entries.find((entry) => entry.type === "session")?.id;
+      if (!ownerSessionId) throw new Error("Agent owner session identity is missing");
       identity = { callId: call.id, sessionId, requestId, ownerSessionId };
       // Hold the first native error until the exact child process and faux provenance are visible.
       let childAgent;
@@ -4923,15 +4305,11 @@ async function runAgentTerminalFailureSmoke(ctx) {
       let listedAgents = [];
       let matchingAgents = [];
       if (!observedAgentEvidence) {
-        listedAgents =
-          (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
+        listedAgents = (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
         matchingAgents = await agentsForPiSession(ctx, listedAgents, sessionId);
         if (matchingAgents.length > 1)
-          throw new Error(
-            "Delegated Pi session matches multiple managed Agents",
-          );
-        if (matchingAgents.length === 1 && persistedChild)
-          childAgent = matchingAgents[0];
+          throw new Error("Delegated Pi session matches multiple managed Agents");
+        if (matchingAgents.length === 1 && persistedChild) childAgent = matchingAgents[0];
       }
       if (!observedAgentEvidence && childAgent?.pane_id) {
         const info = await nestedCommand(ctx, [
@@ -4940,23 +4318,14 @@ async function runAgentTerminalFailureSmoke(ctx) {
           "--pane",
           childAgent.pane_id,
         ]).catch(() => null);
-        const processes = candidateProcess(
-          info,
-          ctx.candidateExtension,
-          ctx.herdrStateExtension,
-        );
+        const processes = candidateProcess(info, ctx.candidateExtension, ctx.herdrStateExtension);
         const provenance = (
-          await readFile(
-            join(evidenceDir, "smoke-faux-provenance.jsonl"),
-            "utf8",
-          ).catch(() => "")
+          await readFile(join(evidenceDir, "smoke-faux-provenance.jsonl"), "utf8").catch(() => "")
         )
           .split(/\r?\n/)
           .filter(Boolean)
           .map((line) => JSON.parse(line));
-        const childProvenance = provenance.filter(
-          (row) => row.sessionId === sessionId,
-        );
+        const childProvenance = provenance.filter((row) => row.sessionId === sessionId);
         if (processes.length === 1 && childProvenance.length === 1) {
           const processProof = matchPiProvenance(
             provenance,
@@ -4976,12 +4345,7 @@ async function runAgentTerminalFailureSmoke(ctx) {
           await writeFile(observedPath, "observed\n");
         }
       }
-      const handoff = failedAgentHandoff(
-        entries,
-        requestId,
-        sessionId,
-        ownerSessionId,
-      );
+      const handoff = failedAgentHandoff(entries, requestId, sessionId, ownerSessionId);
       if (!handoff || !observedAgentEvidence)
         return {
           done: false,
@@ -4990,9 +4354,7 @@ async function runAgentTerminalFailureSmoke(ctx) {
             failedHandoff: false,
             childSessionId: sessionId,
             persistedChildSession: !!persistedChild,
-            persistedChildBytes: persistedChild
-              ? Buffer.byteLength(persistedChild.contents)
-              : 0,
+            persistedChildBytes: persistedChild ? Buffer.byteLength(persistedChild.contents) : 0,
             persistedChildErrors: persistedChild
               ? sessionEntries(persistedChild.contents).filter(
                   (entry) =>
@@ -5034,11 +4396,7 @@ async function runAgentTerminalFailureSmoke(ctx) {
             entry.message?.role === "assistant" &&
             entry.message.stopReason === "error",
         ) ?? [];
-      if (
-        !child ||
-        !child.contents.includes("CONTROLLED_PARTIAL_RESPONSE") ||
-        errors.length !== 2
-      )
+      if (!child || !child.contents.includes("CONTROLLED_PARTIAL_RESPONSE") || errors.length !== 2)
         return {
           done: false,
           progress: { failedHandoff: true, childError: errors.length },
@@ -5049,24 +4407,16 @@ async function runAgentTerminalFailureSmoke(ctx) {
         handoff.details.error.message !== expectedFailure ||
         !messageText(handoff.content).includes(expectedFailure)
       )
-        throw new Error(
-          "Agent failure handoff lost the terminal assistant cause or model",
-        );
+        throw new Error("Agent failure handoff lost the terminal assistant cause or model");
       const attempts = (
-        await readFile(
-          join(evidenceDir, "smoke-faux-attempts.jsonl"),
-          "utf8",
-        ).catch(() => "")
+        await readFile(join(evidenceDir, "smoke-faux-attempts.jsonl"), "utf8").catch(() => "")
       )
         .split(/\r?\n/)
         .filter(Boolean)
         .map((line) => JSON.parse(line))
         .filter((row) => row.sessionId === sessionId);
       const settlements = (
-        await readFile(
-          join(evidenceDir, "smoke-faux-settled.jsonl"),
-          "utf8",
-        ).catch(() => "")
+        await readFile(join(evidenceDir, "smoke-faux-settled.jsonl"), "utf8").catch(() => "")
       )
         .split(/\r?\n/)
         .filter(Boolean)
@@ -5077,9 +4427,7 @@ async function runAgentTerminalFailureSmoke(ctx) {
           index > entries.indexOf(handoff) &&
           entry.type === "message" &&
           entry.message?.role === "assistant" &&
-          messageText(entry.message.content).includes(
-            "SMOKE_AGENT_FAILURE_DELIVERED",
-          ),
+          messageText(entry.message.content).includes("SMOKE_AGENT_FAILURE_DELIVERED"),
       );
       if (
         attempts.length !== 2 ||
@@ -5109,22 +4457,15 @@ async function runAgentTerminalFailureSmoke(ctx) {
     },
     { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS },
   );
-  if (!identity)
-    throw new Error("Agent failure result lacked delegated identity");
+  if (!identity) throw new Error("Agent failure result lacked delegated identity");
   await waitForEvidence(
     ctx,
     "agent-terminal-failure-retired",
     async () => {
       const agents = (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
-      const matching = await agentsForPiSession(
-        ctx,
-        agents,
-        identity.sessionId,
-      );
+      const matching = await agentsForPiSession(ctx, agents, identity.sessionId);
       const panes = (await nestedCommand(ctx, ["pane", "list"])).panes ?? [];
-      const panePresent = panes.some(
-        (pane) => pane.pane_id === observedAgentEvidence.agentPaneId,
-      );
+      const panePresent = panes.some((pane) => pane.pane_id === observedAgentEvidence.agentPaneId);
       const processAlive = (() => {
         try {
           process.kill(observedAgentEvidence.process.pid, 0);
@@ -5165,11 +4506,9 @@ async function runAgentTerminalFailureSmoke(ctx) {
 }
 
 async function canonicalGitCommonDirectory(repository) {
-  const { stdout } = await run(
-    "git",
-    ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    { cwd: repository },
-  );
+  const { stdout } = await run("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+    cwd: repository,
+  });
   return realpath(stdout.trim());
 }
 
@@ -5177,10 +4516,7 @@ async function smokeManagerDescriptorPath(ctx) {
   const canonicalRepoKey = await canonicalGitCommonDirectory(ctx.rootCwd);
   const owned = relative(await realpath(ctx.paths.root), canonicalRepoKey);
   assert.ok(
-    owned &&
-      owned !== ".." &&
-      !owned.startsWith(`..${sep}`) &&
-      !isAbsolute(owned),
+    owned && owned !== ".." && !owned.startsWith(`..${sep}`) && !isAbsolute(owned),
     "Manager descriptor lookup requires an isolated scenario repository",
   );
   const key = createHash("sha256").update(canonicalRepoKey).digest("hex");
@@ -5206,19 +4542,10 @@ async function smokeRootManagerLease(ctx, managerPath) {
       sessionEntries(session.contents)[0]?.id === descriptor.piSessionId,
     "Manager lease does not match the exact fixture session",
   );
-  const info = await nestedCommand(ctx, [
-    "pane",
-    "process-info",
-    "--pane",
-    ctx.rootPaneId,
-  ]);
+  const info = await nestedCommand(ctx, ["pane", "process-info", "--pane", ctx.rootPaneId]);
   const foreground = info.process_info?.foreground_processes ?? [];
   if (ctx.smokeRootManagerPid === undefined) {
-    const processes = candidateProcess(
-      info,
-      ctx.candidateExtension,
-      ctx.herdrStateExtension,
-    );
+    const processes = candidateProcess(info, ctx.candidateExtension, ctx.herdrStateExtension);
     assert.deepEqual(
       processes.map((process) => process.pid),
       [pid],
@@ -5226,11 +4553,7 @@ async function smokeRootManagerLease(ctx, managerPath) {
     );
     ctx.smokeRootManagerPid = pid;
   } else {
-    assert.equal(
-      pid,
-      ctx.smokeRootManagerPid,
-      "Manager role reentry replaced the fixture process",
-    );
+    assert.equal(pid, ctx.smokeRootManagerPid, "Manager role reentry replaced the fixture process");
     // A live Pi can stop exposing its launch argv; the exact PID is stable.
     if (!foreground.some((process) => process.pid === pid)) return null;
   }
@@ -5270,8 +4593,7 @@ async function runManagerHandoffSmoke(ctx) {
       const agents = (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
       const rootAgent = agents.find(
         (agent) =>
-          agent.pane_id === ctx.rootPaneId &&
-          typeof agent.agent_session?.value === "string",
+          agent.pane_id === ctx.rootPaneId && typeof agent.agent_session?.value === "string",
       );
       return { done: !!rootAgent };
     },
@@ -5303,11 +4625,7 @@ async function runManagerHandoffSmoke(ctx) {
         throw new Error("Manager handoff worktree topology is unavailable");
       let worktree;
       try {
-        worktree = captureManagerHandoffWorktree(
-          ctx,
-          topology.worktrees,
-          branch,
-        );
+        worktree = captureManagerHandoffWorktree(ctx, topology.worktrees, branch);
       } catch (error) {
         if (error?.code !== "SMOKE_OBSERVATION") throw error;
         return {
@@ -5321,16 +4639,10 @@ async function runManagerHandoffSmoke(ctx) {
       const session = await root();
       if (session) assertNoFailedProjectDelegation(session.contents, branch);
       const rows = session ? staffDelegateResults(session.contents) : [];
-      if (rows.length > 1)
-        throw new Error("Manager handoff created multiple project assignments");
+      if (rows.length > 1) throw new Error("Manager handoff created multiple project assignments");
       const row = rows.length === 1 ? rows[0] : null;
       const fauxAttempts = await readFile(
-        join(
-          ctx.paths.piAgent,
-          "pi-herdsman",
-          "runtime",
-          "smoke-faux-attempts.jsonl",
-        ),
+        join(ctx.paths.piAgent, "pi-herdsman", "runtime", "smoke-faux-attempts.jsonl"),
         "utf8",
       ).catch(() => "");
       const diagnostics = (values = {}) =>
@@ -5343,26 +4655,18 @@ async function runManagerHandoffSmoke(ctx) {
           supervisorCall: "not_yet_evaluated",
           supervisorSuccess: "not_yet_evaluated",
           readiness: "not_yet_evaluated",
-          fauxSupervisorToolAvailability:
-            managerHandoffSupervisorToolAvailability(fauxAttempts),
+          fauxSupervisorToolAvailability: managerHandoffSupervisorToolAvailability(fauxAttempts),
           candidateProcessCount: "not_observed",
           provenanceMatch: "not_evaluated",
           ...values,
         });
       if (managerAssignmentBranchMismatch(row, branch))
-        throw new Error(
-          "Manager handoff delegate result has a mismatched branch identity",
-        );
+        throw new Error("Manager handoff delegate result has a mismatched branch identity");
       if (row?.workspace_id) {
         ctx.owned.managerWorkspaceId = row.workspace_id;
       }
       if (row?.workspace_id)
-        captureManagerHandoffWorktree(
-          ctx,
-          topology.worktrees,
-          branch,
-          row.workspace_id,
-        );
+        captureManagerHandoffWorktree(ctx, topology.worktrees, branch, row.workspace_id);
       if (!row || !row.branch || !row.session || !row.workspace_id || !worktree)
         return { done: false, progress: diagnostics() };
       const agents = (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
@@ -5376,25 +4680,15 @@ async function runManagerHandoffSmoke(ctx) {
           lead = agent;
           break;
         }
-      if (!lead)
-        return { done: false, progress: diagnostics({ lead: "false" }) };
+      if (!lead) return { done: false, progress: diagnostics({ lead: "false" }) };
       const leadSession = await isolatedSessionDetails(ctx, lead);
       let processCount = "not_observed";
       let provenanceMatch = "not_evaluated";
       let errorCategory = "none";
       let processProof = null;
       try {
-        const info = await nestedCommand(ctx, [
-          "pane",
-          "process-info",
-          "--pane",
-          lead.pane_id,
-        ]);
-        const processes = candidateProcess(
-          info,
-          ctx.candidateExtension,
-          ctx.herdrStateExtension,
-        );
+        const info = await nestedCommand(ctx, ["pane", "process-info", "--pane", lead.pane_id]);
+        const processes = candidateProcess(info, ctx.candidateExtension, ctx.herdrStateExtension);
         processCount = processes.length;
         if (processes.length) {
           const provenancePath = join(
@@ -5496,9 +4790,7 @@ async function runManagerHandoffSmoke(ctx) {
     "--workspace",
     ctx.rootWorkspaceId,
   ]);
-  const worktree = (worktrees.worktrees ?? []).find(
-    (item) => item.branch === branch,
-  );
+  const worktree = (worktrees.worktrees ?? []).find((item) => item.branch === branch);
   if (!worktree) throw new Error("Manager handoff worktree was not found");
   const worktreePath = worktree.path ?? worktree.worktree_path;
   ctx.owned.managerWorkspaceId = row.workspace_id;
@@ -5526,12 +4818,7 @@ async function runManagerHandoffSmoke(ctx) {
     "supervision-v2",
     hash(nestedHerdrApiSocketPath(ctx.paths, ctx.sessionName)),
   );
-  const assignmentPath = join(
-    runtime,
-    "assignments",
-    hash(repoKey),
-    `${hash(branch)}.json`,
-  );
+  const assignmentPath = join(runtime, "assignments", hash(repoKey), `${hash(branch)}.json`);
   const managerPath = await smokeManagerDescriptorPath(ctx);
   const provenancePath = join(
     ctx.paths.piAgent,
@@ -5540,17 +4827,8 @@ async function runManagerHandoffSmoke(ctx) {
     "smoke-faux-provenance.jsonl",
   );
   const leadProcessPid = async () => {
-    const info = await nestedCommand(ctx, [
-      "pane",
-      "process-info",
-      "--pane",
-      lead.pane_id,
-    ]);
-    const processes = candidateProcess(
-      info,
-      ctx.candidateExtension,
-      ctx.herdrStateExtension,
-    );
+    const info = await nestedCommand(ctx, ["pane", "process-info", "--pane", lead.pane_id]);
+    const processes = candidateProcess(info, ctx.candidateExtension, ctx.herdrStateExtension);
     const provenance = (await readFile(provenancePath, "utf8"))
       .split(/\r?\n/)
       .filter(Boolean)
@@ -5594,8 +4872,7 @@ async function runManagerHandoffSmoke(ctx) {
       sessionEntries(savedSession.contents)
         .filter(
           (entry) =>
-            entry.type === "custom" &&
-            entry.customType === "pi-herdsman-coordinator-definition",
+            entry.type === "custom" && entry.customType === "pi-herdsman-coordinator-definition",
         )
         .map((entry) => entry.data),
       [
@@ -5611,23 +4888,18 @@ async function runManagerHandoffSmoke(ctx) {
   };
   const assertLeadContinuity = async () => {
     if (!managerHandoffLeadPidContinues(initialLeadPid, await leadProcessPid()))
-      throw new Error(
-        "Assigned Lead Pi process changed during Manager handoff",
-      );
+      throw new Error("Assigned Lead Pi process changed during Manager handoff");
     const agents = (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
     const sameLead = agents.find(
-      (agent) =>
-        agent.workspace_id === row.workspace_id &&
-        agent.pane_id === lead.pane_id,
+      (agent) => agent.workspace_id === row.workspace_id && agent.pane_id === lead.pane_id,
     );
     if (!sameLead || (await agentSessionId(ctx, sameLead)) !== leadSessionId)
       throw new Error("Assigned Lead did not remain in its exact session");
     await assertSavedDefinition(await isolatedSessionDetails(ctx, sameLead));
     const panes = (await nestedCommand(ctx, ["pane", "list"])).panes ?? [];
     if (
-      resolve(
-        panes.find((pane) => pane.pane_id === lead.pane_id)?.cwd ?? "",
-      ) !== resolve(worktreePath)
+      resolve(panes.find((pane) => pane.pane_id === lead.pane_id)?.cwd ?? "") !==
+      resolve(worktreePath)
     )
       throw new Error("Assigned Lead workspace changed during Manager handoff");
   };
@@ -5644,12 +4916,9 @@ async function runManagerHandoffSmoke(ctx) {
         for (const name of await readdir(messagesDir))
           if (name.endsWith(".json"))
             try {
-              records.push(
-                JSON.parse(await readFile(join(messagesDir, name), "utf8")),
-              );
+              records.push(JSON.parse(await readFile(join(messagesDir, name), "utf8")));
             } catch (error) {
-              if (error.code !== "ENOENT" && !(error instanceof SyntaxError))
-                throw error;
+              if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
             }
         const record = managerHandoffRetainedRecord(
           records,
@@ -5660,8 +4929,7 @@ async function runManagerHandoffSmoke(ctx) {
         );
         const leadSession = await isolatedSessionDetails(ctx, lead);
         const toolEvidence =
-          leadSession &&
-          hasSuccessfulSupervisorMessage(leadSession.contents, marker);
+          leadSession && hasSuccessfulSupervisorMessage(leadSession.contents, marker);
         return {
           done: !!record && !!toolEvidence,
           value: record,
@@ -5682,8 +4950,7 @@ async function runManagerHandoffSmoke(ctx) {
     managerLeasePresent = false;
   }
   const beforeReentry = await root();
-  if (!beforeReentry)
-    throw new Error("Manager handoff owner session disappeared before reentry");
+  if (!beforeReentry) throw new Error("Manager handoff owner session disappeared before reentry");
   if (
     !managerHandoffCanReenter(
       managerLeasePresent,
@@ -5766,13 +5033,8 @@ async function runManagerHandoffSmoke(ctx) {
       (await nestedCommand(ctx, ["agent", "list"])).agents ?? [],
       leadSessionId,
     );
-  const statePath = join(
-    runtime,
-    "coordinators",
-    `${hash(leadSessionId)}.json`,
-  );
-  const readLeadState = async () =>
-    JSON.parse(await readFile(statePath, "utf8"));
+  const statePath = join(runtime, "coordinators", `${hash(leadSessionId)}.json`);
+  const readLeadState = async () => JSON.parse(await readFile(statePath, "utf8"));
   const initialState = await readLeadState();
   assert.ok(initialState.instanceId);
   const staffAction = async (tool, action, prompt) => {
@@ -5783,12 +5045,7 @@ async function runManagerHandoffSmoke(ctx) {
       async () => {
         const session = await root();
         if (!session) return { done: false };
-        const results = staffActionResults(
-          session.contents,
-          tool,
-          action,
-          prompt,
-        );
+        const results = staffActionResults(session.contents, tool, action, prompt);
         assert.ok(results.length <= 1);
         const entries = sessionEntries(session.contents);
         const failed = entries.find(
@@ -5797,22 +5054,16 @@ async function runManagerHandoffSmoke(ctx) {
             message.toolName === tool &&
             (message.isError || message.details?.ok === false),
         );
-        if (failed)
-          throw new Error(
-            `${tool} failed: ${messageText(failed.message.content)}`,
-          );
+        if (failed) throw new Error(`${tool} failed: ${messageText(failed.message.content)}`);
         return {
           done: results.length === 1,
           value: results[0],
           progress: {
             promptObserved: entries.some(
-              ({ message }) =>
-                message?.role === "user" &&
-                messageText(message.content) === prompt,
+              ({ message }) => message?.role === "user" && messageText(message.content) === prompt,
             ),
             toolResultObserved: entries.some(
-              ({ message }) =>
-                message?.role === "toolResult" && message.toolName === tool,
+              ({ message }) => message?.role === "toolResult" && message.toolName === tool,
             ),
           },
         };
@@ -5820,36 +5071,19 @@ async function runManagerHandoffSmoke(ctx) {
       { timeoutMs: 90_000, stallMs: MODEL_STALL_MS },
     );
   };
-  const stopped = await staffAction(
-    "stop_lead",
-    "stop",
-    "MANAGER_HANDOFF_STOP",
-  );
+  const stopped = await staffAction("stop_lead", "stop", "MANAGER_HANDOFF_STOP");
   assert.equal(stopped.branch, branch);
   assert.equal(stopped.session, leadSessionId);
   assert.deepEqual(await listExactLeads(), []);
-  const stoppedPane = await nestedCommand(ctx, [
-    "pane",
-    "process-info",
-    "--pane",
-    lead.pane_id,
-  ]);
+  const stoppedPane = await nestedCommand(ctx, ["pane", "process-info", "--pane", lead.pane_id]);
   assert.deepEqual(
-    candidateProcess(
-      stoppedPane,
-      ctx.candidateExtension,
-      ctx.herdrStateExtension,
-    ),
+    candidateProcess(stoppedPane, ctx.candidateExtension, ctx.herdrStateExtension),
     [],
   );
   const stoppedSession = await exactIsolatedSession(ctx, leadSessionId);
   await assertSavedDefinition(stoppedSession);
 
-  const resumed = await staffAction(
-    "resume_work",
-    "resume",
-    "MANAGER_HANDOFF_RESUME",
-  );
+  const resumed = await staffAction("resume_work", "resume", "MANAGER_HANDOFF_RESUME");
   assert.equal(resumed.recovered, true);
   assert.equal(resumed.branch, branch);
   assert.equal(resumed.session, leadSessionId);
@@ -5867,11 +5101,7 @@ async function runManagerHandoffSmoke(ctx) {
     "--pane",
     resumedLead.pane_id,
   ]);
-  const processes = candidateProcess(
-    resumedPane,
-    ctx.candidateExtension,
-    ctx.herdrStateExtension,
-  );
+  const processes = candidateProcess(resumedPane, ctx.candidateExtension, ctx.herdrStateExtension);
   assert.equal(processes.length, 1);
   assert.notEqual(processes[0].pid, initialLeadPid);
   const ready = await readLeadState();
@@ -5889,9 +5119,7 @@ function managerMergeToolRows(contents) {
     const message = entry.message;
     if (entry.type !== "message" || message?.role !== "assistant") return [];
     return (Array.isArray(message.content) ? message.content : [])
-      .filter(
-        (part) => part?.type === "toolCall" && part.name === "integrate_branch",
-      )
+      .filter((part) => part?.type === "toolCall" && part.name === "integrate_branch")
       .map((call) => {
         const result = entries.find(
           (candidate) =>
@@ -5967,8 +5195,7 @@ async function runManagerMergeSmoke(ctx) {
       return {
         done: agents.some(
           (agent) =>
-            agent.pane_id === ctx.rootPaneId &&
-            typeof agent.agent_session?.value === "string",
+            agent.pane_id === ctx.rootPaneId && typeof agent.agent_session?.value === "string",
         ),
       };
     },
@@ -5984,11 +5211,7 @@ async function runManagerMergeSmoke(ctx) {
     "--timeout",
     "15000",
   ]);
-  await submitPaneCommand(
-    ctx,
-    ctx.rootPaneId,
-    `MANAGER_MERGE_ASSIGN branch ${branch}`,
-  );
+  await submitPaneCommand(ctx, ctx.rootPaneId, `MANAGER_MERGE_ASSIGN branch ${branch}`);
 
   const assigned = await waitForEvidence(
     ctx,
@@ -6000,16 +5223,10 @@ async function runManagerMergeSmoke(ctx) {
         "--workspace",
         ctx.rootWorkspaceId,
       ]);
-      const worktree = captureManagerHandoffWorktree(
-        ctx,
-        topology.worktrees ?? [],
-        branch,
-      );
+      const worktree = captureManagerHandoffWorktree(ctx, topology.worktrees ?? [], branch);
       const session = await manager();
       const rows = session
-        ? staffDelegateResults(session.contents).filter(
-            (row) => row.branch === branch,
-          )
+        ? staffDelegateResults(session.contents).filter((row) => row.branch === branch)
         : [];
       if (rows.length !== 1 || !worktree)
         return {
@@ -6028,18 +5245,13 @@ async function runManagerMergeSmoke(ctx) {
     { timeoutMs: DEFAULT_MANAGER_READY_TIMEOUT_MS, stallMs: MODEL_STALL_MS },
   );
   const sourcePath = assigned.worktree.path;
-  assert.ok(
-    assigned.repoKey,
-    "Herdr must expose the verified repository identity",
-  );
+  assert.ok(assigned.repoKey, "Herdr must expose the verified repository identity");
   const assignmentPath = join(
     ctx.paths.piAgent,
     "pi-herdsman",
     "runtime",
     "supervision-v2",
-    createHash("sha256")
-      .update(nestedHerdrApiSocketPath(ctx.paths, ctx.sessionName))
-      .digest("hex"),
+    createHash("sha256").update(nestedHerdrApiSocketPath(ctx.paths, ctx.sessionName)).digest("hex"),
     "assignments",
     createHash("sha256").update(assigned.repoKey).digest("hex"),
     `${createHash("sha256").update(branch).digest("hex")}.json`,
@@ -6052,9 +5264,7 @@ async function runManagerMergeSmoke(ctx) {
     "",
     "fixture must have no remotes",
   );
-  const primaryBefore = await managerMergeCheckoutState(
-    ctx.primaryCheckoutPath,
-  );
+  const primaryBefore = await managerMergeCheckoutState(ctx.primaryCheckoutPath);
   assert.equal(primaryBefore.branch, "main");
 
   const sourceReport = await waitForEvidence(
@@ -6062,9 +5272,7 @@ async function runManagerMergeSmoke(ctx) {
     "manager-merge-lead-source",
     async () => {
       const session = await manager();
-      const reports = session
-        ? completedHandoffs(session.contents, assignmentRecord.id)
-        : [];
+      const reports = session ? completedHandoffs(session.contents, assignmentRecord.id) : [];
       const report = reports.at(-1);
       const sha = report?.details?.senderEnvironment?.git?.head;
       return {
@@ -6100,17 +5308,13 @@ async function runManagerMergeSmoke(ctx) {
     ],
     { cwd: ctx.rootCwd },
   );
-  const targetAdvanced = await managerMergeCheckoutState(
-    ctx.primaryCheckoutPath,
-  );
+  const targetAdvanced = await managerMergeCheckoutState(ctx.primaryCheckoutPath);
   assert.equal(targetAdvanced.branch, "main");
   assert.notEqual(targetAdvanced.head, primaryBefore.head);
   const expectedTree = (
-    await run(
-      "git",
-      ["merge-tree", "--write-tree", targetAdvanced.head, initialSha],
-      { cwd: ctx.primaryCheckoutPath },
-    )
+    await run("git", ["merge-tree", "--write-tree", targetAdvanced.head, initialSha], {
+      cwd: ctx.primaryCheckoutPath,
+    })
   ).stdout.trim();
   const mergePrompt = `MANAGER_MERGE_ATTEMPT ${initialSha}`;
   await submitPaneCommand(ctx, ctx.rootPaneId, mergePrompt);
@@ -6122,8 +5326,7 @@ async function runManagerMergeSmoke(ctx) {
       const rows = session ? managerMergeToolRows(session.contents) : [];
       const matching = rows.find(
         (row) =>
-          row.arguments?.expected_head === initialSha &&
-          row.result?.details?.status === "complete",
+          row.arguments?.expected_head === initialSha && row.result?.details?.status === "complete",
       );
       return { done: !!matching, value: matching };
     },
@@ -6137,11 +5340,7 @@ async function runManagerMergeSmoke(ctx) {
   assert.equal(complete.result.details.checkout_removed, true);
   assert.equal(complete.result.details.assignment_retired, true);
   const finalTarget = await managerMergeCheckoutState(ctx.primaryCheckoutPath);
-  assert.equal(
-    finalTarget.branch,
-    "main",
-    "target branch identity must remain main",
-  );
+  assert.equal(finalTarget.branch, "main", "target branch identity must remain main");
   assert.equal(
     (
       await run("git", ["show", "-s", "--format=%P", "HEAD"], {
@@ -6152,11 +5351,9 @@ async function runManagerMergeSmoke(ctx) {
     "verified target must be a two-parent merge of the observed target and accepted source",
   );
   assert.equal(finalTarget.status, "");
-  await run(
-    "git",
-    ["merge-base", "--is-ancestor", initialSha, finalTarget.head],
-    { cwd: ctx.primaryCheckoutPath },
-  );
+  await run("git", ["merge-base", "--is-ancestor", initialSha, finalTarget.head], {
+    cwd: ctx.primaryCheckoutPath,
+  });
   assert.equal(
     (
       await run("git", ["rev-parse", "HEAD^{tree}"], {
@@ -6165,11 +5362,9 @@ async function runManagerMergeSmoke(ctx) {
     ).stdout.trim(),
     expectedTree,
   );
-  await run(
-    "git",
-    ["merge-base", "--is-ancestor", targetAdvanced.head, finalTarget.head],
-    { cwd: ctx.primaryCheckoutPath },
-  );
+  await run("git", ["merge-base", "--is-ancestor", targetAdvanced.head, finalTarget.head], {
+    cwd: ctx.primaryCheckoutPath,
+  });
   const finalTopology = await nestedCommand(ctx, [
     "worktree",
     "list",
@@ -6177,17 +5372,14 @@ async function runManagerMergeSmoke(ctx) {
     ctx.rootWorkspaceId,
   ]);
   assert.equal(
-    (finalTopology.worktrees ?? []).filter((item) => item.branch === branch)
-      .length,
+    (finalTopology.worktrees ?? []).filter((item) => item.branch === branch).length,
     0,
     "only the exact integrated source worktree must be automatically removed",
   );
   assert.equal(finalTopology.source?.repo_key, assigned.repoKey);
   assert.ok(
     (finalTopology.worktrees ?? []).some(
-      (item) =>
-        item.branch === "main" &&
-        resolve(item.path) === resolve(ctx.primaryCheckoutPath),
+      (item) => item.branch === "main" && resolve(item.path) === resolve(ctx.primaryCheckoutPath),
     ),
     "the primary main worktree must remain",
   );
@@ -6196,12 +5388,9 @@ async function runManagerMergeSmoke(ctx) {
     { code: "ENOENT" },
     "the exact active assignment must be retired",
   );
-  const finalAgents =
-    (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
+  const finalAgents = (await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
   assert.equal(
-    finalAgents.some(
-      (agent) => agent.workspace_id === assigned.row.workspace_id,
-    ),
+    finalAgents.some((agent) => agent.workspace_id === assigned.row.workspace_id),
     false,
     "the exact assigned Lead workspace must be absent after retirement",
   );
@@ -6242,9 +5431,7 @@ export function managerRecoveryResumeOnlyPrompt(branch) {
 
 export function managerRecoveryResumeDiagnostics(contents, prompt) {
   const entries = sessionEntries(contents);
-  const byId = new Map(
-    entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
-  );
+  const byId = new Map(entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]));
   const isDescendantOf = (entry, ancestorId) => {
     const visited = new Set();
     let parentId = entry.parentId;
@@ -6364,9 +5551,7 @@ export async function runScenario(ctx, scenario) {
 }
 
 function hasExtensionArg(argv, extension) {
-  return argv.some(
-    (arg, index) => arg === "--extension" && argv[index + 1] === extension,
-  );
+  return argv.some((arg, index) => arg === "--extension" && argv[index + 1] === extension);
 }
 
 function escapedPattern(value) {
@@ -6374,17 +5559,12 @@ function escapedPattern(value) {
 }
 
 function commandLineHasPath(cmdline, path) {
-  return new RegExp(`(?:^|[\\s"'])${escapedPattern(path)}(?:$|[\\s"'])`).test(
-    cmdline,
-  );
+  return new RegExp(`(?:^|[\\s"'])${escapedPattern(path)}(?:$|[\\s"'])`).test(cmdline);
 }
 
 function candidateProcessMatch(proc, extension, integration) {
   if (Array.isArray(proc.argv)) {
-    if (
-      hasExtensionArg(proc.argv, extension) &&
-      hasExtensionArg(proc.argv, integration)
-    )
+    if (hasExtensionArg(proc.argv, extension) && hasExtensionArg(proc.argv, integration))
       return "argv";
     // shortcut: accepts Pi's exact process title when Linux hides CLI args, later scenario evidence still proves loaded extensions; upgrade when Herdr exposes executable and extension provenance.
     if (
@@ -6407,8 +5587,8 @@ function candidateProcessMatch(proc, extension, integration) {
 }
 
 function candidateProcess(processInfo, extension, integration) {
-  return (processInfo?.process_info?.foreground_processes ?? []).filter(
-    (proc) => candidateProcessMatch(proc, extension, integration),
+  return (processInfo?.process_info?.foreground_processes ?? []).filter((proc) =>
+    candidateProcessMatch(proc, extension, integration),
   );
 }
 
@@ -6432,9 +5612,7 @@ export async function inspectPaneProcesses(
   stage,
 ) {
   const paneIds = [
-    ...new Set(
-      panes.map((pane) => (typeof pane === "string" ? pane : pane.paneId)),
-    ),
+    ...new Set(panes.map((pane) => (typeof pane === "string" ? pane : pane.paneId))),
   ].filter((paneId) => paneId && paneId !== rootPaneId);
   const inspected = await Promise.all(
     paneIds.map(async (paneId) => {
@@ -6469,11 +5647,7 @@ export async function inspectPaneProcesses(
         },
       ];
     return processes.map((proc) => {
-      const processMatchSource = candidateProcessMatch(
-        proc,
-        extension,
-        integration,
-      );
+      const processMatchSource = candidateProcessMatch(proc, extension, integration);
       return {
         paneId,
         pid: proc.pid ?? null,
@@ -6486,15 +5660,11 @@ export async function inspectPaneProcesses(
           ? {
               stage,
               argvPresent: Array.isArray(proc.argv),
-              argvLength: Array.isArray(proc.argv)
-                ? Math.min(proc.argv.length, 10000)
-                : null,
+              argvLength: Array.isArray(proc.argv) ? Math.min(proc.argv.length, 10000) : null,
               candidateExtensionArgMatch:
-                Array.isArray(proc.argv) &&
-                hasExtensionArg(proc.argv, extension),
+                Array.isArray(proc.argv) && hasExtensionArg(proc.argv, extension),
               integrationExtensionArgMatch:
-                Array.isArray(proc.argv) &&
-                hasExtensionArg(proc.argv, integration),
+                Array.isArray(proc.argv) && hasExtensionArg(proc.argv, integration),
               cmdlinePresent: typeof proc.cmdline === "string",
             }
           : {}),
@@ -6524,12 +5694,7 @@ async function inspectCandidateProcesses(ctx) {
     listedPanes(listed.value),
     ctx.rootPaneId,
     async (paneId) => {
-      const result = await tryNestedCommand(ctx, [
-        "pane",
-        "process-info",
-        "--pane",
-        paneId,
-      ]);
+      const result = await tryNestedCommand(ctx, ["pane", "process-info", "--pane", paneId]);
       if (!result.ok) throw observationFailure(result.error);
       return result.value;
     },
@@ -6550,9 +5715,7 @@ async function rootSessionSnapshot(ctx) {
   const observed = await tryNestedCommand(ctx, ["agent", "list"]);
   if (!observed.ok) throw observationFailure(observed.error);
   const listed = observed.value;
-  const rootAgent = (listed.agents ?? []).find(
-    (agent) => agent.pane_id === ctx.rootPaneId,
-  );
+  const rootAgent = (listed.agents ?? []).find((agent) => agent.pane_id === ctx.rootPaneId);
   const sessionPath = rootAgent?.agent_session?.value;
   if (!sessionPath || rootAgent.agent_session?.kind !== "path") return null;
   const absolutePath = resolve(sessionPath);
@@ -6564,9 +5727,7 @@ async function rootSessionSnapshot(ctx) {
     relativePath.startsWith(`..${sep}`) ||
     isAbsolute(relativePath)
   )
-    throw new Error(
-      "root Pi session path is outside the isolated session directory",
-    );
+    throw new Error("root Pi session path is outside the isolated session directory");
   let details;
   try {
     details = await lstat(absolutePath);
@@ -6577,18 +5738,12 @@ async function rootSessionSnapshot(ctx) {
   if (!details.isFile() || details.isSymbolicLink())
     throw new Error("root Pi session is not a regular isolated session file");
   if (details.size > MAX_SESSION_BYTES)
-    throw new Error(
-      `root Pi session exceeds ${MAX_SESSION_BYTES} byte read limit`,
-    );
+    throw new Error(`root Pi session exceeds ${MAX_SESSION_BYTES} byte read limit`);
   const contents = await readFile(absolutePath, "utf8");
-  const header = sessionEntries(contents).find(
-    (entry) => entry.type === "session",
-  );
+  const header = sessionEntries(contents).find((entry) => entry.type === "session");
   if (!header) return null;
   if (header.cwd !== ctx.rootCwd)
-    throw new Error(
-      "root Pi session cwd does not match the candidate repository",
-    );
+    throw new Error("root Pi session cwd does not match the candidate repository");
   return { path: absolutePath, status: rootAgent.agent_status, contents };
 }
 
@@ -6596,17 +5751,8 @@ function smokeAgentLabel(agent) {
   return agent?.label ?? agent?.agent_label ?? agent?.agent;
 }
 
-async function smokeMailbox(
-  ctx,
-  agent,
-  expectedLabel = smokeAgentLabel(agent),
-) {
-  const root = join(
-    ctx.paths.piAgent,
-    "pi-herdsman",
-    "runtime",
-    "mailboxes-v5",
-  );
+async function smokeMailbox(ctx, agent, expectedLabel = smokeAgentLabel(agent)) {
+  const root = join(ctx.paths.piAgent, "pi-herdsman", "runtime", "mailboxes-v5");
   for (const dir of await readdir(root, { withFileTypes: true })) {
     if (!/^[0-9a-f]{32}$/.test(dir.name)) continue;
     if (dir.isSymbolicLink() || !dir.isDirectory())
@@ -6620,11 +5766,7 @@ async function smokeMailbox(
       if (error.code === "ENOENT") continue;
       throw error;
     }
-    if (
-      !stateStat.isFile() ||
-      stateStat.isSymbolicLink() ||
-      stateStat.size > 65536
-    )
+    if (!stateStat.isFile() || stateStat.isSymbolicLink() || stateStat.size > 65536)
       throw new Error("smoke mailbox state is not a bounded regular file");
     const state = JSON.parse(await readFile(statePath, "utf8"));
     if (state.agentLabel !== expectedLabel) continue;
@@ -6640,9 +5782,7 @@ async function smokeMailbox(
           requestStat.isSymbolicLink() ||
           requestStat.size > 4 * 1024 * 1024
         )
-          throw new Error(
-            "smoke mailbox request is not a bounded regular file",
-          );
+          throw new Error("smoke mailbox request is not a bounded regular file");
         request = JSON.parse(await readFile(requestPath, "utf8"));
       } catch (error) {
         if (error.code !== "ENOENT") throw error;
@@ -6658,18 +5798,12 @@ async function smokeManagedAgentRecords(ctx, agents) {
     agents.map(async (agent) => {
       const session = await isolatedSessionDetails(ctx, agent);
       if (!session) return { agent, session, mailbox: undefined };
-      const root = join(
-        ctx.paths.piAgent,
-        "pi-herdsman",
-        "runtime",
-        "mailboxes-v5",
-      );
+      const root = join(ctx.paths.piAgent, "pi-herdsman", "runtime", "mailboxes-v5");
       let mailboxDirs;
       try {
         mailboxDirs = await readdir(root, { withFileTypes: true });
       } catch (error) {
-        if (error.code === "ENOENT")
-          return { agent, session, mailbox: undefined };
+        if (error.code === "ENOENT") return { agent, session, mailbox: undefined };
         throw error;
       }
       for (const dir of mailboxDirs) {
@@ -6684,11 +5818,7 @@ async function smokeManagedAgentRecords(ctx, agents) {
           if (error.code === "ENOENT") continue;
           throw error;
         }
-        if (
-          !stateStat.isFile() ||
-          stateStat.isSymbolicLink() ||
-          stateStat.size > 65536
-        )
+        if (!stateStat.isFile() || stateStat.isSymbolicLink() || stateStat.size > 65536)
           throw new Error("smoke mailbox state is not a bounded regular file");
         const state = JSON.parse(await readFile(statePath, "utf8"));
         if (state.piSessionId !== session.id) continue;
@@ -6725,12 +5855,7 @@ async function restartNestedHerdr(ctx) {
   );
   await run(
     "herdr",
-    [
-      "pane",
-      "run",
-      ctx.owned.hostPaneId,
-      shellCommand(["herdr", "--session", ctx.sessionName]),
-    ],
+    ["pane", "run", ctx.owned.hostPaneId, shellCommand(["herdr", "--session", ctx.sessionName])],
     { env: ctx.parentEnv },
   );
   await waitForNestedHerdr(ctx);
@@ -6741,9 +5866,7 @@ async function restartNestedHerdr(ctx) {
 async function runAgentCrashRecoverySmoke(ctx) {
   assert.ok(
     ctx.paths.root &&
-      resolve(ctx.paths.xdgConfig).startsWith(
-        `${resolve(ctx.paths.root)}${sep}`,
-      ) &&
+      resolve(ctx.paths.xdgConfig).startsWith(`${resolve(ctx.paths.root)}${sep}`) &&
       /^phs-[0-9a-f-]{12}$/.test(ctx.sessionName) &&
       ctx.owned.hostPaneId,
     "crash-recovery resources are not proven disposable and isolated",
@@ -6753,9 +5876,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
   });
   if (!isolatedSessions.ok) throw observationFailure(isolatedSessions.error);
   assert.ok(
-    isolatedSessions.value.sessions?.some(
-      (session) => session.name === ctx.sessionName,
-    ),
+    isolatedSessions.value.sessions?.some((session) => session.name === ctx.sessionName),
     "named disposable session is not present in its isolated Herdr config",
   );
   await waitForEvidence(
@@ -6793,16 +5914,8 @@ async function runAgentCrashRecoverySmoke(ctx) {
           },
         };
       }
-      const {
-        agent: target,
-        session: targetSession,
-        mailbox: targetMailbox,
-      } = targetRecord;
-      const {
-        agent: parent,
-        session: parentSession,
-        mailbox: parentMailbox,
-      } = parentRecord;
+      const { agent: target, session: targetSession, mailbox: targetMailbox } = targetRecord;
+      const { agent: parent, session: parentSession, mailbox: parentMailbox } = parentRecord;
       const { mailbox: childMailbox } = childRecord;
       if (
         !targetMailbox.state.activeRequestId ||
@@ -6863,12 +5976,9 @@ async function runAgentCrashRecoverySmoke(ctx) {
   );
   if (ctx.crashRecovery.target.request)
     assert.ok(
-      ctx.crashRecovery.target.request.requestId ===
-        ctx.crashRecovery.target.requestId &&
-        ctx.crashRecovery.target.request.runId ===
-          ctx.crashRecovery.target.runId &&
-        ctx.crashRecovery.target.request.ownerSessionId ===
-          ctx.crashRecovery.ownerSessionId,
+      ctx.crashRecovery.target.request.requestId === ctx.crashRecovery.target.requestId &&
+        ctx.crashRecovery.target.request.runId === ctx.crashRecovery.target.runId &&
+        ctx.crashRecovery.target.request.ownerSessionId === ctx.crashRecovery.ownerSessionId,
       "accepted target request identity mismatch",
     );
   await restartNestedHerdr(ctx);
@@ -6884,10 +5994,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
     "--no-focus",
   ]);
   const ownerPane = created.root_pane;
-  assert.ok(
-    ownerPane?.pane_id,
-    "could not create isolated owner controller pane",
-  );
+  assert.ok(ownerPane?.pane_id, "could not create isolated owner controller pane");
   ctx.rootPaneId = ownerPane.pane_id;
   const restartPrompt = `PI_HERDSMAN_CRASH_RECOVERY_AFTER_RESTART target session: ${ctx.crashRecovery.target.sessionPath}. Inspect list_agents. If smoke-crash-parent lists steer_agent, try steering it once and verify the receiverless request is rejected; do not retry. Do not stop or continue any Agent until the harness authorizes one exact recovery action.`;
   const args = candidateArgs({
@@ -6903,11 +6010,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
       "run",
       ctx.rootPaneId,
       rootCandidateCommand(
-        worktreePiCommand([
-          ...args,
-          "--session",
-          ctx.crashRecovery.ownerSessionPath,
-        ]),
+        worktreePiCommand([...args, "--session", ctx.crashRecovery.ownerSessionPath]),
       ),
     ],
     { env: nestedControlEnv(process.env, ctx.paths, ctx.sessionName) },
@@ -6922,8 +6025,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
         (agent) =>
           agent.pane_id === ctx.rootPaneId &&
           agent.agent_session?.kind === "path" &&
-          resolve(agent.agent_session.value) ===
-            ctx.crashRecovery.ownerSessionPath,
+          resolve(agent.agent_session.value) === ctx.crashRecovery.ownerSessionPath,
       );
       return { done: !!owner, value: owner };
     },
@@ -6936,9 +6038,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
     "crash-recovery-restored-controller-list",
     async () => {
       const owner = await rootSessionSnapshot(ctx);
-      const found =
-        owner &&
-        latestPostRestartListAgentsResult(sessionEntries(owner.contents));
+      const found = owner && latestPostRestartListAgentsResult(sessionEntries(owner.contents));
       return { done: !!found, value: owner };
     },
     { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS, pollMs: 200 },
@@ -6946,23 +6046,15 @@ async function runAgentCrashRecoverySmoke(ctx) {
   const ownerEntries = sessionEntries(reopenedOwner.contents);
   const listResult = latestPostRestartListAgentsResult(ownerEntries);
   const controlledAgents = listResult?.message?.details?.agents;
-  assert.ok(
-    Array.isArray(controlledAgents),
-    "reopened owner did not persist list_agents state",
-  );
+  assert.ok(Array.isArray(controlledAgents), "reopened owner did not persist list_agents state");
   const restoredParentState = controlledAgents.find(
     (agent) => smokeAgentLabel(agent) === "smoke-crash-parent",
   );
-  assert.ok(
-    restoredParentState,
-    "reopened owner could not inspect pending-child parent",
-  );
+  assert.ok(restoredParentState, "reopened owner could not inspect pending-child parent");
   assert.ok(
     restoredParentState.pi_session_id === ctx.crashRecovery.parent.sessionId &&
-      restoredParentState.pi_session_path ===
-        ctx.crashRecovery.parent.sessionPath &&
-      restoredParentState.owner_session_id ===
-        ctx.crashRecovery.parent.ownerSessionId &&
+      restoredParentState.pi_session_path === ctx.crashRecovery.parent.sessionPath &&
+      restoredParentState.owner_session_id === ctx.crashRecovery.parent.ownerSessionId &&
       restoredParentState.workspace_id === ctx.crashRecovery.parent.workspaceId,
     "restored pending-child parent identity changed",
   );
@@ -6972,9 +6064,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
   );
   const parentSteerAdvertised =
     restoredParentState.available_tools?.includes("steer_agent") === true;
-  const reopenedOwnerHeader = ownerEntries.find(
-    (entry) => entry.type === "session",
-  );
+  const reopenedOwnerHeader = ownerEntries.find((entry) => entry.type === "session");
   assert.ok(
     reopenedOwnerHeader?.id === ctx.crashRecovery.ownerSessionId,
     "reopened owner session identity changed",
@@ -6987,10 +6077,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
         const owner = await rootSessionSnapshot(ctx);
         const entries = owner ? sessionEntries(owner.contents) : [];
         const steerCall = entries
-          .filter(
-            (entry) =>
-              entry.type === "message" && entry.message?.role === "assistant",
-          )
+          .filter((entry) => entry.type === "message" && entry.message?.role === "assistant")
           .flatMap((entry) => entry.message.content ?? [])
           .find(
             (part) =>
@@ -7011,11 +6098,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
       },
       { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS, pollMs: 200 },
     );
-    assert.equal(
-      steerResult.details?.ok,
-      false,
-      "receiverless steering unexpectedly succeeded",
-    );
+    assert.equal(steerResult.details?.ok, false, "receiverless steering unexpectedly succeeded");
     assert.equal(
       steerResult.details?.error?.category,
       "agent_busy",
@@ -7036,20 +6119,14 @@ async function runAgentCrashRecoverySmoke(ctx) {
           message.details?.requestId === ctx.crashRecovery.target.requestId
         );
       });
-      assert.ok(
-        originalResults.length <= 1,
-        "original target result was delivered more than once",
-      );
+      assert.ok(originalResults.length <= 1, "original target result was delivered more than once");
       if (originalResults.length === 1) {
-        const resultDetails =
-          originalResults[0]?.message?.details ?? originalResults[0]?.details;
+        const resultDetails = originalResults[0]?.message?.details ?? originalResults[0]?.details;
         assert.ok(
           resultDetails?.requestId === ctx.crashRecovery.target.requestId &&
             resultDetails?.runId === ctx.crashRecovery.target.runId &&
-            resultDetails?.ownerSessionId ===
-              ctx.crashRecovery.ownerSessionId &&
-            resultDetails?.workspaceId ===
-              ctx.crashRecovery.target.workspaceId &&
+            resultDetails?.ownerSessionId === ctx.crashRecovery.ownerSessionId &&
+            resultDetails?.workspaceId === ctx.crashRecovery.target.workspaceId &&
             resultDetails?.agentLabel === "smoke-crash-target" &&
             resultDetails?.paneId === ctx.crashRecovery.target.paneId &&
             resultDetails?.piSessionId === ctx.crashRecovery.target.sessionId &&
@@ -7062,9 +6139,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
       const latestListResult = latestPostRestartListAgentsResult(entries);
       const agents = latestListResult?.message?.details?.agents;
       const target = Array.isArray(agents)
-        ? agents.find(
-            (agent) => smokeAgentLabel(agent) === "smoke-crash-target",
-          )
+        ? agents.find((agent) => smokeAgentLabel(agent) === "smoke-crash-target")
         : undefined;
       if (target) {
         assert.ok(
@@ -7110,19 +6185,13 @@ async function runAgentCrashRecoverySmoke(ctx) {
             entry.message.toolName === "stop_agent" &&
             !entry.message.isError,
         );
-        const completed = owner?.contents.includes(
-          "PI_HERDSMAN_CRASH_RECOVERY_CLOSED",
-        );
+        const completed = owner?.contents.includes("PI_HERDSMAN_CRASH_RECOVERY_CLOSED");
         return { done: !!result && !!completed, value: result };
       },
       { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS, pollMs: 200 },
     );
     const stopDetails = stopResult.message.details;
-    assert.equal(
-      stopDetails?.ok,
-      true,
-      "persisted stop result was not successful",
-    );
+    assert.equal(stopDetails?.ok, true, "persisted stop result was not successful");
     assert.equal(stopDetails?.action, "stop");
     const closed = stopDetails?.closed_assignment;
     assert.ok(
@@ -7148,12 +6217,10 @@ async function runAgentCrashRecoverySmoke(ctx) {
       let mailboxAbsent = false;
       try {
         const directory = await lstat(mailboxDirectory);
-        if (!directory.isDirectory() || directory.isSymbolicLink())
-          return unknown;
+        if (!directory.isDirectory() || directory.isSymbolicLink()) return unknown;
         const statePath = join(mailboxDirectory, "state.json");
         const stat = await lstat(statePath);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536)
-          return unknown;
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536) return unknown;
         mailboxState = JSON.parse(await readFile(statePath, "utf8"));
       } catch (error) {
         if (error.code !== "ENOENT") return unknown;
@@ -7173,8 +6240,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
       }
       if (!current.ok) return unknown;
       const snapshot = current.value.snapshot;
-      if (!Array.isArray(snapshot?.agents) || !Array.isArray(snapshot?.panes))
-        return unknown;
+      if (!Array.isArray(snapshot?.agents) || !Array.isArray(snapshot?.panes)) return unknown;
       const target = ctx.crashRecovery.target;
       const identityMatches =
         mailboxAbsent ||
@@ -7191,40 +6257,25 @@ async function runAgentCrashRecoverySmoke(ctx) {
             mailboxState.lastAck.requestId === target.requestId
           : !mailboxState.activeRequestId;
       if (!identityMatches || !stateSettled) return unknown;
-      const execution = await classifyOldExecution(
-        snapshot,
-        target,
-        async (paneId) => {
-          let observed;
-          try {
-            observed = await tryNestedCommand(ctx, [
-              "pane",
-              "process-info",
-              "--pane",
-              paneId,
-            ]);
-          } catch {
-            return "unknown";
-          }
-          if (!observed.ok)
-            return observed.herdrCode === "pane_not_found"
-              ? "clear"
-              : "unknown";
-          const processes = observed.value.process_info?.foreground_processes;
-          if (!Array.isArray(processes)) return "unknown";
-          try {
-            return candidateProcess(
-              observed.value,
-              ctx.candidateExtension,
-              ctx.herdrStateExtension,
-            ).length
-              ? "active"
-              : "clear";
-          } catch {
-            return "unknown";
-          }
-        },
-      );
+      const execution = await classifyOldExecution(snapshot, target, async (paneId) => {
+        let observed;
+        try {
+          observed = await tryNestedCommand(ctx, ["pane", "process-info", "--pane", paneId]);
+        } catch {
+          return "unknown";
+        }
+        if (!observed.ok) return observed.herdrCode === "pane_not_found" ? "clear" : "unknown";
+        const processes = observed.value.process_info?.foreground_processes;
+        if (!Array.isArray(processes)) return "unknown";
+        try {
+          return candidateProcess(observed.value, ctx.candidateExtension, ctx.herdrStateExtension)
+            .length
+            ? "active"
+            : "clear";
+        } catch {
+          return "unknown";
+        }
+      });
       return {
         done: execution === "quiescent",
         value: execution,
@@ -7254,13 +6305,9 @@ async function runAgentCrashRecoverySmoke(ctx) {
       const call = entries
         .filter((entry) => entry.type === "message")
         .flatMap((entry) =>
-          entry.message?.role === "assistant"
-            ? (entry.message.content ?? [])
-            : [],
+          entry.message?.role === "assistant" ? (entry.message.content ?? []) : [],
         )
-        .find(
-          (part) => part.type === "toolCall" && part.name === "resume_agent",
-        );
+        .find((part) => part.type === "toolCall" && part.name === "resume_agent");
       const result =
         call &&
         entries.find(
@@ -7269,23 +6316,21 @@ async function runAgentCrashRecoverySmoke(ctx) {
             entry.message?.role === "toolResult" &&
             entry.message.toolCallId === call.id,
         )?.message;
-      if (!result)
-        return { done: false, progress: { continuationResult: false } };
+      if (!result) return { done: false, progress: { continuationResult: false } };
       const details = result.details;
       if (result.isError || details?.ok !== true) {
         const category = details?.error?.category ?? details?.category;
-        ctx.crashRecovery.continueAgentRejectionCategory =
-          STRUCTURED_TOOL_ERROR_CATEGORIES.has(category) ? category : "unknown";
+        ctx.crashRecovery.continueAgentRejectionCategory = STRUCTURED_TOOL_ERROR_CATEGORIES.has(
+          category,
+        )
+          ? category
+          : "unknown";
       }
       return { done: true, value: details };
     },
     { timeoutMs: 30_000, stallMs: MODEL_STALL_MS, pollMs: 200 },
   );
-  assert.equal(
-    continued?.ok,
-    true,
-    "resume_agent failed during crash recovery",
-  );
+  assert.equal(continued?.ok, true, "resume_agent failed during crash recovery");
   assert.ok(
     continued.session_id === ctx.crashRecovery.target.sessionId &&
       continued.session_path === ctx.crashRecovery.target.sessionPath &&
@@ -7313,15 +6358,10 @@ async function runAgentCrashRecoverySmoke(ctx) {
           ctx.crashRecovery.target.requestId,
       );
       const continuedResults = results.filter(
-        (entry) =>
-          (entry.message?.details ?? entry.details)?.requestId ===
-          continued.request_id,
+        (entry) => (entry.message?.details ?? entry.details)?.requestId === continued.request_id,
       );
       assert.ok(original.length <= 1, "original target result was duplicated");
-      assert.ok(
-        continuedResults.length <= 1,
-        "continued target result was duplicated",
-      );
+      assert.ok(continuedResults.length <= 1, "continued target result was duplicated");
       return {
         done: continuedResults.length === 1,
         value: { entries, results, original, continued: continuedResults[0] },
@@ -7331,8 +6371,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
   );
   const completedOwnerEntries = completed.entries;
   const originalTargetResults = completed.original;
-  if (recoveryOutcome.kind === "settled")
-    assert.equal(originalTargetResults.length, 1);
+  if (recoveryOutcome.kind === "settled") assert.equal(originalTargetResults.length, 1);
   assert.equal(completed.continued !== undefined, true);
   const continuedTargetResult = completed.continued;
   const continuedResultDetails =
@@ -7340,14 +6379,11 @@ async function runAgentCrashRecoverySmoke(ctx) {
   assert.ok(
     continuedResultDetails?.requestId === continued.request_id &&
       continuedResultDetails?.runId !== ctx.crashRecovery.target.runId &&
-      continuedResultDetails?.ownerSessionId ===
-        ctx.crashRecovery.ownerSessionId &&
-      continuedResultDetails?.workspaceId ===
-        ctx.crashRecovery.target.workspaceId &&
+      continuedResultDetails?.ownerSessionId === ctx.crashRecovery.ownerSessionId &&
+      continuedResultDetails?.workspaceId === ctx.crashRecovery.target.workspaceId &&
       continuedResultDetails?.agentLabel === "smoke-crash-target" &&
       continuedResultDetails?.paneId === continued.pane_id &&
-      continuedResultDetails?.piSessionId ===
-        ctx.crashRecovery.target.sessionId &&
+      continuedResultDetails?.piSessionId === ctx.crashRecovery.target.sessionId &&
       continuedResultDetails?.status === "completed",
     "continued target result identity mismatch",
   );
@@ -7364,27 +6400,20 @@ async function runAgentCrashRecoverySmoke(ctx) {
   );
   assert.equal(
     ownerToolCalls.filter(
-      (call) =>
-        call.name === "delegate_agent" &&
-        call.arguments?.label === "smoke-crash-target",
+      (call) => call.name === "delegate_agent" && call.arguments?.label === "smoke-crash-target",
     ).length,
     1,
     "original target work was delegated more than once",
   );
-  const continueCalls = ownerToolCalls.filter(
-    (call) => call.name === "resume_agent",
-  );
+  const continueCalls = ownerToolCalls.filter((call) => call.name === "resume_agent");
   assert.equal(continueCalls.length, 1);
   assert.ok(
-    continueCalls[0].arguments?.session ===
-      ctx.crashRecovery.target.sessionPath,
+    continueCalls[0].arguments?.session === ctx.crashRecovery.target.sessionPath,
     "resume_agent did not use the exact saved session",
   );
   assert.equal(
     ownerToolCalls.filter(
-      (call) =>
-        call.name === "stop_agent" &&
-        call.arguments?.agent === "smoke-crash-target",
+      (call) => call.name === "stop_agent" && call.arguments?.agent === "smoke-crash-target",
     ).length,
     ctx.crashRecovery.recoveryPath === "explicit-stop" ? 1 : 0,
   );
@@ -7410,19 +6439,14 @@ function isolatedSessionRoots(ctx) {
     ctx.paths.piSessions,
     // Chief reserves the exact child session through Pi's SDK default,
     // which is inside the isolated agent directory, not the CLI override.
-    ...(ctx.scenario === "chief-manager"
-      ? [join(ctx.paths.piAgent, "sessions")]
-      : []),
+    ...(ctx.scenario === "chief-manager" ? [join(ctx.paths.piAgent, "sessions")] : []),
   ];
 }
 
 function isSessionDescendant(root, candidate) {
   const segment = relative(root, candidate);
   return (
-    segment !== "" &&
-    segment !== ".." &&
-    !segment.startsWith(`..${sep}`) &&
-    !isAbsolute(segment)
+    segment !== "" && segment !== ".." && !segment.startsWith(`..${sep}`) && !isAbsolute(segment)
   );
 }
 
@@ -7436,13 +6460,9 @@ async function pinIsolatedSessionRoot(ctx, root) {
   const ancestor = dirname(ctx.paths.piSessions);
   if (!isSessionDescendant(ancestor, root))
     throw new Error("managed Pi session resolves outside isolation");
-  const expected = resolve(
-    ctx.paths.root ?? (await realpath(ancestor)),
-    relative(ancestor, root),
-  );
+  const expected = resolve(ctx.paths.root ?? (await realpath(ancestor)), relative(ancestor, root));
   const approved = await lstat(expected, { bigint: true });
-  if (!approved.isDirectory())
-    throw new Error("managed Pi session resolves outside isolation");
+  if (!approved.isDirectory()) throw new Error("managed Pi session resolves outside isolation");
   async function verify() {
     if ((await realpath(root)) !== expected)
       throw new Error("managed Pi session resolves outside isolation");
@@ -7456,16 +6476,10 @@ async function pinIsolatedSessionRoot(ctx, root) {
 
 export async function isolatedSessionDetails(ctx, agent) {
   const identity = agent?.agent_session;
-  if (identity?.kind !== "path" || typeof identity.value !== "string")
-    return null;
+  if (identity?.kind !== "path" || typeof identity.value !== "string") return null;
   const path = resolve(identity.value);
-  const root = isolatedSessionRoots(ctx).find((root) =>
-    isSessionDescendant(root, path),
-  );
-  if (!root)
-    throw new Error(
-      "managed Pi session path is outside the isolated session directory",
-    );
+  const root = isolatedSessionRoots(ctx).find((root) => isSessionDescendant(root, path));
+  if (!root) throw new Error("managed Pi session path is outside the isolated session directory");
   try {
     const pinned = await pinIsolatedSessionRoot(ctx, root);
     return await readIsolatedSession(path, pinned);
@@ -7481,9 +6495,7 @@ async function readIsolatedSession(path, root) {
     const details = await lstat(path, { bigint: true });
     const assertBoundedFile = (file) => {
       if (!file.isFile() || file.size > MAX_SESSION_BYTES)
-        throw new Error(
-          "managed Pi session is not a bounded regular isolated session file",
-        );
+        throw new Error("managed Pi session is not a bounded regular isolated session file");
     };
     assertBoundedFile(details);
     const canonicalPath = await realpath(path);
@@ -7505,11 +6517,8 @@ async function readIsolatedSession(path, root) {
     if (error.code === "ENOENT") return undefined;
     throw error;
   }
-  const header = sessionEntries(contents).find(
-    (entry) => entry.type === "session",
-  );
-  if (!header?.id)
-    throw new Error("managed Pi session has no persisted session ID");
+  const header = sessionEntries(contents).find((entry) => entry.type === "session");
+  if (!header?.id) throw new Error("managed Pi session has no persisted session ID");
   return { path, id: header.id, contents };
 }
 
@@ -7528,47 +6537,33 @@ export async function exactIsolatedSession(ctx, id) {
             .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
             .map((entry) => ({
               pinned,
-              path: join(
-                root,
-                relative(pinned.expected, entry.parentPath),
-                entry.name,
-              ),
+              path: join(root, relative(pinned.expected, entry.parentPath), entry.name),
             }));
         } catch (error) {
-          if (error.code !== "ENOENT" || root === ctx.paths.piSessions)
-            throw error;
+          if (error.code !== "ENOENT" || root === ctx.paths.piSessions) throw error;
           return [];
         }
       }),
     )
   ).flat();
   if (files.length > 256)
-    throw new Error(
-      "too many isolated Pi session files to identify Lead safely",
-    );
+    throw new Error("too many isolated Pi session files to identify Lead safely");
   const matches = [];
   for (const { pinned, path } of files) {
     const session = await readIsolatedSession(path, pinned);
     if (session?.id === id) matches.push(session);
   }
-  if (matches.length > 1)
-    throw new Error(`ambiguous isolated Pi session ID: ${id}`);
+  if (matches.length > 1) throw new Error(`ambiguous isolated Pi session ID: ${id}`);
   return matches[0];
 }
 
 async function agentSessionId(ctx, agent) {
   const identity = agent?.agent_session;
-  if (identity?.kind === "id" && typeof identity.value === "string")
-    return identity.value;
+  if (identity?.kind === "id" && typeof identity.value === "string") return identity.value;
   return (await isolatedSessionDetails(ctx, agent))?.id;
 }
 
-export async function agentsForPiSession(
-  ctx,
-  agents,
-  sessionId,
-  getSessionId = agentSessionId,
-) {
+export async function agentsForPiSession(ctx, agents, sessionId, getSessionId = agentSessionId) {
   const matches = [];
   for (const agent of agents)
     if ((await getSessionId(ctx, agent)) === sessionId) matches.push(agent);
@@ -7591,12 +6586,10 @@ export function assertCoreToolEvidence(simulated, evidence, expectedPackage) {
   );
   const selection = evidence.find(({ name }) => name === "attach_handoff");
   const scout = evidence.find(
-    ({ name, arguments: args }) =>
-      name === "delegate_agent" && args?.label === "smoke-core-scout",
+    ({ name, arguments: args }) => name === "delegate_agent" && args?.label === "smoke-core-scout",
   );
   const next = evidence.find(
-    ({ name, arguments: args }) =>
-      name === "delegate_agent" && args?.label === "smoke-core-next",
+    ({ name, arguments: args }) => name === "delegate_agent" && args?.label === "smoke-core-next",
   );
   const [ref] = selection?.arguments?.files ?? [];
   requireSmokeEvidence(
@@ -7622,18 +6615,10 @@ export function assertCoreToolEvidence(simulated, evidence, expectedPackage) {
   );
 }
 
-export function assertContinuationReadEvidence(
-  simulated,
-  reads,
-  readResult,
-  expectedName,
-) {
+export function assertContinuationReadEvidence(simulated, reads, readResult, expectedName) {
   if (!simulated) return;
   assert.equal(reads.length, 1, "continued Agent must not reread package.json");
-  assert.ok(
-    readResult,
-    "remembered package must come from its successful persisted read",
-  );
+  assert.ok(readResult, "remembered package must come from its successful persisted read");
   assert.ok(
     messageText(readResult.message.content).includes(expectedName),
     "persisted package read must contain the returned package name",
@@ -7641,11 +6626,7 @@ export function assertContinuationReadEvidence(
 }
 
 export function retainCoreObservation(ctx, records, elapsedMs) {
-  if (
-    records.some(
-      (record) => Number.isSafeInteger(record?.pid) && record.pid > 0,
-    )
-  )
+  if (records.some((record) => Number.isSafeInteger(record?.pid) && record.pid > 0))
     ctx.coreLastNonemptyObservation = {
       elapsedMs,
       processRecords: sanitizedProcessRecords(records),
@@ -7665,8 +6646,7 @@ async function runCoreSmoke(ctx) {
       for (const item of inspection.verified) {
         observed.set(`${item.paneId}\0${item.pid}`, item);
       }
-      if (inspection.verified.length)
-        ctx.lastVerified = "agent_process_observed";
+      if (inspection.verified.length) ctx.lastVerified = "agent_process_observed";
       if (!ctx.simulated) {
         const rootInfo = await tryNestedCommand(ctx, [
           "pane",
@@ -7713,22 +6693,14 @@ async function runCoreSmoke(ctx) {
         ctx.coreRootSessionId = sessionEntries(session.contents).find(
           (entry) => entry.type === "session",
         )?.id;
-        const assistantResult = assistantResultForSession(
-          session,
-          ctx.initialPrompt,
-          marker,
-        );
+        const assistantResult = assistantResultForSession(session, ctx.initialPrompt, marker);
         if (assistantResult) ctx.assistantResult = assistantResult;
       }
       const paneCount = distinctPaneCount([...observed.values()]);
-      if (session && ctx.assistantResult)
-        ctx.lastVerified = "scenario_session_result_observed";
-      const scenarioReady =
-        !!ctx.assistantResult && paneCount >= 2 && !!ctx.coreRootProcess;
+      if (session && ctx.assistantResult) ctx.lastVerified = "scenario_session_result_observed";
+      const scenarioReady = !!ctx.assistantResult && paneCount >= 2 && !!ctx.coreRootProcess;
       const provenanceObservation =
-        ctx.simulated && scenarioReady
-          ? await coreObservationProvenance(ctx)
-          : undefined;
+        ctx.simulated && scenarioReady ? await coreObservationProvenance(ctx) : undefined;
       const observedPids = new Set([
         ctx.coreRootProcess?.pid,
         ...[...observed.values()].map(({ pid }) => pid),
@@ -7742,11 +6714,7 @@ async function runCoreSmoke(ctx) {
         ...provenanceObservation,
         observedPids,
       });
-      ctx.coreCorrelation = coreCorrelationSummary(
-        provenanceObservation,
-        observedPids,
-        done,
-      );
+      ctx.coreCorrelation = coreCorrelationSummary(provenanceObservation, observedPids, done);
       return {
         done,
         progress: {
@@ -7780,12 +6748,7 @@ async function runCoreSmoke(ctx) {
       ctx.sessionStartObserved = Boolean(
         (
           await readFile(
-            join(
-              ctx.paths.piAgent,
-              "pi-herdsman",
-              "runtime",
-              "smoke-faux-session-start.jsonl",
-            ),
+            join(ctx.paths.piAgent, "pi-herdsman", "runtime", "smoke-faux-session-start.jsonl"),
             "utf8",
           )
         ).trim(),
@@ -7793,67 +6756,46 @@ async function runCoreSmoke(ctx) {
     } catch {
       ctx.sessionStartObserved = false;
     }
-    const sessionFiles = (
-      await readdir(ctx.paths.piSessions, { recursive: true })
-    ).filter((file) => file.endsWith(".jsonl"));
+    const sessionFiles = (await readdir(ctx.paths.piSessions, { recursive: true })).filter((file) =>
+      file.endsWith(".jsonl"),
+    );
     const sessionIds = new Set();
     for (const file of sessionFiles) {
-      const header = sessionEntries(
-        await readFile(join(ctx.paths.piSessions, file), "utf8"),
-      ).find((entry) => entry.type === "session");
-      if (typeof header?.id === "string" && header.id)
-        sessionIds.add(header.id);
+      const header = sessionEntries(await readFile(join(ctx.paths.piSessions, file), "utf8")).find(
+        (entry) => entry.type === "session",
+      );
+      if (typeof header?.id === "string" && header.id) sessionIds.add(header.id);
     }
     const rootSession = await rootSessionSnapshot(ctx);
     const rootId =
       rootSession &&
-      sessionEntries(rootSession.contents).find(
-        (entry) => entry.type === "session",
-      )?.id;
-    requireSmokeEvidence(
-      rootId,
-      "core root session has no exact Pi session identity",
-    );
+      sessionEntries(rootSession.contents).find((entry) => entry.type === "session")?.id;
+    requireSmokeEvidence(rootId, "core root session has no exact Pi session identity");
     const observedProcesses = [ctx.coreRootProcess, ...observed.values()].map(
       ({ paneId, pid }) => ({ paneId, processes: [{ pid }] }),
     );
     const sessions = [];
     for (const file of sessionFiles) {
-      const entries = sessionEntries(
-        await readFile(join(ctx.paths.piSessions, file), "utf8"),
-      );
+      const entries = sessionEntries(await readFile(join(ctx.paths.piSessions, file), "utf8"));
       const id = entries.find((entry) => entry.type === "session")?.id;
       if (sessionIds.has(id)) sessions.push({ id, entries });
     }
-    const expectedDefinitions = coreAgentDefinitionsExpectations(
-      sessions,
-      rootId,
-    );
+    const expectedDefinitions = coreAgentDefinitionsExpectations(sessions, rootId);
     for (const sessionId of sessionIds) {
       const expectedAgentDefinitions = expectedDefinitions.get(sessionId);
       requireSmokeEvidence(
         expectedAgentDefinitions !== undefined,
         `missing persisted role evidence for ${sessionId}`,
       );
-      const matches = provenance.filter(
-        (record) => record.sessionId === sessionId,
-      );
-      requireSmokeEvidence(
-        matches.length === 1,
-        `expected one provenance row for ${sessionId}`,
-      );
+      const matches = provenance.filter((record) => record.sessionId === sessionId);
+      requireSmokeEvidence(matches.length === 1, `expected one provenance row for ${sessionId}`);
       const record = matches[0];
       const candidates =
-        sessionId === rootId
-          ? observedProcesses.slice(0, 1)
-          : observedProcesses.slice(1);
+        sessionId === rootId ? observedProcesses.slice(0, 1) : observedProcesses.slice(1);
       const pane = candidates.find(({ processes }) =>
         processes.some((process) => process.pid === record.pid),
       );
-      requireSmokeEvidence(
-        pane,
-        `no exact foreground PID match for ${sessionId}`,
-      );
+      requireSmokeEvidence(pane, `no exact foreground PID match for ${sessionId}`);
       matchPiProvenance(
         provenance,
         sessionId,
@@ -7866,36 +6808,27 @@ async function runCoreSmoke(ctx) {
     }
     verifyCoreProvenanceEvidence(ctx, provenance, sessionIds);
     ctx.versionChildSessionIds = [...sessionIds].filter((id) => id !== rootId);
-    const files = (
-      await readdir(ctx.paths.piSessions, { recursive: true })
-    ).filter((file) => file.endsWith(".jsonl"));
+    const files = (await readdir(ctx.paths.piSessions, { recursive: true })).filter((file) =>
+      file.endsWith(".jsonl"),
+    );
     const evidence = [];
     for (const file of files) {
-      const entries = sessionEntries(
-        await readFile(join(ctx.paths.piSessions, file), "utf8"),
-      );
+      const entries = sessionEntries(await readFile(join(ctx.paths.piSessions, file), "utf8"));
       const cwd = entries.find((entry) => entry.type === "session")?.cwd;
       const calls = entries.flatMap((entry) =>
         entry.type === "message" && entry.message?.role === "assistant"
-          ? (entry.message.content ?? []).filter(
-              (part) => part.type === "toolCall",
-            )
+          ? (entry.message.content ?? []).filter((part) => part.type === "toolCall")
           : [],
       );
       const results = entries
-        .filter(
-          (entry) =>
-            entry.type === "message" && entry.message?.role === "toolResult",
-        )
+        .filter((entry) => entry.type === "message" && entry.message?.role === "toolResult")
         .map((entry) => entry.message);
       for (const call of calls) {
         if (
           call.name !== "delegate_agent" &&
           call.name !== "attach_handoff" &&
           call.name !== "notify_owner" &&
-          !(
-            call.name === "read" && isPackageReadPath(call.arguments?.path, cwd)
-          )
+          !(call.name === "read" && isPackageReadPath(call.arguments?.path, cwd))
         )
           continue;
         const result = results.find(
@@ -7915,30 +6848,25 @@ async function runCoreSmoke(ctx) {
     }
     assertCoreToolEvidence(ctx.simulated, evidence, ctx.expectedPackage);
     ctx.coreToolEvidence = evidence.map(({ name }) => name);
-    const ownerNotificationReceived = sessionEntries(rootSession.contents).some(
-      (entry) => {
-        const message = entry.message;
-        const details = entry.details ?? message?.details;
-        return (
-          (entry.customType === "pi-herdsman-agent-owner-message" ||
-            message?.customType === "pi-herdsman-agent-owner-message") &&
-          details?.ownerSessionId === ctx.coreRootSessionId &&
-          details?.agentLabel === "smoke-core-implementer" &&
-          typeof details?.messageId === "string" &&
-          messageText(message?.content ?? entry.content ?? "").includes(
-            "SMOKE_CORE_OWNER_NOTIFICATION",
-          )
-        );
-      },
-    );
+    const ownerNotificationReceived = sessionEntries(rootSession.contents).some((entry) => {
+      const message = entry.message;
+      const details = entry.details ?? message?.details;
+      return (
+        (entry.customType === "pi-herdsman-agent-owner-message" ||
+          message?.customType === "pi-herdsman-agent-owner-message") &&
+        details?.ownerSessionId === ctx.coreRootSessionId &&
+        details?.agentLabel === "smoke-core-implementer" &&
+        typeof details?.messageId === "string" &&
+        messageText(message?.content ?? entry.content ?? "").includes(
+          "SMOKE_CORE_OWNER_NOTIFICATION",
+        )
+      );
+    });
     requireSmokeEvidence(
       ownerNotificationReceived,
       "core must deliver the Agent's accepted owner notification into persisted Lead history",
     );
-    const captured = await coreNestedDelegationDiagnostics(
-      ctx,
-      rootSession.contents,
-    );
+    const captured = await coreNestedDelegationDiagnostics(ctx, rootSession.contents);
     const handoff = captured.coreHandoff;
     requireSmokeEvidence(
       handoff?.attachHandoff.selectionMatches === true,
@@ -7974,10 +6902,7 @@ async function runCoreSmoke(ctx) {
 // leaf projection at the limit, and result delivery at every level are real.
 async function runDeepChainSmoke(ctx) {
   const marker = `${DEEP_CHAIN_MARKER} ${DEEP_CHAIN_RESULT}`;
-  const labels = Array.from(
-    { length: DEEP_CHAIN_DEPTH },
-    (_, i) => `smoke-deep-${i + 1}`,
-  );
+  const labels = Array.from({ length: DEEP_CHAIN_DEPTH }, (_, i) => `smoke-deep-${i + 1}`);
   const seenInTree = new Set();
   await waitForEvidence(
     ctx,
@@ -7987,11 +6912,7 @@ async function runDeepChainSmoke(ctx) {
       const session = await rootSessionSnapshot(ctx);
       if (session) {
         ctx.rootSessionPath = session.path;
-        const assistantResult = assistantResultForSession(
-          session,
-          ctx.initialPrompt,
-          marker,
-        );
+        const assistantResult = assistantResultForSession(session, ctx.initialPrompt, marker);
         if (assistantResult) ctx.assistantResult = assistantResult;
       }
       return {
@@ -8007,14 +6928,12 @@ async function runDeepChainSmoke(ctx) {
     },
     { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS },
   );
-  const files = (
-    await readdir(ctx.paths.piSessions, { recursive: true })
-  ).filter((file) => file.endsWith(".jsonl"));
+  const files = (await readdir(ctx.paths.piSessions, { recursive: true })).filter((file) =>
+    file.endsWith(".jsonl"),
+  );
   const sessions = [];
   for (const file of files) {
-    const entries = sessionEntries(
-      await readFile(join(ctx.paths.piSessions, file), "utf8"),
-    );
+    const entries = sessionEntries(await readFile(join(ctx.paths.piSessions, file), "utf8"));
     sessions.push({
       id: entries.find((entry) => entry.type === "session")?.id,
       entries,
@@ -8034,15 +6953,9 @@ async function sampleRootTreeLabels(ctx, labels, seen) {
   } catch {
     return;
   }
-  const treeRows = text
-    .split(/\r?\n/u)
-    .filter((line) => /^[ │]*[└├]─ /u.test(line));
+  const treeRows = text.split(/\r?\n/u).filter((line) => /^[ │]*[└├]─ /u.test(line));
   for (const label of labels)
-    if (
-      treeRows.some((line) =>
-        new RegExp(`\\b${label}\\s+${label}\\b`, "u").test(line),
-      )
-    )
+    if (treeRows.some((line) => new RegExp(`\\b${label}\\s+${label}\\b`, "u").test(line)))
       seen.add(label);
 }
 
@@ -8073,12 +6986,9 @@ export function assertDeepChainEvidence(sessions) {
     for (const message of messages) {
       if (message?.role !== "assistant") continue;
       for (const part of message.content ?? []) {
-        if (part.type !== "toolCall" || part.name !== "delegate_agent")
-          continue;
+        if (part.type !== "toolCall" || part.name !== "delegate_agent") continue;
         const result = messages.find(
-          (candidate) =>
-            candidate?.role === "toolResult" &&
-            candidate.toolCallId === part.id,
+          (candidate) => candidate?.role === "toolResult" && candidate.toolCallId === part.id,
         );
         requireSmokeEvidence(
           result && !result.isError,
@@ -8108,10 +7018,7 @@ export function assertDeepChainEvidence(sessions) {
   requireSmokeEvidence(
     JSON.stringify(labels) ===
       JSON.stringify(
-        Array.from(
-          { length: DEEP_CHAIN_DEPTH },
-          (_, index) => `smoke-deep-${index + 1}`,
-        ),
+        Array.from({ length: DEEP_CHAIN_DEPTH }, (_, index) => `smoke-deep-${index + 1}`),
       ),
     `deep-chain expected exactly one delegation per level, observed ${labels.join(", ")}`,
   );
@@ -8142,17 +7049,13 @@ export function assertDeepChainEvidence(sessions) {
       );
     });
   requireSmokeEvidence(
-    successfulCalls(
-      "await_owner",
-      (args) => args?.question === "SMOKE_DEEP_QUESTION",
-    ).length === 1,
+    successfulCalls("await_owner", (args) => args?.question === "SMOKE_DEEP_QUESTION").length === 1,
     "deep-chain leaf must escalate one await_owner to its owner",
   );
   requireSmokeEvidence(
     successfulCalls(
       "reply_agent",
-      (args) =>
-        args?.agent === "smoke-deep-4" && args?.message === "SMOKE_DEEP_ANSWER",
+      (args) => args?.agent === "smoke-deep-4" && args?.message === "SMOKE_DEEP_ANSWER",
     ).length === 1,
     "deep-chain depth-3 owner must reply to the leaf's ask",
   );
@@ -8169,9 +7072,7 @@ async function runContinuationSmoke(ctx) {
   const firstPrompt = ctx.initialPrompt;
   const firstMarker = "PI_HERDSMAN_CONTINUATION_FIRST";
   const secondMarker = "PI_HERDSMAN_CONTINUATION_SECOND";
-  const expectedName = JSON.parse(
-    await readFile(join(ctx.repoRoot, "package.json"), "utf8"),
-  ).name;
+  const expectedName = JSON.parse(await readFile(join(ctx.repoRoot, "package.json"), "utf8")).name;
   let firstSession;
   let firstGeneration;
   const firstPids = new Set();
@@ -8224,11 +7125,7 @@ async function runContinuationSmoke(ctx) {
               observationError: observed.error,
               evidence: { sessionId: session.id, paneId: agent.pane_id },
             };
-          pids = candidateProcess(
-            observed.value,
-            ctx.candidateExtension,
-            ctx.herdrStateExtension,
-          )
+          pids = candidateProcess(observed.value, ctx.candidateExtension, ctx.herdrStateExtension)
             .map(({ pid }) => pid)
             .filter((pid) => pid != null);
           firstSession = { ...session, paneId: agent.pane_id };
@@ -8240,12 +7137,7 @@ async function runContinuationSmoke(ctx) {
       // Keep the simulated child alive until its required live evidence is captured.
       if (done && ctx.simulated)
         await writeFile(
-          join(
-            ctx.paths.piAgent,
-            "pi-herdsman",
-            "runtime",
-            "continuation-first-observed",
-          ),
+          join(ctx.paths.piAgent, "pi-herdsman", "runtime", "continuation-first-observed"),
           "observed\n",
           { flag: "wx", mode: 0o600 },
         );
@@ -8270,9 +7162,7 @@ async function runContinuationSmoke(ctx) {
     { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS, pollMs: 200 },
   );
   if (!firstPids.size)
-    throw new Error(
-      "continuation-first-generation: no candidate process identity was observed",
-    );
+    throw new Error("continuation-first-generation: no candidate process identity was observed");
 
   await waitForEvidence(
     ctx,
@@ -8280,8 +7170,7 @@ async function runContinuationSmoke(ctx) {
     async () => {
       const session = await rootSessionSnapshot(ctx);
       if (session) assertNoFailedAgentDelegation(session.contents);
-      const result =
-        session && assistantResultForSession(session, firstPrompt, firstMarker);
+      const result = session && assistantResultForSession(session, firstPrompt, firstMarker);
       return {
         done: !!result,
         progress: {
@@ -8323,13 +7212,9 @@ async function runContinuationSmoke(ctx) {
     },
     { timeoutMs: 60_000, stallMs: CONTROL_STALL_MS, pollMs: 300 },
   );
-  const panesAfterFirst = listedPanes(
-    await nestedCommand(ctx, ["pane", "list"]),
-  );
+  const panesAfterFirst = listedPanes(await nestedCommand(ctx, ["pane", "list"]));
   if (panesAfterFirst.some((pane) => pane.paneId === firstSession.paneId))
-    throw new Error(
-      "continuation-first-cleanup: first managed pane did not disappear",
-    );
+    throw new Error("continuation-first-cleanup: first managed pane did not disappear");
   const savedAfterCleanup = await isolatedSessionDetails(ctx, {
     agent_session: { kind: "path", value: firstSession.path },
   });
@@ -8348,17 +7233,11 @@ async function runContinuationSmoke(ctx) {
       let matchingSessionSeen = false;
       let matchingPane;
       for (const agent of agents) {
-        const session = await isolatedSessionDetails(ctx, agent).catch(
-          (error) => {
-            if (error.code === "ENOENT") return null;
-            throw error;
-          },
-        );
-        if (
-          session?.path !== firstSession.path ||
-          session.id !== firstSession.id
-        )
-          continue;
+        const session = await isolatedSessionDetails(ctx, agent).catch((error) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        });
+        if (session?.path !== firstSession.path || session.id !== firstSession.id) continue;
         matchingSessionSeen = true;
         matchingPane = agent.pane_id;
         const observed = await tryNestedCommand(ctx, [
@@ -8367,8 +7246,7 @@ async function runContinuationSmoke(ctx) {
           "--pane",
           agent.pane_id,
         ]);
-        if (!observed.ok)
-          return { done: false, observationError: observed.error };
+        if (!observed.ok) return { done: false, observationError: observed.error };
         const matches = candidateProcess(
           observed.value,
           ctx.candidateExtension,
@@ -8445,8 +7323,7 @@ async function runContinuationSmoke(ctx) {
     async () => {
       const session = await rootSessionSnapshot(ctx);
       const matchingResults =
-        session &&
-        continuationResultsForPrompt(session.contents, followup, secondMarker);
+        session && continuationResultsForPrompt(session.contents, followup, secondMarker);
       const result = matchingResults?.[0];
       if (result) {
         if (!messageText(result.message.content).includes(expectedName))
@@ -8459,9 +7336,7 @@ async function runContinuationSmoke(ctx) {
           );
         const contents = await readFile(firstSession.path, "utf8");
         const childEntries = sessionEntries(contents);
-        const childCwd = childEntries.find(
-          (entry) => entry.type === "session",
-        )?.cwd;
+        const childCwd = childEntries.find((entry) => entry.type === "session")?.cwd;
         if (ctx.simulated) {
           const reads = childEntries.flatMap((entry) =>
             entry.type === "message" && entry.message?.role === "assistant"
@@ -8481,22 +7356,12 @@ async function runContinuationSmoke(ctx) {
               entry.message.toolCallId === reads[0]?.id &&
               !entry.message.isError,
           );
-          assertContinuationReadEvidence(
-            ctx.simulated,
-            reads,
-            readResult,
-            expectedName,
-          );
+          assertContinuationReadEvidence(ctx.simulated, reads, readResult, expectedName);
         }
         const evidence = continuationSessionEvidence(
           contents,
           firstSession.id,
-          correlatedContinuationTask(
-            session.contents,
-            result.id,
-            firstSession.id,
-            followup,
-          ),
+          correlatedContinuationTask(session.contents, result.id, firstSession.id, followup),
         );
         ctx.continuationSessionEvidence = evidence;
         if (
@@ -8510,11 +7375,7 @@ async function runContinuationSmoke(ctx) {
         await waitForDescendantsToExit(ctx);
         const finalSession = await rootSessionSnapshot(ctx);
         const finalResults = finalSession
-          ? continuationResultsForPrompt(
-              finalSession.contents,
-              followup,
-              secondMarker,
-            )
+          ? continuationResultsForPrompt(finalSession.contents, followup, secondMarker)
           : [];
         if (finalResults.length !== 1)
           throw new Error(
@@ -8564,9 +7425,7 @@ async function runManagerBootstrapSmoke(ctx) {
     async () => {
       const observed = await tryNestedCommand(ctx, ["agent", "list"]);
       if (!observed.ok) throw observationFailure(observed.error);
-      const root = (observed.value.agents ?? []).find(
-        (agent) => agent.pane_id === ctx.rootPaneId,
-      );
+      const root = (observed.value.agents ?? []).find((agent) => agent.pane_id === ctx.rootPaneId);
       return {
         done:
           !!root &&
@@ -8583,9 +7442,7 @@ async function runManagerBootstrapSmoke(ctx) {
   const verifyPaneIdentity = async () => {
     const listed = await nestedCommand(ctx, ["pane", "list"]);
     assert.ok(Array.isArray(listed.panes), "Herdr pane list is malformed");
-    const listedPane = listed.panes.find(
-      (pane) => pane?.pane_id === ctx.rootPaneId,
-    );
+    const listedPane = listed.panes.find((pane) => pane?.pane_id === ctx.rootPaneId);
     assert.ok(listedPane, "expected Herdr pane is no longer present");
     assert.equal(listedPane.workspace_id, ctx.rootWorkspaceId);
     assert.ok(
@@ -8593,8 +7450,7 @@ async function runManagerBootstrapSmoke(ctx) {
       "Herdr pane list omitted the expected tab ID",
     );
 
-    const current = (await nestedCommand(ctx, ["pane", "get", ctx.rootPaneId]))
-      .pane;
+    const current = (await nestedCommand(ctx, ["pane", "get", ctx.rootPaneId])).pane;
     assert.ok(
       current && typeof current === "object" && !Array.isArray(current),
       "Herdr pane.get returned a malformed pane",
@@ -8608,11 +7464,7 @@ async function runManagerBootstrapSmoke(ctx) {
     );
     assert.ok(isAbsolute(current.cwd), "Herdr pane cwd is not absolute");
     const paneCwd = await realpath(current.cwd);
-    assert.equal(
-      paneCwd,
-      target,
-      "Herdr pane cwd differs from approved target",
-    );
+    assert.equal(paneCwd, target, "Herdr pane cwd differs from approved target");
     return {
       paneId: current.pane_id,
       tabId: current.tab_id,
@@ -8650,13 +7502,12 @@ async function runManagerBootstrapSmoke(ctx) {
     confirmation.replace(/\s+/gu, " ").includes(target),
     "native confirmation must show the exact approved path before approval",
   );
-  ctx.managerBootstrap.confirmationEvidence = confirmation
-    .replace(/\s+/gu, " ")
-    .slice(-1000);
+  ctx.managerBootstrap.confirmationEvidence = confirmation.replace(/\s+/gu, " ").slice(-1000);
   ctx.managerBootstrap.confirmedIdentity = await verifyPaneIdentity();
-  const visibleConfirmation = (
-    await nestedPaneText(ctx, ctx.rootPaneId, "visible")
-  ).replace(/\s+/gu, " ");
+  const visibleConfirmation = (await nestedPaneText(ctx, ctx.rootPaneId, "visible")).replace(
+    /\s+/gu,
+    " ",
+  );
   assert.ok(
     visibleConfirmation.includes(target) &&
       visibleConfirmation.includes("Initialize Git repository?") &&
@@ -8698,11 +7549,7 @@ async function runManagerBootstrapSmoke(ctx) {
   assert.equal(await readFile(markerPath, "utf8"), markerContents);
 
   markStage(ctx, "manager-bootstrap-fresh-herdr-topology");
-  const freshWorkspace = await nestedCommand(ctx, [
-    "workspace",
-    "get",
-    ctx.rootWorkspaceId,
-  ]);
+  const freshWorkspace = await nestedCommand(ctx, ["workspace", "get", ctx.rootWorkspaceId]);
   const freshTopology = await nestedCommand(ctx, [
     "worktree",
     "list",
@@ -8735,16 +7582,13 @@ async function runManagerBootstrapSmoke(ctx) {
             entry.message?.role === "assistant" &&
             Array.isArray(entry.message.content)
               ? entry.message.content.filter(
-                  (part) =>
-                    part?.type === "toolCall" && part.name === "delegate_work",
+                  (part) => part?.type === "toolCall" && part.name === "delegate_work",
                 )
               : [],
           )
         : [];
       if (delegateCalls.length > 1)
-        throw new Error(
-          "Manager bootstrap called delegate_work more than once",
-        );
+        throw new Error("Manager bootstrap called delegate_work more than once");
       ctx.managerBootstrapDelegationProgress = {
         ...managerBootstrapDelegationState(snapshot?.contents ?? "", branch),
         correlatedChild: false,
@@ -8760,9 +7604,7 @@ async function runManagerBootstrapSmoke(ctx) {
         }
       }
       if (results.length > 1)
-        throw new Error(
-          "Manager bootstrap made more than one project delegation",
-        );
+        throw new Error("Manager bootstrap made more than one project delegation");
       const result = results[0];
       if (!result)
         return {
@@ -8796,18 +7638,13 @@ async function runManagerBootstrapSmoke(ctx) {
         ctx.rootWorkspaceId,
       ]);
       const worktree = topology.worktrees.find(
-        (item) =>
-          item.branch === branch &&
-          item.open_workspace_id === result.workspace_id,
+        (item) => item.branch === branch && item.open_workspace_id === result.workspace_id,
       );
       const done =
-        !!child &&
-        childEvidence.expectedSessionFile?.sessionIdMatches === true &&
-        !!worktree;
+        !!child && childEvidence.expectedSessionFile?.sessionIdMatches === true && !!worktree;
       Object.assign(ctx.managerBootstrapDelegationProgress, {
         correlatedChild: !!child,
-        childSessionSaved:
-          childEvidence.expectedSessionFile?.sessionIdMatches === true,
+        childSessionSaved: childEvidence.expectedSessionFile?.sessionIdMatches === true,
         linkedWorktreeObserved: !!worktree,
       });
       return {
@@ -8816,8 +7653,7 @@ async function runManagerBootstrapSmoke(ctx) {
         progress: {
           ...ctx.managerBootstrapDelegationProgress,
           correlatedChild: !!child,
-          childSessionSaved:
-            childEvidence.expectedSessionFile?.sessionIdMatches === true,
+          childSessionSaved: childEvidence.expectedSessionFile?.sessionIdMatches === true,
           linkedWorktreeObserved: !!worktree,
         },
         evidence: { result, childEvidence, worktree },
@@ -8827,19 +7663,13 @@ async function runManagerBootstrapSmoke(ctx) {
   );
   assert.equal(delegated.result.workspace_id, delegated.child.workspace_id);
   assert.equal(delegated.result.session, delegated.child.agent_session.value);
-  const linkedPath = resolve(
-    delegated.worktree.path ?? delegated.worktree.worktree_path,
-  );
+  const linkedPath = resolve(delegated.worktree.path ?? delegated.worktree.worktree_path);
   assert.notEqual(linkedPath, target);
   await assert.rejects(lstat(join(linkedPath, markerName)), { code: "ENOENT" });
   assert.equal(await readFile(markerPath, "utf8"), markerContents);
   await verifyEmptyRoot();
 
-  const finalWorkspace = await nestedCommand(ctx, [
-    "workspace",
-    "get",
-    ctx.rootWorkspaceId,
-  ]);
+  const finalWorkspace = await nestedCommand(ctx, ["workspace", "get", ctx.rootWorkspaceId]);
   const finalTopology = await nestedCommand(ctx, [
     "worktree",
     "list",
@@ -8851,9 +7681,7 @@ async function runManagerBootstrapSmoke(ctx) {
   assert.equal(resolve(finalTopology.source.source_checkout_path), target);
   assert.ok(
     finalTopology.worktrees.some(
-      (item) =>
-        item.branch === branch &&
-        resolve(item.path ?? item.worktree_path) === linkedPath,
+      (item) => item.branch === branch && resolve(item.path ?? item.worktree_path) === linkedPath,
     ),
   );
   ctx.managerBootstrap.evidence = {
@@ -8885,10 +7713,7 @@ function sanitizeManagerBootstrapText(value, ctx) {
   return text
     .replace(/Bearer\s+\S+/giu, "Bearer <REDACTED>")
     .replace(/\b(?:sk|pk)-[A-Za-z0-9_-]{16,}\b/gu, "<REDACTED_KEY>")
-    .replace(
-      /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/giu,
-      "<REDACTED_KEY>",
-    )
+    .replace(/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/giu, "<REDACTED_KEY>")
     .replace(
       /(api[_-]?key|access[_-]?token|secret|authorization|password|cookie)\s*[:=]\s*\S+/giu,
       "$1=<REDACTED>",
@@ -8904,10 +7729,8 @@ async function captureManagerBootstrapFailure(ctx) {
   const evidence = { stage: ctx.stage ?? null };
   if (ctx.managerBootstrap)
     evidence.confirmation = {
-      visibleBeforeApproval:
-        ctx.managerBootstrap.confirmationVisibleBeforeApproval === true,
-      exactTargetMatched:
-        ctx.managerBootstrap.confirmationTargetMatched === true,
+      visibleBeforeApproval: ctx.managerBootstrap.confirmationVisibleBeforeApproval === true,
+      exactTargetMatched: ctx.managerBootstrap.confirmationTargetMatched === true,
       approvalSent: ctx.managerBootstrap.approvalSent === true,
     };
   const attempt = async (key, operation) => {
@@ -8928,9 +7751,7 @@ async function captureManagerBootstrapFailure(ctx) {
           (await nestedPaneText(ctx, ctx.rootPaneId, "visible"))
             .split(/\r?\n/u)
             .filter((line) =>
-              /manager|git|repository|initialize|error|failed|fatal|warning|exception/iu.test(
-                line,
-              ),
+              /manager|git|repository|initialize|error|failed|fatal|warning|exception/iu.test(line),
             )
             .slice(-80)
             .join("\n"),
@@ -8945,8 +7766,7 @@ async function captureManagerBootstrapFailure(ctx) {
           ctx.rootPaneId,
         ]);
         if (!result.ok) return { observed: false };
-        const processes =
-          result.value?.process_info?.foreground_processes ?? [];
+        const processes = result.value?.process_info?.foreground_processes ?? [];
         return {
           observed: true,
           foregroundProcessCount: processes.length,
@@ -8989,8 +7809,7 @@ async function captureManagerBootstrapFailure(ctx) {
               const argv = Array.isArray(event.argv) ? event.argv : [];
               const command = argv[1];
               if (!["init", "commit"].includes(command)) return [];
-              if (typeof event.sid === "string")
-                commands.set(event.sid, command);
+              if (typeof event.sid === "string") commands.set(event.sid, command);
               return [{ event: "start", command }];
             }
             if (event.event === "exit" && commands.has(event.sid))
@@ -9037,10 +7856,7 @@ async function captureManagerBootstrapFailure(ctx) {
       } catch (error) {
         results[args[0] + (args[1] === "--verify" ? ":head" : "")] = {
           code: Number.isInteger(error.code) ? error.code : null,
-          stderr: sanitizeManagerBootstrapText(
-            error.stderr ?? error.message,
-            ctx,
-          ),
+          stderr: sanitizeManagerBootstrapText(error.stderr ?? error.message, ctx),
         };
       }
     }
@@ -9065,10 +7881,8 @@ async function runManagerRecoverySmoke(ctx) {
     waitRootSessionBytes = snapshot ? Buffer.byteLength(snapshot.contents) : 0;
     return snapshot;
   };
-  const promptRoot = (prompt) =>
-    nestedCommand(ctx, ["agent", "prompt", ctx.rootPaneId, prompt]);
-  const promptAgent = (paneId, prompt) =>
-    nestedCommand(ctx, ["agent", "prompt", paneId, prompt]);
+  const promptRoot = (prompt) => nestedCommand(ctx, ["agent", "prompt", ctx.rootPaneId, prompt]);
+  const promptAgent = (paneId, prompt) => nestedCommand(ctx, ["agent", "prompt", paneId, prompt]);
   const agents = async () => {
     const result = await tryNestedCommand(ctx, ["agent", "list"]);
     if (!result.ok) throw observationFailure(result.error);
@@ -9083,8 +7897,7 @@ async function runManagerRecoverySmoke(ctx) {
     ]);
     if (!observed.ok) throw observationFailure(observed.error);
     const result = observed.value;
-    if (!Array.isArray(result?.worktrees))
-      throw new Error("Herdr worktree inventory is malformed");
+    if (!Array.isArray(result?.worktrees)) throw new Error("Herdr worktree inventory is malformed");
     if (
       !result.worktrees.every(
         (item) =>
@@ -9101,9 +7914,8 @@ async function runManagerRecoverySmoke(ctx) {
     return result.worktrees;
   };
   const primaryPath = ctx.primaryCheckoutPath;
-  const rootWorkspace = (
-    await nestedCommand(ctx, ["workspace", "get", ctx.rootWorkspaceId])
-  ).workspace;
+  const rootWorkspace = (await nestedCommand(ctx, ["workspace", "get", ctx.rootWorkspaceId]))
+    .workspace;
   const rootTopology = await nestedCommand(ctx, [
     "worktree",
     "list",
@@ -9119,26 +7931,15 @@ async function runManagerRecoverySmoke(ctx) {
   const matchingWorktrees = async () =>
     (await worktrees()).filter((item) => item.branch === branch);
   const paneInfo = async (paneId) => {
-    const result = await tryNestedCommand(ctx, [
-      "pane",
-      "process-info",
-      "--pane",
-      paneId,
-    ]);
+    const result = await tryNestedCommand(ctx, ["pane", "process-info", "--pane", paneId]);
     if (!result.ok) throw observationFailure(result.error);
     return result.value;
   };
   const paneExists = async (paneId) =>
-    listedPanes(await nestedCommand(ctx, ["pane", "list"])).some(
-      (pane) => pane.paneId === paneId,
-    );
+    listedPanes(await nestedCommand(ctx, ["pane", "list"])).some((pane) => pane.paneId === paneId);
   const candidatePids = async (paneId) => {
     const info = await paneInfo(paneId);
-    return candidateProcess(
-      info,
-      ctx.candidateExtension,
-      ctx.herdrStateExtension,
-    )
+    return candidateProcess(info, ctx.candidateExtension, ctx.herdrStateExtension)
       .map((proc) => proc.pid)
       .filter((pid) => pid != null);
   };
@@ -9198,8 +7999,7 @@ async function runManagerRecoverySmoke(ctx) {
         },
       );
     } catch (error) {
-      if (error.code !== "SMOKE_STALLED" && error.code !== "SMOKE_TIMEOUT")
-        throw error;
+      if (error.code !== "SMOKE_STALLED" && error.code !== "SMOKE_TIMEOUT") throw error;
       if (label === "ready") {
         ctx.managerRecovery.readyEvidence ??= {};
         try {
@@ -9207,11 +8007,7 @@ async function runManagerRecoverySmoke(ctx) {
           const results = session ? staffDelegateResults(session.contents) : [];
           const evidence = ctx.managerRecovery.readyEvidence;
           evidence.entries = session
-            ? managerReadyEntryEvidence(
-                session.contents,
-                branch,
-                results[0]?.session,
-              )
+            ? managerReadyEntryEvidence(session.contents, branch, results[0]?.session)
             : [];
           if (
             results.length === 1 &&
@@ -9237,11 +8033,7 @@ async function runManagerRecoverySmoke(ctx) {
                 if (lead) {
                   try {
                     evidence.leadDiagnostics = managerDiagnosticLines(
-                      await nestedPaneText(
-                        ctx,
-                        lead.pane_id,
-                        "recent-unwrapped",
-                      ),
+                      await nestedPaneText(ctx, lead.pane_id, "recent-unwrapped"),
                     );
                   } catch {
                     evidence.leadDiagnostics = [];
@@ -9255,15 +8047,11 @@ async function runManagerRecoverySmoke(ctx) {
             }
           }
         } catch (error) {
-          ctx.managerRecovery.readyEvidence.entriesError = String(error).slice(
-            0,
-            200,
-          );
+          ctx.managerRecovery.readyEvidence.entriesError = String(error).slice(0, 200);
         }
       }
       if (label === "ready")
-        error.smoke.lastEvidence =
-          ctx.managerRecovery.readyEvidence ?? error.smoke.lastEvidence;
+        error.smoke.lastEvidence = ctx.managerRecovery.readyEvidence ?? error.smoke.lastEvidence;
       throw error;
     }
   };
@@ -9275,8 +8063,7 @@ async function runManagerRecoverySmoke(ctx) {
       (await agents()).find(
         (agent) =>
           agent.pane_id === ctx.rootPaneId &&
-          (agent.agent_session?.kind === "id" ||
-            agent.agent_session?.kind === "path") &&
+          (agent.agent_session?.kind === "id" || agent.agent_session?.kind === "path") &&
           typeof agent.agent_session.value === "string" &&
           agent.agent_session.value.length > 0,
       ),
@@ -9338,20 +8125,10 @@ async function runManagerRecoverySmoke(ctx) {
         (child.agent_session?.kind === "id"
           ? await exactIsolatedSession(ctx, results[0].session)
           : await isolatedSessionDetails(ctx, child));
-      const childVerified = verifiedLeadSession(
-        childSession,
-        results[0]?.session,
-      );
+      const childVerified = verifiedLeadSession(childSession, results[0]?.session);
       const leadCompleted =
-        childVerified &&
-        leadReadyCompleted(childSession.contents, "MANAGER_RECOVERY_READY");
-      const {
-        receipt,
-        answer,
-        answerAfterReceipt,
-        prematureReady,
-        prematureFinish,
-      } =
+        childVerified && leadReadyCompleted(childSession.contents, "MANAGER_RECOVERY_READY");
+      const { receipt, answer, answerAfterReceipt, prematureReady, prematureFinish } =
         session && results.length === 1
           ? managerReadyAnswer(session.contents, branch, results[0].session)
           : {
@@ -9368,10 +8145,7 @@ async function runManagerRecoverySmoke(ctx) {
         childSessionVerified: !!childVerified,
         leadReadyResult: !!(
           childVerified &&
-          hasSuccessfulSupervisorMessage(
-            childSession.contents,
-            "MANAGER_RECOVERY_READY",
-          )
+          hasSuccessfulSupervisorMessage(childSession.contents, "MANAGER_RECOVERY_READY")
         ),
         leadCompleted: !!leadCompleted,
         receipt,
@@ -9379,9 +8153,7 @@ async function runManagerRecoverySmoke(ctx) {
         managerAnswerAfterReceipt: !!answerAfterReceipt,
         prematureReady,
         prematureFinish,
-        rootRecent: session
-          ? summarizeSession(session.contents).recentMessages.slice(-6)
-          : [],
+        rootRecent: session ? summarizeSession(session.contents).recentMessages.slice(-6) : [],
         leadRecent: childSession
           ? summarizeSession(childSession.contents).recentMessages.slice(-6)
           : [],
@@ -9436,9 +8208,7 @@ async function runManagerRecoverySmoke(ctx) {
   ctx.owned.managerWorkspaceId = workspaceId;
   ctx.owned.managerWorktreePath = worktreePath;
 
-  const initialAgent = (await agents()).find(
-    (agent) => agent.workspace_id === workspaceId,
-  );
+  const initialAgent = (await agents()).find((agent) => agent.workspace_id === workspaceId);
   assert.ok(initialAgent, "delegated Lead was not listed in its workspace");
   const paneId = initialAgent.pane_id;
   assert.ok(paneId);
@@ -9452,11 +8222,7 @@ async function runManagerRecoverySmoke(ctx) {
     ctx.candidateExtension,
     ctx.herdrStateExtension,
   );
-  assert.equal(
-    initialProcesses.length,
-    1,
-    "expected one child candidate process",
-  );
+  assert.equal(initialProcesses.length, 1, "expected one child candidate process");
   const initialPid = initialProcesses[0].pid;
   assert.ok(initialPid);
   const pane = (await nestedCommand(ctx, ["pane", "list"])).panes.find(
@@ -9480,12 +8246,7 @@ async function runManagerRecoverySmoke(ctx) {
     "supervision-v2",
     hash(nestedHerdrApiSocketPath(ctx.paths, ctx.sessionName)),
   );
-  const assignmentPath = join(
-    runtime,
-    "assignments",
-    hash(repoKey),
-    `${hash(branch)}.json`,
-  );
+  const assignmentPath = join(runtime, "assignments", hash(repoKey), `${hash(branch)}.json`);
   const primaryBranch = rootTopology.worktrees.find(
     (item) => item.open_workspace_id === ctx.rootWorkspaceId,
   )?.branch;
@@ -9505,11 +8266,9 @@ async function runManagerRecoverySmoke(ctx) {
     `${hash(primaryBranch)}.json`,
   );
   await mkdir(dirname(unrelatedAssignmentPath), { recursive: true });
-  await writeFile(
-    unrelatedAssignmentPath,
-    `${JSON.stringify(unrelatedAssignment)}\n`,
-    { flag: "wx" },
-  );
+  await writeFile(unrelatedAssignmentPath, `${JSON.stringify(unrelatedAssignment)}\n`, {
+    flag: "wx",
+  });
   const managerPath = await smokeManagerDescriptorPath(ctx);
   const assignmentBytes = async () => {
     const details = await lstat(assignmentPath);
@@ -9566,12 +8325,7 @@ async function runManagerRecoverySmoke(ctx) {
   await waitFor("direct-handoff-settled", async () => {
     const session = await rootSnapshot();
     return session &&
-      managerProjectMessageSettled(
-        session.contents,
-        branch,
-        first.session,
-        contextMarker,
-      )
+      managerProjectMessageSettled(session.contents, branch, first.session, contextMarker)
       ? session
       : null;
   });
@@ -9592,10 +8346,7 @@ async function runManagerRecoverySmoke(ctx) {
   });
   await waitFor("review-response-completed", async () => {
     const session = await rootSnapshot();
-    return session &&
-      assistantResponseCompletedForSession(session, reviewPrompt)
-      ? session
-      : null;
+    return session && assistantResponseCompletedForSession(session, reviewPrompt) ? session : null;
   });
   // Replace the Manager lease while the exact Lead is still live; the later
   // stop/resume assertion must exercise recovery under the replacement lease.
@@ -9643,11 +8394,7 @@ async function runManagerRecoverySmoke(ctx) {
       const close = closes[0];
       if (
         close.branch !== branch ||
-        !assistantResultForSession(
-          session,
-          closePrompt,
-          "PI_HERDSMAN_MANAGER_RECOVERY_PAUSED",
-        )
+        !assistantResultForSession(session, closePrompt, "PI_HERDSMAN_MANAGER_RECOVERY_PAUSED")
       )
         return null;
       const pids = await candidatePids(paneId).catch(() => []);
@@ -9660,22 +8407,14 @@ async function runManagerRecoverySmoke(ctx) {
   );
   markStage(ctx, "graceful-close-validation");
   await assertUnchangedAssignment();
-  assert.ok(
-    await paneExists(paneId),
-    "stop_lead removed the preserved assignment pane",
-  );
+  assert.ok(await paneExists(paneId), "stop_lead removed the preserved assignment pane");
   const pausedWorktrees = await matchingWorktrees();
   assert.equal(pausedWorktrees.length, 1);
-  assert.equal(
-    pausedWorktrees[0].path ?? pausedWorktrees[0].worktree_path,
-    worktreePath,
-  );
+  assert.equal(pausedWorktrees[0].path ?? pausedWorktrees[0].worktree_path, worktreePath);
 
   if (ctx.managerRemovalAcceptance) {
     const removalPrompt = `Explicitly call remove_worktree exactly once for branch ${branch}. Do not use another tool.`;
-    const removalResultCount = sessionEntries(
-      (await rootSnapshot()).contents,
-    ).filter(
+    const removalResultCount = sessionEntries((await rootSnapshot()).contents).filter(
       (entry) =>
         entry.type === "message" &&
         entry.message?.role === "toolResult" &&
@@ -9738,16 +8477,11 @@ async function runManagerRecoverySmoke(ctx) {
       async () => {
         const session = await rootSnapshot();
         const sessionId = session
-          ? sessionEntries(session.contents).find(
-              (entry) => entry.type === "session",
-            )?.id
+          ? sessionEntries(session.contents).find((entry) => entry.type === "session")?.id
           : null;
         const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
         return {
-          done:
-            sessionId === pendingSessionId &&
-            text.includes("remov") &&
-            /pending/iu.test(text),
+          done: sessionId === pendingSessionId && text.includes("remov") && /pending/iu.test(text),
           progress: {
             sameSession: sessionId === pendingSessionId,
             pendingVisible: /pending/iu.test(text),
@@ -9782,9 +8516,7 @@ async function runManagerRecoverySmoke(ctx) {
     const dirtyMarker = join(worktreePath, ".smoke-manager-removal-dirty");
     try {
       const approvalPrompt = `The previous removal request was dismissed. This is a new safety check: call remove_worktree exactly once for branch ${branch} now. Do not use another tool.`;
-      const priorRemovalResults = sessionEntries(
-        (await rootSnapshot()).contents,
-      ).filter(
+      const priorRemovalResults = sessionEntries((await rootSnapshot()).contents).filter(
         (entry) =>
           entry.type === "message" &&
           entry.message?.role === "toolResult" &&
@@ -9819,18 +8551,8 @@ async function runManagerRecoverySmoke(ctx) {
       );
       markStage(ctx, "manager-removal-approval-ui");
       await submitPaneCommand(ctx, ctx.rootPaneId, "/manager-remove");
-      await nestedPaneInput(ctx, [
-        "pane",
-        "send-keys",
-        ctx.rootPaneId,
-        "enter",
-      ]);
-      await nestedPaneInput(ctx, [
-        "pane",
-        "send-keys",
-        ctx.rootPaneId,
-        "enter",
-      ]);
+      await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
+      await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
       await waitForEvidence(
         ctx,
         "manager-removal-confirmation-dialog",
@@ -9847,26 +8569,15 @@ async function runManagerRecoverySmoke(ctx) {
         { timeoutMs: 5_000, stallMs: CONTROL_STALL_MS },
       );
       await writeFile(dirtyMarker, "owned smoke fixture\n", { flag: "wx" });
-      await nestedPaneInput(ctx, [
-        "pane",
-        "send-text",
-        ctx.rootPaneId,
-        "remove",
-      ]);
-      await nestedPaneInput(ctx, [
-        "pane",
-        "send-keys",
-        ctx.rootPaneId,
-        "enter",
-      ]);
+      await nestedPaneInput(ctx, ["pane", "send-text", ctx.rootPaneId, "remove"]);
+      await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
       await waitForEvidence(
         ctx,
         "manager-removal-approval-safety-refusal",
         async () => {
           const text = await nestedPaneText(ctx, ctx.rootPaneId, "visible");
           const normalized = text.replace(/\s+/gu, " ");
-          const refusal =
-            "Checkout is dirty or could not be verified; worktree preserved";
+          const refusal = "Checkout is dirty or could not be verified; worktree preserved";
           return {
             done: normalized.includes(refusal),
             progress: { safetyRefusal: normalized.includes(refusal) },
@@ -9882,11 +8593,7 @@ async function runManagerRecoverySmoke(ctx) {
     }
 
     markStage(ctx, "manager-removal-preauthorization");
-    await submitPaneCommand(
-      ctx,
-      ctx.rootPaneId,
-      "/manager-removal-confirmation required",
-    );
+    await submitPaneCommand(ctx, ctx.rootPaneId, "/manager-removal-confirmation required");
     await waitForEvidence(
       ctx,
       "manager-removal-preauthorization-required",
@@ -9903,9 +8610,7 @@ async function runManagerRecoverySmoke(ctx) {
       { timeoutMs: 10_000, stallMs: CONTROL_STALL_MS },
     );
     const authorizedPrompt = `Explicitly call remove_worktree exactly once for branch ${branch}. Do not use another tool.`;
-    const cleanRemovalCount = sessionEntries(
-      (await rootSnapshot()).contents,
-    ).filter(
+    const cleanRemovalCount = sessionEntries((await rootSnapshot()).contents).filter(
       (entry) =>
         entry.type === "message" &&
         entry.message?.role === "toolResult" &&
@@ -9934,8 +8639,7 @@ async function runManagerRecoverySmoke(ctx) {
             results.at(-1)?.message?.details?.pending === true,
           value: results.at(-1),
           progress: {
-            correlatedPendingResult:
-              results.at(-1)?.message?.details?.pending === true,
+            correlatedPendingResult: results.at(-1)?.message?.details?.pending === true,
           },
           evidence: session ? summarizeSession(session.contents) : null,
         };
@@ -9986,8 +8690,7 @@ async function runManagerRecoverySmoke(ctx) {
             throw error;
           },
         );
-        const checkoutRemoved =
-          matchingOwnedWorktrees.length === 0 && !checkoutPathPresent;
+        const checkoutRemoved = matchingOwnedWorktrees.length === 0 && !checkoutPathPresent;
         // /manager-remove reports through the UI; it does not emit another
         // remove_worktree tool result after the approval dialog.
         const successMessage =
@@ -10067,10 +8770,7 @@ async function runManagerRecoverySmoke(ctx) {
 
   const resumePrompt = managerRecoveryResumeOnlyPrompt(branch);
   const stoppedLeadSession = await exactIsolatedSession(ctx, first.session);
-  assert.ok(
-    stoppedLeadSession?.contents,
-    "stopped Lead session is unavailable",
-  );
+  assert.ok(stoppedLeadSession?.contents, "stopped Lead session is unavailable");
   const resumeHistoryStart = sessionEntries(stoppedLeadSession.contents).length;
   ctx.managerRecovery.resumePrompt = resumePrompt;
   markStage(ctx, "graceful-resume");
@@ -10078,19 +8778,10 @@ async function runManagerRecoverySmoke(ctx) {
   const resumed = await waitFor("graceful-resume", async () => {
     const session = await rootSnapshot();
     if (!session) return null;
-    const results = staffActionResults(
-      session.contents,
-      "resume_work",
-      "resume",
-      resumePrompt,
-    );
+    const results = staffActionResults(session.contents, "resume_work", "resume", resumePrompt);
     if (
       results.length !== 1 ||
-      !assistantResultForSession(
-        session,
-        resumePrompt,
-        "PI_HERDSMAN_MANAGER_RECOVERY_RESUMED",
-      )
+      !assistantResultForSession(session, resumePrompt, "PI_HERDSMAN_MANAGER_RECOVERY_RESUMED")
     )
       return null;
     return results[0];
@@ -10119,9 +8810,7 @@ async function runManagerRecoverySmoke(ctx) {
   await waitFor("resume-first-tool-after-instruction", async () => {
     const session = await exactIsolatedSession(ctx, first.session);
     if (!session?.contents) return null;
-    const resumedEntries = sessionEntries(session.contents).slice(
-      resumeHistoryStart,
-    );
+    const resumedEntries = sessionEntries(session.contents).slice(resumeHistoryStart);
     const instructionIndex = resumedEntries.findIndex(
       (entry) =>
         entry.type === "custom_message" &&
@@ -10148,15 +8837,11 @@ async function runManagerRecoverySmoke(ctx) {
   await assertUnchangedAssignment();
   const resumedWorktrees = await matchingWorktrees();
   assert.equal(resumedWorktrees.length, 1);
-  assert.equal(
-    resumedWorktrees[0].path ?? resumedWorktrees[0].worktree_path,
-    worktreePath,
-  );
+  assert.equal(resumedWorktrees[0].path ?? resumedWorktrees[0].worktree_path, worktreePath);
   markStage(ctx, "graceful-resume-placement");
   const resumedAgents = [];
   for (const agent of await agents())
-    if ((await agentSessionId(ctx, agent)) === first.session)
-      resumedAgents.push(agent);
+    if ((await agentSessionId(ctx, agent)) === first.session) resumedAgents.push(agent);
   assert.equal(
     resumedAgents.length,
     1,
@@ -10180,15 +8865,8 @@ async function runManagerRecoverySmoke(ctx) {
   assert.equal(resumedPane.tab_id, resumedAgent.tab_id);
   assert.equal(await realpath(resumedPane.cwd), await realpath(worktreePath));
   if (resumedPaneId !== paneId) {
-    assert.ok(
-      await paneExists(paneId),
-      "resume removed the stopped Lead's pane",
-    );
-    assert.deepEqual(
-      await candidatePids(paneId),
-      [],
-      "old Lead pane still runs Pi",
-    );
+    assert.ok(await paneExists(paneId), "resume removed the stopped Lead's pane");
+    assert.deepEqual(await candidatePids(paneId), [], "old Lead pane still runs Pi");
   }
   ctx.managerRecovery.resumedPaneId = resumedPaneId;
   ctx.managerRecovery.resumedTabId = resumedPane.tab_id;
@@ -10238,10 +8916,7 @@ async function runManagerRecoverySmoke(ctx) {
   assert.equal(await realpath(senderRoot), await realpath(worktreePath));
   assert.match(senderHead, /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u);
   await promptAgent(resumedPaneId, managerRecoveryPostRecoveryPrompt());
-  const retainedMessagesDirectory = join(
-    dirname(assignmentPath),
-    `${hash(branch)}.messages`,
-  );
+  const retainedMessagesDirectory = join(dirname(assignmentPath), `${hash(branch)}.messages`);
   const retainedRecord = await waitFor("project-message-retained", async () => {
     try {
       const names = await readdir(retainedMessagesDirectory);
@@ -10249,22 +8924,12 @@ async function runManagerRecoverySmoke(ctx) {
       for (const name of names) {
         if (!name.endsWith(".json")) continue;
         try {
-          records.push(
-            JSON.parse(
-              await readFile(join(retainedMessagesDirectory, name), "utf8"),
-            ),
-          );
+          records.push(JSON.parse(await readFile(join(retainedMessagesDirectory, name), "utf8")));
         } catch (error) {
-          if (error.code !== "ENOENT" && !(error instanceof SyntaxError))
-            throw error;
+          if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
         }
       }
-      return retainedProjectMessageRecord(
-        records,
-        branch,
-        first.session,
-        contextMarker,
-      );
+      return retainedProjectMessageRecord(records, branch, first.session, contextMarker);
     } catch (error) {
       if (error.code === "ENOENT") return null;
       throw error;
@@ -10279,8 +8944,7 @@ async function runManagerRecoverySmoke(ctx) {
     "retained message must identify the exact sender checkout, branch and HEAD",
   );
   const retainedProcessInfo = await paneInfo(resumedPaneId);
-  const retainedForeground =
-    retainedProcessInfo.process_info?.foreground_processes ?? [];
+  const retainedForeground = retainedProcessInfo.process_info?.foreground_processes ?? [];
   const retainedPidMatched = candidateProcess(
     retainedProcessInfo,
     ctx.candidateExtension,
@@ -10293,23 +8957,15 @@ async function runManagerRecoverySmoke(ctx) {
       agent.workspace_id === workspaceId,
   );
   const retainedSession =
-    retainedReports.length === 1
-      ? await isolatedSessionDetails(ctx, retainedReports[0])
-      : null;
+    retainedReports.length === 1 ? await isolatedSessionDetails(ctx, retainedReports[0]) : null;
   const retainedObservation = {
-    pinnedPidInForeground: retainedForeground.some(
-      (process) => process.pid === resumedPid,
-    ),
+    pinnedPidInForeground: retainedForeground.some((process) => process.pid === resumedPid),
     candidateFilterMatched: retainedPidMatched,
     exactSessionPathAndId:
-      retainedSession?.path === resumedSession.path &&
-      retainedSession.id === first.session,
+      retainedSession?.path === resumedSession.path && retainedSession.id === first.session,
     paneReports: retainedReports.length,
   };
-  assert.ok(
-    retainedPidMatched,
-    `resumed Lead observation: ${JSON.stringify(retainedObservation)}`,
-  );
+  assert.ok(retainedPidMatched, `resumed Lead observation: ${JSON.stringify(retainedObservation)}`);
   let retainedLead = false;
   for (const agent of await agents())
     if (
@@ -10344,11 +9000,9 @@ async function runManagerRecoverySmoke(ctx) {
       ? session
       : null;
   });
-  const deliveredRecord = projectMessageEntries(
-    delivered.contents,
-    branch,
-    first.session,
-  ).find((entry) => entry.details?.id === retainedRecord.id);
+  const deliveredRecord = projectMessageEntries(delivered.contents, branch, first.session).find(
+    (entry) => entry.details?.id === retainedRecord.id,
+  );
   // Match the entire informational annotation, including its escaped fields
   // and authority disclaimer, rather than accepting an arbitrary suffix.
   const quoteEnvironment = (value) =>
@@ -10386,22 +9040,13 @@ async function runManagerRecoverySmoke(ctx) {
 
   const beforeKillAgents = [];
   for (const agent of await agents())
-    if ((await agentSessionId(ctx, agent)) === first.session)
-      beforeKillAgents.push(agent);
-  assert.equal(
-    beforeKillAgents.length,
-    1,
-    "expected one exact Lead before kill",
-  );
+    if ((await agentSessionId(ctx, agent)) === first.session) beforeKillAgents.push(agent);
+  assert.equal(beforeKillAgents.length, 1, "expected one exact Lead before kill");
   const beforeKillAgent = beforeKillAgents[0];
   assert.equal(beforeKillAgent.pane_id, resumedPaneId);
   assert.equal(beforeKillAgent.workspace_id, workspaceId);
   const beforeKillInfo = await paneInfo(resumedPaneId);
-  const proven = candidateProcess(
-    beforeKillInfo,
-    ctx.candidateExtension,
-    ctx.herdrStateExtension,
-  );
+  const proven = candidateProcess(beforeKillInfo, ctx.candidateExtension, ctx.herdrStateExtension);
   assert.equal(proven.length, 1);
   assert.equal(proven[0].pid, resumedPid);
   assert.ok(
@@ -10434,39 +9079,23 @@ async function runManagerRecoverySmoke(ctx) {
     },
     30_000,
   );
-  assert.ok(
-    await paneExists(resumedPaneId),
-    "child pane did not survive executor loss",
-  );
+  assert.ok(await paneExists(resumedPaneId), "child pane did not survive executor loss");
   const retainedWorktrees = await matchingWorktrees();
   assert.equal(retainedWorktrees.length, 1);
-  assert.equal(
-    retainedWorktrees[0].path ?? retainedWorktrees[0].worktree_path,
-    worktreePath,
-  );
+  assert.equal(retainedWorktrees[0].path ?? retainedWorktrees[0].worktree_path, worktreePath);
 
   const beforeRetirement = await waitFor(
     "manager-idle-before-retirement",
     async () => {
-      const manager = (await agents()).find(
-        (agent) => agent.pane_id === ctx.rootPaneId,
-      );
+      const manager = (await agents()).find((agent) => agent.pane_id === ctx.rootPaneId);
       return manager?.agent_status === "idle" ? rootSnapshot() : null;
     },
     15_000,
   );
   const preservedLeadHistory = await exactIsolatedSession(ctx, first.session);
-  assert.ok(
-    preservedLeadHistory,
-    "retirement requires verified saved Lead history",
-  );
+  assert.ok(preservedLeadHistory, "retirement requires verified saved Lead history");
   assert.deepEqual(
-    retirementNoticeEntries(
-      beforeRetirement.contents,
-      repoKey,
-      branch,
-      first.session,
-    ),
+    retirementNoticeEntries(beforeRetirement.contents, repoKey, branch, first.session),
     [],
   );
   markStage(ctx, "missing-worktree");
@@ -10497,9 +9126,7 @@ async function runManagerRecoverySmoke(ctx) {
           if (!name.endsWith(".json")) continue;
           let record;
           try {
-            record = JSON.parse(
-              await readFile(join(retainedMessagesDirectory, name), "utf8"),
-            );
+            record = JSON.parse(await readFile(join(retainedMessagesDirectory, name), "utf8"));
           } catch (error) {
             if (error.code === "ENOENT") continue;
             throw error;
@@ -10519,11 +9146,9 @@ async function runManagerRecoverySmoke(ctx) {
     unrelatedAssignment,
   );
   assert.equal((await matchingWorktrees()).length, 0);
-  await run(
-    "git",
-    ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
-    { cwd: ctx.primaryCheckoutPath },
-  );
+  await run("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
+    cwd: ctx.primaryCheckoutPath,
+  });
   const pendingRetirementPath = join(
     runtime,
     "retirements",
@@ -10536,12 +9161,7 @@ async function runManagerRecoverySmoke(ctx) {
       const session = await rootSnapshot();
       if (
         !session ||
-        retirementNoticeEntries(
-          session.contents,
-          repoKey,
-          branch,
-          first.session,
-        ).length === 0
+        retirementNoticeEntries(session.contents, repoKey, branch, first.session).length === 0
       )
         return null;
       assertPassiveRetirementEvidence(
@@ -10575,14 +9195,8 @@ async function runManagerRecoverySmoke(ctx) {
         branch,
         first.session,
       );
-      const manager = (await agents()).find(
-        (agent) => agent.pane_id === ctx.rootPaneId,
-      );
-      assert.equal(
-        manager?.agent_status,
-        "idle",
-        "retirement must not wake the Manager",
-      );
+      const manager = (await agents()).find((agent) => agent.pane_id === ctx.rootPaneId);
+      assert.equal(manager?.agent_status, "idle", "retirement must not wake the Manager");
       return Date.now() >= passiveObservationUntil;
     },
     15_000,
@@ -10597,37 +9211,24 @@ async function runManagerRecoverySmoke(ctx) {
   const retiredResumePrompt = managerRecoveryRetiredResumePrompt(branch);
   markStage(ctx, "retired-assignment-resume-rejected");
   await promptRoot(retiredResumePrompt);
-  const rejectedResume = await waitFor(
-    "retired-assignment-resume-rejected",
-    async () => {
-      const session = await rootSnapshot();
-      const attempts = session
-        ? managerRecoveryResumeDiagnostics(
-            session.contents,
-            retiredResumePrompt,
-          )
-        : [];
-      return attempts.length === 1 && attempts[0].result?.isError
-        ? attempts[0]
-        : null;
-    },
-  );
+  const rejectedResume = await waitFor("retired-assignment-resume-rejected", async () => {
+    const session = await rootSnapshot();
+    const attempts = session
+      ? managerRecoveryResumeDiagnostics(session.contents, retiredResumePrompt)
+      : [];
+    return attempts.length === 1 && attempts[0].result?.isError ? attempts[0] : null;
+  });
   assert.equal(rejectedResume.branch, branch);
   await waitFor("retired-resume-response-completed", async () => {
     const session = await rootSnapshot();
-    return session &&
-      assistantResponseCompletedForSession(session, retiredResumePrompt)
+    return session && assistantResponseCompletedForSession(session, retiredResumePrompt)
       ? session
       : null;
   });
   const afterRepeatedReconciliation = await rootSnapshot();
   assert.equal(
-    retirementNoticeEntries(
-      afterRepeatedReconciliation.contents,
-      repoKey,
-      branch,
-      first.session,
-    ).length,
+    retirementNoticeEntries(afterRepeatedReconciliation.contents, repoKey, branch, first.session)
+      .length,
     1,
     "preflight and repeated inbox observation must not duplicate retirement context",
   );
@@ -10654,8 +9255,7 @@ async function runActiveStopSmoke(ctx) {
   const label = `stop-${randomUUID().slice(0, 12)}`;
   const startupPrompt = initialPromptForScenario("active-stop", ctx);
   const marker = `ACTIVE_STOP_CONTINUED_${randomUUID()}`;
-  const promptRoot = (prompt) =>
-    nestedCommand(ctx, ["agent", "prompt", ctx.rootPaneId, prompt]);
+  const promptRoot = (prompt) => nestedCommand(ctx, ["agent", "prompt", ctx.rootPaneId, prompt]);
   const rootReady = await waitForEvidence(
     ctx,
     "active-stop-root-ready",
@@ -10683,9 +9283,7 @@ async function runActiveStopSmoke(ctx) {
           progress: {
             candidateProcess: sanitizeManagerBootstrapText(
               JSON.stringify(
-                processObservation.ok
-                  ? processObservation.value
-                  : processObservation.error,
+                processObservation.ok ? processObservation.value : processObservation.error,
               ).slice(-1000),
               ctx,
             ),
@@ -10704,26 +9302,19 @@ async function runActiveStopSmoke(ctx) {
         : sessionEntries(snapshot.contents)
             .filter(
               (entry) =>
-                entry.type === "message" &&
-                ["user", "assistant"].includes(entry.message?.role),
+                entry.type === "message" && ["user", "assistant"].includes(entry.message?.role),
             )
             .slice(-4)
             .map((entry) => ({
               id: sanitizeManagerBootstrapText(entry.id, ctx).slice(0, 100),
               role: entry.message.role,
               stopReason: entry.message.stopReason ?? null,
-              parentId: sanitizeManagerBootstrapText(entry.parentId, ctx).slice(
-                0,
-                100,
+              parentId: sanitizeManagerBootstrapText(entry.parentId, ctx).slice(0, 100),
+              text: sanitizeManagerBootstrapText(messageText(entry.message.content), ctx).slice(
+                -200,
               ),
-              text: sanitizeManagerBootstrapText(
-                messageText(entry.message.content),
-                ctx,
-              ).slice(-200),
             }));
-      const header = sessionEntries(snapshot.contents).find(
-        (entry) => entry.type === "session",
-      );
+      const header = sessionEntries(snapshot.contents).find((entry) => entry.type === "session");
       if (typeof header?.id !== "string" || !header.id.trim())
         return {
           done: false,
@@ -10736,10 +9327,10 @@ async function runActiveStopSmoke(ctx) {
         ctx.rootPaneId,
       ]);
       if (!observed.ok) {
-        const processObservationError = sanitizeManagerBootstrapText(
-          observed.error,
-          ctx,
-        ).slice(0, 300);
+        const processObservationError = sanitizeManagerBootstrapText(observed.error, ctx).slice(
+          0,
+          300,
+        );
         let terminalTail = "";
         try {
           terminalTail = sanitizeManagerBootstrapText(
@@ -10810,14 +9401,10 @@ async function runActiveStopSmoke(ctx) {
     { timeoutMs: 30_000, stallMs: CONTROL_STALL_MS },
   );
   const root = rootReady.snapshot;
-  const ownerId = sessionEntries(root.contents).find(
-    (entry) => entry.type === "session",
-  )?.id;
+  const ownerId = sessionEntries(root.contents).find((entry) => entry.type === "session")?.id;
   assert.ok(ownerId, "active-stop Lead session ID is unavailable");
   const task = `Work as the assigned Agent and remain active. Do not finish until continued. Remember ${marker}.`;
-  await promptRoot(
-    `Delegate exactly one Agent with label ${label} to do this task: ${task}`,
-  );
+  await promptRoot(`Delegate exactly one Agent with label ${label} to do this task: ${task}`);
   let initial;
   await waitForEvidence(
     ctx,
@@ -10832,19 +9419,14 @@ async function runActiveStopSmoke(ctx) {
         ),
       );
       const owned = records.filter(
-        ({ mailbox }) =>
-          mailbox?.state.ownerSessionId === ownerId &&
-          mailbox.state.activeRequestId,
+        ({ mailbox }) => mailbox?.state.ownerSessionId === ownerId && mailbox.state.activeRequestId,
       );
       if (owned.length > 1)
         throw new Error(
           `active-stop expected one active Lead-owned Agent, observed ${owned.length}`,
         );
-      const matches = owned.filter(
-        ({ mailbox }) => mailbox.state.agentLabel === label,
-      );
-      if (matches.length > 1)
-        throw new Error("active-stop observed duplicate Agent label");
+      const matches = owned.filter(({ mailbox }) => mailbox.state.agentLabel === label);
+      if (matches.length > 1) throw new Error("active-stop observed duplicate Agent label");
       if (!matches.length) {
         const root = await rootSessionSnapshot(ctx);
         return {
@@ -10863,8 +9445,7 @@ async function runActiveStopSmoke(ctx) {
         "--pane",
         agent.pane_id,
       ]);
-      if (!observed.ok)
-        return { done: false, observationError: observed.error };
+      if (!observed.ok) return { done: false, observationError: observed.error };
       const processes = candidateProcess(
         observed.value,
         ctx.candidateExtension,
@@ -10988,9 +9569,7 @@ async function runActiveStopSmoke(ctx) {
           done: false,
           observationError: "Agent pane observation unavailable",
         };
-      const panePresent = listedPanes(panes.value).some(
-        (item) => item.paneId === identity.paneId,
-      );
+      const panePresent = listedPanes(panes.value).some((item) => item.paneId === identity.paneId);
       return { done: !panePresent, progress: { panePresent } };
     },
     { timeoutMs: 60_000, stallMs: CONTROL_STALL_MS },
@@ -11003,8 +9582,7 @@ async function runActiveStopSmoke(ctx) {
       if (!listed.ok)
         return {
           done: false,
-          observationError:
-            "Agent registration cleanup observation unavailable",
+          observationError: "Agent registration cleanup observation unavailable",
         };
       const alive = (() => {
         try {
@@ -11016,9 +9594,7 @@ async function runActiveStopSmoke(ctx) {
       })();
       return {
         done:
-          !(listed.value.agents ?? []).some(
-            (item) => item.pane_id === identity.paneId,
-          ) &&
+          !(listed.value.agents ?? []).some((item) => item.pane_id === identity.paneId) &&
           !alive &&
           !(await exactAgentMailboxPending(ctx, {
             piSessionId: identity.sessionId,
@@ -11044,10 +9620,7 @@ async function runActiveStopSmoke(ctx) {
           done: false,
           observationError: "no-replay Agent/pane observation unavailable",
         };
-      const agents = await smokeManagedAgentRecords(
-        ctx,
-        listed.value.agents ?? [],
-      );
+      const agents = await smokeManagedAgentRecords(ctx, listed.value.agents ?? []);
       const matchingAgents = agents.filter(
         ({ session, mailbox: box }) =>
           session?.id === identity.sessionId ||
@@ -11059,28 +9632,14 @@ async function runActiveStopSmoke(ctx) {
         ({ paneId }) => paneId === identity.paneId,
       );
       let mailboxPending = false;
-      const mailboxRoot = join(
-        ctx.paths.piAgent,
-        "pi-herdsman",
-        "runtime",
-        "mailboxes-v5",
-      );
+      const mailboxRoot = join(ctx.paths.piAgent, "pi-herdsman", "runtime", "mailboxes-v5");
       for (const dir of await readdir(mailboxRoot, {
         withFileTypes: true,
-      }).catch((error) =>
-        error.code === "ENOENT" ? [] : Promise.reject(error),
-      )) {
-        if (
-          !dir.isDirectory() ||
-          dir.isSymbolicLink() ||
-          !/^[0-9a-f]{32}$/u.test(dir.name)
-        )
+      }).catch((error) => (error.code === "ENOENT" ? [] : Promise.reject(error)))) {
+        if (!dir.isDirectory() || dir.isSymbolicLink() || !/^[0-9a-f]{32}$/u.test(dir.name))
           continue;
         const state = JSON.parse(
-          await readFile(
-            join(mailboxRoot, dir.name, "state.json"),
-            "utf8",
-          ).catch((error) =>
+          await readFile(join(mailboxRoot, dir.name, "state.json"), "utf8").catch((error) =>
             error.code === "ENOENT" ? "{}" : Promise.reject(error),
           ),
         );
@@ -11102,11 +9661,9 @@ async function runActiveStopSmoke(ctx) {
           observationError: "no-replay process observation unavailable",
         };
       const matchingProcess = processObservations.some((result) =>
-        candidateProcess(
-          result.value,
-          ctx.candidateExtension,
-          ctx.herdrStateExtension,
-        ).some((process) => process.pid === pid),
+        candidateProcess(result.value, ctx.candidateExtension, ctx.herdrStateExtension).some(
+          (process) => process.pid === pid,
+        ),
       );
       return {
         done:
@@ -11131,16 +9688,11 @@ async function runActiveStopSmoke(ctx) {
     "active-stop-continuation",
     async () => {
       const snapshot = await rootSessionSnapshot(ctx);
-      const results =
-        snapshot &&
-        continuationResultsForPrompt(snapshot.contents, followup, marker);
+      const results = snapshot && continuationResultsForPrompt(snapshot.contents, followup, marker);
       if (results?.length > 1)
         throw new Error("active-stop produced multiple descendant responses");
       if (results?.length === 1) {
-        const childContents = await readFile(
-          identity.sessionPath,
-          "utf8",
-        ).catch((error) =>
+        const childContents = await readFile(identity.sessionPath, "utf8").catch((error) =>
           error.code === "ENOENT" ? "" : Promise.reject(error),
         );
         const evidence = activeStopContinuationEvidence(
@@ -11187,10 +9739,7 @@ async function findChiefManagerRecoveryRecord(ctx, repository, session) {
     piSessionFile: session.path,
   };
   const entries = await readdir(root, { recursive: true, withFileTypes: true });
-  assert.ok(
-    entries.length <= 512,
-    "recovery fixture inventory exceeded its bound",
-  );
+  assert.ok(entries.length <= 512, "recovery fixture inventory exceeded its bound");
   const matches = [];
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
@@ -11213,11 +9762,7 @@ async function findChiefManagerRecoveryRecord(ctx, repository, session) {
     )
       matches.push({ path, original, record });
   }
-  assert.equal(
-    matches.length,
-    1,
-    "expected one exact v1 Manager recovery record",
-  );
+  assert.equal(matches.length, 1, "expected one exact v1 Manager recovery record");
   return matches[0];
 }
 
@@ -11243,18 +9788,10 @@ async function runChiefManagerSmoke(ctx) {
   // and no change to Herdsman's URL validation or Git protocol permissions.
   const gitConfig = join(ctx.paths.xdgConfig, "git", "config");
   await mkdir(dirname(gitConfig), { recursive: true });
-  await run("git", [
-    "config",
-    "--file",
-    gitConfig,
-    `url.${repository}.insteadOf`,
-    url,
-  ]);
+  await run("git", ["config", "--file", gitConfig, `url.${repository}.insteadOf`, url]);
   const panes = async () => (await nestedCommand(ctx, ["pane", "list"])).panes;
-  const projectPanes = async () =>
-    (await panes()).filter((pane) => pane.cwd === repository);
-  const agents = async () =>
-    (await nestedCommand(ctx, ["agent", "list"])).agents;
+  const projectPanes = async () => (await panes()).filter((pane) => pane.cwd === repository);
+  const agents = async () => (await nestedCommand(ctx, ["agent", "list"])).agents;
   const paneProcessInfo = async (paneId) =>
     nestedCommand(ctx, ["pane", "process-info", "--pane", paneId]);
   const processIn = async (paneId) =>
@@ -11268,8 +9805,7 @@ async function runChiefManagerSmoke(ctx) {
       timeoutMs,
       stallMs: timeoutMs,
     });
-  const prompt = (pane, text) =>
-    nestedCommand(ctx, ["agent", "prompt", pane, text]);
+  const prompt = (pane, text) => nestedCommand(ctx, ["agent", "prompt", pane, text]);
   let turn = 0;
   async function lifecycle(tool, expected, stage, args = { repository }) {
     const exitsChief = tool === "stop_hierarchy" && args.scope === "all";
@@ -11289,8 +9825,7 @@ async function runChiefManagerSmoke(ctx) {
         const turns = sessionEntries(session?.contents ?? "");
         const index = turns.findIndex(
           (entry) =>
-            entry.message?.role === "user" &&
-            messageText(entry.message.content) === request,
+            entry.message?.role === "user" && messageText(entry.message.content) === request,
         );
         const messages = [];
         for (const entry of index < 0 ? [] : turns.slice(index + 1)) {
@@ -11308,17 +9843,13 @@ async function runChiefManagerSmoke(ctx) {
           assert.deepEqual(calls[0].arguments, args);
         }
         const results = messages.filter(
-          (message) =>
-            message.role === "toolResult" &&
-            message.toolCallId === calls[0]?.id,
+          (message) => message.role === "toolResult" && message.toolCallId === calls[0]?.id,
         );
         assert.ok(results.length <= 1, "Chief call has duplicate results");
         const result = results[0];
         const targetPanes = await projectPanes();
         const targetIds = new Set(targetPanes.map((pane) => pane.pane_id));
-        const targetAgents = (await agents()).filter((agent) =>
-          targetIds.has(agent.pane_id),
-        );
+        const targetAgents = (await agents()).filter((agent) => targetIds.has(agent.pane_id));
         let savedTargetSessions = 0;
         let savedManagerRoles = 0;
         const roleErrors = [];
@@ -11328,10 +9859,7 @@ async function runChiefManagerSmoke(ctx) {
           if (!target) continue;
           savedTargetSessions++;
           for (const entry of sessionEntries(target.contents)) {
-            if (
-              entry.customType === "pi-herdsman-role" &&
-              entry.data?.role === "manager"
-            )
+            if (entry.customType === "pi-herdsman-role" && entry.data?.role === "manager")
               savedManagerRoles++;
             if (entry.customType === "pi_herdsman_role_error") {
               // Retain only known categories, never the message or session content.
@@ -11344,9 +9872,7 @@ async function runChiefManagerSmoke(ctx) {
                     ? "lease"
                     : /(?:chief|supervisor)/iu.test(observed)
                       ? "chief_authority"
-                      : /(?:workspace|repository|checkout|placement)/iu.test(
-                            observed,
-                          )
+                      : /(?:workspace|repository|checkout|placement)/iu.test(observed)
                         ? "project_identity"
                         : "other";
               if (!roleErrors.includes(category)) roleErrors.push(category);
@@ -11358,16 +9884,9 @@ async function runChiefManagerSmoke(ctx) {
                       entry.data?.error?.message ??
                       entry.data?.error ??
                       entry.data?.detail);
-                const line =
-                  typeof raw === "string" ? raw.split(/\r?\n/u, 1)[0] : "";
-                ctx.chiefManagerRoleError = sanitizeManagerBootstrapText(
-                  line,
-                  ctx,
-                )
-                  .replace(
-                    /\b[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}\b/giu,
-                    "<ID>",
-                  )
+                const line = typeof raw === "string" ? raw.split(/\r?\n/u, 1)[0] : "";
+                ctx.chiefManagerRoleError = sanitizeManagerBootstrapText(line, ctx)
+                  .replace(/\b[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}\b/giu, "<ID>")
                   .replace(/(?:https?|ssh):\/\/[^\s"'<>]+/giu, "<URL>")
                   .replace(/(?:[A-Za-z]:[\\/]|\/)[^\s"'<>]+/gu, "<PATH>")
                   .replace(/\s+/gu, " ")
@@ -11378,12 +9897,7 @@ async function runChiefManagerSmoke(ctx) {
           }
         }
         const settlement =
-          !!session &&
-          !!assistantResultForSession(
-            session,
-            request,
-            "CHIEF_MANAGER_SMOKE_SETTLED",
-          );
+          !!session && !!assistantResultForSession(session, request, "CHIEF_MANAGER_SMOKE_SETTLED");
         ctx.chiefManagerTurn = {
           tool,
           promptPersisted: index >= 0,
@@ -11414,8 +9928,7 @@ async function runChiefManagerSmoke(ctx) {
     if (expected) {
       assert.equal(result.isError, false, `${stage} returned a tool error`);
       const failure =
-        result.details?.status === "partial_failure" ||
-        tool === "stop_hierarchy"
+        result.details?.status === "partial_failure" || tool === "stop_hierarchy"
           ? ` (${sanitizeManagerBootstrapText(
               [
                 result.details?.stage,
@@ -11427,32 +9940,19 @@ async function runChiefManagerSmoke(ctx) {
               ctx,
             ).slice(0, 350)})`
           : "";
-      assert.equal(
-        result.details?.status,
-        expected,
-        `${stage} tool status${failure}`,
-      );
+      assert.equal(result.details?.status, expected, `${stage} tool status${failure}`);
       if (tool === "stop_hierarchy") {
         assert.equal(result.details.scope, args.scope);
         assert.deepEqual(result.details.remaining, []);
       }
     } else if (tool === "list_projects" || tool === "list_staff") {
-      assert.equal(
-        result.isError,
-        false,
-        "project discovery returned an error",
-      );
+      assert.equal(result.isError, false, "project discovery returned an error");
     } else {
       assert.ok(
-        (result.details?.status === "partial_failure" &&
-          result.details?.stage === "recovery") ||
+        (result.details?.status === "partial_failure" && result.details?.stage === "recovery") ||
           (result.isError === true &&
-            /(?:recovery|saved Manager session)/iu.test(
-              messageText(result.content),
-            ) &&
-            /(?:invalid|mismatch|does not match|foreign)/iu.test(
-              messageText(result.content),
-            )),
+            /(?:recovery|saved Manager session)/iu.test(messageText(result.content)) &&
+            /(?:invalid|mismatch|does not match|foreign)/iu.test(messageText(result.content))),
         "mismatched saved session must block lifecycle action at recovery",
       );
     }
@@ -11462,12 +9962,7 @@ async function runChiefManagerSmoke(ctx) {
       async () => {
         const session = await rootSessionSnapshot(ctx);
         ctx.chiefManagerTurn.settlement =
-          !!session &&
-          !!assistantResultForSession(
-            session,
-            request,
-            "CHIEF_MANAGER_SMOKE_SETTLED",
-          );
+          !!session && !!assistantResultForSession(session, request, "CHIEF_MANAGER_SMOKE_SETTLED");
         return {
           done: ctx.chiefManagerTurn.settlement && session.status === "idle",
           progress: ctx.chiefManagerTurn,
@@ -11482,27 +9977,17 @@ async function runChiefManagerSmoke(ctx) {
       const project = (await panes()).filter((pane) => pane.cwd === checkout);
       const workspaceIds = new Set(project.map((pane) => pane.workspace_id));
       if (workspaceIds.size === 0) return { done: false };
-      assert.equal(
-        workspaceIds.size,
-        1,
-        "expected one project primary workspace",
-      );
+      assert.equal(workspaceIds.size, 1, "expected one project primary workspace");
       const listing = await agents();
       const descriptor = JSON.parse(
-        await readFile(
-          await smokeManagerDescriptorPath({ ...ctx, rootCwd: checkout }),
-          "utf8",
-        ),
+        await readFile(await smokeManagerDescriptorPath({ ...ctx, rootCwd: checkout }), "utf8"),
       );
       const pane = project.find((item) => item.pane_id === descriptor.paneId);
       assert.ok(pane, "Manager descriptor must identify a project pane");
       assert.equal(pane.workspace_id, descriptor.workspaceId);
       assert.equal(pane.tab_id, descriptor.tabId);
       const pid = descriptor.claim?.pid;
-      assert.ok(
-        Number.isSafeInteger(pid) && pid > 0,
-        "invalid Manager lease PID",
-      );
+      assert.ok(Number.isSafeInteger(pid) && pid > 0, "invalid Manager lease PID");
       // Herdr can report a settled Pi turn as "done" while Pi is still live.
       // Bind the session path and lease PID to the pane independently of that status.
       const reports = listing.filter((item) => item.pane_id === pane.pane_id);
@@ -11510,8 +9995,7 @@ async function runChiefManagerSmoke(ctx) {
       const agent = reports[0];
       const session = await isolatedSessionDetails(ctx, agent);
       const processes =
-        (await paneProcessInfo(pane.pane_id)).process_info
-          ?.foreground_processes ?? [];
+        (await paneProcessInfo(pane.pane_id)).process_info?.foreground_processes ?? [];
       const exactPid = processes.filter((process) => process.pid === pid);
       const progress = {
         sessionKind: agent?.agent_session?.kind ?? null,
@@ -11523,17 +10007,9 @@ async function runChiefManagerSmoke(ctx) {
       if (!session || exactPid.length === 0) return { done: false, progress };
       assert.equal(exactPid.length, 1, "ambiguous Manager foreground PID");
       assert.equal(session.id, descriptor.piSessionId);
-      assert.equal(
-        await realpath(session.path),
-        await realpath(descriptor.piSessionFile),
-      );
-      assert.equal(
-        (await exactIsolatedSession(ctx, session.id))?.path,
-        session.path,
-      );
-      for (const other of project.filter(
-        (item) => item.pane_id !== pane.pane_id,
-      )) {
+      assert.equal(await realpath(session.path), await realpath(descriptor.piSessionFile));
+      assert.equal((await exactIsolatedSession(ctx, session.id))?.path, session.path);
+      for (const other of project.filter((item) => item.pane_id !== pane.pane_id)) {
         assert.ok(
           !listing.some(
             (item) =>
@@ -11543,11 +10019,7 @@ async function runChiefManagerSmoke(ctx) {
           ),
           "duplicate Pi agent in project",
         );
-        assert.deepEqual(
-          await processIn(other.pane_id),
-          [],
-          "duplicate Pi process in project",
-        );
+        assert.deepEqual(await processIn(other.pane_id), [], "duplicate Pi process in project");
       }
       ctx.chiefManagerProcess = progress;
       return { done: true, value: { pane, session, pid }, progress };
@@ -11569,16 +10041,11 @@ async function runChiefManagerSmoke(ctx) {
         const session = await exactIsolatedSession(ctx, manager.session.id);
         const done =
           !!session &&
-          !!assistantResultForSession(
-            session,
-            request,
-            "CHIEF_MANAGER_SMOKE_VERIFIED",
-          );
+          !!assistantResultForSession(session, request, "CHIEF_MANAGER_SMOKE_VERIFIED");
         const entries = sessionEntries(session?.contents ?? "");
         const user = entries.findIndex(
           (entry) =>
-            entry.message?.role === "user" &&
-            messageText(entry.message.content) === request,
+            entry.message?.role === "user" && messageText(entry.message.content) === request,
         );
         const error =
           user >= 0 &&
@@ -11586,18 +10053,14 @@ async function runChiefManagerSmoke(ctx) {
             .slice(user + 1)
             .some(
               (entry) =>
-                entry.message?.role === "assistant" &&
-                entry.message.stopReason === "error",
+                entry.message?.role === "assistant" && entry.message.stopReason === "error",
             );
         const screen = done
           ? ""
-          : await nestedPaneText(ctx, manager.pane.pane_id, "visible").catch(
-              () => null,
-            );
+          : await nestedPaneText(ctx, manager.pane.pane_id, "visible").catch(() => null);
         const starts = sessionEntries(await readFile(startsPath, "utf8"));
         const start = starts.findLast(
-          (entry) =>
-            entry.sessionId === manager.session.id && entry.pid === manager.pid,
+          (entry) => entry.sessionId === manager.session.id && entry.pid === manager.pid,
         );
         const progress = {
           promptPersisted: user >= 0,
@@ -11605,18 +10068,12 @@ async function runChiefManagerSmoke(ctx) {
           replied: done,
           screenObserved: screen !== null,
           paneEchoedProbe: screen?.includes(request) ?? false,
-          modelMissing:
-            /\b(?:no model selected|no models available|no api key)\b/iu.test(
-              screen ?? "",
-            ),
-          modelAtChildStart:
-            start?.chiefManagerModel ?? "provider_start_not_observed",
-          trustPrompt: /trust this|project trust|approve this/iu.test(
+          modelMissing: /\b(?:no model selected|no models available|no api key)\b/iu.test(
             screen ?? "",
           ),
-          confirmation: /\b(?:yes\s*\/\s*no|press enter|confirm)\b/iu.test(
-            screen ?? "",
-          ),
+          modelAtChildStart: start?.chiefManagerModel ?? "provider_start_not_observed",
+          trustPrompt: /trust this|project trust|approve this/iu.test(screen ?? ""),
+          confirmation: /\b(?:yes\s*\/\s*no|press enter|confirm)\b/iu.test(screen ?? ""),
         };
         ctx.chiefManagerProbe = progress;
         return { done, value: session, progress };
@@ -11630,11 +10087,7 @@ async function runChiefManagerSmoke(ctx) {
     const session = await rootSessionSnapshot(ctx);
     const answered =
       !!session &&
-      !!assistantResultForSession(
-        session,
-        ctx.initialPrompt,
-        "CHIEF_MANAGER_SMOKE_STARTUP",
-      );
+      !!assistantResultForSession(session, ctx.initialPrompt, "CHIEF_MANAGER_SMOKE_STARTUP");
     return {
       done: answered && session.status === "idle",
       progress: {
@@ -11657,8 +10110,7 @@ async function runChiefManagerSmoke(ctx) {
   ]);
   await wait("chief-agent", async () => ({
     done: (await agents()).some(
-      (agent) =>
-        agent.pane_id === ctx.rootPaneId && agent.agent_status === "idle",
+      (agent) => agent.pane_id === ctx.rootPaneId && agent.agent_status === "idle",
     ),
   }));
   const clone = await lifecycle("clone_repository", "cloned", "clone-only", {
@@ -11668,13 +10120,10 @@ async function runChiefManagerSmoke(ctx) {
   assert.equal(clone.repository, destination);
   assert.ok(clone.workspaceId);
   assert.notEqual(clone.workspaceId, ctx.rootWorkspaceId);
-  const head = async (cwd) =>
-    (await run("git", ["rev-parse", "HEAD"], { cwd })).stdout;
+  const head = async (cwd) => (await run("git", ["rev-parse", "HEAD"], { cwd })).stdout;
   assert.equal(await head(destination), await head(repository));
 
-  const clonePanes = (await panes()).filter(
-    (pane) => pane.workspace_id === clone.workspaceId,
-  );
+  const clonePanes = (await panes()).filter((pane) => pane.workspace_id === clone.workspaceId);
   assert.equal(clonePanes.length, 1, "clone should have only its initial pane");
   assert.equal(clonePanes[0].cwd, destination);
   assert.ok(
@@ -11686,11 +10135,8 @@ async function runChiefManagerSmoke(ctx) {
   assert.ok(Array.isArray(foreground), "missing clone pane process evidence");
   assert.ok(
     !foreground.some((proc) => proc.name === "pi") &&
-      candidateProcess(
-        cloneProcessInfo,
-        ctx.candidateExtension,
-        ctx.herdrStateExtension,
-      ).length === 0,
+      candidateProcess(cloneProcessInfo, ctx.candidateExtension, ctx.herdrStateExtension).length ===
+        0,
     "clone-only workspace launched Pi",
   );
 
@@ -11707,12 +10153,9 @@ async function runChiefManagerSmoke(ctx) {
     },
   ]);
   assert.equal(matches[0].managerStatus, "none");
-  const ordinaryLeadStart = await lifecycle(
-    "start_lead",
-    "lead_started",
-    "ordinary-lead",
-    { workspace: clone.workspaceId },
-  );
+  const ordinaryLeadStart = await lifecycle("start_lead", "lead_started", "ordinary-lead", {
+    workspace: clone.workspaceId,
+  });
   const ordinaryLeadPanes = (await panes()).filter(
     (pane) => pane.workspace_id === clone.workspaceId,
   );
@@ -11725,14 +10168,10 @@ async function runChiefManagerSmoke(ctx) {
   assert.ok(ordinaryLeadId, "ordinary Lead has no exact Pi session ID");
   const ordinaryLeadSession = await exactIsolatedSession(ctx, ordinaryLeadId);
   const ordinaryLeadPane = ordinaryLeadAgents[0].pane_id;
-  const [ordinaryLeadProcess, ...extraLeadProcesses] =
-    await processIn(ordinaryLeadPane);
+  const [ordinaryLeadProcess, ...extraLeadProcesses] = await processIn(ordinaryLeadPane);
   assert.ok(ordinaryLeadProcess?.pid > 0);
   assert.deepEqual(extraLeadProcesses, []);
-  assert.ok(
-    ordinaryLeadSession,
-    "ordinary Lead exact saved session is missing",
-  );
+  assert.ok(ordinaryLeadSession, "ordinary Lead exact saved session is missing");
   assert.ok(
     sessionEntries(ordinaryLeadSession.contents).some(
       (entry) =>
@@ -11753,11 +10192,7 @@ async function runChiefManagerSmoke(ctx) {
   // Herdr's fresh Pi can select another default in this fixture. Explicitly
   // select the simulated model in the verified child, not in production launch.
   const selectManagerModel = async ({ pane }) => {
-    await submitPaneCommand(
-      ctx,
-      pane.pane_id,
-      "/model smoke-faux/chief-manager",
-    );
+    await submitPaneCommand(ctx, pane.pane_id, "/model smoke-faux/chief-manager");
     await nestedCommand(ctx, [
       "pane",
       "wait-output",
@@ -11810,8 +10245,7 @@ async function runChiefManagerSmoke(ctx) {
     const entries = sessionEntries(session.contents);
     const promptIndex = entries.findIndex(
       (entry) =>
-        entry.message?.role === "user" &&
-        messageText(entry.message.content) === delegationPrompt,
+        entry.message?.role === "user" && messageText(entry.message.content) === delegationPrompt,
     );
     if (promptIndex < 0) return { done: false };
     progress.promptObserved = true;
@@ -11831,14 +10265,11 @@ async function runChiefManagerSmoke(ctx) {
     progress.toolCallObserved = true;
     progress.toolCallId = call.id;
     const result = entries.find(
-      (entry) =>
-        entry.message?.role === "toolResult" &&
-        entry.message.toolCallId === call.id,
+      (entry) => entry.message?.role === "toolResult" && entry.message.toolCallId === call.id,
     );
     progress.toolResultObserved = Boolean(result);
     progress.toolResultError = result ? Boolean(result.message.isError) : null;
-    if (result?.message.isError)
-      throw new Error("Named Manager Agent delegation failed");
+    if (result?.message.isError) throw new Error("Named Manager Agent delegation failed");
     const resultText = result && messageText(result.message.content);
     if (!resultText?.includes("Request: ")) return { done: false };
     const requestId = resultText.match(/^Request: ([^\n]+)$/m)?.[1];
@@ -11858,23 +10289,17 @@ async function runChiefManagerSmoke(ctx) {
     progress.completionMarkerObserved =
       typeof handoff === "object" &&
       messageText(handoff.content).includes("CHIEF_MANAGER_AGENT_COMPLETED");
-    return handoff
-      ? { done: true, value: { requestId, childSessionId } }
-      : { done: false };
+    return handoff ? { done: true, value: { requestId, childSessionId } } : { done: false };
   });
   ctx.chiefManagerDelegation = delegation;
-  const originalPanes = (await projectPanes())
-    .map((pane) => pane.pane_id)
-    .sort();
+  const originalPanes = (await projectPanes()).map((pane) => pane.pane_id).sort();
   await lifecycle("start_manager", "already_running", "repeat");
   const repeat = await observeManager("repeated-manager");
   assert.equal(repeat.pid, first.pid);
   assert.equal(repeat.pane.pane_id, first.pane.pane_id);
   assert.equal(repeat.session.id, first.session.id);
   // The completed Agent generation is cleaned after result delivery.
-  const repeatedPanes = (await projectPanes())
-    .map((pane) => pane.pane_id)
-    .sort();
+  const repeatedPanes = (await projectPanes()).map((pane) => pane.pane_id).sort();
   assert.ok(
     repeatedPanes.every((pane) => originalPanes.includes(pane)),
     "repeated Manager start added a project pane",
@@ -11917,12 +10342,7 @@ async function runChiefManagerSmoke(ctx) {
     "--no-focus",
   ]);
   const topology = () =>
-    nestedCommand(ctx, [
-      "worktree",
-      "list",
-      "--workspace",
-      first.pane.workspace_id,
-    ]);
+    nestedCommand(ctx, ["worktree", "list", "--workspace", first.pane.workspace_id]);
   const project = await topology();
   const worktree = project.worktrees.find((item) => item.branch === branch);
   assert.equal(worktree?.path ?? worktree?.worktree_path, checkout);
@@ -11934,9 +10354,7 @@ async function runChiefManagerSmoke(ctx) {
     const session = await exactIsolatedSession(ctx, first.session.id);
     if (!session) return { done: false };
     assertNoFailedProjectDelegation(session.contents, branch);
-    const rows = staffDelegateResults(session.contents).filter(
-      (row) => row.branch === branch,
-    );
+    const rows = staffDelegateResults(session.contents).filter((row) => row.branch === branch);
     assert.ok(rows.length <= 1, "duplicate project assignment");
     const row = rows[0];
     return { done: !!row, value: row };
@@ -11955,17 +10373,14 @@ async function runChiefManagerSmoke(ctx) {
     `${hash(branch)}.json`,
   );
   const assignmentRecord = await readFile(assignmentPath, "utf8");
-  const expectedHead = (
-    await run("git", ["rev-parse", "HEAD"], { cwd: checkout })
-  ).stdout;
+  const expectedHead = (await run("git", ["rev-parse", "HEAD"], { cwd: checkout })).stdout;
   const assignedLead = async () => {
     const listing = (await agents()).filter(
       (item) => item.workspace_id === assignment.workspace_id,
     );
     const exact = [];
     for (const agent of listing) {
-      if ((await agentSessionId(ctx, agent)) === assignment.session)
-        exact.push(agent);
+      if ((await agentSessionId(ctx, agent)) === assignment.session) exact.push(agent);
     }
     assert.ok(exact.length <= 1, "duplicate assigned Lead session");
     if (exact.length !== 1) return null;
@@ -11974,10 +10389,7 @@ async function runChiefManagerSmoke(ctx) {
     const session = await exactIsolatedSession(ctx, assignment.session);
     if (!session) return null;
     const pid = processes[0].pid;
-    assert.ok(
-      Number.isSafeInteger(pid) && pid > 0,
-      "invalid assigned Lead PID",
-    );
+    assert.ok(Number.isSafeInteger(pid) && pid > 0, "invalid assigned Lead PID");
     return { paneId: exact[0].pane_id, pid, session };
   };
   const lead = await wait("assigned-lead", async () => {
@@ -11987,8 +10399,7 @@ async function runChiefManagerSmoke(ctx) {
       sessionEntries(live.session.contents).some(
         (entry) =>
           entry.message?.role === "assistant" &&
-          messageText(entry.message.content) ===
-            "CHIEF_MANAGER_SMOKE_LEAD_READY",
+          messageText(entry.message.content) === "CHIEF_MANAGER_SMOKE_LEAD_READY",
       );
     return {
       done,
@@ -11998,16 +10409,11 @@ async function runChiefManagerSmoke(ctx) {
   });
   const assertAssignmentPreserved = async () => {
     assert.equal(await readFile(assignmentPath, "utf8"), assignmentRecord);
-    const matches = (await topology()).worktrees.filter(
-      (item) => item.branch === branch,
-    );
+    const matches = (await topology()).worktrees.filter((item) => item.branch === branch);
     assert.equal(matches.length, 1);
     assert.equal(matches[0].open_workspace_id, assignment.workspace_id);
     assert.equal(matches[0].path ?? matches[0].worktree_path, checkout);
-    assert.equal(
-      (await run("git", ["rev-parse", "HEAD"], { cwd: checkout })).stdout,
-      expectedHead,
-    );
+    assert.equal((await run("git", ["rev-parse", "HEAD"], { cwd: checkout })).stdout, expectedHead);
     const savedLead = await exactIsolatedSession(ctx, assignment.session);
     assert.equal(savedLead?.path, lead.session.path);
     assert.ok(savedLead.contents.startsWith(lead.session.contents));
@@ -12018,9 +10424,7 @@ async function runChiefManagerSmoke(ctx) {
   const observeOwnedAgent = (label, ownerId, leaf = true) =>
     wait(label, async () => {
       const records = await smokeManagedAgentRecords(ctx, await agents());
-      const matches = records.filter(
-        ({ mailbox }) => mailbox?.state.agentLabel === label,
-      );
+      const matches = records.filter(({ mailbox }) => mailbox?.state.agentLabel === label);
       assert.ok(matches.length <= 1, `duplicate Agent: ${label}`);
       if (!matches.length) return { done: false };
       const { agent, session, mailbox } = matches[0];
@@ -12042,19 +10446,14 @@ async function runChiefManagerSmoke(ctx) {
       const activeMailboxRequestPresent = !!mailbox.state.activeRequestId;
       const positiveChildPidPresent = process?.pid > 0;
       return {
-        done:
-          activeMailboxRequestPresent &&
-          positiveChildPidPresent &&
-          (!leaf || waiting),
+        done: activeMailboxRequestPresent && positiveChildPidPresent && (!leaf || waiting),
         value: { paneId: agent.pane_id, session, pid: process?.pid },
         ...(label === "smoke-chief-agent" || label === "smoke-first-agent"
           ? {
               evidence: ownedAgentReadinessEvidence({
                 activeMailboxRequestPresent,
                 positiveChildPidPresent,
-                ...(label === "smoke-chief-agent"
-                  ? { expectedAwaitOwnerPresent: waiting }
-                  : {}),
+                ...(label === "smoke-chief-agent" ? { expectedAwaitOwnerPresent: waiting } : {}),
               }),
             }
           : {}),
@@ -12067,11 +10466,7 @@ async function runChiefManagerSmoke(ctx) {
       const session = await exactIsolatedSession(ctx, ownerId);
       if (!session) return { done: false };
       assertNoFailedAgentDelegation(session.contents, `smoke-${owner}-agent`);
-      const { delegation } = coreDelegationEdge(
-        session.contents,
-        `smoke-${owner}-agent`,
-        ownerId,
-      );
+      const { delegation } = coreDelegationEdge(session.contents, `smoke-${owner}-agent`, ownerId);
       return {
         done: delegation === "accepted",
         progress: rootDelegationDiagnostics(session.contents),
@@ -12087,20 +10482,10 @@ async function runChiefManagerSmoke(ctx) {
   const chiefAgent = await observeOwnedAgent("smoke-chief-agent", chiefId);
   markStage(ctx, "chief-manager-delegate-first");
   await delegate(first.pane.pane_id, first.session.id, "first");
-  const firstAgent = await observeOwnedAgent(
-    "smoke-first-agent",
-    first.session.id,
-    false,
-  );
-  const nestedAgent = await observeOwnedAgent(
-    "smoke-nested-agent",
-    firstAgent.session.id,
-  );
+  const firstAgent = await observeOwnedAgent("smoke-first-agent", first.session.id, false);
+  const nestedAgent = await observeOwnedAgent("smoke-nested-agent", firstAgent.session.id);
   await delegate(second.pane.pane_id, second.session.id, "second");
-  const secondAgent = await observeOwnedAgent(
-    "smoke-second-agent",
-    second.session.id,
-  );
+  const secondAgent = await observeOwnedAgent("smoke-second-agent", second.session.id);
 
   const staff = await lifecycle("list_staff", null, "staff-target", {});
   const managers = staff.reports.filter((report) => report.role === "manager");
@@ -12113,9 +10498,7 @@ async function runChiefManagerSmoke(ctx) {
       entry.data?.ownerSessionId === chiefId,
   );
   const managerTarget = (sessionId) => {
-    const binding = targetBindings.find(
-      (entry) => entry.data.sessionId === sessionId,
-    );
+    const binding = targetBindings.find((entry) => entry.data.sessionId === sessionId);
     assert.match(binding?.data.target ?? "", /^manager:/u);
     return binding.data.target;
   };
@@ -12124,15 +10507,10 @@ async function runChiefManagerSmoke(ctx) {
     managers.map((report) => report.target).sort(),
     [selected, managerTarget(second.session.id)].sort(),
   );
-  const targeted = await lifecycle(
-    "stop_hierarchy",
-    "complete",
-    "targeted-stop",
-    {
-      scope: "manager",
-      target: selected,
-    },
-  );
+  const targeted = await lifecycle("stop_hierarchy", "complete", "targeted-stop", {
+    scope: "manager",
+    target: selected,
+  });
   assert.deepEqual(targeted.stopped, [
     { role: "lead", session: assignment.session },
     { role: "manager", session: first.session.id },
@@ -12147,9 +10525,7 @@ async function runChiefManagerSmoke(ctx) {
     return true;
   };
   await wait("targeted-process-exit", async () => ({
-    done: [lead, first, firstAgent, nestedAgent].every(({ pid }) =>
-      pidExited(pid),
-    ),
+    done: [lead, first, firstAgent, nestedAgent].every(({ pid }) => pidExited(pid)),
   }));
   const assertUnselectedAgentsSurvive = async () => {
     for (const [label, ownerId, original] of [
@@ -12165,9 +10541,7 @@ async function runChiefManagerSmoke(ctx) {
       (await processIn(second.pane.pane_id)).map(({ pid }) => pid),
       [second.pid],
     );
-    const report = (await agents()).find(
-      (agent) => agent.pane_id === second.pane.pane_id,
-    );
+    const report = (await agents()).find((agent) => agent.pane_id === second.pane.pane_id);
     assert.equal(await agentSessionId(ctx, report), second.session.id);
   };
   await assertUnselectedAgentsSurvive();
@@ -12176,55 +10550,33 @@ async function runChiefManagerSmoke(ctx) {
       (await processIn(ordinaryLeadPane)).map(({ pid }) => pid),
       [ordinaryLeadProcess.pid],
     );
-    const live = (await agents()).find(
-      (agent) => agent.pane_id === ordinaryLeadPane,
-    );
+    const live = (await agents()).find((agent) => agent.pane_id === ordinaryLeadPane);
     assert.ok(live);
     assert.equal(await agentSessionId(ctx, live), ordinaryLeadId);
   };
   await assertOrdinaryLeadSurvives();
-  const workspace = await nestedCommand(ctx, [
-    "workspace",
-    "get",
-    first.pane.workspace_id,
-  ]);
+  const workspace = await nestedCommand(ctx, ["workspace", "get", first.pane.workspace_id]);
   assert.equal(workspace.workspace?.workspace_id, first.pane.workspace_id);
-  const stoppedPanes = (await projectPanes())
-    .map((pane) => pane.pane_id)
-    .sort();
+  const stoppedPanes = (await projectPanes()).map((pane) => pane.pane_id).sort();
   const saved = await exactIsolatedSession(ctx, first.session.id);
   assert.equal(saved?.path, first.session.path);
-  assert.ok(
-    saved.contents.startsWith(beforeStop.contents),
-    "Manager history was lost",
-  );
+  assert.ok(saved.contents.startsWith(beforeStop.contents), "Manager history was lost");
   await assertAssignmentPreserved();
   await lifecycle("start_manager", "resume_required", "resume-required");
-  assert.deepEqual(
-    (await projectPanes()).map((pane) => pane.pane_id).sort(),
-    stoppedPanes,
-  );
+  assert.deepEqual((await projectPanes()).map((pane) => pane.pane_id).sort(), stoppedPanes);
 
   const recovery = await findChiefManagerRecoveryRecord(ctx, repository, saved);
   const wrongSession = randomUUID();
   assert.notEqual(wrongSession, saved.id);
-  const corrupt =
-    JSON.stringify({ ...recovery.record, piSessionId: wrongSession }) + "\n";
+  const corrupt = JSON.stringify({ ...recovery.record, piSessionId: wrongSession }) + "\n";
   try {
     await writeFile(recovery.path, corrupt);
     for (const tool of ["resume_manager", "start_manager"]) {
       await lifecycle(tool, null, `blocked-${tool}`);
       const observed = await projectPanes();
-      assert.deepEqual(
-        observed.map((pane) => pane.pane_id).sort(),
-        stoppedPanes,
-      );
+      assert.deepEqual(observed.map((pane) => pane.pane_id).sort(), stoppedPanes);
       for (const pane of observed)
-        assert.deepEqual(
-          await processIn(pane.pane_id),
-          [],
-          "blocked call started Pi",
-        );
+        assert.deepEqual(await processIn(pane.pane_id), [], "blocked call started Pi");
       assert.equal(await readFile(recovery.path, "utf8"), corrupt);
       assert.equal(await readFile(saved.path, "utf8"), saved.contents);
       await assertAssignmentPreserved();
@@ -12246,19 +10598,12 @@ async function runChiefManagerSmoke(ctx) {
   );
   await assertAssignmentPreserved();
   await assertOrdinaryLeadSurvives();
-  const [chiefProcess, ...extraChiefProcesses] = await processIn(
-    ctx.rootPaneId,
-  );
+  const [chiefProcess, ...extraChiefProcesses] = await processIn(ctx.rootPaneId);
   assert.ok(chiefProcess?.pid > 0);
   assert.deepEqual(extraChiefProcesses, []);
-  const staffStop = await lifecycle(
-    "stop_hierarchy",
-    "complete",
-    "staff-stop",
-    {
-      scope: "staff",
-    },
-  );
+  const staffStop = await lifecycle("stop_hierarchy", "complete", "staff-stop", {
+    scope: "staff",
+  });
   assert.deepEqual(
     staffStop.stopped.map(({ role, session }) => `${role}:${session}`).sort(),
     [
@@ -12268,15 +10613,13 @@ async function runChiefManagerSmoke(ctx) {
     ].sort(),
   );
   await wait("staff-process-exit", async () => ({
-    done: [resumed, ordinaryLeadProcess, second, chiefAgent, secondAgent].every(
-      ({ pid }) => pidExited(pid),
+    done: [resumed, ordinaryLeadProcess, second, chiefAgent, secondAgent].every(({ pid }) =>
+      pidExited(pid),
     ),
   }));
   const savedOrdinaryLead = await exactIsolatedSession(ctx, ordinaryLeadId);
   assert.equal(savedOrdinaryLead?.path, ordinaryLeadSession.path);
-  assert.ok(
-    savedOrdinaryLead.contents.startsWith(ordinaryLeadSession.contents),
-  );
+  assert.ok(savedOrdinaryLead.contents.startsWith(ordinaryLeadSession.contents));
   assert.deepEqual(
     (await processIn(ctx.rootPaneId)).map(({ pid }) => pid),
     [chiefProcess.pid],
@@ -12288,17 +10631,10 @@ async function runChiefManagerSmoke(ctx) {
   const restaffed = await observeManager("restaffed-manager");
   assert.equal(restaffed.session.id, first.session.id);
   assert.equal(restaffed.session.path, first.session.path);
-  const complete = await lifecycle(
-    "stop_hierarchy",
-    "shutdown_requested",
-    "complete-stop",
-    {
-      scope: "all",
-    },
-  );
-  assert.deepEqual(complete.stopped, [
-    { role: "manager", session: restaffed.session.id },
-  ]);
+  const complete = await lifecycle("stop_hierarchy", "shutdown_requested", "complete-stop", {
+    scope: "all",
+  });
+  assert.deepEqual(complete.stopped, [{ role: "manager", session: restaffed.session.id }]);
   await wait("complete-process-exit", async () => ({
     done: pidExited(restaffed.pid) && pidExited(chiefProcess.pid),
   }));
@@ -12317,16 +10653,12 @@ async function runChiefManagerSmoke(ctx) {
     chiefExitObserved: true,
     assignmentPreserved: true,
     mismatchedRecoveryBlocked: true,
-    managerAgentDelegation: chiefManagerSuccessEvidence(
-      ctx.chiefManagerDelegationProgress,
-    ),
+    managerAgentDelegation: chiefManagerSuccessEvidence(ctx.chiefManagerDelegationProgress),
   };
   requireSmokeEvidence(
     ctx.chiefManager.managerAgentDelegation.delegationToolCallObserved &&
-      ctx.chiefManager.managerAgentDelegation
-        .successfulCorrelatedDelegationResultObserved &&
-      ctx.chiefManager.managerAgentDelegation
-        .completedAgentResultReceiptCorrelated,
+      ctx.chiefManager.managerAgentDelegation.successfulCorrelatedDelegationResultObserved &&
+      ctx.chiefManager.managerAgentDelegation.completedAgentResultReceiptCorrelated,
     "named Manager Agent completion evidence is incomplete",
   );
 }
@@ -12343,11 +10675,7 @@ async function runChiefTreeSmoke(ctx) {
     );
     const response =
       prompt &&
-      assistantResultForSession(
-        session,
-        ctx.initialPrompt,
-        "PI_HERDSMAN_CHIEF_TREE_STARTUP",
-      );
+      assistantResultForSession(session, ctx.initialPrompt, "PI_HERDSMAN_CHIEF_TREE_STARTUP");
     return prompt && response ? { prompt, response } : null;
   };
 
@@ -12373,18 +10701,11 @@ async function runChiefTreeSmoke(ctx) {
 
   const readSnapshotContents = async () => {
     const details = await lstat(ctx.chiefTreeResultFile);
-    if (
-      !details.isFile() ||
-      details.isSymbolicLink() ||
-      details.size > MAX_CHIEF_TREE_RESULT_BYTES
-    )
-      throw new Error(
-        "chief-tree-probe: result path is not a bounded regular file",
-      );
+    if (!details.isFile() || details.isSymbolicLink() || details.size > MAX_CHIEF_TREE_RESULT_BYTES)
+      throw new Error("chief-tree-probe: result path is not a bounded regular file");
     return readFile(ctx.chiefTreeResultFile, "utf8");
   };
-  const readSnapshots = async () =>
-    parseToolSnapshots(await readSnapshotContents());
+  const readSnapshots = async () => parseToolSnapshots(await readSnapshotContents());
   const awaitSnapshot = async (label) =>
     waitForEvidence(
       ctx,
@@ -12394,8 +10715,7 @@ async function runChiefTreeSmoke(ctx) {
         try {
           snapshots = await readSnapshots();
         } catch (error) {
-          if (error.code === "ENOENT")
-            return { done: false, observationError: error.message };
+          if (error.code === "ENOENT") return { done: false, observationError: error.message };
           throw error;
         }
         return {
@@ -12480,8 +10800,7 @@ async function runChiefTreeSmoke(ctx) {
       }
       const footer = chiefTreeFooter(treeText);
       const selected =
-        !!footer &&
-        chiefTreeSelectedRow(treeText, "PI_HERDSMAN_CHIEF_TREE_POST_CHIEF");
+        !!footer && chiefTreeSelectedRow(treeText, "PI_HERDSMAN_CHIEF_TREE_POST_CHIEF");
       return {
         done: selected,
         value: { footer, treeText },
@@ -12526,9 +10845,7 @@ async function runChiefTreeSmoke(ctx) {
         }
         const next = chiefTreeFooter(text);
         if (!next || next.total !== footer.total)
-          throw new Error(
-            "chief-tree-selection: tree footer disappeared or changed",
-          );
+          throw new Error("chief-tree-selection: tree footer disappeared or changed");
         return {
           done: next.selected !== before,
           progress: { selected: next.selected },
@@ -12565,17 +10882,9 @@ async function runChiefTreeSmoke(ctx) {
         if (error.code !== "ENOENT") throw error;
       }
       if (snapshots)
-        treeEvents = countChiefTreeEvents(
-          await readSnapshotContents(),
-          treeEventsBefore,
-        );
+        treeEvents = countChiefTreeEvents(await readSnapshotContents(), treeEventsBefore);
       return {
-        ...chiefTreeBranchTransition(
-          text,
-          snapshots,
-          treeEventsBefore,
-          treeEvents,
-        ),
+        ...chiefTreeBranchTransition(text, snapshots, treeEventsBefore, treeEvents),
         evidence: {
           footer: chiefTreeFooter(text),
           treeEvents,
@@ -12595,16 +10904,11 @@ async function runChiefTreeSmoke(ctx) {
         try {
           snapshots = await readSnapshots();
         } catch (error) {
-          if (error.code === "ENOENT")
-            return { done: false, observationError: error.message };
+          if (error.code === "ENOENT") return { done: false, observationError: error.message };
           throw error;
         }
-        const treeEvents = countChiefTreeEvents(
-          await readSnapshotContents(),
-          treeEventsBefore,
-        );
-        const done =
-          snapshots.has("tree") && treeEvents > transition.treeEvents;
+        const treeEvents = countChiefTreeEvents(await readSnapshotContents(), treeEventsBefore);
+        const done = snapshots.has("tree") && treeEvents > transition.treeEvents;
         return {
           done,
           progress: { treeEvents, treeSnapshot: done },
@@ -12623,20 +10927,9 @@ async function runChiefTreeSmoke(ctx) {
   const lead = snapshots.get("lead");
   const chief = snapshots.get("chief");
   const tree = snapshots.get("tree");
-  assert.ok(
-    lead && chief && tree,
-    "chief-tree-probe: three snapshots required",
-  );
-  assert.notDeepEqual(
-    chief,
-    lead,
-    "Chief tools must differ from ordinary Lead tools",
-  );
-  assert.deepEqual(
-    tree,
-    lead,
-    "selecting the pre-Chief branch must restore ordinary Lead tools",
-  );
+  assert.ok(lead && chief && tree, "chief-tree-probe: three snapshots required");
+  assert.notDeepEqual(chief, lead, "Chief tools must differ from ordinary Lead tools");
+  assert.deepEqual(tree, lead, "selecting the pre-Chief branch must restore ordinary Lead tools");
 
   const followup = "Reply exactly PI_HERDSMAN_CHIEF_TREE_FOLLOWUP.";
   await submitPaneCommand(ctx, ctx.rootPaneId, followup);
@@ -12646,12 +10939,7 @@ async function runChiefTreeSmoke(ctx) {
     async () => {
       const session = await rootSessionSnapshot(ctx);
       const done = !!(
-        session &&
-        assistantResultForSession(
-          session,
-          followup,
-          "PI_HERDSMAN_CHIEF_TREE_FOLLOWUP",
-        )
+        session && assistantResultForSession(session, followup, "PI_HERDSMAN_CHIEF_TREE_FOLLOWUP")
       );
       return {
         done,
@@ -12674,9 +10962,7 @@ async function runSupervisorAgentSmoke(ctx) {
     async () => {
       const session = await rootSessionSnapshot(ctx);
       return {
-        done:
-          !!session &&
-          session.contents.includes("PI_HERDSMAN_SUPERVISOR_AGENT_STARTUP"),
+        done: !!session && session.contents.includes("PI_HERDSMAN_SUPERVISOR_AGENT_STARTUP"),
       };
     },
     { timeoutMs: 90_000, stallMs: MODEL_STALL_MS },
@@ -12687,9 +10973,7 @@ async function runSupervisorAgentSmoke(ctx) {
     "supervisor-agent-lead-before-snapshot",
     async () => {
       try {
-        const snapshots = parseToolSnapshots(
-          await readFile(ctx.chiefTreeResultFile, "utf8"),
-        );
+        const snapshots = parseToolSnapshots(await readFile(ctx.chiefTreeResultFile, "utf8"));
         return { done: snapshots.has("lead"), value: snapshots.get("lead") };
       } catch (error) {
         if (error.code === "ENOENT") return { done: false };
@@ -12714,9 +10998,7 @@ async function runSupervisorAgentSmoke(ctx) {
     "supervisor-agent-chief-tool-snapshot",
     async () => {
       try {
-        const snapshots = parseToolSnapshots(
-          await readFile(ctx.chiefTreeResultFile, "utf8"),
-        );
+        const snapshots = parseToolSnapshots(await readFile(ctx.chiefTreeResultFile, "utf8"));
         return { done: snapshots.has("chief"), value: snapshots.get("chief") };
       } catch (error) {
         if (error.code === "ENOENT") return { done: false };
@@ -12744,10 +11026,7 @@ async function runSupervisorAgentSmoke(ctx) {
     "list_peers",
     "message_peer",
   ])
-    assert.ok(
-      !chiefTools.includes(tool),
-      `Chief tool snapshot unexpectedly includes ${tool}`,
-    );
+    assert.ok(!chiefTools.includes(tool), `Chief tool snapshot unexpectedly includes ${tool}`);
   assert.notDeepEqual(
     chiefTools,
     leadBeforeChief,
@@ -12756,24 +11035,12 @@ async function runSupervisorAgentSmoke(ctx) {
   const prompt =
     "SMOKE_SUPERVISOR_AGENT_DELEGATE: start the explicitly allowed Agent and wait for its result.";
   await submitPaneCommand(ctx, ctx.rootPaneId, prompt);
-  const mailboxRoot = join(
-    ctx.paths.piAgent,
-    "pi-herdsman",
-    "runtime",
-    "mailboxes-v5",
-  );
+  const mailboxRoot = join(ctx.paths.piAgent, "pi-herdsman", "runtime", "mailboxes-v5");
   const timelineStartedAt = Date.now();
   const mailboxPreviouslySeen = new Map();
-  const sampleHandoffTimeline = async (
-    session,
-    requestId,
-    childSessionId,
-    listed,
-  ) => {
+  const sampleHandoffTimeline = async (session, requestId, childSessionId, listed) => {
     const entries = sessionEntries(session.contents);
-    const ownerSessionId = entries.find(
-      (entry) => entry.type === "session",
-    )?.id;
+    const ownerSessionId = entries.find((entry) => entry.type === "session")?.id;
     const now = Date.now();
     const current = new Map();
     try {
@@ -12786,11 +11053,7 @@ async function runSupervisorAgentSmoke(ctx) {
         try {
           const path = join(mailbox, "state.json");
           const stat = await lstat(path);
-          if (
-            stat.isFile() &&
-            !stat.isSymbolicLink() &&
-            stat.size <= 64 * 1024
-          ) {
+          if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 64 * 1024) {
             state = JSON.parse(await readFile(path, "utf8"));
             statePresent = true;
           }
@@ -12808,11 +11071,7 @@ async function runSupervisorAgentSmoke(ctx) {
         try {
           const path = join(mailbox, `result-${requestId}.json`);
           const stat = await lstat(path);
-          if (
-            stat.isFile() &&
-            !stat.isSymbolicLink() &&
-            stat.size <= 64 * 1024
-          ) {
+          if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 64 * 1024) {
             result = JSON.parse(await readFile(path, "utf8"));
             resultPresent = true;
           }
@@ -12855,10 +11114,7 @@ async function runSupervisorAgentSmoke(ctx) {
                 agentLabel: result.agentLabel,
                 paneId: result.paneId,
                 status: result.status,
-                text:
-                  typeof result.text === "string"
-                    ? result.text.slice(0, 1200)
-                    : null,
+                text: typeof result.text === "string" ? result.text.slice(0, 1200) : null,
                 error: result.error,
                 completedAt: result.completedAt,
               }
@@ -12871,9 +11127,7 @@ async function runSupervisorAgentSmoke(ctx) {
         startedAt: new Date(timelineStartedAt).toISOString(),
         events: [],
       };
-      ctx.supervisorAgentTimeline.mailboxScanError = String(
-        error?.message ?? error,
-      ).slice(0, 500);
+      ctx.supervisorAgentTimeline.mailboxScanError = String(error?.message ?? error).slice(0, 500);
     }
     ctx.supervisorAgentTimeline ??= {
       startedAt: new Date(timelineStartedAt).toISOString(),
@@ -12905,11 +11159,7 @@ async function runSupervisorAgentSmoke(ctx) {
     }
     const delivered = entries.find((entry) => {
       const message = entry.type === "custom_message" ? entry : entry.message;
-      return supervisorAgentCompletionMatches(
-        message,
-        requestId,
-        childSessionId,
-      );
+      return supervisorAgentCompletionMatches(message, requestId, childSessionId);
     });
     timeline.requestId = requestId;
     timeline.childSessionId = childSessionId;
@@ -12925,9 +11175,7 @@ async function runSupervisorAgentSmoke(ctx) {
         isError: message.isError ?? null,
         stopReason: message.stopReason ?? null,
         errorMessage:
-          typeof message.errorMessage === "string"
-            ? message.errorMessage.slice(0, 500)
-            : null,
+          typeof message.errorMessage === "string" ? message.errorMessage.slice(0, 500) : null,
         details: message.details
           ? {
               requestId: message.details.requestId,
@@ -12991,27 +11239,16 @@ async function runSupervisorAgentSmoke(ctx) {
             `Supervisor Agent assignment failed: ${messageText(failed.message.content)}`,
           );
         if (resultIndex < 0) continue;
-        const assignmentResult = messageText(
-          entries[resultIndex].message.content,
-        );
-        const childSessionId =
-          assignmentResult.match(/^Session: ([^\n]+)$/m)?.[1];
+        const assignmentResult = messageText(entries[resultIndex].message.content);
+        const childSessionId = assignmentResult.match(/^Session: ([^\n]+)$/m)?.[1];
         const requestId = assignmentResult.match(/^Request: ([^\n]+)$/m)?.[1];
         if (!childSessionId || !requestId)
-          throw new Error(
-            "Supervisor Agent assignment result omitted session/request identity",
-          );
+          throw new Error("Supervisor Agent assignment result omitted session/request identity");
         const handoffIndex = entries.findIndex(
           (entry, i) =>
-            i > resultIndex &&
-            supervisorAgentCompletionMatches(entry, requestId, childSessionId),
+            i > resultIndex && supervisorAgentCompletionMatches(entry, requestId, childSessionId),
         );
-        await sampleHandoffTimeline(
-          session,
-          requestId,
-          childSessionId,
-          listed.value,
-        );
+        await sampleHandoffTimeline(session, requestId, childSessionId, listed.value);
         const handoff = handoffIndex >= 0 ? entries[handoffIndex] : null;
         const completion =
           handoffIndex >= 0 &&
@@ -13027,11 +11264,7 @@ async function runSupervisorAgentSmoke(ctx) {
             );
         if (
           handoff &&
-          supervisorAgentCompletionMatches(
-            handoff,
-            requestId,
-            childSessionId,
-          ) &&
+          supervisorAgentCompletionMatches(handoff, requestId, childSessionId) &&
           completion
         ) {
           ctx.supervisorAgentEvidence = {
@@ -13045,13 +11278,11 @@ async function runSupervisorAgentSmoke(ctx) {
         done: false,
         progress: {
           calls: calls.length,
-          agents: (listed.value.agents ?? []).map(
-            ({ pane_id, agent_status, agent_session }) => ({
-              pane_id,
-              agent_status,
-              sessionKind: agent_session?.kind,
-            }),
-          ),
+          agents: (listed.value.agents ?? []).map(({ pane_id, agent_status, agent_session }) => ({
+            pane_id,
+            agent_status,
+            sessionKind: agent_session?.kind,
+          })),
         },
       };
     },
@@ -13084,9 +11315,7 @@ async function runSupervisorAgentSmoke(ctx) {
     "supervisor-agent-lead-tool-snapshot",
     async () => {
       try {
-        const current = parseToolSnapshots(
-          await readFile(ctx.chiefTreeResultFile, "utf8"),
-        );
+        const current = parseToolSnapshots(await readFile(ctx.chiefTreeResultFile, "utf8"));
         return { done: current.has("lead-after"), value: current };
       } catch (error) {
         if (error.code === "ENOENT") return { done: false };
@@ -13138,9 +11367,7 @@ export function descendantCleanupStatus(
     verified.set(item.pid, { paneId: item.paneId, pid: item.pid });
   const live = [...verified.values()].filter(({ pid }) => isPidAlive(pid));
   const livePaneIds = new Set(inspection.paneIds);
-  const unresolved = inspection.unresolved.filter(({ paneId }) =>
-    livePaneIds.has(paneId),
-  );
+  const unresolved = inspection.unresolved.filter(({ paneId }) => livePaneIds.has(paneId));
   return {
     done: live.length === 0 && unresolved.length === 0,
     live,
@@ -13157,8 +11384,7 @@ async function waitForDescendantsToExit(ctx) {
     async () => {
       const inspection = await inspectCandidateProcesses(ctx);
       const status = descendantCleanupStatus(inspection, previouslyVerified);
-      for (const [pid, item] of status.verified)
-        previouslyVerified.set(pid, item);
+      for (const [pid, item] of status.verified) previouslyVerified.set(pid, item);
       return {
         done: status.done,
         progress: {
@@ -13183,14 +11409,10 @@ export async function verifyParentShutdown(
   });
   const childExited = () =>
     Boolean(parent.exit) ||
-    (parent.server?.exitCode !== null &&
-      parent.server?.exitCode !== undefined) ||
-    (parent.server?.signalCode !== null &&
-      parent.server?.signalCode !== undefined);
+    (parent.server?.exitCode !== null && parent.server?.exitCode !== undefined) ||
+    (parent.server?.signalCode !== null && parent.server?.signalCode !== undefined);
   const signalName = (signal) =>
-    ["SIGTERM", "SIGKILL", "SIGINT", "SIGHUP", "SIGABRT", "SIGQUIT"].includes(
-      signal,
-    )
+    ["SIGTERM", "SIGKILL", "SIGINT", "SIGHUP", "SIGABRT", "SIGQUIT"].includes(signal)
       ? signal
       : null;
   const exitedBeforeStop = childExited();
@@ -13231,10 +11453,7 @@ export async function verifyParentShutdown(
     serverStopped = observed?.server?.running === false;
     diagnostics.namedServer = {
       verified: typeof observed?.server?.running === "boolean",
-      running:
-        typeof observed?.server?.running === "boolean"
-          ? observed.server.running
-          : null,
+      running: typeof observed?.server?.running === "boolean" ? observed.server.running : null,
     };
   } catch (error) {
     statusError = error;
@@ -13245,18 +11464,14 @@ export async function verifyParentShutdown(
     };
   }
   const failures = [];
-  if (exitedBeforeStop)
-    failures.push("owned child exited before requested server shutdown");
-  if (exitError)
-    failures.push(`owned child did not exit: ${exitError.message}`);
+  if (exitedBeforeStop) failures.push("owned child exited before requested server shutdown");
+  if (exitError) failures.push(`owned child did not exit: ${exitError.message}`);
   if (statusError || !serverStopped)
     failures.push(
       `named Herdr server stop not verified${statusError ? `: ${statusError.message}` : ""}`,
     );
   if (stopError && (exitError || !serverStopped))
-    failures.push(
-      `named Herdr server stop command failed: ${stopError.message}`,
-    );
+    failures.push(`named Herdr server stop command failed: ${stopError.message}`);
   return failures;
 }
 
@@ -13268,9 +11483,7 @@ export async function collectDiagnostics(
     execute = run,
     observe = tryHerdr,
     snapshot = (context, ownerSessionId) =>
-      ownerSessionId
-        ? exactIsolatedSession(context, ownerSessionId)
-        : rootSessionSnapshot(context),
+      ownerSessionId ? exactIsolatedSession(context, ownerSessionId) : rootSessionSnapshot(context),
     expectedLabel,
   } = {},
 ) {
@@ -13283,49 +11496,31 @@ export async function collectDiagnostics(
   diagnostics.failure = failure?.smoke ?? null;
   diagnostics.stage = ctx.stage ?? null;
   diagnostics.preflight = ctx.preflight ?? null;
-  const [agents, panes, rootSession, rootPane, hostPane] =
-    await Promise.allSettled([
-      observe(["agent", "list"], { env, timeout: OBSERVATION_TIMEOUT_MS }),
-      observe(["pane", "list"], { env, timeout: OBSERVATION_TIMEOUT_MS }),
-      snapshot(
-        ctx,
-        ctx.scenario === "chief-manager" &&
-          ctx.stage === "chief-manager-delegate-first"
-          ? ctx.chiefManagerDelegationIdentity?.managerSessionId
-          : undefined,
-      ),
-      ctx.rootPaneId
-        ? execute(
-            "herdr",
-            [
-              "pane",
-              "read",
-              ctx.rootPaneId,
-              "--source",
-              "recent-unwrapped",
-              "--lines",
-              "120",
-            ],
-            { env, timeout: OBSERVATION_TIMEOUT_MS },
-          )
-        : null,
-      owned.hostPaneId
-        ? readParentHostPane(ctx, owned.hostPaneId, execute)
-        : null,
-    ]);
+  const [agents, panes, rootSession, rootPane, hostPane] = await Promise.allSettled([
+    observe(["agent", "list"], { env, timeout: OBSERVATION_TIMEOUT_MS }),
+    observe(["pane", "list"], { env, timeout: OBSERVATION_TIMEOUT_MS }),
+    snapshot(
+      ctx,
+      ctx.scenario === "chief-manager" && ctx.stage === "chief-manager-delegate-first"
+        ? ctx.chiefManagerDelegationIdentity?.managerSessionId
+        : undefined,
+    ),
+    ctx.rootPaneId
+      ? execute(
+          "herdr",
+          ["pane", "read", ctx.rootPaneId, "--source", "recent-unwrapped", "--lines", "120"],
+          { env, timeout: OBSERVATION_TIMEOUT_MS },
+        )
+      : null,
+    owned.hostPaneId ? readParentHostPane(ctx, owned.hostPaneId, execute) : null,
+  ]);
   diagnostics.agents =
-    agents.status === "fulfilled"
-      ? agents.value
-      : { ok: false, error: agents.reason?.message };
+    agents.status === "fulfilled" ? agents.value : { ok: false, error: agents.reason?.message };
   diagnostics.panes =
-    panes.status === "fulfilled"
-      ? panes.value
-      : { ok: false, error: panes.reason?.message };
+    panes.status === "fulfilled" ? panes.value : { ok: false, error: panes.reason?.message };
   diagnostics.observedCoreProcesses = ctx.coreProcessEvidence ?? [];
   diagnostics.coreProcessDiagnostics = ctx.coreProcessDiagnostics ?? [];
-  const paneIds = diagnostics.panes.ok
-    ? listedPanes(diagnostics.panes.value)
-    : [];
+  const paneIds = diagnostics.panes.ok ? listedPanes(diagnostics.panes.value) : [];
   diagnostics.processes = await bestEffortProcessDiagnostics(
     paneIds,
     ctx.rootPaneId,
@@ -13341,18 +11536,14 @@ export async function collectDiagnostics(
     ctx.herdrStateExtension,
   );
   try {
-    const session =
-      rootSession.status === "fulfilled" ? rootSession.value : null;
+    const session = rootSession.status === "fulfilled" ? rootSession.value : null;
     diagnostics.rootSession = session
       ? {
           path: session.path,
           status: session.status,
           ...summarizeSession(session.contents),
           gracefulResumeCalls: ctx.managerRecovery?.resumePrompt
-            ? managerRecoveryResumeDiagnostics(
-                session.contents,
-                ctx.managerRecovery.resumePrompt,
-              )
+            ? managerRecoveryResumeDiagnostics(session.contents, ctx.managerRecovery.resumePrompt)
             : null,
         }
       : { error: "no saved root Pi session was available" };
@@ -13362,10 +11553,7 @@ export async function collectDiagnostics(
   if (ctx.scenario === "core") {
     try {
       if (rootSession.status === "fulfilled" && rootSession.value) {
-        const coreEvidence = await coreNestedDelegationDiagnostics(
-          ctx,
-          rootSession.value.contents,
-        );
+        const coreEvidence = await coreNestedDelegationDiagnostics(ctx, rootSession.value.contents);
         diagnostics.coreDelegation = coreEvidence.coreDelegation;
         diagnostics.coreHandoff = coreEvidence.coreHandoff;
       } else {
@@ -13380,8 +11568,7 @@ export async function collectDiagnostics(
     }
   }
   if (ctx.scenario === "supervisor-agent") {
-    const session =
-      rootSession.status === "fulfilled" ? rootSession.value : null;
+    const session = rootSession.status === "fulfilled" ? rootSession.value : null;
     const entries = session ? sessionEntries(session.contents) : [];
     const calls = entries.flatMap((entry, index) =>
       entry.type === "message" && entry.message?.role === "assistant"
@@ -13416,10 +11603,8 @@ export async function collectDiagnostics(
       }),
     };
     const latestAssignment = diagnostics.supervisorAgent.assignments.at(-1);
-    const childSessionId =
-      latestAssignment?.result?.match(/^Session: ([^\n]+)/m)?.[1];
-    const requestId =
-      latestAssignment?.result?.match(/^Request: ([^\n]+)/m)?.[1];
+    const childSessionId = latestAssignment?.result?.match(/^Session: ([^\n]+)/m)?.[1];
+    const requestId = latestAssignment?.result?.match(/^Request: ([^\n]+)/m)?.[1];
     diagnostics.supervisorAgent.childSessionId = childSessionId ?? null;
     diagnostics.supervisorAgent.requestId = requestId ?? null;
     const rootEntries = entries.filter((entry) => entry.type === "message");
@@ -13436,9 +11621,7 @@ export async function collectDiagnostics(
           isError: message.isError ?? null,
           stopReason: message.stopReason ?? null,
           errorMessage:
-            typeof message.errorMessage === "string"
-              ? message.errorMessage.slice(0, 1000)
-              : null,
+            typeof message.errorMessage === "string" ? message.errorMessage.slice(0, 1000) : null,
           calls: (Array.isArray(message.content) ? message.content : [])
             .filter((part) => part.type === "toolCall")
             .map((part) => ({
@@ -13450,12 +11633,7 @@ export async function collectDiagnostics(
         };
       });
     if (requestId && session) {
-      const mailboxRoot = join(
-        ctx.paths.piAgent,
-        "pi-herdsman",
-        "runtime",
-        "mailboxes-v5",
-      );
+      const mailboxRoot = join(ctx.paths.piAgent, "pi-herdsman", "runtime", "mailboxes-v5");
       const mailboxEvidence = [];
       let mailboxDirectoriesScanned = 0;
       try {
@@ -13468,12 +11646,7 @@ export async function collectDiagnostics(
           try {
             const statePath = join(path, "state.json");
             const details = await lstat(statePath);
-            if (
-              !details.isFile() ||
-              details.isSymbolicLink() ||
-              details.size > 64 * 1024
-            )
-              continue;
+            if (!details.isFile() || details.isSymbolicLink() || details.size > 64 * 1024) continue;
             state = JSON.parse(await readFile(statePath, "utf8"));
           } catch (error) {
             if (error.code !== "ENOENT") throw error;
@@ -13483,11 +11656,7 @@ export async function collectDiagnostics(
           try {
             const resultPath = join(path, `result-${requestId}.json`);
             const details = await lstat(resultPath);
-            if (
-              details.isFile() &&
-              !details.isSymbolicLink() &&
-              details.size <= 64 * 1024
-            )
+            if (details.isFile() && !details.isSymbolicLink() && details.size <= 64 * 1024)
               result = JSON.parse(await readFile(resultPath, "utf8"));
           } catch (error) {
             if (error.code !== "ENOENT") throw error;
@@ -13499,44 +11668,31 @@ export async function collectDiagnostics(
             !!state &&
             state.ownerSessionId === ownerSessionId &&
             state.agentLabel === latestAssignment?.arguments?.label &&
-            [state.activeRequestId, state.completedRequestId].includes(
-              requestId,
-            );
-          if (
-            stateMatches ||
-            result ||
-            state?.agentLabel === latestAssignment?.arguments?.label
-          )
+            [state.activeRequestId, state.completedRequestId].includes(requestId);
+          if (stateMatches || result || state?.agentLabel === latestAssignment?.arguments?.label)
             mailboxEvidence.push({
               mailbox: dir.name,
               stateMatches,
               ownerMatches: state?.ownerSessionId === ownerSessionId,
-              requestMatches: [
-                state?.activeRequestId,
-                state?.completedRequestId,
-              ].includes(requestId),
+              requestMatches: [state?.activeRequestId, state?.completedRequestId].includes(
+                requestId,
+              ),
               state,
               result,
             });
         }
       } catch (error) {
         if (error.code !== "ENOENT")
-          diagnostics.supervisorAgent.mailboxError = String(
-            error?.message ?? error,
-          ).slice(0, 500);
+          diagnostics.supervisorAgent.mailboxError = String(error?.message ?? error).slice(0, 500);
       }
-      diagnostics.supervisorAgent.mailboxDirectoriesScanned =
-        mailboxDirectoriesScanned;
+      diagnostics.supervisorAgent.mailboxDirectoriesScanned = mailboxDirectoriesScanned;
       diagnostics.supervisorAgent.mailboxes = mailboxEvidence;
     }
     if (childSessionId) {
-      const records = diagnostics.agents.ok
-        ? (diagnostics.agents.value?.agents ?? [])
-        : [];
+      const records = diagnostics.agents.ok ? (diagnostics.agents.value?.agents ?? []) : [];
       let childRecord = records.find(
         (agent) =>
-          agent.agent_session?.kind === "id" &&
-          agent.agent_session.value === childSessionId,
+          agent.agent_session?.kind === "id" && agent.agent_session.value === childSessionId,
       );
       if (!childRecord) {
         for (const agent of records) {
@@ -13559,9 +11715,10 @@ export async function collectDiagnostics(
       try {
         childSession = await exactIsolatedSession(ctx, childSessionId);
       } catch (error) {
-        diagnostics.supervisorAgent.childSessionError = String(
-          error?.message ?? error,
-        ).slice(0, 500);
+        diagnostics.supervisorAgent.childSessionError = String(error?.message ?? error).slice(
+          0,
+          500,
+        );
       }
       diagnostics.supervisorAgent.childSession = childSession
         ? {
@@ -13574,15 +11731,7 @@ export async function collectDiagnostics(
         const [terminal, processes] = await Promise.allSettled([
           execute(
             "herdr",
-            [
-              "pane",
-              "read",
-              childPaneId,
-              "--source",
-              "recent-unwrapped",
-              "--lines",
-              "100",
-            ],
+            ["pane", "read", childPaneId, "--source", "recent-unwrapped", "--lines", "100"],
             { env, timeout: OBSERVATION_TIMEOUT_MS },
           ),
           observe(["pane", "process-info", "--pane", childPaneId], {
@@ -13606,9 +11755,7 @@ export async function collectDiagnostics(
             : {
                 error:
                   processes.status === "rejected"
-                    ? String(
-                        processes.reason?.message ?? processes.reason,
-                      ).slice(0, 500)
+                    ? String(processes.reason?.message ?? processes.reason).slice(0, 500)
                     : processes.value.error,
               };
       } else {
@@ -13637,19 +11784,10 @@ export async function collectDiagnostics(
   ].slice(0, 4);
   const descendantReads = await Promise.allSettled(
     knownDescendants.map((paneId) =>
-      execute(
-        "herdr",
-        [
-          "pane",
-          "read",
-          paneId,
-          "--source",
-          "recent-unwrapped",
-          "--lines",
-          "80",
-        ],
-        { env, timeout: OBSERVATION_TIMEOUT_MS },
-      ),
+      execute("herdr", ["pane", "read", paneId, "--source", "recent-unwrapped", "--lines", "80"], {
+        env,
+        timeout: OBSERVATION_TIMEOUT_MS,
+      }),
     ),
   );
   diagnostics.descendants = descendantReads.map((entry, index) =>
@@ -13667,9 +11805,7 @@ export async function collectDiagnostics(
       agentsObserved: diagnostics.agents?.ok
         ? (diagnostics.agents.value?.agents?.length ?? 0)
         : null,
-      panesObserved: diagnostics.panes?.ok
-        ? (diagnostics.panes.value?.panes?.length ?? 0)
-        : null,
+      panesObserved: diagnostics.panes?.ok ? (diagnostics.panes.value?.panes?.length ?? 0) : null,
       candidateProcessesObserved: Array.isArray(diagnostics.processes)
         ? diagnostics.processes.filter((record) => record.processMatch).length
         : null,
@@ -13686,23 +11822,14 @@ export async function collectDiagnostics(
   }
   return {
     stage: diagnostics.stage,
-    agentsObserved: diagnostics.agents?.ok
-      ? (diagnostics.agents.value?.agents?.length ?? 0)
-      : null,
-    panesObserved: diagnostics.panes?.ok
-      ? (diagnostics.panes.value?.panes?.length ?? 0)
-      : null,
-    rootSessionObserved: Boolean(
-      diagnostics.rootSession && !diagnostics.rootSession.error,
-    ),
+    agentsObserved: diagnostics.agents?.ok ? (diagnostics.agents.value?.agents?.length ?? 0) : null,
+    panesObserved: diagnostics.panes?.ok ? (diagnostics.panes.value?.panes?.length ?? 0) : null,
+    rootSessionObserved: Boolean(diagnostics.rootSession && !diagnostics.rootSession.error),
     ...(ctx.scenario === "continuation" || ctx.scenario === "chief-manager"
       ? {
           rootDelegation:
             rootSession.status === "fulfilled" && rootSession.value
-              ? rootDelegationDiagnostics(
-                  rootSession.value.contents,
-                  expectedLabel,
-                )
+              ? rootDelegationDiagnostics(rootSession.value.contents, expectedLabel)
               : null,
         }
       : {}),
@@ -13721,13 +11848,10 @@ export async function collectDiagnostics(
       ? {
           supervisorAgent: {
             assignmentsObserved: diagnostics.supervisorAgent.assignments.length,
-            childSessionObserved: Boolean(
-              diagnostics.supervisorAgent.childSession,
-            ),
+            childSessionObserved: Boolean(diagnostics.supervisorAgent.childSession),
             matchingMailboxes:
-              diagnostics.supervisorAgent.mailboxes?.filter(
-                (item) => item.stateMatches,
-              ).length ?? 0,
+              diagnostics.supervisorAgent.mailboxes?.filter((item) => item.stateMatches).length ??
+              0,
           },
         }
       : {}),
@@ -13780,16 +11904,10 @@ export async function cleanup(
   if (owned.managerBranch) {
     let managerWorktreeSafe = true;
     try {
-      assert.equal(
-        owned.managerBranch,
-        ctx.managerRecovery?.branch ?? ctx.terminalFailure?.branch,
-      );
-      const listed = await cleanupHerdr(
-        ["worktree", "list", "--workspace", ctx.rootWorkspaceId],
-        {
-          env: nestedControlEnv(process.env, paths, owned.sessionName),
-        },
-      );
+      assert.equal(owned.managerBranch, ctx.managerRecovery?.branch ?? ctx.terminalFailure?.branch);
+      const listed = await cleanupHerdr(["worktree", "list", "--workspace", ctx.rootWorkspaceId], {
+        env: nestedControlEnv(process.env, paths, owned.sessionName),
+      });
       if (!Array.isArray(listed.worktrees))
         throw new Error("Herdr worktree topology is unavailable");
       const worktrees = listed.worktrees;
@@ -13810,12 +11928,9 @@ export async function cleanup(
       );
       if (target) {
         const env = nestedControlEnv(process.env, paths, owned.sessionName);
-        await cleanupHerdr(
-          ["worktree", "remove", "--workspace", target.open_workspace_id],
-          {
-            env,
-          },
-        );
+        await cleanupHerdr(["worktree", "remove", "--workspace", target.open_workspace_id], {
+          env,
+        });
       }
     } catch (error) {
       managerWorktreeSafe = false;
@@ -13852,28 +11967,24 @@ export async function cleanup(
         timeout: remainingTimeout(),
       });
       for (let i = 0; i < 3 && !deleted; i++) {
-        const deletion = await tryHerdrCommand(
-          ["session", "delete", owned.sessionName, "--json"],
-          { env, timeout: remainingTimeout() },
-        );
+        const deletion = await tryHerdrCommand(["session", "delete", owned.sessionName, "--json"], {
+          env,
+          timeout: remainingTimeout(),
+        });
         const sessions = await tryHerdrCommand(["session", "list", "--json"], {
           env,
           timeout: remainingTimeout(),
         });
         if (!sessions.ok)
-          throw new Error(
-            `could not verify nested session deletion: ${sessions.error}`,
-          );
+          throw new Error(`could not verify nested session deletion: ${sessions.error}`);
         const rows = sessions.value?.sessions;
-        if (!Array.isArray(rows))
-          throw new Error("Herdr session list result is malformed");
+        if (!Array.isArray(rows)) throw new Error("Herdr session list result is malformed");
         deleted = !rows.some((item) => item.name === owned.sessionName);
         if (!deletion.ok && !deleted)
           throw new Error(
             `session delete delivery is ambiguous; session still listed: ${deletion.error}`,
           );
-        if (!deleted && i < 2)
-          await sleepFor(Math.min(300, remainingTimeout()));
+        if (!deleted && i < 2) await sleepFor(Math.min(300, remainingTimeout()));
       }
     } catch (error) {
       recordCleanupFailure(
@@ -13881,10 +11992,7 @@ export async function cleanup(
         `nested session cleanup ${owned.sessionName}: ${error.message}`,
       );
     }
-    if (
-      !deleted &&
-      !failures.some((item) => item.startsWith("nested session remains"))
-    )
+    if (!deleted && !failures.some((item) => item.startsWith("nested session remains")))
       recordCleanupFailure(
         "nested_session",
         `nested session remains: ${owned.sessionName}; temp=${paths.root}`,
@@ -13896,10 +12004,7 @@ export async function cleanup(
         env: ctx.parentEnv,
       });
     } catch (error) {
-      recordCleanupFailure(
-        "host_tab",
-        `host tab ${owned.hostTabId}: ${error.message}`,
-      );
+      recordCleanupFailure("host_tab", `host tab ${owned.hostTabId}: ${error.message}`);
     }
   }
   if (owned.parent) {
@@ -13921,12 +12026,7 @@ export async function cleanup(
       }
     }
     const waitForParentExit = async (timeoutMs) => {
-      if (
-        parent.exit ||
-        parent.server.exitCode != null ||
-        parent.server.signalCode != null
-      )
-        return;
+      if (parent.exit || parent.server.exitCode != null || parent.server.signalCode != null) return;
       await Promise.race([
         new Promise((resolve) => parent.server.once("exit", resolve)),
         sleepFor(timeoutMs).then(() => {
@@ -13945,14 +12045,10 @@ export async function cleanup(
           try {
             await waitForParentExit(5_000);
             parentDiagnostics.child.waitAfterStop = "exited";
-            parentDiagnostics.child.exitObservedAfterStop = Boolean(
-              parent.exit,
-            );
+            parentDiagnostics.child.exitObservedAfterStop = Boolean(parent.exit);
           } catch {
             parentDiagnostics.child.waitAfterStop = "timeout";
-            parentDiagnostics.child.exitObservedAfterStop = Boolean(
-              parent.exit,
-            );
+            parentDiagnostics.child.exitObservedAfterStop = Boolean(parent.exit);
             parentDiagnostics.child.sigtermSent = parent.server.kill("SIGTERM");
             try {
               await waitForParentExit(3_000);
@@ -13960,13 +12056,10 @@ export async function cleanup(
             } catch {
               parentDiagnostics.child.waitAfterSigterm = "timeout";
             } finally {
-              parentDiagnostics.child.exitObservedAfterSigterm = Boolean(
-                parent.exit,
-              );
+              parentDiagnostics.child.exitObservedAfterSigterm = Boolean(parent.exit);
             }
             if (parentDiagnostics.child.waitAfterSigterm !== "exited") {
-              parentDiagnostics.child.sigkillSent =
-                parent.server.kill("SIGKILL");
+              parentDiagnostics.child.sigkillSent = parent.server.kill("SIGKILL");
               try {
                 await waitForParentExit(2_000);
                 parentDiagnostics.child.waitAfterSigkill = "exited";
@@ -13974,9 +12067,7 @@ export async function cleanup(
                 parentDiagnostics.child.waitAfterSigkill = "timeout";
                 throw error;
               } finally {
-                parentDiagnostics.child.exitObservedAfterSigkill = Boolean(
-                  parent.exit,
-                );
+                parentDiagnostics.child.exitObservedAfterSigkill = Boolean(parent.exit);
               }
             }
           }
@@ -13995,23 +12086,16 @@ export async function cleanup(
     parentDiagnostics.cleanupErrorCode = parentFailures.length
       ? "PARENT_SHUTDOWN_UNVERIFIED"
       : null;
-    failures.push(
-      ...parentFailures.map((failure) => `parent ${parent.name}: ${failure}`),
-    );
+    failures.push(...parentFailures.map((failure) => `parent ${parent.name}: ${failure}`));
   }
   const sessionMayRemain =
     owned.sessionName &&
-    failures.some(
-      (item) => item.includes(owned.sessionName) && item.includes("cleanup"),
-    );
+    failures.some((item) => item.includes(owned.sessionName) && item.includes("cleanup"));
   if (!sessionMayRemain && !failures.length) {
     try {
       await remove(paths.root, { recursive: true, force: true });
     } catch (error) {
-      recordCleanupFailure(
-        "temporary_state",
-        `temporary state: ${error.message}`,
-      );
+      recordCleanupFailure("temporary_state", `temporary state: ${error.message}`);
     }
   }
   ctx.cleanupErrorCode = failures.length
@@ -14023,13 +12107,7 @@ export async function cleanup(
 
 const CORE_DIAGNOSTIC_ENUMS = {
   delegation: ["accepted", "rejected", "unknown", "not_observed", "ambiguous"],
-  session: [
-    "observed",
-    "not_observed",
-    "unknown",
-    "ambiguous",
-    "observation_failed",
-  ],
+  session: ["observed", "not_observed", "unknown", "ambiguous", "observation_failed"],
   terminalResult: [
     "published",
     "delivered",
@@ -14056,9 +12134,7 @@ const CORE_DIAGNOSTIC_ENUMS = {
 
 function sanitizedCoreDelegation(value) {
   const state = (object, field) =>
-    CORE_DIAGNOSTIC_ENUMS[field].includes(object?.[field])
-      ? object[field]
-      : "unknown";
+    CORE_DIAGNOSTIC_ENUMS[field].includes(object?.[field]) ? object[field] : "unknown";
   const edge = (object) => ({
     delegation: state(object, "delegation"),
     session: state(object, "session"),
@@ -14070,43 +12146,33 @@ function sanitizedCoreDelegation(value) {
     rootToImplementer: edge(value?.rootToImplementer),
     implementerToScout: edge(value?.implementerToScout),
     rootCompletionMarker:
-      typeof value?.rootCompletionMarker === "boolean"
-        ? value.rootCompletionMarker
-        : null,
-    firstUnverifiedBoundary:
-      CORE_DIAGNOSTIC_ENUMS.firstUnverifiedBoundary.includes(
-        value?.firstUnverifiedBoundary,
-      )
-        ? value.firstUnverifiedBoundary
-        : "observation_failed",
+      typeof value?.rootCompletionMarker === "boolean" ? value.rootCompletionMarker : null,
+    firstUnverifiedBoundary: CORE_DIAGNOSTIC_ENUMS.firstUnverifiedBoundary.includes(
+      value?.firstUnverifiedBoundary,
+    )
+      ? value.firstUnverifiedBoundary
+      : "observation_failed",
   };
 }
 
 function sanitizedCoreHandoff(value) {
   if (!value || typeof value !== "object") return null;
   const id = (input) =>
-    typeof input === "string" &&
-    input.length <= 256 &&
-    /^[A-Za-z0-9._:-]+$/u.test(input)
+    typeof input === "string" && input.length <= 256 && /^[A-Za-z0-9._:-]+$/u.test(input)
       ? input
       : null;
   const request = (input) =>
     typeof input === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(
-      input,
-    )
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(input)
       ? input
       : null;
   const semantic = (input) =>
-    typeof input === "string" &&
-    /^result:[a-z][a-z0-9_-]{0,31}#[1-9][0-9]*$/u.test(input)
+    typeof input === "string" && /^result:[a-z][a-z0-9_-]{0,31}#[1-9][0-9]*$/u.test(input)
       ? input
       : null;
   const canonical = (input) =>
     typeof input === "string" &&
-    /^result:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(
-      input,
-    )
+    /^result:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(input)
       ? input
       : null;
   const path = (input) =>
@@ -14137,9 +12203,7 @@ function sanitizedCoreHandoff(value) {
     workspaceId: id(input?.workspaceId),
     agentLabel: id(input?.agentLabel),
     paneId: id(input?.paneId),
-    status: ["completed", "failed"].includes(input?.status)
-      ? input.status
-      : "unknown",
+    status: ["completed", "failed"].includes(input?.status) ? input.status : "unknown",
     errorCode: [
       "empty_result",
       "execution_error",
@@ -14167,9 +12231,7 @@ function sanitizedCoreHandoff(value) {
       receiptCount: Number.isSafeInteger(reference.receiptCount)
         ? Math.min(Math.max(reference.receiptCount, 0), 256)
         : 0,
-      receiptIndex: Number.isSafeInteger(reference.receiptIndex)
-        ? reference.receiptIndex
-        : null,
+      receiptIndex: Number.isSafeInteger(reference.receiptIndex) ? reference.receiptIndex : null,
       receiptMatches: reference.receiptMatches === true,
       referenceMatches: reference.referenceMatches === true,
       artifact: {
@@ -14198,17 +12260,13 @@ function sanitizedCoreHandoff(value) {
         ? value.attachHandoff.calls.slice(0, 4).map((call) => ({
             index: Number.isSafeInteger(call.index) ? call.index : null,
             callId: id(call.callId),
-            files: Array.isArray(call.files)
-              ? call.files.slice(0, 4).map(semantic)
-              : [],
+            files: Array.isArray(call.files) ? call.files.slice(0, 4).map(semantic) : [],
             resultCount: Number.isSafeInteger(call.resultCount)
               ? Math.min(Math.max(call.resultCount, 0), 256)
               : 0,
             results: Array.isArray(call.results)
               ? call.results.slice(0, 2).map((result) => ({
-                  index: Number.isSafeInteger(result.index)
-                    ? result.index
-                    : null,
+                  index: Number.isSafeInteger(result.index) ? result.index : null,
                   toolCallId: id(result.toolCallId),
                   isError: result.isError === true,
                   text:
@@ -14226,9 +12284,7 @@ function sanitizedCoreHandoff(value) {
                           .slice(0, 600)
                       : "",
                   details: {
-                    assignmentRequestId: request(
-                      result.details?.assignmentRequestId,
-                    ),
+                    assignmentRequestId: request(result.details?.assignmentRequestId),
                     runId: id(result.details?.runId),
                     ownerSessionId: id(result.details?.ownerSessionId),
                     workspaceId: id(result.details?.workspaceId),
@@ -14272,9 +12328,7 @@ function sanitizedCoreHandoff(value) {
       files: Array.isArray(value.nextAgent?.files)
         ? value.nextAgent.files.slice(0, 4).map(semantic)
         : [],
-      correlatedResultCount: Number.isSafeInteger(
-        value.nextAgent?.correlatedResultCount,
-      )
+      correlatedResultCount: Number.isSafeInteger(value.nextAgent?.correlatedResultCount)
         ? Math.min(Math.max(value.nextAgent.correlatedResultCount, 0), 256)
         : 0,
       assignmentMatches: value.nextAgent?.assignmentMatches === true,
@@ -14282,50 +12336,36 @@ function sanitizedCoreHandoff(value) {
       artifact: {
         ref: semantic(value.nextAgent?.artifact?.ref),
         canonicalRef: canonical(value.nextAgent?.artifact?.canonicalRef),
-        attachmentCount: Number.isSafeInteger(
-          value.nextAgent?.artifact?.attachmentCount,
-        )
+        attachmentCount: Number.isSafeInteger(value.nextAgent?.artifact?.attachmentCount)
           ? Math.min(Math.max(value.nextAgent.artifact.attachmentCount, 0), 256)
           : 0,
         received: value.nextAgent?.artifact?.received === true,
         attachedPackage: {
           name:
-            typeof value.nextAgent?.artifact?.attachedPackage?.name ===
-              "string" &&
-            /^[A-Za-z0-9@._+/-]{1,256}$/u.test(
-              value.nextAgent.artifact.attachedPackage.name,
-            )
+            typeof value.nextAgent?.artifact?.attachedPackage?.name === "string" &&
+            /^[A-Za-z0-9@._+/-]{1,256}$/u.test(value.nextAgent.artifact.attachedPackage.name)
               ? value.nextAgent.artifact.attachedPackage.name
               : null,
           version:
-            typeof value.nextAgent?.artifact?.attachedPackage?.version ===
-              "string" &&
-            /^[A-Za-z0-9@._+/-]{1,256}$/u.test(
-              value.nextAgent.artifact.attachedPackage.version,
-            )
+            typeof value.nextAgent?.artifact?.attachedPackage?.version === "string" &&
+            /^[A-Za-z0-9@._+/-]{1,256}$/u.test(value.nextAgent.artifact.attachedPackage.version)
               ? value.nextAgent.artifact.attachedPackage.version
               : null,
         },
-        provenanceMatches:
-          value.nextAgent?.artifact?.provenanceMatches === true,
+        provenanceMatches: value.nextAgent?.artifact?.provenanceMatches === true,
         readback: {
           name:
             typeof value.nextAgent?.artifact?.readback?.name === "string" &&
-            /^[A-Za-z0-9@._+/-]{1,256}$/u.test(
-              value.nextAgent.artifact.readback.name,
-            )
+            /^[A-Za-z0-9@._+/-]{1,256}$/u.test(value.nextAgent.artifact.readback.name)
               ? value.nextAgent.artifact.readback.name
               : null,
           version:
             typeof value.nextAgent?.artifact?.readback?.version === "string" &&
-            /^[A-Za-z0-9@._+/-]{1,256}$/u.test(
-              value.nextAgent.artifact.readback.version,
-            )
+            /^[A-Za-z0-9@._+/-]{1,256}$/u.test(value.nextAgent.artifact.readback.version)
               ? value.nextAgent.artifact.readback.version
               : null,
         },
-        responseMatchesArtifact:
-          value.nextAgent?.artifact?.responseMatchesArtifact === true,
+        responseMatchesArtifact: value.nextAgent?.artifact?.responseMatchesArtifact === true,
       },
     },
   };
@@ -14338,30 +12378,21 @@ function sanitizedFailureDiagnostics(value) {
   const root = value.rootDelegation;
   const supervisor = value.supervisorAgent;
   return {
-    ...(typeof value.stage === "string" &&
-    /^[a-z0-9-]{1,80}$/u.test(value.stage)
+    ...(typeof value.stage === "string" && /^[a-z0-9-]{1,80}$/u.test(value.stage)
       ? { stage: value.stage }
       : {}),
     agentsObserved: count(value.agentsObserved),
     panesObserved: count(value.panesObserved),
     rootSessionObserved:
-      typeof value.rootSessionObserved === "boolean"
-        ? value.rootSessionObserved
-        : false,
+      typeof value.rootSessionObserved === "boolean" ? value.rootSessionObserved : false,
     ...(root && typeof root === "object"
       ? {
           rootDelegation: {
             expectedLabelMatched:
-              typeof root.expectedLabelMatched === "boolean"
-                ? root.expectedLabelMatched
-                : false,
-            matchingResult: [
-              "absent",
-              "pending",
-              "error",
-              "success",
-              "unknown",
-            ].includes(root.matchingResult)
+              typeof root.expectedLabelMatched === "boolean" ? root.expectedLabelMatched : false,
+            matchingResult: ["absent", "pending", "error", "success", "unknown"].includes(
+              root.matchingResult,
+            )
               ? root.matchingResult
               : "unknown",
             ...(STRUCTURED_TOOL_ERROR_CATEGORIES.has(root.errorCategory)
@@ -14389,28 +12420,20 @@ function sanitizedFailureDiagnostics(value) {
     ...(value.coreDelegation
       ? { coreDelegation: sanitizedCoreDelegation(value.coreDelegation) }
       : {}),
-    ...(value.coreHandoff
-      ? { coreHandoff: sanitizedCoreHandoff(value.coreHandoff) }
-      : {}),
+    ...(value.coreHandoff ? { coreHandoff: sanitizedCoreHandoff(value.coreHandoff) } : {}),
   };
 }
 
 function sanitizedProcessRecords(records) {
-  const pane = (value) =>
-    typeof value === "string" && /^w\d+:p\d+$/u.test(value) ? value : null;
-  const pid = (value) =>
-    Number.isSafeInteger(value) && value > 0 ? value : null;
+  const pane = (value) => (typeof value === "string" && /^w\d+:p\d+$/u.test(value) ? value : null);
+  const pid = (value) => (Number.isSafeInteger(value) && value > 0 ? value : null);
   return records.slice(0, 10).map((record) => ({
     paneId: pane(record?.paneId),
     pid: pid(record?.pid),
     parentPid: pid(record?.parentPid),
-    processName: ["pi", "node", "other"].includes(record?.processName)
-      ? record.processName
-      : null,
+    processName: ["pi", "node", "other"].includes(record?.processName) ? record.processName : null,
     processMatch: record?.processMatch === true,
-    processMatchSource: ["argv", "cmdline", "process-title"].includes(
-      record?.processMatchSource,
-    )
+    processMatchSource: ["argv", "cmdline", "process-title"].includes(record?.processMatchSource)
       ? record.processMatchSource
       : null,
     ...(["candidate-start", "core-gate"].includes(record?.stage)
@@ -14421,10 +12444,8 @@ function sanitizedProcessRecords(records) {
             Number.isSafeInteger(record.argvLength) && record.argvLength >= 0
               ? Math.min(record.argvLength, 10000)
               : null,
-          candidateExtensionArgMatch:
-            record.candidateExtensionArgMatch === true,
-          integrationExtensionArgMatch:
-            record.integrationExtensionArgMatch === true,
+          candidateExtensionArgMatch: record.candidateExtensionArgMatch === true,
+          integrationExtensionArgMatch: record.integrationExtensionArgMatch === true,
           cmdlinePresent: record.cmdlinePresent === true,
         }
       : {}),
@@ -14437,34 +12458,19 @@ function sanitizedProcessRecords(records) {
   }));
 }
 
-export function sanitizedFailureEvidence(
-  ctx,
-  failure,
-  outcome,
-  cleanup,
-  diagnostics,
-) {
+export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup, diagnostics) {
   const parent = ctx.owned?.parent;
   const smoke = failure?.error?.smoke;
-  const pane = (value) =>
-    typeof value === "string" && /^w\d+:p\d+$/u.test(value) ? value : null;
-  const pid = (value) =>
-    Number.isSafeInteger(value) && value > 0 ? value : null;
+  const pane = (value) => (typeof value === "string" && /^w\d+:p\d+$/u.test(value) ? value : null);
+  const pid = (value) => (Number.isSafeInteger(value) && value > 0 ? value : null);
   const observationError = (value) =>
-    value == null
-      ? null
-      : value === "no foreground process records"
-        ? value
-        : "observation error";
+    value == null ? null : value === "no foreground process records" ? value : "observation error";
   const coreObservation =
     ctx.scenario === "core" && smoke?.stage === "core-delegation"
       ? {
-          verifiedProcesses: Array.isArray(
-            smoke.lastProgress?.verifiedProcesses,
-          )
+          verifiedProcesses: Array.isArray(smoke.lastProgress?.verifiedProcesses)
             ? smoke.lastProgress.verifiedProcesses.slice(0, 40).map((key) => {
-                const [paneId, processId] =
-                  typeof key === "string" ? key.split("\0") : [];
+                const [paneId, processId] = typeof key === "string" ? key.split("\0") : [];
                 return { paneId: pane(paneId), pid: pid(Number(processId)) };
               })
             : null,
@@ -14474,20 +12480,15 @@ export function sanitizedFailureEvidence(
           lastNonemptyObservation: ctx.coreLastNonemptyObservation
             ? {
                 elapsedMs:
-                  typeof ctx.coreLastNonemptyObservation.elapsedMs ===
-                    "number" &&
+                  typeof ctx.coreLastNonemptyObservation.elapsedMs === "number" &&
                   Number.isFinite(ctx.coreLastNonemptyObservation.elapsedMs)
                     ? Math.min(
                         Number.MAX_SAFE_INTEGER,
                         Math.max(0, ctx.coreLastNonemptyObservation.elapsedMs),
                       )
                     : null,
-                processRecords: Array.isArray(
-                  ctx.coreLastNonemptyObservation.processRecords,
-                )
-                  ? sanitizedProcessRecords(
-                      ctx.coreLastNonemptyObservation.processRecords,
-                    )
+                processRecords: Array.isArray(ctx.coreLastNonemptyObservation.processRecords)
+                  ? sanitizedProcessRecords(ctx.coreLastNonemptyObservation.processRecords)
                   : null,
               }
             : null,
@@ -14507,78 +12508,46 @@ export function sanitizedFailureEvidence(
           ...chiefManagerSuccessEvidence(ctx.chiefManagerDelegationProgress),
           promptDispatchAttempted:
             ctx.chiefManagerDelegationProgress?.promptDispatchAttempted ?? null,
-          workingObserved:
-            ctx.chiefManagerDelegationProgress?.workingObserved ?? null,
-          promptObserved:
-            ctx.chiefManagerDelegationProgress?.promptObserved ?? null,
-          toolCallObserved:
-            ctx.chiefManagerDelegationProgress?.toolCallObserved ?? null,
-          toolResultObserved:
-            ctx.chiefManagerDelegationProgress?.toolResultObserved ?? null,
-          toolResultError:
-            ctx.chiefManagerDelegationProgress?.toolResultError ?? null,
-          handoffObserved:
-            ctx.chiefManagerDelegationProgress?.handoffObserved ?? null,
+          workingObserved: ctx.chiefManagerDelegationProgress?.workingObserved ?? null,
+          promptObserved: ctx.chiefManagerDelegationProgress?.promptObserved ?? null,
+          toolCallObserved: ctx.chiefManagerDelegationProgress?.toolCallObserved ?? null,
+          toolResultObserved: ctx.chiefManagerDelegationProgress?.toolResultObserved ?? null,
+          toolResultError: ctx.chiefManagerDelegationProgress?.toolResultError ?? null,
+          handoffObserved: ctx.chiefManagerDelegationProgress?.handoffObserved ?? null,
           fauxInvocationObserved: ctx.chiefManagerInvocationObserved === true,
         }
       : null;
   const terminalFailureProgress = progress
     ? {
-        requestCount: Number.isSafeInteger(progress.requestCount)
-          ? progress.requestCount
-          : null,
-        settledCount: Number.isSafeInteger(progress.settledCount)
-          ? progress.settledCount
-          : null,
+        requestCount: Number.isSafeInteger(progress.requestCount) ? progress.requestCount : null,
+        settledCount: Number.isSafeInteger(progress.settledCount) ? progress.settledCount : null,
         settledNonAborted:
-          typeof progress.settledNonAborted === "boolean"
-            ? progress.settledNonAborted
-            : null,
-        finalError:
-          typeof progress.finalError === "boolean" ? progress.finalError : null,
+          typeof progress.settledNonAborted === "boolean" ? progress.settledNonAborted : null,
+        finalError: typeof progress.finalError === "boolean" ? progress.finalError : null,
         partialObserved:
-          typeof progress.partialObserved === "boolean"
-            ? progress.partialObserved
-            : null,
-        leadToolCalls: Number.isSafeInteger(progress.leadToolCalls)
-          ? progress.leadToolCalls
-          : null,
-        reportCount: Number.isSafeInteger(progress.reportCount)
-          ? progress.reportCount
-          : null,
+          typeof progress.partialObserved === "boolean" ? progress.partialObserved : null,
+        leadToolCalls: Number.isSafeInteger(progress.leadToolCalls) ? progress.leadToolCalls : null,
+        reportCount: Number.isSafeInteger(progress.reportCount) ? progress.reportCount : null,
         logicalReports: Number.isSafeInteger(progress.logicalReports)
           ? progress.logicalReports
           : null,
-        actionable:
-          typeof progress.actionable === "boolean" ? progress.actionable : null,
+        actionable: typeof progress.actionable === "boolean" ? progress.actionable : null,
         managerResponded:
-          typeof progress.managerResponded === "boolean"
-            ? progress.managerResponded
-            : null,
-        settlementCallback: ["observed", "not_observed"].includes(
-          progress.settlementCallback,
-        )
+          typeof progress.managerResponded === "boolean" ? progress.managerResponded : null,
+        settlementCallback: ["observed", "not_observed"].includes(progress.settlementCallback)
           ? progress.settlementCallback
           : "not_observed",
-        settlementOutcome: [
-          "aborted",
-          "error",
-          "completed",
-          "other",
-          "not_observed",
-        ].includes(progress.settlementOutcome)
+        settlementOutcome: ["aborted", "error", "completed", "other", "not_observed"].includes(
+          progress.settlementOutcome,
+        )
           ? progress.settlementOutcome
           : "not_observed",
-        reportPending: ["observed", "not_observed"].includes(
-          progress.reportPending,
-        )
+        reportPending: ["observed", "not_observed"].includes(progress.reportPending)
           ? progress.reportPending
           : "not_observed",
-        publicationAttempt: [
-          "attempted",
-          "not_attempted",
-          "not_observed",
-        ].includes(progress.publicationAttempt)
+        publicationAttempt: ["attempted", "not_attempted", "not_observed"].includes(
+          progress.publicationAttempt,
+        )
           ? progress.publicationAttempt
           : "not_observed",
         publicationOutcome: ["returned", "failed", "not_observed"].includes(
@@ -14586,14 +12555,10 @@ export function sanitizedFailureEvidence(
         )
           ? progress.publicationOutcome
           : "not_observed",
-        managerReceipt: ["observed", "not_observed"].includes(
-          progress.managerReceipt,
-        )
+        managerReceipt: ["observed", "not_observed"].includes(progress.managerReceipt)
           ? progress.managerReceipt
           : "not_observed",
-        managerFollowup: ["observed", "not_observed"].includes(
-          progress.managerFollowup,
-        )
+        managerFollowup: ["observed", "not_observed"].includes(progress.managerFollowup)
           ? progress.managerFollowup
           : "not_observed",
       }
@@ -14604,10 +12569,9 @@ export function sanitizedFailureEvidence(
       : null;
   const managerHandoffProgress = managerProgress
     ? {
-        fauxSupervisorToolAvailability: [
-          "not_offered",
-          "not_observed",
-        ].includes(managerProgress.fauxSupervisorToolAvailability)
+        fauxSupervisorToolAvailability: ["not_offered", "not_observed"].includes(
+          managerProgress.fauxSupervisorToolAvailability,
+        )
           ? managerProgress.fauxSupervisorToolAvailability
           : "not_observed",
         expectedBranchWorktree: ["true", "false", "not_observed"].includes(
@@ -14615,28 +12579,19 @@ export function sanitizedFailureEvidence(
         )
           ? managerProgress.expectedBranchWorktree
           : "not_observed",
-        successfulCorrelatedDelegateProjectResult: [
-          "true",
-          "false",
-          "not_observed",
-        ].includes(managerProgress.successfulCorrelatedDelegateProjectResult)
+        successfulCorrelatedDelegateProjectResult: ["true", "false", "not_observed"].includes(
+          managerProgress.successfulCorrelatedDelegateProjectResult,
+        )
           ? managerProgress.successfulCorrelatedDelegateProjectResult
           : "not_observed",
-        assignmentIdentitySessionWorkspaceBranchMatch: [
-          "true",
-          "false",
-          "not_observed",
-        ].includes(
+        assignmentIdentitySessionWorkspaceBranchMatch: ["true", "false", "not_observed"].includes(
           managerProgress.assignmentIdentitySessionWorkspaceBranchMatch,
         )
           ? managerProgress.assignmentIdentitySessionWorkspaceBranchMatch
           : "not_observed",
-        matchedLead: [
-          "true",
-          "false",
-          "not_observed",
-          "not_yet_evaluated",
-        ].includes(managerProgress.matchedLead)
+        matchedLead: ["true", "false", "not_observed", "not_yet_evaluated"].includes(
+          managerProgress.matchedLead,
+        )
           ? managerProgress.matchedLead
           : "not_yet_evaluated",
         candidateProcessCount:
@@ -14644,24 +12599,18 @@ export function sanitizedFailureEvidence(
           managerProgress.candidateProcessCount >= 0
             ? Math.min(managerProgress.candidateProcessCount, 100)
             : "not_observed",
-        candidateProcessProvenanceMatch: [
-          "true",
-          "false",
-          "not_evaluated",
-        ].includes(managerProgress.candidateProcessProvenanceMatch)
+        candidateProcessProvenanceMatch: ["true", "false", "not_evaluated"].includes(
+          managerProgress.candidateProcessProvenanceMatch,
+        )
           ? managerProgress.candidateProcessProvenanceMatch
           : "not_evaluated",
         supervisorCallObserved:
           typeof managerProgress.supervisorCallObserved === "boolean"
             ? managerProgress.supervisorCallObserved
             : false,
-        supervisorResultState: [
-          "not_observed",
-          "missing",
-          "pending",
-          "success",
-          "error",
-        ].includes(managerProgress.supervisorResultState)
+        supervisorResultState: ["not_observed", "missing", "pending", "success", "error"].includes(
+          managerProgress.supervisorResultState,
+        )
           ? managerProgress.supervisorResultState
           : "not_observed",
         supervisorErrorCategory: [
@@ -14672,13 +12621,11 @@ export function sanitizedFailureEvidence(
           ? managerProgress.supervisorErrorCategory
           : "none",
         supervisorHandlerBranchStatus:
-          managerProgress.supervisorHandlerBranchStatus ===
-          "operation_error_returned"
+          managerProgress.supervisorHandlerBranchStatus === "operation_error_returned"
             ? managerProgress.supervisorHandlerBranchStatus
             : "not_observed",
         supervisorPersistedErrorCategoryPresent:
-          typeof managerProgress.supervisorPersistedErrorCategoryPresent ===
-          "boolean"
+          typeof managerProgress.supervisorPersistedErrorCategoryPresent === "boolean"
             ? managerProgress.supervisorPersistedErrorCategoryPresent
             : false,
         supervisorPersistedErrorCategory: STRUCTURED_TOOL_ERROR_CATEGORIES.has(
@@ -14693,8 +12640,7 @@ export function sanitizedFailureEvidence(
           "unstructured_error_unknown",
         ].includes(managerProgress.supervisorUnstructuredErrorClass)
           ? {
-              supervisorUnstructuredErrorClass:
-                managerProgress.supervisorUnstructuredErrorClass,
+              supervisorUnstructuredErrorClass: managerProgress.supervisorUnstructuredErrorClass,
             }
           : {}),
         readinessDeliveryObserved:
@@ -14730,15 +12676,12 @@ export function sanitizedFailureEvidence(
     outcome,
     stage: ctx.stage ?? "setup",
     errorCode:
-      typeof failure?.error?.code === "string"
-        ? failure.error.code.slice(0, 80)
-        : undefined,
+      typeof failure?.error?.code === "string" ? failure.error.code.slice(0, 80) : undefined,
     ...(terminalFailureProgress ? { terminalFailureProgress } : {}),
     ...(ctx.scenario === "chief-manager"
       ? { chiefManagerDelegationProgress: chiefManagerProgress }
       : {}),
-    ...(ctx.scenario === "chief-manager" &&
-    smoke?.stage === "chief-manager-smoke-first-agent"
+    ...(ctx.scenario === "chief-manager" && smoke?.stage === "chief-manager-smoke-first-agent"
       ? {
           ownedAgentReadiness: ownedAgentReadinessEvidence(smoke.lastEvidence),
         }
@@ -14755,17 +12698,14 @@ export function sanitizedFailureEvidence(
         }
       : {}),
     ...(managerHandoffProgress ? { managerHandoffProgress } : {}),
-    ...(ctx.scenario === "manager-bootstrap" &&
-    ctx.managerBootstrapDelegationProgress
+    ...(ctx.scenario === "manager-bootstrap" && ctx.managerBootstrapDelegationProgress
       ? {
           managerBootstrapDelegation: managerBootstrapDelegationProjection(
             ctx.managerBootstrapDelegationProgress,
           ),
         }
       : {}),
-    ...(diagnostics
-      ? { diagnostics: sanitizedFailureDiagnostics(diagnostics) }
-      : {}),
+    ...(diagnostics ? { diagnostics: sanitizedFailureDiagnostics(diagnostics) } : {}),
     ...(ctx.scenario === "agent-crash-recovery"
       ? {
           crashRecovery: {
@@ -14787,23 +12727,16 @@ export function sanitizedFailureEvidence(
       : {}),
     ...(ctx.managerBootstrapFailureDiagnostics
       ? {
-          managerBootstrapFailureDiagnostics:
-            ctx.managerBootstrapFailureDiagnostics,
+          managerBootstrapFailureDiagnostics: ctx.managerBootstrapFailureDiagnostics,
         }
       : {}),
     ...(ctx.scenario === "core" && diagnostics?.coreDelegation
       ? { coreDelegation: sanitizedCoreDelegation(diagnostics.coreDelegation) }
       : {}),
     ...(ctx.chiefManagerTurn ? { chiefManagerTurn: ctx.chiefManagerTurn } : {}),
-    ...(ctx.chiefManagerProcess
-      ? { chiefManagerProcess: ctx.chiefManagerProcess }
-      : {}),
-    ...(ctx.chiefManagerProbe
-      ? { chiefManagerProbe: ctx.chiefManagerProbe }
-      : {}),
-    ...(ctx.chiefManagerRoleError
-      ? { chiefManagerRoleError: ctx.chiefManagerRoleError }
-      : {}),
+    ...(ctx.chiefManagerProcess ? { chiefManagerProcess: ctx.chiefManagerProcess } : {}),
+    ...(ctx.chiefManagerProbe ? { chiefManagerProbe: ctx.chiefManagerProbe } : {}),
+    ...(ctx.chiefManagerRoleError ? { chiefManagerRoleError: ctx.chiefManagerRoleError } : {}),
     lastVerified: ctx.lastVerified ?? null,
     processesVerified: ctx.coreProcessEvidence?.length ?? 0,
     sessionStartObserved: ctx.sessionStartObserved ?? false,
@@ -14825,8 +12758,7 @@ export function sanitizedFailureEvidence(
           stop: ctx.parentCleanupDiagnostics.stop ?? null,
           child: { ...ctx.parentCleanupDiagnostics.child },
           namedServer: ctx.parentCleanupDiagnostics.namedServer ?? null,
-          cleanupErrorCode:
-            ctx.parentCleanupDiagnostics.cleanupErrorCode ?? null,
+          cleanupErrorCode: ctx.parentCleanupDiagnostics.cleanupErrorCode ?? null,
         }
       : null,
     cleanupErrorCode: ctx.cleanupErrorCode ?? null,
@@ -14856,9 +12788,7 @@ export async function preserveFailureEvidence(evidence, path) {
     });
     return path;
   }
-  const directory = await mkdtemp(
-    join(tmpdir(), "pi-herdsman-smoke-evidence-"),
-  );
+  const directory = await mkdtemp(join(tmpdir(), "pi-herdsman-smoke-evidence-"));
   evidence.runReference = basename(directory);
   const evidencePath = join(directory, "result.json");
   await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, {
@@ -14893,10 +12823,7 @@ export function reportFailureEvidence(artifact) {
   );
 }
 
-export async function reportFinalFailureEvidence(
-  artifact,
-  output = console.log,
-) {
+export async function reportFinalFailureEvidence(artifact, output = console.log) {
   try {
     const evidence = JSON.parse(await readFile(artifact, "utf8"));
     const runReference = evidence.runReference;
@@ -14905,9 +12832,7 @@ export async function reportFinalFailureEvidence(
       !/^[a-zA-Z0-9_-]{1,128}$/.test(runReference) ||
       runReference !== basename(dirname(artifact)) ||
       !scenarioNames.includes(evidence.scenario) ||
-      !["SETUP_FAIL", "STALLED", "SCENARIO_FAIL", "EVIDENCE_FAIL"].includes(
-        evidence.outcome,
-      ) ||
+      !["SETUP_FAIL", "STALLED", "SCENARIO_FAIL", "EVIDENCE_FAIL"].includes(evidence.outcome) ||
       !["PASS", "FAIL", "NOT_REQUIRED"].includes(evidence.cleanup)
     )
       return false;
@@ -14929,12 +12854,8 @@ export async function reportFinalFailureEvidence(
       scenario: evidence.scenario,
       outcome: evidence.outcome,
       cleanup: evidence.cleanup,
-      ...(evidence.mode === "simulated" || evidence.mode === "live"
-        ? { mode: evidence.mode }
-        : {}),
-      ...(safeErrorCodes.includes(evidence.errorCode)
-        ? { errorCode: evidence.errorCode }
-        : {}),
+      ...(evidence.mode === "simulated" || evidence.mode === "live" ? { mode: evidence.mode } : {}),
+      ...(safeErrorCodes.includes(evidence.errorCode) ? { errorCode: evidence.errorCode } : {}),
       ...Object.fromEntries(
         [
           "sessionStartObserved",
@@ -14946,8 +12867,7 @@ export async function reportFinalFailureEvidence(
           .filter((key) => typeof evidence[key] === "boolean")
           .map((key) => [key, evidence[key]]),
       ),
-      ...(evidence.scenario === "manager-bootstrap" &&
-      evidence.managerBootstrapDelegation
+      ...(evidence.scenario === "manager-bootstrap" && evidence.managerBootstrapDelegation
         ? {
             managerBootstrapDelegation: managerBootstrapDelegationProjection(
               evidence.managerBootstrapDelegation,
@@ -14970,20 +12890,14 @@ export async function reportFinalFailureEvidence(
 
 export function reportFailureEvidenceWriteError(error, action = "save") {
   const operation = action === "update" ? "update cleanup result" : "save";
-  const code = ["ENOSPC", "EACCES", "EPERM", "EROFS", "EIO", "ENOENT"].includes(
-    error?.code,
-  )
+  const code = ["ENOSPC", "EACCES", "EPERM", "EROFS", "EIO", "ENOENT"].includes(error?.code)
     ? error.code
     : "unknown";
-  console.error(
-    `failure evidence: could not ${operation} (filesystem error ${code})`,
-  );
+  console.error(`failure evidence: could not ${operation} (filesystem error ${code})`);
 }
 
 export function reportSuccessEvidenceWriteError(error) {
-  const code = ["ENOSPC", "EACCES", "EPERM", "EROFS", "EIO", "ENOENT"].includes(
-    error?.code,
-  )
+  const code = ["ENOSPC", "EACCES", "EPERM", "EROFS", "EIO", "ENOENT"].includes(error?.code)
     ? error.code
     : "unknown";
   console.error(`success evidence: could not save (filesystem error ${code})`);
@@ -15007,11 +12921,7 @@ export async function updateFailureEvidenceAfterCleanup(
   }
 }
 
-export async function retainScenarioFailureEvidence(
-  ctx,
-  evidence,
-  save = preserveFailureEvidence,
-) {
+export async function retainScenarioFailureEvidence(ctx, evidence, save = preserveFailureEvidence) {
   try {
     const artifact = await save(evidence);
     ctx.failureArtifact = artifact;
@@ -15026,9 +12936,7 @@ export async function retainScenarioFailureEvidence(
 
 async function main() {
   const args = parseSmokeArgs(process.argv.slice(2));
-  const pkg = JSON.parse(
-    await readFile(join(repoRoot, "package.json"), "utf8"),
-  );
+  const pkg = JSON.parse(await readFile(join(repoRoot, "package.json"), "utf8"));
   const scenario = args.scenario;
   let preflightEvidence;
   let model;
@@ -15037,17 +12945,14 @@ async function main() {
     model = await selectSmokeModel(args);
     await run("npm", ["run", "build"], { cwd: repoRoot });
   } catch (error) {
-    console.error(
-      `smoke ${scenario}: SETUP FAIL\n${formatSmokeFailure(error, "preflight-build")}`,
-    );
+    console.error(`smoke ${scenario}: SETUP FAIL\n${formatSmokeFailure(error, "preflight-build")}`);
     try {
       const artifact = await preserveFailureEvidence({
         scenario,
         mode: args.simulated ? "simulated" : "live",
         outcome: "SETUP_FAIL",
         stage: "preflight-build",
-        errorCode:
-          typeof error?.code === "string" ? error.code.slice(0, 80) : null,
+        errorCode: typeof error?.code === "string" ? error.code.slice(0, 80) : null,
         lastVerified: null,
         processesVerified: 0,
         sessionStartObserved: false,
@@ -15066,17 +12971,14 @@ async function main() {
   try {
     paths = await createIsolation();
   } catch (error) {
-    console.error(
-      `smoke ${scenario}: SETUP FAIL\n${formatSmokeFailure(error, "isolation")}`,
-    );
+    console.error(`smoke ${scenario}: SETUP FAIL\n${formatSmokeFailure(error, "isolation")}`);
     try {
       const artifact = await preserveFailureEvidence({
         scenario,
         mode: args.simulated ? "simulated" : "live",
         outcome: "SETUP_FAIL",
         stage: "isolation",
-        errorCode:
-          typeof error?.code === "string" ? error.code.slice(0, 80) : null,
+        errorCode: typeof error?.code === "string" ? error.code.slice(0, 80) : null,
         lastVerified: null,
         processesVerified: 0,
         sessionStartObserved: false,
@@ -15098,11 +13000,7 @@ async function main() {
     herdrStateExtension: paths.herdrStateExtension,
     ...(scenario === "chief-tree" || scenario === "supervisor-agent"
       ? {
-          chiefTreeProbeExtension: join(
-            paths.piAgent,
-            "extensions",
-            "chief-tree-tools.mjs",
-          ),
+          chiefTreeProbeExtension: join(paths.piAgent, "extensions", "chief-tree-tools.mjs"),
           chiefTreeResultFile: join(paths.root, "chief-tree-tools.json"),
         }
       : {}),
@@ -15112,15 +13010,10 @@ async function main() {
     simulated: args.simulated,
     ...(args.simulated || scenario === "terminal-failure"
       ? {
-          simulatedProviderExtension: join(
-            paths.piAgent,
-            "extensions",
-            "smoke-faux.ts",
-          ),
+          simulatedProviderExtension: join(paths.piAgent, "extensions", "smoke-faux.ts"),
         }
       : {}),
-    managerReadyTimeoutMs:
-      args.managerReadyTimeoutMs ?? DEFAULT_MANAGER_READY_TIMEOUT_MS,
+    managerReadyTimeoutMs: args.managerReadyTimeoutMs ?? DEFAULT_MANAGER_READY_TIMEOUT_MS,
     managerRecoveryDiagnostics: args.managerRecoveryDiagnostics,
     managerExternalRemoval: args.managerExternalRemoval,
     managerRemovalAcceptance: args.managerRemovalAcceptance,
@@ -15172,18 +13065,10 @@ async function main() {
       ...preflightEvidence,
       ...(await preflightParent(pkg, parent.env)),
     };
-    ctx.rootWorkspaceId = await createParentWorkspace(
-      paths,
-      parent,
-      owned,
-      ctx.rootCwd,
-    );
+    ctx.rootWorkspaceId = await createParentWorkspace(paths, parent, owned, ctx.rootCwd);
     ctx.parentEnv = { ...parent.env, HERDR_WORKSPACE_ID: ctx.rootWorkspaceId };
     if (ctx.simulatedProviderExtension) {
-      await copyFile(
-        join(repoRoot, "scripts", "smoke-faux.mjs"),
-        ctx.simulatedProviderExtension,
-      );
+      await copyFile(join(repoRoot, "scripts", "smoke-faux.mjs"), ctx.simulatedProviderExtension);
       if (scenario === "core" || scenario === "continuation")
         await prepareFauxAgentOverlays(
           paths,
@@ -15206,11 +13091,9 @@ async function main() {
             role === "manager"
               ? "tools: [codemode, list_agents, delegate_agent, resume_agent]\n"
               : "";
-          await writeFile(
-            file,
-            `---\nname: ${role}\nagents: [${agents}]\n${tools}---\n`,
-            { flag: "wx" },
-          );
+          await writeFile(file, `---\nname: ${role}\nagents: [${agents}]\n${tools}---\n`, {
+            flag: "wx",
+          });
         }
         await writeFile(
           join(paths.piAgent, "settings.json"),
@@ -15259,13 +13142,7 @@ async function main() {
         recursive: true,
       });
       await writeFile(
-        join(
-          ctx.rootCwd,
-          ".pi",
-          "coordinators",
-          "leads",
-          "manager-handoff-lead.md",
-        ),
+        join(ctx.rootCwd, ".pi", "coordinators", "leads", "manager-handoff-lead.md"),
         `---\nname: manager-handoff-lead\nmodel: smoke-faux/manager-handoff-lead\nnoExtensions: true\nnoSkills: true\ntools: [codemode]\nextensions: [builtin:codemode, ${JSON.stringify(ctx.simulatedProviderExtension)}]\n---\n`,
       );
     }
@@ -15313,8 +13190,7 @@ async function main() {
       await mkdir(join(ctx.rootCwd, ".pi", "agents"), { recursive: true });
       for (let level = 1; level <= DEEP_CHAIN_DEPTH; level++) {
         const name = `smoke-deep-${level}`;
-        const agents =
-          level < DEEP_CHAIN_DEPTH ? `agents: [smoke-deep-${level + 1}]\n` : "";
+        const agents = level < DEEP_CHAIN_DEPTH ? `agents: [smoke-deep-${level + 1}]\n` : "";
         await writeFile(
           join(ctx.rootCwd, ".pi", "agents", `${name}.md`),
           `---\nname: ${name}\nmodel: smoke-faux/deep-chain\nnoExtensions: false\nextensions: [${JSON.stringify(ctx.simulatedProviderExtension)}]\n${agents}---\n`,
@@ -15326,11 +13202,9 @@ async function main() {
     if (args.simulated) ctx.authMechanism = "not required (simulated)";
     else ctx.authMechanism = await preparePi(paths, model);
     if (ctx.chiefTreeProbeExtension)
-      await writeFile(
-        ctx.chiefTreeProbeExtension,
-        chiefTreeProbeSource(ctx.chiefTreeResultFile),
-        { flag: "wx" },
-      );
+      await writeFile(ctx.chiefTreeProbeExtension, chiefTreeProbeSource(ctx.chiefTreeResultFile), {
+        flag: "wx",
+      });
     await startNestedHerdr(
       paths,
       owned,
@@ -15353,12 +13227,10 @@ async function main() {
         "crash-recovery-initial-owner-ready",
         async () => {
           const listing = await tryNestedCommand(ctx, ["agent", "list"]);
-          if (!listing.ok)
-            return { done: false, observationError: listing.error };
+          if (!listing.ok) return { done: false, observationError: listing.error };
           const owner = (listing.value.agents ?? []).find(
             (agent) =>
-              agent.pane_id === ctx.rootPaneId &&
-              typeof agent.agent_session?.value === "string",
+              agent.pane_id === ctx.rootPaneId && typeof agent.agent_session?.value === "string",
           );
           return { done: !!owner, value: owner };
         },
@@ -15375,26 +13247,14 @@ async function main() {
     await runScenario(ctx, scenario);
     if (
       ctx.simulated &&
-      ["core", "continuation", "chief-tree", "terminal-failure"].includes(
-        scenario,
-      )
+      ["core", "continuation", "chief-tree", "terminal-failure"].includes(scenario)
     ) {
       const root = await rootSessionSnapshot(ctx);
       const rootId =
-        root &&
-        sessionEntries(root.contents).find((entry) => entry.type === "session")
-          ?.id;
-      requireSmokeEvidence(
-        rootId,
-        "scenario root session has no exact Pi session identity",
-      );
+        root && sessionEntries(root.contents).find((entry) => entry.type === "session")?.id;
+      requireSmokeEvidence(rootId, "scenario root session has no exact Pi session identity");
       const contents = await readFile(
-        join(
-          ctx.paths.piAgent,
-          "pi-herdsman",
-          "runtime",
-          "smoke-faux-provenance.jsonl",
-        ),
+        join(ctx.paths.piAgent, "pi-herdsman", "runtime", "smoke-faux-provenance.jsonl"),
         "utf8",
       );
       const versions = scenarioVersionProvenance(
@@ -15419,9 +13279,7 @@ async function main() {
     console.log(`candidate: ${ctx.candidateExtension}`);
     if (scenario === "core") {
       console.log(`descendant panes: ${ctx.descendantCount}`);
-      console.log(
-        `process evidence: ${JSON.stringify(ctx.coreProcessEvidence)}`,
-      );
+      console.log(`process evidence: ${JSON.stringify(ctx.coreProcessEvidence)}`);
       console.log(`package result: ${ctx.expectedPackage}`);
     }
     if (scenario === "continuation")
@@ -15445,19 +13303,14 @@ async function main() {
         })}`,
       );
     if (scenario === "supervisor-agent")
-      console.log(
-        `supervisor-agent: ${JSON.stringify(ctx.supervisorAgentEvidence)}`,
-      );
+      console.log(`supervisor-agent: ${JSON.stringify(ctx.supervisorAgentEvidence)}`);
     if (scenario === "manager-recovery")
       console.log(`manager-recovery: ${JSON.stringify(ctx.managerRecovery)}`);
     if (scenario === "terminal-failure")
       console.log(`terminal-failure: ${JSON.stringify(ctx.terminalFailure)}`);
     if (scenario === "agent-crash-recovery")
-      console.log(
-        `agent-crash-recovery: ${JSON.stringify(ctx.crashRecovery.outputSummary)}`,
-      );
-    if (scenario === "deep-chain")
-      console.log(`deep-chain: ${JSON.stringify(ctx.deepChain)}`);
+      console.log(`agent-crash-recovery: ${JSON.stringify(ctx.crashRecovery.outputSummary)}`);
+    if (scenario === "deep-chain") console.log(`deep-chain: ${JSON.stringify(ctx.deepChain)}`);
     console.log(`authentication: ${ctx.authMechanism}`);
   } catch (error) {
     failure = { phase, error };
@@ -15466,13 +13319,11 @@ async function main() {
     );
     if (scenario === "manager-bootstrap") {
       try {
-        ctx.managerBootstrapFailureDiagnostics =
-          await captureManagerBootstrapFailure(ctx);
+        ctx.managerBootstrapFailureDiagnostics = await captureManagerBootstrapFailure(ctx);
       } catch (diagnosticError) {
         ctx.managerBootstrapFailureDiagnostics = {
           stage: ctx.stage ?? null,
-          captureFailed:
-            diagnosticError?.code ?? diagnosticError?.name ?? "error",
+          captureFailed: diagnosticError?.code ?? diagnosticError?.name ?? "error",
         };
       }
     }
@@ -15505,18 +13356,11 @@ async function main() {
       if (ctx.scenario === "chief-manager") {
         try {
           const invocationLog = await readFile(
-            join(
-              paths.piAgent,
-              "pi-herdsman",
-              "runtime",
-              "smoke-chief-manager-invocations.jsonl",
-            ),
+            join(paths.piAgent, "pi-herdsman", "runtime", "smoke-chief-manager-invocations.jsonl"),
             "utf8",
           );
           const { managerSessionId, promptMarker } =
-            ctx.chiefManagerDelegationProgress ??
-            ctx.chiefManagerDelegationIdentity ??
-            {};
+            ctx.chiefManagerDelegationProgress ?? ctx.chiefManagerDelegationIdentity ?? {};
           ctx.chiefManagerInvocationObserved = invocationLog
             .trim()
             .split(/\r?\n/)
@@ -15524,8 +13368,7 @@ async function main() {
               try {
                 const receipt = JSON.parse(line);
                 return (
-                  receipt.sessionId === managerSessionId &&
-                  receipt.promptMarker === promptMarker
+                  receipt.sessionId === managerSessionId && receipt.promptMarker === promptMarker
                 );
               } catch {
                 return false;
@@ -15585,20 +13428,12 @@ async function main() {
       }
       try {
         const provenance = await readFile(
-          join(
-            paths.piAgent,
-            "pi-herdsman",
-            "runtime",
-            "smoke-faux-provenance.jsonl",
-          ),
+          join(paths.piAgent, "pi-herdsman", "runtime", "smoke-faux-provenance.jsonl"),
           "utf8",
         );
         ctx.firstRequestObserved = provenance.trim().length > 0;
         if (ctx.scenario === "core" && ctx.simulated)
-          ctx.coreRootProvenance = rootFailureProvenance(
-            provenance,
-            ctx.coreRootSessionId,
-          );
+          ctx.coreRootProvenance = rootFailureProvenance(provenance, ctx.coreRootSessionId);
       } catch {}
       evidence = sanitizedFailureEvidence(
         ctx,
@@ -15626,12 +13461,7 @@ async function main() {
       process.exitCode = 1;
       if (!failure) {
         failure = { phase: "cleanup", error: new Error(cleanupError) };
-        evidence = sanitizedFailureEvidence(
-          ctx,
-          failure,
-          "CLEANUP_FAIL",
-          "FAIL",
-        );
+        evidence = sanitizedFailureEvidence(ctx, failure, "CLEANUP_FAIL", "FAIL");
         evidence.parentOwnership = parentOwnership;
         evidence.parentCleanup = sanitizedFailureEvidence(
           { ...ctx, owned },
@@ -15641,10 +13471,7 @@ async function main() {
         ).parentCleanup;
         evidence.cleanupErrorCode = ctx.cleanupErrorCode ?? "CLEANUP_FAILED";
         try {
-          const artifact = await preserveFailureEvidence(
-            evidence,
-            ctx.failureArtifact,
-          );
+          const artifact = await preserveFailureEvidence(evidence, ctx.failureArtifact);
           ctx.failureArtifact = artifact;
           reportFailureEvidence(artifact);
         } catch (error) {
@@ -15662,10 +13489,7 @@ async function main() {
         evidence.cleanupErrorCode = ctx.cleanupErrorCode ?? "CLEANUP_FAILED";
         evidence.cleanup = "FAIL";
         try {
-          const artifact = await preserveFailureEvidence(
-            evidence,
-            ctx.failureArtifact,
-          );
+          const artifact = await preserveFailureEvidence(evidence, ctx.failureArtifact);
           ctx.failureArtifact = artifact;
           reportFailureEvidence(artifact);
         } catch (error) {
@@ -15695,8 +13519,7 @@ async function main() {
           mode: ctx.simulated ? "simulated" : "live",
           outcome: "PASS",
           cleanup: "PASS",
-          managerAgentDelegation:
-            ctx.chiefManager?.managerAgentDelegation ?? null,
+          managerAgentDelegation: ctx.chiefManager?.managerAgentDelegation ?? null,
         });
         console.log(
           `chief-manager success evidence reference: ${successEvidenceReference(artifact)} (under system temp directory)`,
@@ -15706,17 +13529,13 @@ async function main() {
         reportSuccessEvidenceWriteError(error);
       }
     }
-    if (failure && ctx.failureArtifact)
-      await reportFinalFailureEvidence(ctx.failureArtifact);
+    if (failure && ctx.failureArtifact) await reportFinalFailureEvidence(ctx.failureArtifact);
     if (!failure && !cleanupError) console.log(`smoke ${scenario}: PASS`);
     if (failure || ctx.evidenceSaveFailed) process.exitCode = 1;
   }
 }
 
-if (
-  process.argv[1] &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (process.argv[2] === "--nested-host") nestedHost(process.argv.slice(3));
   else await main();
 }

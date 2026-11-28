@@ -57,27 +57,22 @@ function apiTree(tree, label) {
       typeof entry.sha !== "string" ||
       !shaPattern.test(entry.sha)
     ) {
-      throw new Error(
-        `Cannot verify reserved branch: invalid ${label} tree entry`,
-      );
+      throw new Error(`Cannot verify reserved branch: invalid ${label} tree entry`);
     }
     seen.add(entry.path);
     if (entry.type === "tree") {
       if (entry.mode !== "040000") {
-        throw new Error(
-          `Cannot verify reserved branch: invalid ${label} tree mode`,
-        );
+        throw new Error(`Cannot verify reserved branch: invalid ${label} tree mode`);
       }
       continue;
     }
-    if (!(
-      (entry.type === "blob" &&
-        ["100644", "100755", "120000"].includes(entry.mode)) ||
-      (entry.type === "commit" && entry.mode === "160000")
-    )) {
-      throw new Error(
-        `Cannot verify reserved branch: unsupported ${label} tree entry`,
-      );
+    if (
+      !(
+        (entry.type === "blob" && ["100644", "100755", "120000"].includes(entry.mode)) ||
+        (entry.type === "commit" && entry.mode === "160000")
+      )
+    ) {
+      throw new Error(`Cannot verify reserved branch: unsupported ${label} tree entry`);
     }
     result.set(entry.path, {
       type: entry.type,
@@ -134,13 +129,8 @@ export async function verifyExistingBranch({
   branchSha = process.env.BRANCH_SHA,
   root = process.cwd(),
 } = {}) {
-  if (
-    !/^[^/]+\/[^/]+$/u.test(repository ?? "") ||
-    !shaPattern.test(branchSha ?? "")
-  ) {
-    throw new Error(
-      "Cannot verify reserved branch: missing repository or branch SHA",
-    );
+  if (!/^[^/]+\/[^/]+$/u.test(repository ?? "") || !shaPattern.test(branchSha ?? "")) {
+    throw new Error("Cannot verify reserved branch: missing repository or branch SHA");
   }
   const authenticatedRequest = (url, options) =>
     request(url, {
@@ -155,15 +145,8 @@ export async function verifyExistingBranch({
     encoding: "utf8",
   }).trim();
   if (!shaPattern.test(mainSha))
-    throw new Error(
-      "Cannot verify reserved branch: invalid checked-out main SHA",
-    );
-  const currentMainSha = await reference(
-    authenticatedRequest,
-    repository,
-    "main",
-    "main",
-  );
+    throw new Error("Cannot verify reserved branch: invalid checked-out main SHA");
+  const currentMainSha = await reference(authenticatedRequest, repository, "main", "main");
   if (currentMainSha !== mainSha) {
     throw new Error(
       "Cannot verify reserved branch: main advanced during reconciliation; retry on current main",
@@ -177,9 +160,7 @@ export async function verifyExistingBranch({
   );
   const mergeBaseSha = comparison?.merge_base_commit?.sha;
   if (typeof mergeBaseSha !== "string" || !shaPattern.test(mergeBaseSha)) {
-    throw new Error(
-      "Cannot verify reserved branch: comparison has no valid merge base",
-    );
+    throw new Error("Cannot verify reserved branch: comparison has no valid merge base");
   }
   const [mergeBaseResponse, branchResponse] = await Promise.all([
     apiJson(
@@ -199,12 +180,7 @@ export async function verifyExistingBranch({
 
   const [latestMainSha, latestBranchSha] = await Promise.all([
     reference(authenticatedRequest, repository, "main", "main"),
-    reference(
-      authenticatedRequest,
-      repository,
-      "automation/upstream-skills",
-      "reserved branch",
-    ),
+    reference(authenticatedRequest, repository, "automation/upstream-skills", "reserved branch"),
   ]);
   if (latestMainSha !== mainSha || latestBranchSha !== branchSha) {
     throw new Error(

@@ -75,13 +75,7 @@ const BOOLEAN_CAPABILITY_FIELDS = new Set([
   "inheritProjectContext",
   "inheritSkills",
 ]);
-const ARRAY_FIELDS = new Set([
-  "tools",
-  "excludeTools",
-  "skills",
-  "extensions",
-  "agents",
-]);
+const ARRAY_FIELDS = new Set(["tools", "excludeTools", "skills", "extensions", "agents"]);
 const SUPPORTED_FIELDS = new Set([
   "name",
   "description",
@@ -105,10 +99,7 @@ const definitionDirectories = {
 
 export type DefinitionCategory = keyof typeof definitionDirectories;
 
-function definitionDirectory(
-  root: string,
-  category: DefinitionCategory,
-): string {
+function definitionDirectory(root: string, category: DefinitionCategory): string {
   return join(root, ...definitionDirectories[category]);
 }
 
@@ -137,8 +128,7 @@ const RUNTIME_LEAD_FIELDS = new Set([
   "agents",
 ]);
 
-export type FrontmatterValue =
-  string | boolean | string[] | { [key: string]: unknown };
+export type FrontmatterValue = string | boolean | string[] | { [key: string]: unknown };
 export type Frontmatter = {
   enabled?: boolean;
   model?: string;
@@ -189,10 +179,7 @@ function markdownFiles(root: string): string[] {
     const path = join(root, entry.name);
     if (entry.isDirectory()) return markdownFiles(path);
     // Dotfile managers deploy definitions as symlinks; reading follows them.
-    return (entry.isFile() || entry.isSymbolicLink()) &&
-      entry.name.endsWith(".md")
-      ? [path]
-      : [];
+    return (entry.isFile() || entry.isSymbolicLink()) && entry.name.endsWith(".md") ? [path] : [];
   });
 }
 
@@ -205,8 +192,7 @@ function readDefinitionLayer(
   const root = definitionDirectory(scopeRoot, category);
   const stats = statSync(root, { throwIfNoEntry: false });
   if (!stats) return [];
-  if (!stats.isDirectory())
-    throw new Error(`definition directory is not a directory: ${root}`);
+  if (!stats.isDirectory()) throw new Error(`definition directory is not a directory: ${root}`);
   const chiefPath = join(root, "chief.md");
   const paths =
     category === "chief"
@@ -225,13 +211,9 @@ function readDefinitionLayer(
         throw new Error(`${path}: invalid ${category} definition name`);
       const reserved = reservedDefinitionCategory(name);
       if (reserved && reserved !== category) {
-        const destination = join(
-          definitionDirectory(scopeRoot, reserved),
-          `${name}.md`,
-        );
+        const destination = join(definitionDirectory(scopeRoot, reserved), `${name}.md`);
         const message = `${path}: definition belongs in ${destination}`;
-        if (category !== "agent" || scopeRoot === BUNDLED_DEFINITION_ROOT)
-          throw new Error(message);
+        if (category !== "agent" || scopeRoot === BUNDLED_DEFINITION_ROOT) throw new Error(message);
         onWarning?.(`${message}; file excluded from discovery`);
         return [];
       }
@@ -257,9 +239,7 @@ function readDefinitionLayer(
     ]);
   for (const [name, paths] of pathsByName)
     if (paths.length > 1)
-      throw new Error(
-        `multiple definitions found for ${category} ${name}: ${paths.join(", ")}`,
-      );
+      throw new Error(`multiple definitions found for ${category} ${name}: ${paths.join(", ")}`);
   return definitions;
 }
 
@@ -277,10 +257,7 @@ function readDefinitionFile(path: string) {
   return parsed;
 }
 
-function resolveBodyFileReferences(
-  body: string,
-  definitionPath: string,
-): string {
+function resolveBodyFileReferences(body: string, definitionPath: string): string {
   return body.replace(BODY_FILE_REFERENCE, (_match, input: string) => {
     const homeRelative = input.startsWith("~/") || input.startsWith(`~${sep}`);
     const expanded = homeRelative ? resolve(homedir(), input.slice(2)) : input;
@@ -294,8 +271,7 @@ function isPlainObject(value: unknown): value is { [key: string]: unknown } {
   return prototype === Object.prototype || prototype === null;
 }
 
-const isArrayModifier = (entry: string): boolean =>
-  entry.startsWith("+") || entry.startsWith("-");
+const isArrayModifier = (entry: string): boolean => entry.startsWith("+") || entry.startsWith("-");
 
 function validateArrayFields(
   frontmatter: Frontmatter,
@@ -306,9 +282,7 @@ function validateArrayFields(
     if (
       value !== undefined &&
       (!Array.isArray(value) ||
-        value.some(
-          (entry) => typeof entry !== "string" || entry.trim().length === 0,
-        ) ||
+        value.some((entry) => typeof entry !== "string" || entry.trim().length === 0) ||
         (field === "agents" &&
           new Set(value.filter((entry) => !isArrayModifier(entry))).size !==
             value.filter((entry) => !isArrayModifier(entry)).length))
@@ -321,14 +295,11 @@ function validateArrayFields(
       );
     if (Array.isArray(value)) {
       const entries =
-        field === "tools"
-          ? normalizedToolNames(value as string[])
-          : (value as string[]);
+        field === "tools" ? normalizedToolNames(value as string[]) : (value as string[]);
       for (const entry of entries)
         if (
           isArrayModifier(entry) &&
-          (!entry.slice(1).trim() ||
-            (field === "tools" && entry.slice(1).trim().includes("*")))
+          (!entry.slice(1).trim() || (field === "tools" && entry.slice(1).trim().includes("*")))
         )
           invalid(
             field,
@@ -341,13 +312,9 @@ function validateArrayFields(
   validateIntrinsicToolPolicy(frontmatter, invalid);
 }
 
-function applyArrayModifiers(
-  base: readonly string[],
-  entries: readonly string[],
-): string[] {
+function applyArrayModifiers(base: readonly string[], entries: readonly string[]): string[] {
   const plain = entries.filter((entry) => !isArrayModifier(entry));
-  const result =
-    plain.length > 0 || entries.length === 0 ? [...new Set(plain)] : [...base];
+  const result = plain.length > 0 || entries.length === 0 ? [...new Set(plain)] : [...base];
   for (const entry of entries) {
     if (!isArrayModifier(entry)) continue;
     const value = entry.slice(1);
@@ -371,10 +338,7 @@ function composeFrontmatter(
   for (const field of ARRAY_FIELDS) {
     const rawEntries = override[field];
     if (!Array.isArray(rawEntries)) continue;
-    const entries =
-      field === "tools"
-        ? normalizedToolNames(rawEntries as string[])
-        : rawEntries;
+    const entries = field === "tools" ? normalizedToolNames(rawEntries as string[]) : rawEntries;
     const baseEntries = base?.[field];
     if (!entries.some((entry) => isArrayModifier(entry as string))) continue;
     if (field === "tools") {
@@ -387,13 +351,8 @@ function composeFrontmatter(
         continue;
       }
       const inheritedTools = normalizedToolNames(baseEntries as string[]);
-      const inheritedRelative =
-        inheritedTools.length > 0 && inheritedTools.every(isArrayModifier);
-      if (
-        inheritedRelative &&
-        normalized.length > 0 &&
-        normalized.every(isArrayModifier)
-      ) {
+      const inheritedRelative = inheritedTools.length > 0 && inheritedTools.every(isArrayModifier);
+      if (inheritedRelative && normalized.length > 0 && normalized.every(isArrayModifier)) {
         effective.tools = [...inheritedTools, ...normalized];
         continue;
       }
@@ -412,9 +371,7 @@ function composeFrontmatter(
         ? normalizedToolNames(baseEntries as string[] | undefined)
         : ((baseEntries as string[] | undefined) ?? []);
     const normalized =
-      field === "tools"
-        ? normalizedToolNames(entries as string[])
-        : (entries as string[]);
+      field === "tools" ? normalizedToolNames(entries as string[]) : (entries as string[]);
     effective[field] = applyArrayModifiers(inherited, normalized);
   }
   return effective;
@@ -425,12 +382,7 @@ export function mergeFrontmatter(
   override: Frontmatter,
   category: DefinitionCategory = "agent",
 ): Frontmatter {
-  return composeFrontmatter(
-    base,
-    override,
-    String(override.name ?? base.name ?? ""),
-    category,
-  );
+  return composeFrontmatter(base, override, String(override.name ?? base.name ?? ""), category);
 }
 
 function validateDefinition(
@@ -440,48 +392,32 @@ function validateDefinition(
   const { frontmatter, name } = definition;
   const source = definition.path;
   const invalid = (field: string, reason: string): never => {
-    throw new Error(
-      `${source}${name ? ` agent ${name}` : ""} field ${field}: ${reason}`,
-    );
+    throw new Error(`${source}${name ? ` agent ${name}` : ""} field ${field}: ${reason}`);
   };
   for (const field of Object.keys(frontmatter))
-    if (!SUPPORTED_FIELDS.has(field))
-      invalid(field, "is not a supported agent-definition field");
-  if (
-    frontmatter.permission !== undefined &&
-    !isPlainObject(frontmatter.permission)
-  )
+    if (!SUPPORTED_FIELDS.has(field)) invalid(field, "is not a supported agent-definition field");
+  if (frontmatter.permission !== undefined && !isPlainObject(frontmatter.permission))
     invalid("permission", "must be a mapping");
   if (typeof frontmatter.name !== "string" || !frontmatter.name)
     invalid("name", "must be a non-empty string");
   if (definition.category !== "agent" && !isDefinitionName(name))
     invalid("name", "must be a valid definition name");
   for (const field of BOOLEAN_CAPABILITY_FIELDS)
-    if (
-      frontmatter[field] !== undefined &&
-      typeof frontmatter[field] !== "boolean"
-    )
+    if (frontmatter[field] !== undefined && typeof frontmatter[field] !== "boolean")
       invalid(field, "must be a boolean");
   validateArrayFields(frontmatter, invalid);
   if (frontmatter.model !== undefined) {
     if (typeof frontmatter.model !== "string" || !frontmatter.model)
       invalid("model", "must be a non-empty string");
   }
-  if (
-    frontmatter.description !== undefined &&
-    typeof frontmatter.description !== "string"
-  )
+  if (frontmatter.description !== undefined && typeof frontmatter.description !== "string")
     invalid("description", "must be a string");
   if (
     frontmatter.thinking !== undefined &&
     frontmatter.thinking !== false &&
-    (typeof frontmatter.thinking !== "string" ||
-      !THINKING_LEVELS.has(frontmatter.thinking))
+    (typeof frontmatter.thinking !== "string" || !THINKING_LEVELS.has(frontmatter.thinking))
   )
-    invalid(
-      "thinking",
-      "must be one of off, minimal, low, medium, high, xhigh, max, or false",
-    );
+    invalid("thinking", "must be one of off, minimal, low, medium, high, xhigh, max, or false");
   if (
     frontmatter.systemPromptMode !== undefined &&
     (typeof frontmatter.systemPromptMode !== "string" ||
@@ -490,19 +426,14 @@ function validateDefinition(
     invalid("systemPromptMode", "must be append or replace");
   if (
     frontmatter.bodyMode !== undefined &&
-    (typeof frontmatter.bodyMode !== "string" ||
-      !BODY_MODES.has(frontmatter.bodyMode))
+    (typeof frontmatter.bodyMode !== "string" || !BODY_MODES.has(frontmatter.bodyMode))
   )
     invalid("bodyMode", "must be append or replace");
   if (frontmatter.bodyMode !== undefined && !options.allowBodyMode)
     invalid("bodyMode", "only valid when overlaying an existing agent");
 }
 
-function mergeDefinitionBody(
-  base: string,
-  override: string,
-  mode: BodyMode,
-): string {
+function mergeDefinitionBody(base: string, override: string, mode: BodyMode): string {
   if (!override) return base;
   if (mode === "append" && base) return `${base}\n\n${override}`;
   return override;
@@ -564,11 +495,7 @@ export function configuredToolPolicy(
     configured.length > 0 &&
     configured.every(isArrayModifier);
   const mode: ConfiguredToolPolicy["mode"] =
-    definition.frontmatter.tools === undefined
-      ? "inherit"
-      : relative
-        ? "relative"
-        : "explicit";
+    definition.frontmatter.tools === undefined ? "inherit" : relative ? "relative" : "explicit";
   const required = new Set(requiredTools);
   const terminal = new Map<string, boolean>();
   if (relative)
@@ -576,25 +503,18 @@ export function configuredToolPolicy(
       const name = operation.slice(1);
       terminal.set(name, operation[0] === "-");
     }
-  const removed = [...terminal]
-    .filter(([, isRemoved]) => isRemoved)
-    .map(([name]) => name);
+  const removed = [...terminal].filter(([, isRemoved]) => isRemoved).map(([name]) => name);
   const forbiddenRequired = removed.find((name) => required.has(name));
   if (forbiddenRequired)
     throw new Error(
       `agent ${definition.name} tools modifier cannot remove required tool ${JSON.stringify(forbiddenRequired)}`,
     );
-  const excluded = [
-    ...normalizedToolNames(definition.frontmatter.excludeTools),
-    ...removed,
-  ]
+  const excluded = [...normalizedToolNames(definition.frontmatter.excludeTools), ...removed]
     .filter((pattern) => !required.has(pattern))
     .filter((pattern, index, all) => all.indexOf(pattern) === index);
   for (const pattern of excluded) {
     if (!pattern.includes("*")) continue;
-    const matched = requiredTools.find((tool) =>
-      matchesToolPattern(pattern, tool),
-    );
+    const matched = requiredTools.find((tool) => matchesToolPattern(pattern, tool));
     if (matched)
       throw new Error(
         `agent ${definition.name} excludeTools pattern ${JSON.stringify(pattern)} ` +
@@ -605,9 +525,7 @@ export function configuredToolPolicy(
   return {
     mode,
     explicit: mode === "explicit",
-    tools: configured.filter(
-      (tool) => !isArrayModifier(tool) && !required.has(tool),
-    ),
+    tools: configured.filter((tool) => !isArrayModifier(tool) && !required.has(tool)),
     excluded,
   };
 }
@@ -618,11 +536,9 @@ export function toolPolicyAllowsName(
   name: string,
 ): boolean {
   if (requiredTools.has(name)) return true;
-  if (policy.excluded.some((pattern) => matchesToolPattern(pattern, name)))
-    return false;
+  if (policy.excluded.some((pattern) => matchesToolPattern(pattern, name))) return false;
   return (
-    policy.mode !== "explicit" ||
-    policy.tools.some((pattern) => matchesToolPattern(pattern, name))
+    policy.mode !== "explicit" || policy.tools.some((pattern) => matchesToolPattern(pattern, name))
   );
 }
 
@@ -631,12 +547,7 @@ function privateRepositoryRoot(projectRoot: string): string | undefined {
   try {
     output = execFileSync(
       "git",
-      [
-        "rev-parse",
-        "--is-inside-work-tree",
-        "--path-format=absolute",
-        "--git-common-dir",
-      ],
+      ["rev-parse", "--is-inside-work-tree", "--path-format=absolute", "--git-common-dir"],
       {
         cwd: projectRoot,
         // The catch below matches Git's English diagnostic.
@@ -672,8 +583,7 @@ function privateRepositoryRoot(projectRoot: string): string | undefined {
   return join(realpathSync(commonDir), "pi-herdsman");
 }
 
-type DefinitionLayerSource =
-  "projectSource" | "overrideSource" | "privateRepositorySource";
+type DefinitionLayerSource = "projectSource" | "overrideSource" | "privateRepositorySource";
 
 export type DefinitionLayerTrace = {
   scope: "bundled" | "global" | "project" | "private";
@@ -701,14 +611,8 @@ type DefinitionTraceCapture = {
   }>;
 };
 
-function sourceScope(
-  field: DefinitionLayerSource,
-): DefinitionLayerTrace["scope"] {
-  return field === "projectSource"
-    ? "project"
-    : field === "overrideSource"
-      ? "global"
-      : "private";
+function sourceScope(field: DefinitionLayerSource): DefinitionLayerTrace["scope"] {
+  return field === "projectSource" ? "project" : field === "overrideSource" ? "global" : "private";
 }
 
 function applyDefinitionLayer(
@@ -749,8 +653,7 @@ function applyDefinitionLayer(
       continue;
     }
     const mode = overrideBodyMode(definition);
-    const { bodyMode: _bodyMode, ...overrideFrontmatter } =
-      definition.frontmatter;
+    const { bodyMode: _bodyMode, ...overrideFrontmatter } = definition.frontmatter;
     const effective: AgentDefinition = {
       category: base.category,
       name: base.name,
@@ -783,10 +686,7 @@ function applyDefinitionLayer(
       if (definition.body) {
         trace.bodyFragments =
           mode === "append" && trace.bodyFragments.length
-            ? [
-                ...trace.bodyFragments,
-                { path: definition.path, scope, body: definition.body },
-              ]
+            ? [...trace.bodyFragments, { path: definition.path, scope, body: definition.body }]
             : [{ path: definition.path, scope, body: definition.body }];
       }
     }
@@ -801,9 +701,7 @@ export type DiscoverAgentDefinitionsOptions = {
   validateAgentReferences?: boolean;
 };
 
-function validateEffectiveAgentReferences(
-  definitions: readonly AgentDefinition[],
-): void {
+function validateEffectiveAgentReferences(definitions: readonly AgentDefinition[]): void {
   const names = new Set(definitions.map((definition) => definition.name));
   for (const definition of definitions)
     for (const reference of definition.frontmatter.agents ?? [])
@@ -824,13 +722,9 @@ export function validateRoleAgentDefinitionReferences(
   );
   for (const reference of definition.frontmatter.agents ?? []) {
     if (reservedDefinitionCategory(reference))
-      throw new Error(
-        `agent ${definition.name} references reserved agent definition ${reference}`,
-      );
+      throw new Error(`agent ${definition.name} references reserved agent definition ${reference}`);
     if (!byName.has(reference))
-      throw new Error(
-        `agent ${definition.name} references missing agent definition ${reference}`,
-      );
+      throw new Error(`agent ${definition.name} references missing agent definition ${reference}`);
   }
 }
 
@@ -838,21 +732,15 @@ function validateDefinitionApplicability(definition: AgentDefinition): void {
   if (definition.category === "agent") return;
   if (supportsDefinitionLaunchSettings(definition)) {
     if (definition.frontmatter.systemPromptMode === "replace")
-      throw new Error(
-        `${definition.path} managed Lead field systemPromptMode: must be append`,
-      );
+      throw new Error(`${definition.path} managed Lead field systemPromptMode: must be append`);
     for (const field of ["enabled", "permission"] as const)
       if (definition.frontmatter[field] !== undefined)
-        throw new Error(
-          `${definition.path} managed Lead field ${field}: is not supported`,
-        );
+        throw new Error(`${definition.path} managed Lead field ${field}: is not supported`);
     return;
   }
   for (const field of Object.keys(definition.frontmatter))
     if (!RUNTIME_LEAD_FIELDS.has(field))
-      throw new Error(
-        `${definition.path} ${definition.name} field ${field}: is not supported`,
-      );
+      throw new Error(`${definition.path} ${definition.name} field ${field}: is not supported`);
 }
 
 function discoverEffectiveDefinitions(
@@ -862,37 +750,20 @@ function discoverEffectiveDefinitions(
   trace?: DefinitionTraceCapture,
   targetName?: string,
 ): AgentDefinition[] {
-  const projectRoot = options.projectRoot
-    ? join(options.projectRoot, CONFIG_DIR_NAME)
-    : undefined;
-  const privateRoot = options.projectRoot
-    ? privateRepositoryRoot(options.projectRoot)
-    : undefined;
+  const projectRoot = options.projectRoot ? join(options.projectRoot, CONFIG_DIR_NAME) : undefined;
+  const privateRoot = options.projectRoot ? privateRepositoryRoot(options.projectRoot) : undefined;
   const globalRoot = getAgentDir();
-  const bundled = readDefinitionLayer(
-    BUNDLED_DEFINITION_ROOT,
-    category,
-    undefined,
-    targetName,
-  );
+  const bundled = readDefinitionLayer(BUNDLED_DEFINITION_ROOT, category, undefined, targetName);
   const project = projectRoot
     ? readDefinitionLayer(projectRoot, category, options.onWarning, targetName)
     : [];
   const privateRepository = privateRoot
     ? readDefinitionLayer(privateRoot, category, options.onWarning, targetName)
     : [];
-  const user = readDefinitionLayer(
-    globalRoot,
-    category,
-    options.onWarning,
-    targetName,
-  );
-  const definitions = new Map(
-    bundled.map((definition) => [definition.name, definition]),
-  );
+  const user = readDefinitionLayer(globalRoot, category, options.onWarning, targetName);
+  const definitions = new Map(bundled.map((definition) => [definition.name, definition]));
   for (const definition of bundled) {
-    if (!definition.extensionSource)
-      definition.extensionSource = definition.path;
+    if (!definition.extensionSource) definition.extensionSource = definition.path;
     validateDefinition(definition);
     if (trace?.name === definition.name) {
       trace.layers.push({
@@ -920,12 +791,7 @@ function discoverEffectiveDefinitions(
   }
   applyDefinitionLayer(definitions, user, "overrideSource", trace);
   applyDefinitionLayer(definitions, project, "projectSource", trace);
-  applyDefinitionLayer(
-    definitions,
-    privateRepository,
-    "privateRepositorySource",
-    trace,
-  );
+  applyDefinitionLayer(definitions, privateRepository, "privateRepositorySource", trace);
   const effective = [...definitions.values()].sort((left, right) =>
     left.name.localeCompare(right.name),
   );
@@ -955,9 +821,7 @@ function findDefinition(
     options.usage === "assigned-lead" &&
     (category !== "lead" || !isAssignedLeadDefinitionName(name))
   )
-    throw new Error(
-      `${category} definition ${name} is not applicable to assigned Leads`,
-    );
+    throw new Error(`${category} definition ${name} is not applicable to assigned Leads`);
   const definition = discoverEffectiveDefinitions(
     options,
     category,
@@ -966,18 +830,13 @@ function findDefinition(
     category === "agent" ? undefined : name,
   ).find((candidate) => candidate.name === name);
   if (!definition)
-    throw new Error(
-      `${category} ${category === "agent" ? "" : "definition "}${name} not found`,
-    );
+    throw new Error(`${category} ${category === "agent" ? "" : "definition "}${name} not found`);
   if (
     category !== "agent" &&
     options.validateAgentReferences !== false &&
     definition.frontmatter.agents?.length
   )
-    validateRoleAgentDefinitionReferences(
-      definition,
-      discoverAgentDefinitions(options),
-    );
+    validateRoleAgentDefinitionReferences(definition, discoverAgentDefinitions(options));
   return definition;
 }
 
@@ -996,13 +855,8 @@ export function inspectDefinition(
 ): DefinitionInspection {
   const trace: DefinitionTraceCapture = { name, layers: [], bodyFragments: [] };
   const definition = findDefinition(category, name, options, trace);
-  if (
-    trace.bodyFragments.map((fragment) => fragment.body).join("\n\n") !==
-    definition.body
-  )
-    throw new Error(
-      `Definition body trace did not reproduce effective body for ${name}`,
-    );
+  if (trace.bodyFragments.map((fragment) => fragment.body).join("\n\n") !== definition.body)
+    throw new Error(`Definition body trace did not reproduce effective body for ${name}`);
   return {
     definition,
     layers: trace.layers,
@@ -1023,9 +877,7 @@ export function discoverAgentDefinitions(
   return discoverDefinitions("agent", options);
 }
 
-export function discoverGlobalAgentDefinition(
-  name: string,
-): AgentDefinition | undefined {
+export function discoverGlobalAgentDefinition(name: string): AgentDefinition | undefined {
   // Global references may resolve only after a trusted project overlay is applied.
   return discoverEffectiveDefinitions({}, "agent", false).find(
     (definition) => definition.name === name,
@@ -1047,10 +899,7 @@ const definitionWarningSessions = new WeakMap<
   { sessionId: string | null; messages: Set<string> }
 >();
 
-export function notifyDefinitionWarning(
-  ctx: ExtensionContext,
-  message: string,
-): void {
+export function notifyDefinitionWarning(ctx: ExtensionContext, message: string): void {
   const manager = ctx.sessionManager;
   const sessionId = manager.getSessionId();
   let state = definitionWarningSessions.get(manager);
@@ -1069,9 +918,7 @@ export async function contextAgentDefinitions(
   onWarning?: (message: string) => void,
 ) {
   const projectTrusted = ctx.isProjectTrusted();
-  const options: DiscoverAgentDefinitionsOptions = projectTrusted
-    ? { projectRoot: ctx.cwd }
-    : {};
+  const options: DiscoverAgentDefinitionsOptions = projectTrusted ? { projectRoot: ctx.cwd } : {};
   options.onWarning = (message) => {
     notifyDefinitionWarning(ctx, message);
     onWarning?.(message);
@@ -1109,15 +956,11 @@ export function validateAgentDefinitionReferences(
   definition: AgentDefinition,
   definitions: readonly AgentDefinition[],
 ): void {
-  const byName = new Map(
-    definitions.map((candidate) => [candidate.name, candidate]),
-  );
+  const byName = new Map(definitions.map((candidate) => [candidate.name, candidate]));
   for (const reference of definition.frontmatter.agents ?? []) {
     const referencedDefinition = byName.get(reference);
     if (!referencedDefinition)
-      throw new Error(
-        `agent ${definition.name} references missing agent definition ${reference}`,
-      );
+      throw new Error(`agent ${definition.name} references missing agent definition ${reference}`);
     if (!agentDefinitionEnabled(referencedDefinition))
       throw new Error(
         `agent ${definition.name} references disabled agent definition ${reference}; enable ${reference} before assigning ${definition.name}`,
@@ -1127,14 +970,10 @@ export function validateAgentDefinitionReferences(
 
 export type AgentDefinitionScope = "delegating" | "leaf";
 
-function withoutDelegationCapability(
-  definition: AgentDefinition,
-): AgentDefinition {
+function withoutDelegationCapability(definition: AgentDefinition): AgentDefinition {
   const { agents: _agents, ...frontmatter } = definition.frontmatter;
   if (frontmatter.tools !== undefined)
-    frontmatter.tools = normalizedToolNames(frontmatter.tools).filter(
-      (tool) => tool !== "agent",
-    );
+    frontmatter.tools = normalizedToolNames(frontmatter.tools).filter((tool) => tool !== "agent");
   return {
     ...definition,
     frontmatter,
@@ -1146,10 +985,7 @@ function withoutDelegationCapability(
  * started by the Lead, Manager or Chief has depth 1, its children depth 2, and
  * so on. An Agent whose depth has reached `maxAgentDepth` is a leaf.
  */
-export function agentScopeAtDepth(
-  depth: number,
-  maxAgentDepth: number,
-): AgentDefinitionScope {
+export function agentScopeAtDepth(depth: number, maxAgentDepth: number): AgentDefinitionScope {
   return depth >= maxAgentDepth ? "leaf" : "delegating";
 }
 
@@ -1171,44 +1007,28 @@ export function agentDefinitionMetadata(
   return {
     name: agent.name,
     ...(agentDefinitionEnabled(agent) ? {} : { enabled: false }),
-    ...(agent.extensionSource === undefined
-      ? {}
-      : { extensionSource: agent.extensionSource }),
-    ...(agent.projectSource === undefined
-      ? {}
-      : { projectSource: agent.projectSource }),
-    ...(agent.overrideSource === undefined
-      ? {}
-      : { overrideSource: agent.overrideSource }),
+    ...(agent.extensionSource === undefined ? {} : { extensionSource: agent.extensionSource }),
+    ...(agent.projectSource === undefined ? {} : { projectSource: agent.projectSource }),
+    ...(agent.overrideSource === undefined ? {} : { overrideSource: agent.overrideSource }),
     ...(agent.privateRepositorySource === undefined
       ? {}
       : { privateRepositorySource: agent.privateRepositorySource }),
     ...(typeof description === "string" ? { description } : {}),
     ...(model === undefined ? {} : { model }),
     ...(thinking === undefined ? {} : { thinking }),
-    ...(frontmatter.noTools === undefined
-      ? {}
-      : { noTools: frontmatter.noTools }),
+    ...(frontmatter.noTools === undefined ? {} : { noTools: frontmatter.noTools }),
     ...(frontmatter.noBuiltinTools === undefined
       ? {}
       : { noBuiltinTools: frontmatter.noBuiltinTools }),
     ...(frontmatter.tools === undefined ? {} : { tools: frontmatter.tools }),
-    ...(frontmatter.excludeTools === undefined
-      ? {}
-      : { excludeTools: frontmatter.excludeTools }),
-    ...(frontmatter.noSkills === undefined
-      ? {}
-      : { noSkills: frontmatter.noSkills }),
+    ...(frontmatter.excludeTools === undefined ? {} : { excludeTools: frontmatter.excludeTools }),
+    ...(frontmatter.noSkills === undefined ? {} : { noSkills: frontmatter.noSkills }),
     ...(frontmatter.inheritSkills === undefined
       ? {}
       : { inheritSkills: frontmatter.inheritSkills }),
     ...(frontmatter.skills === undefined ? {} : { skills: frontmatter.skills }),
-    ...(frontmatter.noExtensions === undefined
-      ? {}
-      : { noExtensions: frontmatter.noExtensions }),
-    ...(frontmatter.extensions === undefined
-      ? {}
-      : { extensions: frontmatter.extensions }),
+    ...(frontmatter.noExtensions === undefined ? {} : { noExtensions: frontmatter.noExtensions }),
+    ...(frontmatter.extensions === undefined ? {} : { extensions: frontmatter.extensions }),
     ...(frontmatter.agents === undefined ? {} : { agents: frontmatter.agents }),
   };
 }
@@ -1230,9 +1050,7 @@ function globalOverridePath(definition: AgentDefinition): string {
   );
 }
 
-export function definitionEditTargets(
-  definition: AgentDefinition,
-): DefinitionEditTarget[] {
+export function definitionEditTargets(definition: AgentDefinition): DefinitionEditTarget[] {
   const targets: DefinitionEditTarget[] = [];
   if (definition.category !== "chief" && definition.privateRepositorySource)
     targets.push({
@@ -1241,8 +1059,7 @@ export function definitionEditTargets(
     });
   if (definition.category !== "chief" && definition.projectSource)
     targets.push({ scope: "project", path: definition.projectSource });
-  if (definition.overrideSource)
-    targets.push({ scope: "global", path: definition.overrideSource });
+  if (definition.overrideSource) targets.push({ scope: "global", path: definition.overrideSource });
   if (!targets.length && definition.extensionSource)
     targets.push({ scope: "global", path: globalOverridePath(definition) });
   return targets;
@@ -1256,29 +1073,18 @@ export function readDefinitionEditSnapshot(
     (candidate) => candidate.scope === target.scope,
   );
   if (!expected || expected.path !== target.path)
-    throw new Error(
-      `definition edit source is no longer available: ${target.path}`,
-    );
+    throw new Error(`definition edit source is no longer available: ${target.path}`);
   const info = lstatSync(target.path, { throwIfNoEntry: false });
   if (!info) {
-    if (
-      definition.extensionSource &&
-      target.scope === "global" &&
-      !definition.overrideSource
-    )
+    if (definition.extensionSource && target.scope === "global" && !definition.overrideSource)
       return { target, content: null, frontmatter: {} };
     throw new Error(`definition source is no longer available: ${target.path}`);
   }
-  if (!info.isFile())
-    throw new Error(`definition source is not a regular file: ${target.path}`);
+  if (!info.isFile()) throw new Error(`definition source is not a regular file: ${target.path}`);
   const content = readFileSync(target.path, "utf8");
-  const parsed = parsePiFrontmatter<Record<string, unknown>>(
-    content.replace(/^\uFEFF/u, ""),
-  );
+  const parsed = parsePiFrontmatter<Record<string, unknown>>(content.replace(/^\uFEFF/u, ""));
   if (parsed.frontmatter.name !== definition.name)
-    throw new Error(
-      `definition source name does not match ${definition.name}: ${target.path}`,
-    );
+    throw new Error(`definition source name does not match ${definition.name}: ${target.path}`);
   return { target, content, frontmatter: parsed.frontmatter as Frontmatter };
 }
 
@@ -1296,29 +1102,20 @@ export function updateAgentOverride(
       ? definition.category !== "agent"
       : !supportsDefinitionLaunchSettings(definition)
   )
-    throw new Error(
-      `Definition ${definition.name} does not support editing ${field}`,
-    );
+    throw new Error(`Definition ${definition.name} does not support editing ${field}`);
   const targets = definitionEditTargets(definition);
-  const target = targets.find(
-    (candidate) => candidate.scope === (options.scope ?? "global"),
-  );
+  const target = targets.find((candidate) => candidate.scope === (options.scope ?? "global"));
   if (!target)
-    throw new Error(
-      `definition has no eligible ${options.scope ?? "global"} edit source`,
-    );
+    throw new Error(`definition has no eligible ${options.scope ?? "global"} edit source`);
   const path = target.path;
   const link = lstatSync(path, { throwIfNoEntry: false });
-  if (link?.isSymbolicLink())
-    throw new Error(`refusing to replace symlinked definition: ${path}`);
+  if (link?.isSymbolicLink()) throw new Error(`refusing to replace symlinked definition: ${path}`);
   const exists = statSync(path, { throwIfNoEntry: false });
   if (
     options.expectedContent !== undefined &&
     (exists ? readFileSync(path, "utf8") : null) !== options.expectedContent
   )
-    throw new Error(
-      `Definition changed while editing: ${path}. Reopen the setting.`,
-    );
+    throw new Error(`Definition changed while editing: ${path}. Reopen the setting.`);
   if (value === undefined && !exists) {
     return { path, changed: false, content: "" };
   }
@@ -1326,26 +1123,20 @@ export function updateAgentOverride(
   let content: string;
   let mode = 0o600;
   if (exists) {
-    if (!exists.isFile())
-      throw new Error(`agent override is not a file: ${path}`);
+    if (!exists.isFile()) throw new Error(`agent override is not a file: ${path}`);
     content = readFileSync(path, "utf8");
     if (
-      parsePiFrontmatter<Record<string, unknown>>(
-        content.replace(/^\uFEFF/u, ""),
-      ).frontmatter.name !== definition.name
+      parsePiFrontmatter<Record<string, unknown>>(content.replace(/^\uFEFF/u, "")).frontmatter
+        .name !== definition.name
     )
-      throw new Error(
-        `definition source name does not match ${definition.name}: ${path}`,
-      );
+      throw new Error(`definition source name does not match ${definition.name}: ${path}`);
     mode = exists.mode & 0o777;
   } else {
     mkdirSync(dirname(path), { recursive: true });
     content = `---\nname: ${JSON.stringify(definition.name)}\n---\n`;
   }
 
-  const lines = [...content.matchAll(/.*(?:\r\n|\n|\r|$)/g)].filter(
-    (match) => match[0].length > 0,
-  );
+  const lines = [...content.matchAll(/.*(?:\r\n|\n|\r|$)/g)].filter((match) => match[0].length > 0);
   if (
     lines[0]?.[0]
       .replace(/^\uFEFF/u, "")
@@ -1354,18 +1145,14 @@ export function updateAgentOverride(
   )
     throw new Error(`invalid agent override frontmatter: ${path}`);
   const closing = lines.findIndex(
-    (match, index) =>
-      index > 0 && match[0].replace(/\r?\n|\r$/u, "").trim() === "---",
+    (match, index) => index > 0 && match[0].replace(/\r?\n|\r$/u, "").trim() === "---",
   );
-  if (closing < 0)
-    throw new Error(`invalid agent override frontmatter: ${path}`);
+  if (closing < 0) throw new Error(`invalid agent override frontmatter: ${path}`);
   const eol = content.match(/\r\n|\n|\r/u)?.[0] ?? "\n";
   const fieldLine = new RegExp(`^${field}:\\s*`);
   const existingIndex = lines.findIndex(
     (line, index) =>
-      index > 0 &&
-      index < closing &&
-      fieldLine.test(line[0].replace(/\r?\n|\r$/u, "")),
+      index > 0 && index < closing && fieldLine.test(line[0].replace(/\r?\n|\r$/u, "")),
   );
   const hadField = existingIndex !== -1;
   if (value === undefined && hadField) {
@@ -1375,10 +1162,7 @@ export function updateAgentOverride(
     if (next && /^[ \t]/u.test(next[0]))
       throw new Error(`cannot safely remove multiline ${field} in ${path}`);
   }
-  if (
-    !hadField &&
-    Object.hasOwn(parsePiFrontmatter(content).frontmatter, field)
-  ) {
+  if (!hadField && Object.hasOwn(parsePiFrontmatter(content).frontmatter, field)) {
     throw new Error(`cannot safely edit ${field} in ${path}`);
   }
   const updated = lines
@@ -1394,9 +1178,7 @@ export function updateAgentOverride(
     })
     .join("");
   const parsed = parsePiFrontmatter(updated).frontmatter;
-  if (
-    value === undefined ? Object.hasOwn(parsed, field) : parsed[field] !== value
-  ) {
+  if (value === undefined ? Object.hasOwn(parsed, field) : parsed[field] !== value) {
     throw new Error(`invalid ${field} override in ${path}`);
   }
   if (value === undefined && !hadField)
@@ -1417,13 +1199,8 @@ export function updateAgentOverride(
     const current = lstatSync(path, { throwIfNoEntry: false });
     if (current?.isSymbolicLink())
       throw new Error(`refusing to replace symlinked definition: ${path}`);
-    if (
-      (current ? readFileSync(path, "utf8") : null) !==
-      (exists ? content : null)
-    )
-      throw new Error(
-        `Definition changed while editing: ${path}. Reopen the setting.`,
-      );
+    if ((current ? readFileSync(path, "utf8") : null) !== (exists ? content : null))
+      throw new Error(`Definition changed while editing: ${path}. Reopen the setting.`);
     renameSync(temporary, path);
     return { path, changed: true, content: readFileSync(path, "utf8") };
   } finally {
@@ -1438,7 +1215,8 @@ export function configuredModel(frontmatter: Frontmatter): string | undefined {
 }
 
 export type ChildModelDecision =
-  { kind: "none" } | { kind: "use"; model: string; provider?: string };
+  | { kind: "none" }
+  | { kind: "use"; model: string; provider?: string };
 
 export function resolveChildModel(input: {
   assignment?: { provider: string; token: string };
@@ -1475,9 +1253,7 @@ export function configuredThinking(
   return level;
 }
 
-export function writePrivatePromptSnapshots(
-  contents: readonly string[],
-): string[] {
+export function writePrivatePromptSnapshots(contents: readonly string[]): string[] {
   const root = herdsmanTempRoot();
   const prompts = join(root, "prompts");
   mkdirSync(prompts, { recursive: true, mode: 0o700 });
@@ -1526,9 +1302,7 @@ export function expandDefinitionBodyFragmentsWithSources(
         skipCanonicalPaths,
       })
     : [];
-  const remaining = new Map(
-    snapshots.map((snapshot) => [snapshot.input, snapshot]),
-  );
+  const remaining = new Map(snapshots.map((snapshot) => [snapshot.input, snapshot]));
   return fragments.map(({ body }) => {
     const parts: ExpandedDefinitionBodyPart[] = [];
     let cursor = 0;
@@ -1552,11 +1326,9 @@ export function expandDefinitionBodyFragments(
   skipCanonicalPaths: readonly string[],
   operation: string,
 ): string[] {
-  return expandDefinitionBodyFragmentsWithSources(
-    fragments,
-    skipCanonicalPaths,
-    operation,
-  ).map((parts) => parts.map(({ text }) => text).join(""));
+  return expandDefinitionBodyFragmentsWithSources(fragments, skipCanonicalPaths, operation).map(
+    (parts) => parts.map(({ text }) => text).join(""),
+  );
 }
 
 export function expandAgentBodyFiles(
@@ -1571,25 +1343,16 @@ export function expandAgentBodyFiles(
   )[0]!;
 }
 
-export function agentDefinitionDelegationEnabled(
-  definition: AgentDefinition,
-): boolean {
-  const {
-    agents,
-    tools: configured,
-    excludeTools,
-    noTools,
-  } = definition.frontmatter;
+export function agentDefinitionDelegationEnabled(definition: AgentDefinition): boolean {
+  const { agents, tools: configured, excludeTools, noTools } = definition.frontmatter;
   if ((agents?.length ?? 0) === 0) return false;
 
   const tools = normalizedToolNames(configured);
   if (normalizedToolNames(excludeTools).includes("agent")) return false;
-  if (noTools === true && !tools.includes("+agent") && !tools.includes("agent"))
-    return false;
+  if (noTools === true && !tools.includes("+agent") && !tools.includes("agent")) return false;
   if (configured === undefined) return true;
   const policy = configuredToolPolicy(definition, []);
-  if (policy.mode === "relative")
-    return toolPolicyAllowsName(policy, new Set(), "agent");
+  if (policy.mode === "relative") return toolPolicyAllowsName(policy, new Set(), "agent");
   return tools.length > 0;
 }
 
@@ -1622,10 +1385,7 @@ export function contextInheritance(
 
 function isWithinDirectory(directory: string, root: string): boolean {
   const rel = relative(root, directory);
-  return (
-    rel === "" ||
-    (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
-  );
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 function contextProjectRoot(cwd: string): string {
@@ -1660,14 +1420,10 @@ function contextProjectRoot(cwd: string): string {
   }
   const cdup = output.replace(/\r?\n$/u, "");
   if (cdup.includes("\n") || cdup.includes("\r") || isAbsolute(cdup))
-    throw new Error(
-      `Invalid Git worktree-relative directory for ${cwd}: ${cdup}`,
-    );
+    throw new Error(`Invalid Git worktree-relative directory for ${cwd}: ${cdup}`);
   const canonicalRoot = realpathSync(resolve(canonicalCwd, cdup || "."));
   if (!isWithinDirectory(canonicalCwd, canonicalRoot))
-    throw new Error(
-      `Git worktree root does not contain ${cwd}: ${canonicalRoot}`,
-    );
+    throw new Error(`Git worktree root does not contain ${cwd}: ${canonicalRoot}`);
   return canonicalRoot;
 }
 
@@ -1677,14 +1433,11 @@ export function selectedAgentContextFiles(
   loader: typeof loadProjectContextFiles = loadProjectContextFiles,
   inheritance = contextInheritance(definition),
 ) {
-  if (!inheritance.global && !inheritance.ancestor && !inheritance.project)
-    return [];
+  if (!inheritance.global && !inheritance.ancestor && !inheritance.project) return [];
   const agentDir = getAgentDir();
   const discovered = loader({ cwd, agentDir });
   const boundary =
-    inheritance.project === inheritance.ancestor
-      ? undefined
-      : contextProjectRoot(cwd);
+    inheritance.project === inheritance.ancestor ? undefined : contextProjectRoot(cwd);
   return discovered.filter((context) => {
     const contextDir = dirname(context.path);
     const isGlobal = resolve(contextDir) === resolve(agentDir);
@@ -1696,13 +1449,9 @@ export function selectedAgentContextFiles(
   });
 }
 
-export const EXPECTED_COORDINATOR_LAUNCH_ENV =
-  "PI_HERDSMAN_EXPECTED_COORDINATOR_LAUNCH";
+export const EXPECTED_COORDINATOR_LAUNCH_ENV = "PI_HERDSMAN_EXPECTED_COORDINATOR_LAUNCH";
 
-export function coordinatorLaunchConfiguration(
-  definition: AgentDefinition,
-  cwd: string,
-): string {
+export function coordinatorLaunchConfiguration(definition: AgentDefinition, cwd: string): string {
   return createHash("sha256")
     .update(
       JSON.stringify([
@@ -1741,10 +1490,7 @@ export type AgentLaunchOptions = {
   omitBodyPrompt?: boolean;
 };
 
-export function agentLaunchArgs(
-  agent: AgentDefinition,
-  options: AgentLaunchOptions,
-): string[] {
+export function agentLaunchArgs(agent: AgentDefinition, options: AgentLaunchOptions): string[] {
   const {
     bodyPromptPath,
     sharedPromptPath,
@@ -1765,14 +1511,8 @@ export function agentLaunchArgs(
   const bodyPromptPathForLaunch =
     !options.omitBodyPrompt && agent.body ? bodyPromptPath : undefined;
   const { frontmatter } = agent;
-  if (
-    agent.body &&
-    !options.omitBodyPrompt &&
-    bodyPromptPathForLaunch === undefined
-  )
-    throw new Error(
-      `agent ${agent.name} has a body but no bodyPromptPath was provided`,
-    );
+  if (agent.body && !options.omitBodyPrompt && bodyPromptPathForLaunch === undefined)
+    throw new Error(`agent ${agent.name} has a body but no bodyPromptPath was provided`);
   const args: string[] = [];
   if (approveProject === true) args.push("--approve");
   else if (approveProject === false) args.push("--no-approve");
@@ -1783,25 +1523,20 @@ export function agentLaunchArgs(
     });
   if (decision.kind === "use") {
     // Constrain Pi's resolver without reimplementing its prefix or fuzzy lookup.
-    if (decision.provider !== undefined)
-      args.push("--provider", decision.provider);
+    if (decision.provider !== undefined) args.push("--provider", decision.provider);
     args.push("--model", decision.model);
   }
   const thinking =
     options.assignmentThinking === null
       ? undefined
-      : (options.assignmentThinking ??
-        configuredThinking(agent) ??
-        inheritedThinking);
+      : (options.assignmentThinking ?? configuredThinking(agent) ?? inheritedThinking);
   if (thinking !== undefined) {
     args.push("--thinking", thinking);
   }
 
   const mode = frontmatter.systemPromptMode ?? "append";
   if (typeof mode !== "string" || !SYSTEM_PROMPT_MODES.has(mode))
-    throw new Error(
-      `agent ${agent.name} has invalid systemPromptMode: ${JSON.stringify(mode)}`,
-    );
+    throw new Error(`agent ${agent.name} has invalid systemPromptMode: ${JSON.stringify(mode)}`);
   if (bodyPromptPathForLaunch !== undefined)
     args.push(
       mode === "append" ? "--append-system-prompt" : "--system-prompt",
@@ -1809,9 +1544,7 @@ export function agentLaunchArgs(
     );
   const inheritance = contextInheritance(
     agent,
-    options.nativeCoordinatorDefaults
-      ? { global: true, ancestor: true, project: true }
-      : undefined,
+    options.nativeCoordinatorDefaults ? { global: true, ancestor: true, project: true } : undefined,
   );
   if (!inheritance.global || !inheritance.ancestor || !inheritance.project) {
     args.push("--no-context-files");
@@ -1850,18 +1583,13 @@ export function agentLaunchArgs(
     const operations = [...normalizedToolNames(frontmatter.tools)];
     for (const tool of requiredTools)
       if (!operations.includes(`+${tool}`)) operations.push(`+${tool}`);
-    if (
-      noTools &&
-      !operations.some((operation) => operation.startsWith("+mcp__"))
-    ) {
+    if (noTools && !operations.some((operation) => operation.startsWith("+mcp__"))) {
       operations.push("+mcp__");
       if (!excluded.includes("mcp__")) excluded.push("mcp__");
     }
     if (operations.length) args.push("--tools", operations.join(","));
   } else if (noTools || policy.mode === "explicit") {
-    const configured = policy.tools.filter(
-      (tool) => !managedAgent || tool !== "agent",
-    );
+    const configured = policy.tools.filter((tool) => !managedAgent || tool !== "agent");
     const selected = [...new Set([...configured, ...requiredTools])];
     if (selected.length) {
       if (!selected.some((tool) => tool.startsWith("mcp__"))) {
@@ -1880,9 +1608,7 @@ export function agentLaunchArgs(
   for (const skill of frontmatter.skills ?? []) args.push("--skill", skill);
 
   if (frontmatter.noExtensions) args.push("--no-extensions");
-  for (const extension of frontmatter.extensions ?? [])
-    args.push("--extension", extension);
-  if (managedAgent)
-    args.push("--append-system-prompt", `<active_agent name="${agent.name}"/>`);
+  for (const extension of frontmatter.extensions ?? []) args.push("--extension", extension);
+  if (managedAgent) args.push("--append-system-prompt", `<active_agent name="${agent.name}"/>`);
   return args;
 }

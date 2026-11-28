@@ -15,18 +15,8 @@ import {
   SessionManager,
   truncateTail,
 } from "@earendil-works/pi-coding-agent";
-import {
-  contentText,
-  getSupportedThinkingLevels,
-  type ThinkingLevel,
-} from "@earendil-works/pi-ai";
-import {
-  accessSync,
-  constants,
-  readdirSync,
-  realpathSync,
-  statSync,
-} from "node:fs";
+import { contentText, getSupportedThinkingLevels, type ThinkingLevel } from "@earendil-works/pi-ai";
+import { accessSync, constants, readdirSync, realpathSync, statSync } from "node:fs";
 import { unlinkSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -119,11 +109,7 @@ import {
   ProcessLockOccupiedError,
   tryClaimAssignmentLock,
 } from "./lock.ts";
-import type {
-  ManagedAgentControlState,
-  SpawnPlacement,
-  MessageFileInput,
-} from "./core.ts";
+import type { ManagedAgentControlState, SpawnPlacement, MessageFileInput } from "./core.ts";
 import {
   agentControlState,
   displayIdentity,
@@ -135,10 +121,7 @@ import {
   snapshotTextFiles,
   validateMessageFiles,
 } from "./core.ts";
-import {
-  globalProjectAssignmentSnapshot,
-  normalizeHerdrLifecycleState,
-} from "./supervision.ts";
+import { globalProjectAssignmentSnapshot, normalizeHerdrLifecycleState } from "./supervision.ts";
 import {
   herdrAgentAlias,
   herdrSessionSnapshot,
@@ -232,10 +215,7 @@ const waitForDelegationLock = async (
         occupiedMessage: "Delegation lifecycle is already in progress",
       });
     } catch (error) {
-      if (
-        !(error instanceof ProcessLockOccupiedError) ||
-        Date.now() >= deadline
-      ) {
+      if (!(error instanceof ProcessLockOccupiedError) || Date.now() >= deadline) {
         if (error instanceof ProcessLockOccupiedError)
           fail("agent_busy", error.message, "lifecycle", {
             details: { workspaceId, parentSessionId: sessionId },
@@ -259,9 +239,7 @@ export type AgentStatusSnapshotHost = {
   scope: ControllerScope;
   /** Verified current root role for display only; undefined uses a neutral label. */
   activeRootRoleForPresentation?(): "lead" | "manager" | "chief" | undefined;
-  listedAgentRecord: ReturnType<
-    typeof createAgentController
-  >["listedAgentRecord"];
+  listedAgentRecord: ReturnType<typeof createAgentController>["listedAgentRecord"];
   runtimeForLabel(label: string): Runtime | undefined;
   herdStartedAt?(): number | undefined;
   environmentIdentity(ctx: ExtensionContext): ManagedAgentState | undefined;
@@ -282,8 +260,7 @@ export function buildAgentStatusSnapshot(
   host: AgentStatusSnapshotHost,
 ): StatusSnapshot {
   const ownerSessionId = ctx.sessionManager.getSessionId();
-  const unresolvedMailboxState =
-    host.scope.kind === "root" && view.stateIssues.length > 0;
+  const unresolvedMailboxState = host.scope.kind === "root" && view.stateIssues.length > 0;
   const agents = view.visible.map((observed) => {
     const agent = host.listedAgentRecord(
       view,
@@ -293,8 +270,7 @@ export function buildAgentStatusSnapshot(
       unresolvedMailboxState,
     );
     const runtime = host.runtimeForLabel(agent.agent as string);
-    const tokens =
-      agent.tokens && typeof agent.tokens === "object" ? agent.tokens : {};
+    const tokens = agent.tokens && typeof agent.tokens === "object" ? agent.tokens : {};
     const role = Reflect.get(tokens, "role");
     const task = Reflect.get(tokens, "task");
     const presentation = parsePresentationTokens(tokens);
@@ -346,17 +322,14 @@ export function buildAgentStatusSnapshot(
         : {}),
       definition:
         collapseDisplayText(
-          typeof agent.agent_definition === "string" &&
-            agent.agent_definition.trim()
+          typeof agent.agent_definition === "string" && agent.agent_definition.trim()
             ? agent.agent_definition
             : typeof role === "string"
               ? role
               : undefined,
         ) ?? "unknown",
       ...(typeof agent.pane_id === "string" ? { paneId: agent.pane_id } : {}),
-      ...(typeof agent.pi_session_id === "string"
-        ? { sessionId: agent.pi_session_id }
-        : {}),
+      ...(typeof agent.pi_session_id === "string" ? { sessionId: agent.pi_session_id } : {}),
       task: typeof task === "string" ? task : runtime?.task,
       startedAt: presentation.startedAt ?? runtime?.startedAt,
       model: presentation.model ?? runtime?.model ?? undefined,
@@ -365,19 +338,13 @@ export function buildAgentStatusSnapshot(
       ...(agent.stale
         ? {
             stale: true,
-            inactiveMs:
-              typeof agent.inactive_ms === "number"
-                ? agent.inactive_ms
-                : undefined,
+            inactiveMs: typeof agent.inactive_ms === "number" ? agent.inactive_ms : undefined,
           }
         : {}),
-      ...(typeof agent.parent_label === "string"
-        ? { parentLabel: agent.parent_label }
-        : {}),
+      ...(typeof agent.parent_label === "string" ? { parentLabel: agent.parent_label } : {}),
     };
   });
-  const herdStartedAt =
-    host.scope.kind === "root" ? host.herdStartedAt?.() : undefined;
+  const herdStartedAt = host.scope.kind === "root" ? host.herdStartedAt?.() : undefined;
   return {
     agents,
     stale: false,
@@ -407,8 +374,7 @@ export function observeLocalHeaderActivity(
     invalidate();
   });
   pi.on("ui_prompt_end", (_event, ctx) => {
-    if (promptSession === ctx.sessionManager.getSessionId())
-      promptSession = undefined;
+    if (promptSession === ctx.sessionManager.getSessionId()) promptSession = undefined;
     invalidate();
   });
   pi.on("agent_start", invalidate);
@@ -423,9 +389,7 @@ export function observeLocalHeaderActivity(
   return (ctx) => {
     try {
       if (ctx.isIdle()) return "idle";
-      return promptSession === ctx.sessionManager.getSessionId()
-        ? "blocked"
-        : "working";
+      return promptSession === ctx.sessionManager.getSessionId() ? "blocked" : "working";
     } catch {
       return "unknown";
     }
@@ -446,8 +410,7 @@ export function createAgentStatusRuntime() {
           intent: FocusIntent,
           isCurrent: () => boolean,
         ): Promise<void>;
-        getGitSummary?():
-          import("./presentation.ts").GitChangeSummary | undefined;
+        getGitSummary?(): import("./presentation.ts").GitChangeSummary | undefined;
         onFreshStatus?(ctx: ExtensionContext, snapshot: StatusSnapshot): void;
         onWidgetStop?(): void;
         getLocalActivity?(ctx: ExtensionContext): LocalHeaderActivity;
@@ -483,10 +446,7 @@ export function createAgentStatusRuntime() {
   };
   let presentedStatus = lastValidStatus;
   let onStatusChange: (() => void) | undefined;
-  const widgetSnapshot = (
-    snapshot: StatusSnapshot,
-    standalone = false,
-  ): StatusSnapshot => {
+  const widgetSnapshot = (snapshot: StatusSnapshot, standalone = false): StatusSnapshot => {
     const pendingStarts = options?.pendingStartEntries() ?? [];
     if (!pendingStarts.length) return snapshot;
     const agents = snapshot.agents.map((agent) => {
@@ -507,9 +467,7 @@ export function createAgentStatusRuntime() {
         : agent;
     });
     const pendingAgents = pendingStarts
-      .filter(
-        ({ label }) => !snapshot.agents.some((agent) => agent.label === label),
-      )
+      .filter(({ label }) => !snapshot.agents.some((agent) => agent.label === label))
       .map(({ label, definition, task, startedAt, parentLabel }) => ({
         label,
         definition,
@@ -548,18 +506,9 @@ export function createAgentStatusRuntime() {
       // A presentation callback must not turn an observation into a failure.
     }
   };
-  const refresh = async (
-    ctx = statusContext,
-    generation = statusGeneration,
-  ): Promise<void> => {
+  const refresh = async (ctx = statusContext, generation = statusGeneration): Promise<void> => {
     const configured = options;
-    if (
-      !configured ||
-      !ctx ||
-      generation !== statusGeneration ||
-      ctx !== statusContext
-    )
-      return;
+    if (!configured || !ctx || generation !== statusGeneration || ctx !== statusContext) return;
     if (statusInFlight) {
       statusRefresh = true;
       return;
@@ -621,10 +570,7 @@ export function createAgentStatusRuntime() {
   // between the read that showed the Agent and the watcher's baseline scan is
   // not reported as new, so starting the watcher also requests one catch-up
   // refresh.
-  const syncNewAgentWatch = (
-    ctx: ExtensionContext,
-    generation: number,
-  ): void => {
+  const syncNewAgentWatch = (ctx: ExtensionContext, generation: number): void => {
     if (!presentedStatus.agents.length || !statusTimer) {
       stopNewAgentWatch?.();
       stopNewAgentWatch = undefined;
@@ -671,8 +617,7 @@ export function createAgentStatusRuntime() {
       statusWidget?.invalidate();
     },
     requestRefresh: () => {
-      if (requestActive && statusContext)
-        void refresh(statusContext, statusGeneration);
+      if (requestActive && statusContext) void refresh(statusContext, statusGeneration);
     },
     getSnapshot: () => presentedStatus,
     invalidateWidget: () => statusWidget?.invalidate(),
@@ -681,9 +626,7 @@ export function createAgentStatusRuntime() {
       if (ctx.mode !== "tui" || !ctx.hasUI) return;
       const primed = statusPrimed && ctx === statusContext;
       const generation =
-        ctx === statusContext && requestActive
-          ? statusGeneration
-          : ++statusGeneration;
+        ctx === statusContext && requestActive ? statusGeneration : ++statusGeneration;
       clearTimer();
       removeWidget();
       statusContext = ctx;
@@ -709,9 +652,7 @@ export function createAgentStatusRuntime() {
       onStatusChange = undefined;
       const primed = statusPrimed && ctx === statusContext;
       const generation =
-        ctx === statusContext && requestActive
-          ? statusGeneration
-          : ++statusGeneration;
+        ctx === statusContext && requestActive ? statusGeneration : ++statusGeneration;
       clearTimer();
       removeWidget();
       statusContext = ctx;
@@ -739,10 +680,7 @@ export function createAgentStatusRuntime() {
             void focus(ctx, intent, isCurrent)
               .catch((error) => {
                 if (generation === statusGeneration && ctx === statusContext)
-                  ctx.ui.notify(
-                    String(error).replace(/^Error: /u, ""),
-                    "warning",
-                  );
+                  ctx.ui.notify(String(error).replace(/^Error: /u, ""), "warning");
               })
               .finally(() => {
                 if (generation === statusGeneration) focusInFlight = false;
@@ -956,16 +894,10 @@ async function herdrVersion(
     signal,
     timeout: 10_000,
   });
-  const value =
-    status && typeof status === "object" ? (status as Record<string, any>) : {};
-  const client =
-    value.client && typeof value.client === "object" ? value.client : {};
-  const server =
-    value.server && typeof value.server === "object" ? value.server : {};
-  const match =
-    typeof client.version === "string"
-      ? parseHerdrVersion(client.version)
-      : undefined;
+  const value = status && typeof status === "object" ? (status as Record<string, any>) : {};
+  const client = value.client && typeof value.client === "object" ? value.client : {};
+  const server = value.server && typeof value.server === "object" ? value.server : {};
+  const match = typeof client.version === "string" ? parseHerdrVersion(client.version) : undefined;
   const supported =
     !!match &&
     (Number(match[1]) > 0 ||
@@ -989,9 +921,7 @@ export function resolveMessageFiles(
   return files.map((file) => {
     if (file.startsWith("evidence:")) {
       const matches = acceptedEvidence.filter(
-        (
-          entry,
-        ): entry is Exclude<RequiredEvidence, { result: ResultBinding }> =>
+        (entry): entry is Exclude<RequiredEvidence, { result: ResultBinding }> =>
           !("result" in entry) && entry.ref === file,
       );
       if (matches.length !== 1)
@@ -1005,11 +935,7 @@ export function resolveMessageFiles(
         verifySemanticEvidenceReservation(evidence.id, evidence.ref!);
         readRequiredEvidenceSnapshot(evidence.sourceAssignmentId, evidence);
       } catch {
-        fail(
-          "invalid_request",
-          `Evidence reference ${file} is unavailable or invalid`,
-          operation,
-        );
+        fail("invalid_request", `Evidence reference ${file} is unavailable or invalid`, operation);
       }
       return {
         kind: "retainedEvidence",
@@ -1038,35 +964,20 @@ export function resolveMessageFiles(
       );
     const requesterSessionId = ctx.sessionManager.getSessionId();
     const branch = ctx.sessionManager.getBranch();
-    const refs = verifiedBranchResultMappings(
-      branch,
-      file,
-      requesterSessionId,
-      operation,
-    );
-    const branchMappings = canonicalRefsForSemanticResult(
-      branch,
-      file,
-      operation,
-    );
+    const refs = verifiedBranchResultMappings(branch, file, requesterSessionId, operation);
+    const branchMappings = canonicalRefsForSemanticResult(branch, file, operation);
     if (branchMappings.size > 1)
       fail(
         "target_ambiguous",
         `Result ref ${file} resolves to conflicting canonical results`,
         operation,
       );
-    for (const accepted of acceptedResults)
-      refs.add(accepted.result.canonicalRef);
+    for (const accepted of acceptedResults) refs.add(accepted.result.canonicalRef);
     const published = resolveScopedResult(file);
     if (published === "invalid")
-      fail(
-        "target_ambiguous",
-        `Result ref ${file} has an invalid publication`,
-        operation,
-      );
+      fail("target_ambiguous", `Result ref ${file} has an invalid publication`, operation);
     if (published && published !== "reserved") {
-      const rootSessionId =
-        process.env.PI_HERDSMAN_ROOT_SESSION_ID || requesterSessionId;
+      const rootSessionId = process.env.PI_HERDSMAN_ROOT_SESSION_ID || requesterSessionId;
       if (
         published.rootSessionId === rootSessionId ||
         acceptedResults.length ||
@@ -1074,10 +985,7 @@ export function resolveMessageFiles(
       )
         refs.add(published.canonicalRef);
     }
-    if (
-      refs.size &&
-      [...branchMappings].some((canonicalRef) => !refs.has(canonicalRef))
-    )
+    if (refs.size && [...branchMappings].some((canonicalRef) => !refs.has(canonicalRef)))
       fail(
         "target_ambiguous",
         `Result ref ${file} resolves to conflicting canonical results`,
@@ -1110,8 +1018,7 @@ function guardMailboxOccupancy(
   operation: string,
   explicit: boolean,
 ): boolean {
-  const retained = (state?: ManagedAgentState) =>
-    unacknowledgedRequestExists(mailbox, state);
+  const retained = (state?: ManagedAgentState) => unacknowledgedRequestExists(mailbox, state);
   let state: ManagedAgentState | undefined;
   try {
     state = readAgentState(mailbox);
@@ -1133,40 +1040,23 @@ function guardMailboxOccupancy(
     return true;
   }
   if (!state) return false;
-  if (explicit)
-    fail(
-      "agent_label_exists",
-      `Agent label already exists: ${label}`,
-      operation,
-    );
+  if (explicit) fail("agent_label_exists", `Agent label already exists: ${label}`, operation);
   return true;
 }
 
-function requireHistoricalMailboxCleared(
-  mailbox: string,
-  ownStartupClaim = false,
-): void {
+function requireHistoricalMailboxCleared(mailbox: string, ownStartupClaim = false): void {
   let entries: string[];
   try {
     entries = readdirSync(mailbox);
   } catch (error) {
-    if (!ownStartupClaim && (error as NodeJS.ErrnoException).code === "ENOENT")
-      return;
-    fail(
-      "invalid_request",
-      "Cannot verify historical mailbox cleanup",
-      "continue",
-    );
+    if (!ownStartupClaim && (error as NodeJS.ErrnoException).code === "ENOENT") return;
+    fail("invalid_request", "Cannot verify historical mailbox cleanup", "continue");
   }
   if (
     (ownStartupClaim && !entries.includes(".starting")) ||
     entries.some((name) => !ownStartupClaim || name !== ".starting")
   )
-    fail(
-      "invalid_request",
-      "Historical mailbox contains unresolved entries",
-      "continue",
-    );
+    fail("invalid_request", "Historical mailbox contains unresolved entries", "continue");
 }
 
 function agentToolName(action: string): string {
@@ -1303,16 +1193,11 @@ export function resolveSavedSessionModelSelection(
       model: { provider: string; modelId: string } | null;
     };
   },
-  catalogModel: (
-    provider: string,
-    modelId: string,
-  ) => { api: string } | undefined,
+  catalogModel: (provider: string, modelId: string) => { api: string } | undefined,
 ): SavedSessionModelSelection {
   const contextModel = manager.buildSessionContext?.().model ?? undefined;
   if (typeof manager.getBranch !== "function")
-    return contextModel
-      ? { kind: "resolved", model: contextModel }
-      : { kind: "none" };
+    return contextModel ? { kind: "resolved", model: contextModel } : { kind: "none" };
   const branch = manager.getBranch();
   let change: { provider: string; modelId: string } | undefined;
   let changeIndex = -1;
@@ -1338,9 +1223,7 @@ export function resolveSavedSessionModelSelection(
     }
   }
   if (!change && !response)
-    return contextModel
-      ? { kind: "resolved", model: contextModel }
-      : { kind: "none" };
+    return contextModel ? { kind: "resolved", model: contextModel } : { kind: "none" };
   if (change && changeIndex > responseIndex)
     return {
       kind: "resolved",
@@ -1349,8 +1232,7 @@ export function resolveSavedSessionModelSelection(
   if (
     change &&
     response &&
-    (change.provider !== response.provider ||
-      change.modelId !== response.modelId)
+    (change.provider !== response.provider || change.modelId !== response.modelId)
   ) {
     const catalog = catalogModel(change.provider, change.modelId);
     if (catalog?.api === "pi-virtual")
@@ -1361,10 +1243,7 @@ export function resolveSavedSessionModelSelection(
     if (!catalog)
       return {
         kind: "unresolved",
-        candidates: [
-          { provider: change.provider, modelId: change.modelId },
-          response,
-        ],
+        candidates: [{ provider: change.provider, modelId: change.modelId }, response],
       };
   }
   return response
@@ -1384,18 +1263,13 @@ export function savedSessionModelSelection(
   },
   isVirtualModel: (provider: string, modelId: string) => boolean = () => false,
 ): { provider: string; modelId: string } | undefined {
-  const selection = resolveSavedSessionModelSelection(
-    manager,
-    (provider, modelId) =>
-      isVirtualModel(provider, modelId) ? { api: "pi-virtual" } : undefined,
+  const selection = resolveSavedSessionModelSelection(manager, (provider, modelId) =>
+    isVirtualModel(provider, modelId) ? { api: "pi-virtual" } : undefined,
   );
   return selection.kind === "resolved" ? selection.model : undefined;
 }
 
-function requiredEvidenceEntriesForRequest(
-  entries: readonly any[],
-  requestId: string,
-): any[] {
+function requiredEvidenceEntriesForRequest(entries: readonly any[], requestId: string): any[] {
   return entries.filter(
     (entry) =>
       entry?.type === "custom" &&
@@ -1407,12 +1281,8 @@ function requiredEvidenceEntriesForRequest(
 function consistentRequiredEvidenceUpdates(entries: readonly any[]): boolean {
   const records = entries.map((entry) => entry?.data);
   const itemsById = new Map<string, RequiredEvidence>();
-  const sameEvidenceAfterRefUpgrade = (
-    previous: unknown,
-    current: unknown,
-  ): boolean => {
-    if (!isRequiredEvidence(previous) || !isRequiredEvidence(current))
-      return false;
+  const sameEvidenceAfterRefUpgrade = (previous: unknown, current: unknown): boolean => {
+    if (!isRequiredEvidence(previous) || !isRequiredEvidence(current)) return false;
     if (isDeepStrictEqual(previous, current)) return true;
     if (
       "path" in previous &&
@@ -1454,17 +1324,11 @@ function consistentRequiredEvidenceUpdates(entries: readonly any[]): boolean {
       previous.inheritedEvidence.length !== current.inheritedEvidence.length ||
       previous.inheritedEvidence.some(
         (item: unknown, itemIndex: number) =>
-          !sameEvidenceAfterRefUpgrade(
-            item,
-            current.inheritedEvidence[itemIndex],
-          ),
+          !sameEvidenceAfterRefUpgrade(item, current.inheritedEvidence[itemIndex]),
       ) ||
       !Array.isArray(previous.localEvidence) ||
       !Array.isArray(current.localEvidence) ||
-      !isDeepStrictEqual(
-        previous.currentEvidenceIds ?? [],
-        current.currentEvidenceIds ?? [],
-      )
+      !isDeepStrictEqual(previous.currentEvidenceIds ?? [], current.currentEvidenceIds ?? [])
     )
       return false;
   }
@@ -1472,8 +1336,7 @@ function consistentRequiredEvidenceUpdates(entries: readonly any[]): boolean {
     if (!Array.isArray(record?.localEvidence)) return false;
     for (const item of record.localEvidence as RequiredEvidence[]) {
       const previous = itemsById.get(item.id);
-      if (previous && !sameEvidenceAfterRefUpgrade(previous, item))
-        return false;
+      if (previous && !sameEvidenceAfterRefUpgrade(previous, item)) return false;
       itemsById.set(item.id, item);
     }
   }
@@ -1512,19 +1375,15 @@ function currentManagedEvidence(ctx: ExtensionContext):
     data?.agentLabel !== state.agentLabel ||
     data?.paneId !== state.paneId ||
     data?.projectAssignmentId !== state.projectAssignmentId ||
-    (data.evidenceAssignmentId !== undefined &&
-      !validId(data.evidenceAssignmentId)) ||
-    (data.projectAssignmentId !== undefined &&
-      data.evidenceAssignmentId === undefined) ||
+    (data.evidenceAssignmentId !== undefined && !validId(data.evidenceAssignmentId)) ||
+    (data.projectAssignmentId !== undefined && data.evidenceAssignmentId === undefined) ||
     !consistentRequiredEvidenceUpdates(entries) ||
     !Array.isArray(data.inheritedEvidence) ||
     !Array.isArray(data.localEvidence) ||
     !data.inheritedEvidence.every(isRequiredEvidence) ||
     !data.localEvidence.every(isRequiredEvidence) ||
     new Set(
-      [...data.inheritedEvidence, ...data.localEvidence].map(
-        (item: RequiredEvidence) => item.id,
-      ),
+      [...data.inheritedEvidence, ...data.localEvidence].map((item: RequiredEvidence) => item.id),
     ).size !==
       data.inheritedEvidence.length + data.localEvidence.length ||
     (data.taskEvidenceId !== undefined &&
@@ -1537,19 +1396,14 @@ function currentManagedEvidence(ctx: ExtensionContext):
         ).length !== 1)) ||
     (data.currentEvidenceIds !== undefined &&
       (!Array.isArray(data.currentEvidenceIds) ||
-        new Set(data.currentEvidenceIds).size !==
-          data.currentEvidenceIds.length ||
+        new Set(data.currentEvidenceIds).size !== data.currentEvidenceIds.length ||
         !data.currentEvidenceIds.every(
           (id: unknown) =>
             typeof id === "string" &&
-            data.inheritedEvidence.some(
-              (item: RequiredEvidence) => item.id === id,
-            ),
+            data.inheritedEvidence.some((item: RequiredEvidence) => item.id === id),
         )))
   )
-    throw new Error(
-      "Managed-agent required-evidence session metadata is foreign or malformed",
-    );
+    throw new Error("Managed-agent required-evidence session metadata is foreign or malformed");
   if (!data.evidenceAssignmentId) {
     if (data.inheritedEvidence.length || data.localEvidence.length)
       throw new Error("Managed-agent required-evidence scope is missing");
@@ -1562,13 +1416,10 @@ function currentManagedEvidence(ctx: ExtensionContext):
     evidenceAssignmentId: data.evidenceAssignmentId,
     inheritedEvidence: data.inheritedEvidence,
     localEvidence: data.localEvidence,
-    ...(data.currentEvidenceIds
-      ? { currentEvidenceIds: [...data.currentEvidenceIds] }
-      : {}),
+    ...(data.currentEvidenceIds ? { currentEvidenceIds: [...data.currentEvidenceIds] } : {}),
   };
 }
-type AssignmentSessionSelector =
-  { kind: "id"; value: string } | { kind: "path"; value: string };
+type AssignmentSessionSelector = { kind: "id"; value: string } | { kind: "path"; value: string };
 type OwnedAssignmentSession = {
   id: string;
   path: string;
@@ -1610,11 +1461,9 @@ export function acceptedCloseProof(
   )
     return undefined;
   const requestId = state.activeRequestId ?? state.resultError?.requestId;
-  const accepted = acceptedAssignmentReceipts(
-    entries,
-    ownerSessionId,
-    child,
-  ).filter(({ requestId: acceptedId }) => acceptedId === requestId);
+  const accepted = acceptedAssignmentReceipts(entries, ownerSessionId, child).filter(
+    ({ requestId: acceptedId }) => acceptedId === requestId,
+  );
   if (!validId(requestId ?? "") || accepted.length !== 1) return undefined;
   return {
     owner_session_id: ownerSessionId,
@@ -1702,8 +1551,7 @@ function closedAssignmentReceipt(
       return [];
     const data = (entry as any).data;
     const proof = data?.proof;
-    if (data?.version !== 1 || !validClosedProof(proof, ownerSessionId, child))
-      return [];
+    if (data?.version !== 1 || !validClosedProof(proof, ownerSessionId, child)) return [];
     return [{ index, proof: proof as Record<string, unknown> }];
   });
   closed.push(...stopped);
@@ -1711,15 +1559,13 @@ function closedAssignmentReceipt(
   const matches = latestAccepted
     ? closed.filter(
         ({ index, proof }) =>
-          latestAccepted.index < index &&
-          latestAccepted.requestId === proof.request_id,
+          latestAccepted.index < index && latestAccepted.requestId === proof.request_id,
       )
     : [];
   if (!matches.length) return undefined;
   const proofs: Record<string, unknown>[] = [];
   for (const { proof } of matches)
-    if (!proofs.some((candidate) => isDeepStrictEqual(candidate, proof)))
-      proofs.push(proof);
+    if (!proofs.some((candidate) => isDeepStrictEqual(candidate, proof))) proofs.push(proof);
   return proofs.length === 1 ? proofs[0] : undefined;
 }
 
@@ -1810,8 +1656,7 @@ function acceptedAssignmentEvidence(
       typeof details?.definition !== "string" ||
       !details.definition.trim()
     ) {
-      if (legacyResult && details?.owner_session_id === ownerSessionId)
-        unavailable?.();
+      if (legacyResult && details?.owner_session_id === ownerSessionId) unavailable?.();
       return [];
     }
     const assignmentAction = action as "delegate" | "continue";
@@ -1829,28 +1674,20 @@ function acceptedAssignmentEvidence(
         },
       ];
     } catch {
-      if (legacyResult && details.owner_session_id === ownerSessionId)
-        unavailable?.();
+      if (legacyResult && details.owner_session_id === ownerSessionId) unavailable?.();
       return [];
     }
   });
   const byRequest = new Map<string, AcceptedAssignmentEvidence[]>();
   for (const item of parsed)
-    byRequest.set(item.requestId, [
-      ...(byRequest.get(item.requestId) ?? []),
-      item,
-    ]);
+    byRequest.set(item.requestId, [...(byRequest.get(item.requestId) ?? []), item]);
   return [...byRequest.values()]
     .flatMap((items) => {
       const identities = new Set(
         items.map(({ index: _index, ...identity }) => JSON.stringify(identity)),
       );
       if (identities.size !== 1) return [];
-      return [
-        items.reduce((earliest, item) =>
-          item.index < earliest.index ? item : earliest,
-        ),
-      ];
+      return [items.reduce((earliest, item) => (item.index < earliest.index ? item : earliest))];
     })
     .filter((receipt) => receipt.ownerSessionId === ownerSessionId)
     .sort((a, b) => a.index - b.index);
@@ -1921,15 +1758,11 @@ export function durableIdentityKey(state: ManagedAgentState): string {
 function directChildStates(parent: ManagedAgentState) {
   return listAgentStates().filter(
     ({ state }) =>
-      state.workspaceId === parent.workspaceId &&
-      state.ownerSessionId === parent.piSessionId,
+      state.workspaceId === parent.workspaceId && state.ownerSessionId === parent.piSessionId,
   );
 }
 
-function pendingResultExists(
-  path: string,
-  requestId: string | undefined,
-): boolean {
+function pendingResultExists(path: string, requestId: string | undefined): boolean {
   if (!requestId) return false;
   try {
     return !!readResult(path, requestId);
@@ -1947,13 +1780,10 @@ export function hasPendingDirectChildWork(parent: ManagedAgentState): boolean {
   );
 }
 
-export function allDirectChildrenAskBlocked(
-  parent: ManagedAgentState,
-): boolean {
+export function allDirectChildrenAskBlocked(parent: ManagedAgentState): boolean {
   return directChildStates(parent).every(({ path, state }) => {
     if (state.resultError) return false;
-    if (!state.activeRequestId)
-      return !pendingResultExists(path, state.completedRequestId);
+    if (!state.activeRequestId) return !pendingResultExists(path, state.completedRequestId);
     if (!state.pendingAskId) return false;
     try {
       return !!readPendingAsk(path, state);
@@ -1968,10 +1798,8 @@ export function hasUndeliveredDirectChildWork(
   entries: readonly unknown[],
   excludedResult?: Record<string, unknown>,
 ): boolean {
-  const matches = (
-    details: Record<string, unknown>,
-    expected: Record<string, unknown>,
-  ) => Object.entries(expected).every(([key, value]) => details[key] === value);
+  const matches = (details: Record<string, unknown>, expected: Record<string, unknown>) =>
+    Object.entries(expected).every(([key, value]) => details[key] === value);
   return directChildStates(parent).some(({ state }) => {
     if (state.resultError) return true;
     const identity = (requestId: string) => ({
@@ -2002,9 +1830,7 @@ export function hasUndeliveredDirectChildWork(
   });
 }
 
-export function assertUniqueDurableIdentities(
-  states: readonly ManagedAgentState[],
-): void {
+export function assertUniqueDurableIdentities(states: readonly ManagedAgentState[]): void {
   const seen = new Set<string>();
   for (const state of states) {
     const key = durableIdentityKey(state);
@@ -2022,11 +1848,7 @@ export function managedAgentPresence(
   state: ManagedAgentState,
   inventory: HerdrSessionSnapshot,
 ): ManagedAgentPresence {
-  const expectedAlias = herdrAgentAlias(
-    state.workspaceId,
-    state.agentLabel,
-    state.runId,
-  );
+  const expectedAlias = herdrAgentAlias(state.workspaceId, state.agentLabel, state.runId);
   const expected = { id: state.piSessionId, path: state.piSessionFile };
   const aliasMatchesIfReported = (agent: any): boolean => {
     const aliases = [agent?.name].filter(
@@ -2050,28 +1872,21 @@ export function managedAgentPresence(
       safeMatches(agent?.agent_session),
   );
   const expectedPane = inventory.panes.find(
-    (pane: any) =>
-      pane?.workspace_id === state.workspaceId &&
-      pane?.pane_id === state.paneId,
+    (pane: any) => pane?.workspace_id === state.workspaceId && pane?.pane_id === state.paneId,
   );
   const relatedAgents = inventory.agents.filter(
     (agent: any) =>
       agent?.name === expectedAlias ||
       safeMatches(agent?.agent_session) ||
-      (agent?.workspace_id === state.workspaceId &&
-        agent?.pane_id === state.paneId),
+      (agent?.workspace_id === state.workspaceId && agent?.pane_id === state.paneId),
   );
-  const relatedPanes = inventory.panes.filter((pane: any) =>
-    safeMatches(pane?.agent_session),
-  );
+  const relatedPanes = inventory.panes.filter((pane: any) => safeMatches(pane?.agent_session));
   if (
     exact.length === 1 &&
     expectedPane &&
     relatedAgents.every((agent: any) => agent === exact[0]) &&
     relatedPanes.every(
-      (pane: any) =>
-        pane?.workspace_id === state.workspaceId &&
-        pane?.pane_id === state.paneId,
+      (pane: any) => pane?.workspace_id === state.workspaceId && pane?.pane_id === state.paneId,
     )
   )
     return { kind: "live", agent: exact[0] };
@@ -2096,9 +1911,7 @@ export function visibleAgentSnapshots(
 ): VisibleManagedAgentSnapshot[] {
   const agents = snapshot.agents;
   if (!scope) return [...agents];
-  const direct = agents.filter(
-    ({ state }) => state.ownerSessionId === ownerSessionId,
-  );
+  const direct = agents.filter(({ state }) => state.ownerSessionId === ownerSessionId);
   if (scope.kind === "managed-agent") return direct;
   const visible: VisibleManagedAgentSnapshot[] = [...direct];
   const byIdentity = new Map<string, ManagedAgentSnapshot[]>();
@@ -2143,9 +1956,7 @@ export function statusBreadcrumb(
   sameIdentity: (left: ManagedAgentState, right: ManagedAgentState) => boolean,
 ): BreadcrumbSegment[] {
   if (!candidate) return [{ text: "?" }];
-  const matches = snapshot.agents.filter(({ state }) =>
-    sameIdentity(state, candidate),
-  );
+  const matches = snapshot.agents.filter(({ state }) => sameIdentity(state, candidate));
   const current = matches.length === 1 ? matches[0] : undefined;
   if (!current)
     return [
@@ -2168,14 +1979,11 @@ export function statusBreadcrumb(
   const visited = new Set([current.state.piSessionId]);
   let ownerSessionId = current.state.ownerSessionId;
   while (true) {
-    const parents = snapshot.agents.filter(
-      ({ state }) => state.piSessionId === ownerSessionId,
-    );
+    const parents = snapshot.agents.filter(({ state }) => state.piSessionId === ownerSessionId);
     if (parents.length > 1) return [{ text: "?" }, ...definitions.reverse()];
     const parent = parents[0];
     if (parent) {
-      if (visited.has(parent.state.piSessionId))
-        return [{ text: "?" }, ...definitions.reverse()];
+      if (visited.has(parent.state.piSessionId)) return [{ text: "?" }, ...definitions.reverse()];
       visited.add(parent.state.piSessionId);
       definitions.push({
         text: displayIdentity(parent.agentDefinition, parent.state.agentLabel),
@@ -2185,15 +1993,9 @@ export function statusBreadcrumb(
       ownerSessionId = parent.state.ownerSessionId;
       continue;
     }
-    if (
-      snapshot.mailboxes.some(
-        ({ state }) => state.piSessionId === ownerSessionId,
-      )
-    )
+    if (snapshot.mailboxes.some(({ state }) => state.piSessionId === ownerSessionId))
       return [{ text: "?" }, ...definitions.reverse()];
-    const roots = snapshot.rootOwners.filter(
-      (root) => root.sessionId === ownerSessionId,
-    );
+    const roots = snapshot.rootOwners.filter((root) => root.sessionId === ownerSessionId);
     return roots.length === 1
       ? [
           {
@@ -2218,16 +2020,11 @@ export function sessionAgentIdentity(
   }>;
   let identity: AgentSessionIdentity | undefined;
   for (const entry of typed) {
-    if (entry.type !== "custom" || entry.customType !== AGENT_DEFINITION_ENTRY)
-      continue;
+    if (entry.type !== "custom" || entry.customType !== AGENT_DEFINITION_ENTRY) continue;
     const data = entry.data;
     if (!data || typeof data !== "object") continue;
     const candidateSessionId = (data as { sessionId?: unknown }).sessionId;
-    if (
-      typeof candidateSessionId !== "string" ||
-      candidateSessionId.trim() !== sessionId
-    )
-      continue;
+    if (typeof candidateSessionId !== "string" || candidateSessionId.trim() !== sessionId) continue;
     if (
       Object.keys(data).length !== 3 ||
       typeof (data as { definition?: unknown }).definition !== "string" ||
@@ -2267,8 +2064,7 @@ export function validateManagedAgentControllerIdentity(
       ctx.sessionManager.getEntries(),
       ctx.sessionManager.getSessionId(),
     );
-    if (!identity)
-      throw new Error("missing pi-herdsman-agent-definition entry");
+    if (!identity) throw new Error("missing pi-herdsman-agent-definition entry");
     definition = identity.definition;
     label = identity.label;
   } catch (error) {
@@ -2292,16 +2088,11 @@ export function validateManagedAgentControllerIdentity(
 
 export function validId(value: string | undefined): boolean {
   return (
-    !!value &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      value,
-    )
+    !!value && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
   );
 }
 
-export function agentResultDetails(
-  entry: unknown,
-): Record<string, unknown> | undefined {
+export function agentResultDetails(entry: unknown): Record<string, unknown> | undefined {
   if (!entry || typeof entry !== "object") return undefined;
   const record = entry as Record<string, unknown>;
   const message =
@@ -2310,9 +2101,7 @@ export function agentResultDetails(
       : record;
   if (message.customType !== "pi-herdsman-agent-result") return undefined;
   const details =
-    message.details && typeof message.details === "object"
-      ? message.details
-      : record.details;
+    message.details && typeof message.details === "object" ? message.details : record.details;
   return details && typeof details === "object" && !Array.isArray(details)
     ? (details as Record<string, unknown>)
     : undefined;
@@ -2338,8 +2127,7 @@ function sameTerminalProvenance(
     return (
       typeof left.piSessionFile === "string" &&
       typeof right.piSessionFile === "string" &&
-      canonicalSessionPath(left.piSessionFile) ===
-        canonicalSessionPath(right.piSessionFile)
+      canonicalSessionPath(left.piSessionFile) === canonicalSessionPath(right.piSessionFile)
     );
   } catch {
     return false;
@@ -2348,10 +2136,7 @@ function sameTerminalProvenance(
 
 export const RESULT_REF_ENTRY = "pi-herdsman-result-ref";
 
-function canonicalResultRef(
-  details: Record<string, unknown>,
-  operation: string,
-): string {
+function canonicalResultRef(details: Record<string, unknown>, operation: string): string {
   if (
     details.status !== "completed" ||
     typeof details.requestId !== "string" ||
@@ -2362,11 +2147,7 @@ function canonicalResultRef(
   try {
     expected = resultRef(details.requestId);
   } catch {
-    fail(
-      "internal_failure",
-      "Result metadata contains an invalid request identity",
-      operation,
-    );
+    fail("internal_failure", "Result metadata contains an invalid request identity", operation);
   }
   if (details.resultRef !== expected)
     fail(
@@ -2446,10 +2227,7 @@ export function canonicalRefsForSemanticResult(
   const refs = new Set<string>();
   for (const entry of entries) {
     const details = agentResultDetails(entry);
-    if (
-      details?.agentLabel === semantic.agent &&
-      details.resultIndex === semantic.index
-    )
+    if (details?.agentLabel === semantic.agent && details.resultIndex === semantic.index)
       refs.add(canonicalResultRef(details, operation));
     const imported = importedResultBinding(entry);
     if (imported?.ref === ref) refs.add(imported.canonicalRef);
@@ -2466,8 +2244,7 @@ export function importResultBindings(
   if (!bindings?.length) return;
   const pending = new Map<string, string>();
   for (const binding of bindings) {
-    if (!isResultBinding(binding))
-      fail("internal_failure", "Invalid result binding", operation);
+    if (!isResultBinding(binding)) fail("internal_failure", "Invalid result binding", operation);
     const incoming = pending.get(binding.ref);
     if (incoming !== undefined && incoming !== binding.canonicalRef)
       fail(
@@ -2480,10 +2257,7 @@ export function importResultBindings(
       binding.ref,
       operation,
     );
-    if (
-      existing.size > 1 ||
-      (existing.size === 1 && !existing.has(binding.canonicalRef))
-    )
+    if (existing.size > 1 || (existing.size === 1 && !existing.has(binding.canonicalRef)))
       fail(
         "target_ambiguous",
         `Result ref ${binding.ref} conflicts with the current branch`,
@@ -2491,11 +2265,7 @@ export function importResultBindings(
       );
     const requesterSessionId = ctx.sessionManager.getSessionId();
     if (!validId(requesterSessionId))
-      fail(
-        "internal_failure",
-        "Requester session identity is invalid",
-        operation,
-      );
+      fail("internal_failure", "Requester session identity is invalid", operation);
     const authorized = verifiedBranchResultMappings(
       ctx.sessionManager.getBranch(),
       binding.ref,
@@ -2506,19 +2276,12 @@ export function importResultBindings(
   }
   const requesterSessionId = ctx.sessionManager.getSessionId();
   if (!validId(requesterSessionId))
-    fail(
-      "internal_failure",
-      "Requester session identity is invalid",
-      operation,
-    );
+    fail("internal_failure", "Requester session identity is invalid", operation);
   for (const [ref, canonicalRef] of pending)
     pi.appendEntry(RESULT_REF_ENTRY, { ref, canonicalRef, requesterSessionId });
 }
 
-export function hasDeliveredAsk(
-  entries: readonly unknown[],
-  ask: AskRecord,
-): boolean {
+export function hasDeliveredAsk(entries: readonly unknown[], ask: AskRecord): boolean {
   return entries.some((entry: any) => {
     const message = entry?.message;
     const details = entry?.details ?? message?.details;
@@ -2562,9 +2325,7 @@ export function canonicalSessionPath(path: string): string {
   try {
     return realpathSync(path);
   } catch (error) {
-    throw new Error(
-      `could not canonicalize exact Pi session path ${path}: ${String(error)}`,
-    );
+    throw new Error(`could not canonicalize exact Pi session path ${path}: ${String(error)}`);
   }
 }
 export function samePersistedSessionPath(
@@ -2577,20 +2338,14 @@ export function samePersistedSessionPath(
     return realpathSync(left) === right;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw new Error(
-      `could not canonicalize exact Pi session path ${left}: ${String(error)}`,
-    );
+    throw new Error(`could not canonicalize exact Pi session path ${left}: ${String(error)}`);
   }
 }
 
 const TRANSCRIPT_MAX_BYTES = 16 * 1024;
 const TRANSCRIPT_TOOL_RESULT_MAX_BYTES = 4 * 1024;
-const TRANSCRIPT_TOOL_RESULT_OMISSION =
-  "\n[... middle of tool result omitted ...]\n";
-type PersistedTranscriptTarget = Pick<
-  ManagedAgentState,
-  "piSessionId" | "piSessionFile"
->;
+const TRANSCRIPT_TOOL_RESULT_OMISSION = "\n[... middle of tool result omitted ...]\n";
+type PersistedTranscriptTarget = Pick<ManagedAgentState, "piSessionId" | "piSessionFile">;
 
 export function persistedTranscriptReady(
   target: PersistedTranscriptTarget,
@@ -2611,8 +2366,7 @@ function readPersistedSessionEntries(
 ): SessionEntry[] {
   if (!target.piSessionId || !target.piSessionFile)
     throw new Error("Target has no persisted Pi session identity");
-  if (!isFile(target.piSessionFile))
-    throw new Error("Persisted Pi session file is unavailable");
+  if (!isFile(target.piSessionFile)) throw new Error("Persisted Pi session file is unavailable");
   const entries = parseSessionEntries(readFile(target.piSessionFile));
   const header = entries[0];
   if (
@@ -2621,17 +2375,11 @@ function readPersistedSessionEntries(
     header.version !== CURRENT_SESSION_VERSION ||
     header.id !== target.piSessionId
   )
-    throw new Error(
-      "Persisted Pi session is missing a matching current session header",
-    );
+    throw new Error("Persisted Pi session is missing a matching current session header");
   const sessionEntries = entries.slice(1);
   if (sessionEntries.some((entry) => entry.type === "session"))
-    throw new Error(
-      "Persisted Pi session contains an unexpected session header",
-    );
-  return sessionEntries.filter(
-    (entry): entry is SessionEntry => entry.type !== "session",
-  );
+    throw new Error("Persisted Pi session contains an unexpected session header");
+  return sessionEntries.filter((entry): entry is SessionEntry => entry.type !== "session");
 }
 
 function truncateTranscriptToolResult(text: string): {
@@ -2639,20 +2387,15 @@ function truncateTranscriptToolResult(text: string): {
   truncated: boolean;
 } {
   const bytes = Buffer.from(text, "utf8");
-  if (bytes.length <= TRANSCRIPT_TOOL_RESULT_MAX_BYTES)
-    return { text, truncated: false };
-  const markerBytes = Buffer.byteLength(
-    TRANSCRIPT_TOOL_RESULT_OMISSION,
-    "utf8",
-  );
+  if (bytes.length <= TRANSCRIPT_TOOL_RESULT_MAX_BYTES) return { text, truncated: false };
+  const markerBytes = Buffer.byteLength(TRANSCRIPT_TOOL_RESULT_OMISSION, "utf8");
   const payloadBytes = TRANSCRIPT_TOOL_RESULT_MAX_BYTES - markerBytes;
   const headBudget = Math.ceil(payloadBytes / 2),
     tailBudget = Math.floor(payloadBytes / 2);
   let headEnd = headBudget;
   while (headEnd > 0 && (bytes[headEnd] & 0xc0) === 0x80) headEnd--;
   let tailStart = bytes.length - tailBudget;
-  while (tailStart < bytes.length && (bytes[tailStart] & 0xc0) === 0x80)
-    tailStart++;
+  while (tailStart < bytes.length && (bytes[tailStart] & 0xc0) === 0x80) tailStart++;
   return {
     text:
       bytes.subarray(0, headEnd).toString("utf8") +
@@ -2669,10 +2412,7 @@ function formatPersistedTranscript(entries: readonly ProjectedSessionEntry[]): {
   const blocks: string[] = [];
   let truncated = false;
   for (const { sourceEntry, messages } of entries) {
-    if (
-      sourceEntry.type === "compaction" ||
-      sourceEntry.type === "branch_summary"
-    ) {
+    if (sourceEntry.type === "compaction" || sourceEntry.type === "branch_summary") {
       if (sourceEntry.summary.trim())
         blocks.push(
           `${sourceEntry.type === "compaction" ? "compaction" : "branch"} summary:\n${sourceEntry.summary.trim()}`,
@@ -2688,14 +2428,10 @@ function formatPersistedTranscript(entries: readonly ProjectedSessionEntry[]): {
           if (part.type === "text" && part.text.trim())
             blocks.push(`assistant:\n${part.text.trim()}`);
           else if (part.type === "toolCall")
-            blocks.push(
-              `tool ${part.name}:\n${JSON.stringify(part.arguments)}`,
-            );
+            blocks.push(`tool ${part.name}:\n${JSON.stringify(part.arguments)}`);
         }
       } else if (message.role === "toolResult") {
-        const result = truncateTranscriptToolResult(
-          contentText(message.content, "").trim(),
-        );
+        const result = truncateTranscriptToolResult(contentText(message.content, "").trim());
         truncated ||= result.truncated;
         blocks.push(
           `tool result ${message.toolName}${message.isError ? " [error]" : ""}:${result.text ? `\n${result.text}` : ""}`,
@@ -2712,9 +2448,7 @@ export function readPersistedTranscript(
   isFile: (path: string) => boolean,
 ): { transcript: string; truncated: boolean } {
   const entries = readPersistedSessionEntries(target, readFile, isFile);
-  const formatted = formatPersistedTranscript(
-    buildSessionProjection(entries).entries,
-  );
+  const formatted = formatPersistedTranscript(buildSessionProjection(entries).entries);
   const bounded = truncateTail(formatted.text, {
     maxBytes: TRANSCRIPT_MAX_BYTES,
   });
@@ -2730,18 +2464,13 @@ export function readAgentTranscript(
   isFile: (path: string) => boolean,
 ): { transcript: string; truncated: boolean } {
   if (!state.piSessionId || !state.piSessionFile)
-    fail(
-      "target_not_found",
-      "Agent has no persisted Pi session identity",
-      "transcript",
-    );
+    fail("target_not_found", "Agent has no persisted Pi session identity", "transcript");
   try {
     return readPersistedTranscript(state, readFile, isFile);
   } catch (error) {
     if (
       error instanceof Error &&
-      error.message ===
-        "Persisted Pi session is missing a matching current session header"
+      error.message === "Persisted Pi session is missing a matching current session header"
     )
       fail("target_not_found", error.message, "transcript");
     fail(
@@ -2793,11 +2522,7 @@ export function ownedAssignmentChildren(
 ): OwnedAssignmentSession[] {
   const children = new Map<string, OwnedAssignmentSession>();
   if (includeReceipts) {
-    for (const receipt of acceptedAssignmentEvidence(
-      entries,
-      ownerSessionId,
-      unavailable,
-    )) {
+    for (const receipt of acceptedAssignmentEvidence(entries, ownerSessionId, unavailable)) {
       const child = {
         id: receipt.sessionId,
         path: receipt.sessionPath,
@@ -2820,10 +2545,7 @@ export function ownedAssignmentChildren(
   return [...children.values()];
 }
 
-function resolveDirectResultSessionPath(
-  ctx: ExtensionContext,
-  ref: string,
-): string {
+function resolveDirectResultSessionPath(ctx: ExtensionContext, ref: string): string {
   const semantic = parseSemanticResultRef(ref);
   if (!semantic)
     fail(
@@ -2835,11 +2557,7 @@ function resolveDirectResultSessionPath(
   const entries = ctx.sessionManager.getBranch();
   const mappings = canonicalRefsForSemanticResult(entries, ref, "continue");
   if (mappings.size > 1)
-    fail(
-      "target_ambiguous",
-      `Result ref ${ref} has conflicting bindings`,
-      "continue",
-    );
+    fail("target_ambiguous", `Result ref ${ref} has conflicting bindings`, "continue");
 
   const matching = entries.flatMap((entry, index) => {
     const details = agentResultDetails(entry);
@@ -2860,35 +2578,19 @@ function resolveDirectResultSessionPath(
       typeof details.agentLabel !== "string" ||
       details.resultRef !== resultRef(details.requestId as string)
     )
-      fail(
-        "invalid_request",
-        `Result ref ${ref} has incomplete provenance`,
-        "continue",
-      );
+      fail("invalid_request", `Result ref ${ref} has incomplete provenance`, "continue");
     let path: string;
     try {
       path = canonicalSessionPath(details.piSessionFile);
     } catch {
-      fail(
-        "invalid_request",
-        `Result ref ${ref} has an invalid session path`,
-        "continue",
-      );
+      fail("invalid_request", `Result ref ${ref} has an invalid session path`, "continue");
     }
     if (mappings.size === 1 && !mappings.has(details.resultRef))
-      fail(
-        "target_ambiguous",
-        `Result ref ${ref} has conflicting bindings`,
-        "continue",
-      );
+      fail("target_ambiguous", `Result ref ${ref} has conflicting bindings`, "continue");
     return [{ details, path, index }];
   });
   if (!matching.length)
-    fail(
-      "target_not_found",
-      `No directly owned completed result matches ${ref}`,
-      "continue",
-    );
+    fail("target_not_found", `No directly owned completed result matches ${ref}`, "continue");
 
   const selected = matching[0]!;
   if (
@@ -2900,11 +2602,7 @@ function resolveDirectResultSessionPath(
         details.resultRef !== selected.details.resultRef,
     )
   )
-    fail(
-      "target_ambiguous",
-      `Result ref ${ref} has conflicting completion records`,
-      "continue",
-    );
+    fail("target_ambiguous", `Result ref ${ref} has conflicting completion records`, "continue");
 
   const child: OwnedAssignmentSession = {
     id: selected.details.piSessionId as string,
@@ -2916,8 +2614,7 @@ function resolveDirectResultSessionPath(
   if (
     accepted.some(
       (receipt) =>
-        receipt.index > selected.index &&
-        receipt.requestId !== selected.details.requestId,
+        receipt.index > selected.index && receipt.requestId !== selected.details.requestId,
     ) ||
     entries.some((entry, index) => {
       if (index <= selected.index) return false;
@@ -2930,9 +2627,7 @@ function resolveDirectResultSessionPath(
       )
         return false;
       try {
-        return (
-          canonicalSessionPath(details.piSessionFile as string) === child.path
-        );
+        return canonicalSessionPath(details.piSessionFile as string) === child.path;
       } catch {
         return false;
       }
@@ -2954,15 +2649,11 @@ export function openOwnedAssignmentSession(
   if (manager.getSessionId() !== child.id) return undefined;
   let identity: AgentSessionIdentity | undefined;
   try {
-    identity = sessionAgentIdentity(
-      manager.getEntries(),
-      manager.getSessionId(),
-    );
+    identity = sessionAgentIdentity(manager.getEntries(), manager.getSessionId());
   } catch {
     return undefined;
   }
-  return identity?.definition === child.definition &&
-    identity.label === child.label
+  return identity?.definition === child.definition && identity.label === child.label
     ? manager
     : undefined;
 }
@@ -2981,8 +2672,7 @@ export function resolveAssignmentSession(
   } = {},
 ): ResolvedAssignmentSession {
   let value = raw.trim();
-  if (value.startsWith("result:"))
-    value = resolveDirectResultSessionPath(ctx, value);
+  if (value.startsWith("result:")) value = resolveDirectResultSessionPath(ctx, value);
   if (!value)
     fail(
       "invalid_request",
@@ -3013,11 +2703,7 @@ export function resolveAssignmentSession(
     try {
       selector = { kind: "path", value: canonicalSessionPath(path) };
     } catch (error) {
-      fail(
-        "invalid_request",
-        error instanceof Error ? error.message : String(error),
-        "continue",
-      );
+      fail("invalid_request", error instanceof Error ? error.message : String(error), "continue");
     }
   }
   const callerId = ctx.sessionManager.getSessionId();
@@ -3031,11 +2717,7 @@ export function resolveAssignmentSession(
       ...closedAssignmentChildren(entries, ownerId),
     ];
     for (const child of children) {
-      if (
-        selector.kind === "id"
-          ? child.id !== selector.value
-          : child.path !== selector.value
-      )
+      if (selector.kind === "id" ? child.id !== selector.value : child.path !== selector.value)
         continue;
       const manager = openOwnedAssignmentSession(child);
       if (!manager) continue;
@@ -3060,13 +2742,10 @@ export function resolveAssignmentSession(
       }
       const allEntries = manager.getEntries();
       const evidenceBranch =
-        typeof manager.getBranch === "function"
-          ? manager.getBranch()
-          : undefined;
+        typeof manager.getBranch === "function" ? manager.getBranch() : undefined;
       const allEvidenceEntries = allEntries.filter(
         (entry: any) =>
-          entry?.type === "custom" &&
-          entry.customType === "pi-herdsman-agent-required-evidence",
+          entry?.type === "custom" && entry.customType === "pi-herdsman-agent-required-evidence",
       ) as any[];
       for (const entry of allEvidenceEntries) {
         const record = entry?.data;
@@ -3083,26 +2762,20 @@ export function resolveAssignmentSession(
           !validAgentLabel(record.agentLabel) ||
           typeof record.paneId !== "string" ||
           !record.paneId.trim() ||
-          (record.projectAssignmentId !== undefined &&
-            !validId(record.projectAssignmentId)) ||
-          (record.evidenceAssignmentId !== undefined &&
-            !validId(record.evidenceAssignmentId)) ||
-          (record.projectAssignmentId !== undefined &&
-            record.evidenceAssignmentId === undefined) ||
+          (record.projectAssignmentId !== undefined && !validId(record.projectAssignmentId)) ||
+          (record.evidenceAssignmentId !== undefined && !validId(record.evidenceAssignmentId)) ||
+          (record.projectAssignmentId !== undefined && record.evidenceAssignmentId === undefined) ||
           !Array.isArray(record.inheritedEvidence) ||
           !record.inheritedEvidence.every(isRequiredEvidence) ||
           !Array.isArray(record.localEvidence) ||
           !record.localEvidence.every(isRequiredEvidence) ||
           (record.currentEvidenceIds !== undefined &&
             (!Array.isArray(record.currentEvidenceIds) ||
-              new Set(record.currentEvidenceIds).size !==
-                record.currentEvidenceIds.length ||
+              new Set(record.currentEvidenceIds).size !== record.currentEvidenceIds.length ||
               !record.currentEvidenceIds.every(
                 (id: unknown) =>
                   typeof id === "string" &&
-                  record.inheritedEvidence.some(
-                    (item: RequiredEvidence) => item.id === id,
-                  ),
+                  record.inheritedEvidence.some((item: RequiredEvidence) => item.id === id),
               ))) ||
           (record.evidenceAssignmentId === undefined &&
             (record.inheritedEvidence.length || record.localEvidence.length)) ||
@@ -3150,21 +2823,14 @@ export function resolveAssignmentSession(
         );
       const currentState = matchingStates[0];
       let historicalTerminal: Record<string, unknown> | undefined;
-      const latestAccepted = acceptedAssignmentReceipts(
-        entries,
-        ownerId,
-        child,
-      ).at(-1);
+      const latestAccepted = acceptedAssignmentReceipts(entries, ownerId, child).at(-1);
       const historicalClose = closedAssignmentReceipt(entries, ownerId, child);
       if (latestAccepted && !currentState && !historicalClose) {
         const hasLatestTerminal = entries.some((entry, index) => {
           if (index <= latestAccepted.index) return false;
           const result = ownedAssignmentResult(entry, ownerId);
           const details = agentResultDetails(entry);
-          if (
-            result?.id !== child.id ||
-            details?.requestId !== latestAccepted.requestId
-          )
+          if (result?.id !== child.id || details?.requestId !== latestAccepted.requestId)
             return false;
           try {
             return canonicalSessionPath(result.path) === child.path;
@@ -3185,20 +2851,12 @@ export function resolveAssignmentSession(
             .map(agentResultDetails)
             .some(
               (proof) =>
-                proof?.requestId === historicalClose.request_id &&
-                proof?.piSessionId === child.id,
+                proof?.requestId === historicalClose.request_id && proof?.piSessionId === child.id,
             )
         )
-          fail(
-            "invalid_request",
-            "Conflicting terminal and closure provenance",
-            "continue",
-          );
+          fail("invalid_request", "Conflicting terminal and closure provenance", "continue");
         requireHistoricalMailboxCleared(
-          agentMailboxPath(
-            historicalClose.workspace_id as string,
-            historicalClose.agent as string,
-          ),
+          agentMailboxPath(historicalClose.workspace_id as string, historicalClose.agent as string),
         );
       }
       if (hasProjectEvidenceHistory && !currentState) {
@@ -3228,11 +2886,9 @@ export function resolveAssignmentSession(
             !evidenceRecord ||
             historicalClose.request_id !== latestRequestId ||
             historicalClose.run_id !== evidenceRecord.runId ||
-            historicalClose.owner_session_id !==
-              evidenceRecord.ownerSessionId ||
+            historicalClose.owner_session_id !== evidenceRecord.ownerSessionId ||
             historicalClose.session_id !== child.id ||
-            canonicalSessionPath(historicalClose.session_path as string) !==
-              child.path ||
+            canonicalSessionPath(historicalClose.session_path as string) !== child.path ||
             historicalClose.definition !== child.definition ||
             historicalClose.agent !== child.label ||
             historicalClose.workspace_id !== evidenceRecord.workspaceId ||
@@ -3261,16 +2917,14 @@ export function resolveAssignmentSession(
             historicalTerminal.ownerSessionId !== ownerId ||
             historicalTerminal.piSessionId !== child.id ||
             typeof historicalTerminal.piSessionFile !== "string" ||
-            canonicalSessionPath(historicalTerminal.piSessionFile) !==
-              child.path ||
+            canonicalSessionPath(historicalTerminal.piSessionFile) !== child.path ||
             historicalTerminal.agentDefinition !== child.definition ||
             historicalTerminal.agentLabel !== child.label ||
             typeof historicalTerminal.workspaceId !== "string" ||
             !historicalTerminal.workspaceId.trim() ||
             typeof historicalTerminal.paneId !== "string" ||
             !historicalTerminal.paneId.trim() ||
-            (historicalTerminal.status !== "completed" &&
-              historicalTerminal.status !== "failed"))
+            (historicalTerminal.status !== "completed" && historicalTerminal.status !== "failed"))
         )
           fail(
             "invalid_request",
@@ -3314,8 +2968,7 @@ export function resolveAssignmentSession(
             );
       const currentRequestId = currentState
         ? (currentState.activeRequestId ?? currentState.completedRequestId)
-        : ((historicalTerminal?.requestId ?? historicalClose?.request_id) as
-            string | undefined);
+        : ((historicalTerminal?.requestId ?? historicalClose?.request_id) as string | undefined);
       if (hasProjectEvidenceHistory && !currentRequestId)
         fail(
           "invalid_request",
@@ -3333,15 +2986,9 @@ export function resolveAssignmentSession(
           "continue",
         );
       const evidenceEntries = currentRequestId
-        ? requiredEvidenceEntriesForRequest(
-            applicableEvidence,
-            currentRequestId,
-          )
+        ? requiredEvidenceEntriesForRequest(applicableEvidence, currentRequestId)
         : [];
-      if (
-        evidenceEntries.length > 1 &&
-        !consistentRequiredEvidenceUpdates(evidenceEntries)
-      )
+      if (evidenceEntries.length > 1 && !consistentRequiredEvidenceUpdates(evidenceEntries))
         fail(
           "invalid_request",
           "Saved assignment has conflicting accepted evidence metadata",
@@ -3377,26 +3024,20 @@ export function resolveAssignmentSession(
           !validAgentLabel(record.agentLabel) ||
           typeof record.paneId !== "string" ||
           !record.paneId.trim() ||
-          (record.projectAssignmentId !== undefined &&
-            !validId(record.projectAssignmentId)) ||
-          (record.evidenceAssignmentId !== undefined &&
-            !validId(record.evidenceAssignmentId)) ||
-          (record.projectAssignmentId !== undefined &&
-            record.evidenceAssignmentId === undefined) ||
+          (record.projectAssignmentId !== undefined && !validId(record.projectAssignmentId)) ||
+          (record.evidenceAssignmentId !== undefined && !validId(record.evidenceAssignmentId)) ||
+          (record.projectAssignmentId !== undefined && record.evidenceAssignmentId === undefined) ||
           !Array.isArray(record.inheritedEvidence) ||
           !record.inheritedEvidence.every(isRequiredEvidence) ||
           !Array.isArray(record.localEvidence) ||
           !record.localEvidence.every(isRequiredEvidence) ||
           (record.currentEvidenceIds !== undefined &&
             (!Array.isArray(record.currentEvidenceIds) ||
-              new Set(record.currentEvidenceIds).size !==
-                record.currentEvidenceIds.length ||
+              new Set(record.currentEvidenceIds).size !== record.currentEvidenceIds.length ||
               !record.currentEvidenceIds.every(
                 (id: unknown) =>
                   typeof id === "string" &&
-                  record.inheritedEvidence.some(
-                    (item: RequiredEvidence) => item.id === id,
-                  ),
+                  record.inheritedEvidence.some((item: RequiredEvidence) => item.id === id),
               ))) ||
           (record.evidenceAssignmentId === undefined &&
             (record.inheritedEvidence.length || record.localEvidence.length)) ||
@@ -3432,9 +3073,7 @@ export function resolveAssignmentSession(
           (record.projectAssignmentId !== currentState?.projectAssignmentId &&
             currentState !== undefined) ||
           record.runId !==
-            (currentState?.runId ??
-              historicalTerminal?.runId ??
-              historicalClose?.run_id) ||
+            (currentState?.runId ?? historicalTerminal?.runId ?? historicalClose?.run_id) ||
           record.ownerSessionId !==
             (currentState?.ownerSessionId ??
               historicalTerminal?.ownerSessionId ??
@@ -3444,9 +3083,7 @@ export function resolveAssignmentSession(
               historicalTerminal?.workspaceId ??
               historicalClose?.workspace_id) ||
           record.paneId !==
-            (currentState?.paneId ??
-              historicalTerminal?.paneId ??
-              historicalClose?.pane_id)
+            (currentState?.paneId ?? historicalTerminal?.paneId ?? historicalClose?.pane_id)
         )
           fail(
             "invalid_request",
@@ -3456,26 +3093,20 @@ export function resolveAssignmentSession(
         let upgradedInheritedEvidence: RequiredEvidence[];
         let upgradedLocalEvidence: RequiredEvidence[];
         try {
-          for (const item of [
-            ...record.inheritedEvidence,
-            ...record.localEvidence,
-          ])
+          for (const item of [...record.inheritedEvidence, ...record.localEvidence])
             if ("path" in item && item.ref !== undefined)
               verifySemanticEvidenceReservation(item.id, item.ref);
           const verifyEvidence = (item: RequiredEvidence): RequiredEvidence => {
             if ("result" in item) return item;
             if (options.readOnlyEvidence && !item.ref)
-              throw new Error(
-                "legacy evidence has no verified semantic reference",
-              );
+              throw new Error("legacy evidence has no verified semantic reference");
             if (options.readOnlyEvidence) {
               verifySemanticEvidenceReservation(item.id, item.ref!);
               return item;
             }
             return upgradeAndVerifyRequiredEvidence(item);
           };
-          upgradedInheritedEvidence =
-            record.inheritedEvidence.map(verifyEvidence);
+          upgradedInheritedEvidence = record.inheritedEvidence.map(verifyEvidence);
           upgradedLocalEvidence = record.localEvidence.map(verifyEvidence);
         } catch {
           fail(
@@ -3488,25 +3119,14 @@ export function resolveAssignmentSession(
           ...record,
           inheritedEvidence: upgradedInheritedEvidence,
           localEvidence: upgradedLocalEvidence,
-          ...(record.taskEvidenceId
-            ? { taskEvidenceId: record.taskEvidenceId }
-            : {}),
+          ...(record.taskEvidenceId ? { taskEvidenceId: record.taskEvidenceId } : {}),
           ...(record.currentEvidenceIds
             ? { currentEvidenceIds: [...record.currentEvidenceIds] }
             : {}),
         };
-        if (
-          !options.readOnlyEvidence &&
-          !isDeepStrictEqual(upgradedRecord, record)
-        )
-          manager.appendCustomEntry(
-            "pi-herdsman-agent-required-evidence",
-            upgradedRecord,
-          );
-        for (const item of [
-          ...upgradedInheritedEvidence,
-          ...upgradedLocalEvidence,
-        ])
+        if (!options.readOnlyEvidence && !isDeepStrictEqual(upgradedRecord, record))
+          manager.appendCustomEntry("pi-herdsman-agent-required-evidence", upgradedRecord);
+        for (const item of [...upgradedInheritedEvidence, ...upgradedLocalEvidence])
           if ("path" in item) {
             try {
               readRequiredEvidenceSnapshot(item.sourceAssignmentId, item);
@@ -3528,9 +3148,7 @@ export function resolveAssignmentSession(
             : {}),
           inheritedEvidence: upgradedInheritedEvidence,
           localEvidence: upgradedLocalEvidence,
-          ...(record.taskEvidenceId
-            ? { taskEvidenceId: record.taskEvidenceId }
-            : {}),
+          ...(record.taskEvidenceId ? { taskEvidenceId: record.taskEvidenceId } : {}),
           ...(record.currentEvidenceIds
             ? { currentEvidenceIds: [...record.currentEvidenceIds] }
             : {}),
@@ -3544,9 +3162,8 @@ export function resolveAssignmentSession(
         label: child.label,
         cwd: manager.getCwd(),
         ...(() => {
-          const selection = resolveSavedSessionModelSelection(
-            manager,
-            (provider, modelId) => ctx.modelRegistry.find(provider, modelId),
+          const selection = resolveSavedSessionModelSelection(manager, (provider, modelId) =>
+            ctx.modelRegistry.find(provider, modelId),
           );
           return selection.kind === "resolved"
             ? { savedModel: selection.model }
@@ -3670,10 +3287,7 @@ function sameRootDelegationGeneration(
   );
 }
 
-function permitsRootDelegation(
-  policy: RootDelegationPolicy,
-  definition: string,
-): boolean {
+function permitsRootDelegation(policy: RootDelegationPolicy, definition: string): boolean {
   return policy === "all" || policy.has(definition);
 }
 
@@ -3707,21 +3321,14 @@ export function visibleAgentCapabilities(
   const available = definitions.filter(
     (definition) =>
       availableNames.has(definition.name) &&
-      (scope.kind === "root" ||
-        scope.allowedAgentDefinitions.has(definition.name)) &&
-      (scope.kind !== "root" ||
-        permitsRootDelegation(rootPolicy, definition.name)),
+      (scope.kind === "root" || scope.allowedAgentDefinitions.has(definition.name)) &&
+      (scope.kind !== "root" || permitsRootDelegation(rootPolicy, definition.name)),
   );
   return available.map((definition) => {
-    const metadata: Record<string, unknown> = agentDefinitionMetadata(
-      definition,
-      childScope,
-    );
+    const metadata: Record<string, unknown> = agentDefinitionMetadata(definition, childScope);
     return {
       name: definition.name,
-      ...(typeof metadata.description === "string"
-        ? { description: metadata.description }
-        : {}),
+      ...(typeof metadata.description === "string" ? { description: metadata.description } : {}),
       tools: formatTools(metadata),
       skills: formatSkills(metadata),
       ...(childScope === "delegating" &&
@@ -3757,36 +3364,22 @@ export type Params =
 
 function validateAgentModelOverridePolicy(
   ctx: ExtensionContext,
-  requested: Pick<
-    Extract<Params, { action: "delegate" }>,
-    "model" | "thinking"
-  >,
+  requested: Pick<Extract<Params, { action: "delegate" }>, "model" | "thinking">,
 ) {
   const config = readConfig();
   if (!config.allowAgentModelOverrides)
-    fail(
-      "invalid_request",
-      "Agent model and thinking overrides are disabled",
-      "delegate",
-      {
-        nextAction:
-          "Omit both overrides or enable Agent model overrides in Herdsman Settings.",
-      },
-    );
+    fail("invalid_request", "Agent model and thinking overrides are disabled", "delegate", {
+      nextAction: "Omit both overrides or enable Agent model overrides in Herdsman Settings.",
+    });
   if (!Object.hasOwn(requested, "model")) return;
   const selected = allowedOverrideModels(ctx, config).find(
     (model) => modelToken(model) === requested.model,
   );
   if (!selected)
-    fail(
-      "invalid_request",
-      "Requested model is not currently permitted or available",
-      "delegate",
-      {
-        nextAction:
-          "Use list_agents to find an exact permitted model ID, or omit the model override.",
-      },
-    );
+    fail("invalid_request", "Requested model is not currently permitted or available", "delegate", {
+      nextAction:
+        "Use list_agents to find an exact permitted model ID, or omit the model override.",
+    });
   return selected;
 }
 
@@ -3797,46 +3390,33 @@ function validateAgentThinkingOverride(
   explicitModel: ReturnType<typeof validateAgentModelOverridePolicy>,
   inherited: ExtensionContext["model"],
 ) {
-  if (
-    !requestedThinking ||
-    !VALID_THINKING_LEVELS.some((level) => level === requestedThinking)
-  )
+  if (!requestedThinking || !VALID_THINKING_LEVELS.some((level) => level === requestedThinking))
     fail("invalid_request", "Unrecognized thinking level", "delegate", {
       nextAction: `Choose a valid thinking level: ${VALID_THINKING_LEVELS.join(", ")}.`,
     });
   const model =
     explicitModel ??
     (() => {
-      const token =
-        configured ?? (inherited ? modelToken(inherited) : undefined);
+      const token = configured ?? (inherited ? modelToken(inherited) : undefined);
       if (token === undefined) return;
       const models = ctx.modelRegistry.getAll();
       const lowerToken = token.toLowerCase();
       const candidates = models.filter(
         (model) =>
-          modelToken(model).toLowerCase() === lowerToken ||
-          model.id.toLowerCase() === lowerToken,
+          modelToken(model).toLowerCase() === lowerToken || model.id.toLowerCase() === lowerToken,
       );
       const candidate = candidates.length === 1 ? candidates[0] : undefined;
       if (!candidate || !ctx.modelRegistry.hasConfiguredAuth(candidate)) return;
       if (configured === undefined) {
-        if (
-          candidate.provider !== inherited?.provider ||
-          candidate.id !== inherited.id
-        )
-          return;
+        if (candidate.provider !== inherited?.provider || candidate.id !== inherited.id) return;
       }
       // An exact token can still lose to Pi's longest-prefix/fuzzy resolution.
       // The CLI resolver only reads these two methods of its runtime.
       const modelRuntime = {
         getModels: () => models,
         hasConfiguredAuth: (provider: string) => {
-          const model = models.find(
-            (candidate) => candidate.provider === provider,
-          );
-          return (
-            model !== undefined && ctx.modelRegistry.hasConfiguredAuth(model)
-          );
+          const model = models.find((candidate) => candidate.provider === provider);
+          return model !== undefined && ctx.modelRegistry.hasConfiguredAuth(model);
         },
       } as unknown as Parameters<typeof resolveCliModel>[0]["modelRuntime"];
       const resolved = resolveCliModel({
@@ -3852,8 +3432,7 @@ function validateAgentThinkingOverride(
       "Cannot unambiguously resolve the model for a thinking override",
       "delegate",
       {
-        nextAction:
-          "Specify an exact permitted provider/model ID or omit the thinking override.",
+        nextAction: "Specify an exact permitted provider/model ID or omit the thinking override.",
       },
     );
   const supported = getSupportedThinkingLevels(model);
@@ -3920,11 +3499,7 @@ export type Runtime = {
 };
 type AgentHealthDiagnostic = Awaited<ReturnType<typeof inspectHerdrAgent>>;
 
-function runtimeIdentityMatches(
-  runtime: Runtime,
-  state: ManagedAgentState,
-  agent: any,
-): boolean {
+function runtimeIdentityMatches(runtime: Runtime, state: ManagedAgentState, agent: any): boolean {
   return (
     runtime.runId === state.runId &&
     runtime.ownerSessionId === state.ownerSessionId &&
@@ -3953,10 +3528,7 @@ function expectedSession(id?: string, path?: string): ExpectedSession {
   return { id, path };
 }
 
-export function sameSessionPath(
-  left: string | undefined,
-  right: string | undefined,
-): boolean {
+export function sameSessionPath(left: string | undefined, right: string | undefined): boolean {
   if (left === right) return true;
   if (!left || !right) return false;
   return canonicalSessionPath(left) === canonicalSessionPath(right);
@@ -3964,35 +3536,22 @@ export function sameSessionPath(
 
 export function stateAgentDefinition(state: ManagedAgentState): string {
   if (state.agentDefinition !== undefined) {
-    if (
-      typeof state.agentDefinition !== "string" ||
-      !state.agentDefinition.trim()
-    )
+    if (typeof state.agentDefinition !== "string" || !state.agentDefinition.trim())
       throw new Error("invalid managed agent definition");
     return state.agentDefinition.trim();
   }
-  if (!state.piSessionFile)
-    throw new Error("managed agent has no Pi session file");
+  if (!state.piSessionFile) throw new Error("managed agent has no Pi session file");
   const manager = SessionManager.open(state.piSessionFile);
-  const identity = sessionAgentIdentity(
-    manager.getEntries(),
-    manager.getSessionId(),
-  );
+  const identity = sessionAgentIdentity(manager.getEntries(), manager.getSessionId());
   if (!identity) throw new Error("missing pi-herdsman-agent-definition entry");
   return identity.definition;
 }
 
-export function herdrSessionsMatch(
-  agent: any,
-  expected: ExpectedSession | undefined,
-): boolean {
+export function herdrSessionsMatch(agent: any, expected: ExpectedSession | undefined): boolean {
   return matchesExpectedSession(agent?.agent_session, expected);
 }
 
-export function herdrAliasMatchesIfReported(
-  agent: any,
-  expectedAlias: string,
-): boolean {
+export function herdrAliasMatchesIfReported(agent: any, expectedAlias: string): boolean {
   const aliases = [agent?.name].filter(
     (value): value is string => typeof value === "string" && value.length > 0,
   );
@@ -4006,21 +3565,14 @@ export function parsePresentationTokens(tokens: unknown): {
   thinking?: string;
   contextPercent?: number;
 } {
-  const source =
-    tokens && typeof tokens === "object"
-      ? (tokens as Record<string, unknown>)
-      : {};
+  const source = tokens && typeof tokens === "object" ? (tokens as Record<string, unknown>) : {};
   const text = (key: string): string | undefined => {
     const value = source[key];
     return typeof value === "string" && value.trim() ? value : undefined;
   };
   const number = (key: string, valid: (value: number) => boolean) => {
     const raw = source[key];
-    if (
-      raw === undefined ||
-      raw === null ||
-      (typeof raw === "string" && !raw.trim())
-    )
+    if (raw === undefined || raw === null || (typeof raw === "string" && !raw.trim()))
       return undefined;
     const value = Number(raw);
     return Number.isFinite(value) && valid(value) ? value : undefined;
@@ -4030,10 +3582,7 @@ export function parsePresentationTokens(tokens: unknown): {
     startedAt: number("started", (value) => value >= 0),
     model: text("model"),
     thinking: text("thinking"),
-    contextPercent: number(
-      "ctx",
-      (value) => Number.isInteger(value) && value >= 0 && value <= 100,
-    ),
+    contextPercent: number("ctx", (value) => Number.isInteger(value) && value >= 0 && value <= 100),
   };
 }
 
@@ -4054,16 +3603,11 @@ export function validateIdentity(
   ];
   for (const [field, expected, actual] of expectedValues)
     if (expected !== actual) differences.push([field, expected, actual]);
-  if (!sameCwd(state.cwd, runtime.cwd))
-    differences.push(["cwd", state.cwd, runtime.cwd]);
+  if (!sameCwd(state.cwd, runtime.cwd)) differences.push(["cwd", state.cwd, runtime.cwd]);
   if (state.piSessionId !== runtime.piSessionId)
     differences.push(["piSessionId", state.piSessionId, runtime.piSessionId]);
   if (!sameSessionPath(state.piSessionFile, runtime.piSessionFile))
-    differences.push([
-      "piSessionFile",
-      state.piSessionFile,
-      runtime.piSessionFile,
-    ]);
+    differences.push(["piSessionFile", state.piSessionFile, runtime.piSessionFile]);
   if (differences.length)
     fail(
       "target_not_found",
@@ -4072,8 +3616,7 @@ export function validateIdentity(
     );
   if (agent) {
     const observation = sessionIdentity(agent.agent_session);
-    const hasObservedSession =
-      agent.agent_session !== undefined && agent.agent_session !== null;
+    const hasObservedSession = agent.agent_session !== undefined && agent.agent_session !== null;
     const liveDifferences: [string, unknown, unknown][] = [];
     const liveValues: [string, unknown, unknown][] = [
       ["workspaceId", agent.workspace_id, runtime.workspaceId],
@@ -4081,18 +3624,13 @@ export function validateIdentity(
     ];
     for (const [field, expected, actual] of liveValues)
       if (expected !== actual) liveDifferences.push([field, expected, actual]);
-    if (!sameCwd(agent.cwd, runtime.cwd))
-      liveDifferences.push(["cwd", agent.cwd, runtime.cwd]);
+    if (!sameCwd(agent.cwd, runtime.cwd)) liveDifferences.push(["cwd", agent.cwd, runtime.cwd]);
     if (!herdrAliasMatchesIfReported(agent, runtime.herdrAgent))
       liveDifferences.push(["herdrAlias", agent, runtime.herdrAgent]);
-    const liveExpectedSession = expectedSession(
-      runtime.piSessionId,
-      runtime.piSessionFile,
-    );
+    const liveExpectedSession = expectedSession(runtime.piSessionId, runtime.piSessionFile);
     if (
       (!observation && (options.requireLiveSession || hasObservedSession)) ||
-      (hasObservedSession &&
-        !matchesExpectedSession(agent.agent_session, liveExpectedSession))
+      (hasObservedSession && !matchesExpectedSession(agent.agent_session, liveExpectedSession))
     )
       liveDifferences.push(["session", observation, liveExpectedSession]);
     if (liveDifferences.length)
@@ -4107,11 +3645,7 @@ export function validateIdentity(
     state.activeRequestId !== options.requestId &&
     state.completedRequestId !== options.requestId
   )
-    fail(
-      "target_not_found",
-      "Agent request identity does not match managed state",
-      "identity",
-    );
+    fail("target_not_found", "Agent request identity does not match managed state", "identity");
 }
 
 export type PendingStart = {
@@ -4141,12 +3675,8 @@ function cwdIsWithin(checkout: string, cwd: string): boolean {
   return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
-function legacyAssignmentCheckout(assignment: {
-  id: string;
-  piSessionFile?: string;
-}) {
-  if (!assignment.piSessionFile || !isAbsolute(assignment.piSessionFile))
-    return undefined;
+function legacyAssignmentCheckout(assignment: { id: string; piSessionFile?: string }) {
+  if (!assignment.piSessionFile || !isAbsolute(assignment.piSessionFile)) return undefined;
   try {
     if (!statSync(assignment.piSessionFile).isFile()) return undefined;
     const saved = readPiSessionHeaderIdentity(assignment.piSessionFile);
@@ -4167,25 +3697,16 @@ function resolveDelegationCwd(value: unknown, controllerCwd: string) {
       return code < 32 || (code >= 127 && code <= 159);
     })
   )
-    fail(
-      "invalid_request",
-      "cwd must be a non-empty path without control characters",
-      "delegate",
-    );
+    fail("invalid_request", "cwd must be a non-empty path without control characters", "delegate");
 
   try {
     const cwd = realpathSync.native(resolve(controllerCwd, value));
     const stat = statSync(cwd, { bigint: true });
-    if (!stat.isDirectory() || stat.ino === 0n)
-      throw new Error("Directory identity unavailable");
+    if (!stat.isDirectory() || stat.ino === 0n) throw new Error("Directory identity unavailable");
     accessSync(cwd, constants.R_OK | constants.X_OK);
     return { cwd, dev: stat.dev, ino: stat.ino };
   } catch {
-    fail(
-      "invalid_request",
-      "cwd must resolve to a readable directory",
-      "delegate",
-    );
+    fail("invalid_request", "cwd must resolve to a readable directory", "delegate");
   }
 }
 
@@ -4201,10 +3722,8 @@ export function validateAssignmentCwd(
   operation: "delegate" | "continue",
   verifiedCrossDirectory?: boolean,
 ): void {
-  const privateSource =
-    operation === "delegate" && definition.privateRepositorySource;
-  if (!definition.projectSource && !privateSource && scope.kind === "root")
-    return;
+  const privateSource = operation === "delegate" && definition.privateRepositorySource;
+  if (!definition.projectSource && !privateSource && scope.kind === "root") return;
   if (!(verifiedCrossDirectory ?? !sameCwd(agentCwd, controllerCwd))) return;
   if (definition.projectSource)
     fail(
@@ -4326,9 +3845,7 @@ function requestEvidenceFields(evidence: {
     ...(evidence.projectAssignmentId !== undefined
       ? { projectAssignmentId: evidence.projectAssignmentId }
       : {}),
-    ...(evidence.taskEvidenceId !== undefined
-      ? { taskEvidenceId: evidence.taskEvidenceId }
-      : {}),
+    ...(evidence.taskEvidenceId !== undefined ? { taskEvidenceId: evidence.taskEvidenceId } : {}),
     ...(evidence.evidenceAssignmentId !== undefined
       ? { evidenceAssignmentId: evidence.evidenceAssignmentId }
       : {}),
@@ -4336,9 +3853,7 @@ function requestEvidenceFields(evidence: {
     ...(evidence.inheritedEvidence !== undefined
       ? { inheritedEvidence: [...evidence.inheritedEvidence] }
       : {}),
-    ...(evidence.localEvidence !== undefined
-      ? { localEvidence: [...evidence.localEvidence] }
-      : {}),
+    ...(evidence.localEvidence !== undefined ? { localEvidence: [...evidence.localEvidence] } : {}),
     ...(evidence.currentEvidenceIds !== undefined
       ? { currentEvidenceIds: [...evidence.currentEvidenceIds] }
       : {}),
@@ -4369,9 +3884,7 @@ export function managedAgentCascadePlanFromSnapshot(
 ): ManagedAgentCascadePlan {
   assertUniqueDurableIdentities(snapshot.mailboxes.map(({ state }) => state));
   const findSnapshot = (candidate: ManagedAgentState): ManagedAgentSnapshot => {
-    const matches = snapshot.agents.filter(({ state }) =>
-      sameIdentity(state, candidate),
-    );
+    const matches = snapshot.agents.filter(({ state }) => sameIdentity(state, candidate));
     if (matches.length !== 1)
       fail(
         "target_ambiguous",
@@ -4389,8 +3902,7 @@ export function managedAgentCascadePlanFromSnapshot(
   const visit = (ancestor: ManagedAgentState): void => {
     for (const { state } of snapshot.mailboxes.filter(
       ({ state }) =>
-        state.workspaceId === parent.workspaceId &&
-        state.ownerSessionId === ancestor.piSessionId,
+        state.workspaceId === parent.workspaceId && state.ownerSessionId === ancestor.piSessionId,
     )) {
       const key = `${state.workspaceId}\0${state.piSessionId}`;
       if (visited.has(key))
@@ -4416,24 +3928,13 @@ export function assertManagedAgentCascadeSafe(
 ): void {
   for (const [index, snapshot] of snapshots.entries()) {
     if (snapshot.presence.kind === "unknown")
-      fail(
-        "target_ambiguous",
-        "Managed agent presence cannot be proved safely",
-        "close",
-      );
-    const mailbox = agentMailboxPath(
-      snapshot.state.workspaceId,
-      snapshot.state.agentLabel,
-    );
+      fail("target_ambiguous", "Managed agent presence cannot be proved safely", "close");
+    const mailbox = agentMailboxPath(snapshot.state.workspaceId, snapshot.state.agentLabel);
     let current: ManagedAgentState | undefined;
     try {
       current = readAgentState(mailbox);
     } catch {
-      fail(
-        "target_ambiguous",
-        "A managed mailbox has unresolved state",
-        "close",
-      );
+      fail("target_ambiguous", "A managed mailbox has unresolved state", "close");
     }
     if (!current || !sameIdentity(current, snapshot.state))
       fail("target_ambiguous", "Managed agent changed before close", "close");
@@ -4443,8 +3944,7 @@ export function assertManagedAgentCascadeSafe(
         current.activeRequestId,
         readUnacknowledgedRequest(mailbox, current)?.requestId,
       ].filter(
-        (id): id is string =>
-          !!id && id !== (index === 0 ? deliveredRootResultId : undefined),
+        (id): id is string => !!id && id !== (index === 0 ? deliveredRootResultId : undefined),
       );
       if (pending.some((id) => readResult(mailbox, id) !== undefined))
         fail(
@@ -4454,11 +3954,7 @@ export function assertManagedAgentCascadeSafe(
         );
     } catch (error) {
       if (error instanceof OperationError) throw error;
-      fail(
-        "target_ambiguous",
-        "A managed mailbox has unresolved state",
-        "close",
-      );
+      fail("target_ambiguous", "A managed mailbox has unresolved state", "close");
     }
   }
 }
@@ -4483,15 +3979,12 @@ export async function managedAgentSnapshots(
   suppliedInventory?: HerdrSessionSnapshot,
   allowTranscriptDefinitionFallback = true,
 ): Promise<ManagedAgentSnapshotCollection> {
-  const inventory =
-    suppliedInventory ?? (await herdrSessionSnapshot(pi, ctx, signal));
+  const inventory = suppliedInventory ?? (await herdrSessionSnapshot(pi, ctx, signal));
   const currentWorkspaceId = process.env.HERDR_WORKSPACE_ID ?? ctx.cwd;
   const { states: allMailboxes, issues: stateIssues } = scanAgentStates();
   const mailboxes = allWorkspaces
     ? allMailboxes
-    : allMailboxes.filter(
-        ({ state }) => state.workspaceId === currentWorkspaceId,
-      );
+    : allMailboxes.filter(({ state }) => state.workspaceId === currentWorkspaceId);
   const pendingOwners = new Set<string>();
   const completedResultsPending = mailboxes.map(({ path, state }) => {
     let pending = false;
@@ -4514,9 +4007,7 @@ export async function managedAgentSnapshots(
         state.terminalId &&
         state.launchShellPid !== undefined &&
         inventory.panes.some(
-          (pane) =>
-            pane.pane_id === state.paneId &&
-            pane.workspace_id === state.workspaceId,
+          (pane) => pane.pane_id === state.paneId && pane.workspace_id === state.workspaceId,
         )
       ) {
         const proven = await verifyRetainedHerdrPane(
@@ -4528,11 +4019,7 @@ export async function managedAgentSnapshots(
             terminalId: state.terminalId,
             launchShellPid: state.launchShellPid,
             cwd: state.cwd,
-            alias: herdrAgentAlias(
-              state.workspaceId,
-              state.agentLabel,
-              state.runId,
-            ),
+            alias: herdrAgentAlias(state.workspaceId, state.agentLabel, state.runId),
             session: { id: state.piSessionId, path: state.piSessionFile },
           },
           signal,
@@ -4553,13 +4040,9 @@ export async function managedAgentSnapshots(
         agentDefinition = "unknown";
       }
       const session = agent && sessionIdentity(agent.agent_session);
-      const piSessionId =
-        session?.kind === "id" ? session.value : state.piSessionId;
-      const piSessionPath =
-        session?.kind === "path" ? session.value : state.piSessionFile;
-      const lifecycleState = agent
-        ? normalizeHerdrLifecycleState(agent)
-        : "unknown";
+      const piSessionId = session?.kind === "id" ? session.value : state.piSessionId;
+      const piSessionPath = session?.kind === "path" ? session.value : state.piSessionFile;
+      const lifecycleState = agent ? normalizeHerdrLifecycleState(agent) : "unknown";
       const controlLifecycleState =
         lifecycleState === "idle" ||
         lifecycleState === "working" ||
@@ -4579,9 +4062,7 @@ export async function managedAgentSnapshots(
             !!state.resultError,
           )
         : "unknown";
-      const pendingDirectChildWork = pendingOwners.has(
-        durableIdentityKey(state),
-      );
+      const pendingDirectChildWork = pendingOwners.has(durableIdentityKey(state));
       const waitingForChildren =
         !!state.activeRequestId &&
         pendingDirectChildWork &&
@@ -4643,11 +4124,7 @@ export async function managedAgentSnapshots(
   let rootOwners: VerifiedRootOwner[] = [];
   if (proveRoot) {
     try {
-      rootOwners = dependencies.readRootOwners(
-        inventory,
-        mailboxes,
-        currentWorkspaceId,
-      );
+      rootOwners = dependencies.readRootOwners(inventory, mailboxes, currentWorkspaceId);
     } catch {
       // Missing root evidence must remain an unknown breadcrumb.
     }
@@ -4708,8 +4185,7 @@ export function listedAgentRecord(
     actions.push("inspect");
     if (transcriptAvailable) actions.push("transcript");
     if (listed.steerable === true) actions.push("steer");
-    if (listed.state === "working" && !state.pendingAskId)
-      actions.push("interrupt");
+    if (listed.state === "working" && !state.pendingAskId) actions.push("interrupt");
     if (state.pendingAskId) {
       try {
         const ask = readPendingAsk(mailbox, state);
@@ -4740,8 +4216,7 @@ export function listedAgentRecord(
     presence.kind === "live" ? parsePresentationTokens(listed.tokens) : {};
   const runtime = dependencies.runtimeForLabel(state.agentLabel);
   const cleanupError =
-    runtime &&
-    dependencies.sameIdentity(dependencies.runtimeIdentityState(runtime), state)
+    runtime && dependencies.sameIdentity(dependencies.runtimeIdentityState(runtime), state)
       ? (runtime.cleanupError ?? runtime.resultReadError)
       : undefined;
   return {
@@ -4786,10 +4261,7 @@ export type AgentControllerOptions = {
         assignment: import("./supervision.ts").ProjectAssignment;
         revalidate(operation: () => Promise<void> | void): Promise<void>;
         publishIfCurrent(
-          operation: (
-            assignment:
-              import("./supervision.ts").ProjectAssignment | undefined,
-          ) => void,
+          operation: (assignment: import("./supervision.ts").ProjectAssignment | undefined) => void,
         ): Promise<void>;
       }
     | undefined
@@ -4806,15 +4278,10 @@ export type AgentControllerOptions = {
     | undefined
   >;
   /** Synchronous assertion hook used only by registerExtensionForTest. */
-  afterRequestPublishedForTest?(
-    mailboxPath: string,
-    request: RequestRecord,
-  ): undefined;
+  afterRequestPublishedForTest?(mailboxPath: string, request: RequestRecord): undefined;
   build: RuntimeBuild;
   extensionPath: string;
-  isContextRetired(
-    manager: Pick<SessionManager, "getEntries" | "getSessionId">,
-  ): boolean;
+  isContextRetired(manager: Pick<SessionManager, "getEntries" | "getSessionId">): boolean;
   snapshotDependencies: AgentSnapshotDependencies;
   persistedTranscriptReady(state: ManagedAgentState): boolean;
   agentDefinitions(ctx: ExtensionContext): Promise<AgentDefinition[]>;
@@ -4831,16 +4298,8 @@ export type AgentControllerOptions = {
     details: Record<string, unknown>,
     triggerTurn?: boolean,
   ): void;
-  sendAskMessage(
-    ctx: ExtensionContext,
-    ask: AskRecord,
-    triggerTurn?: boolean,
-  ): void;
-  sendOwnerMessage(
-    ctx: ExtensionContext,
-    message: OwnerMessageRecord,
-    triggerTurn?: boolean,
-  ): void;
+  sendAskMessage(ctx: ExtensionContext, ask: AskRecord, triggerTurn?: boolean): void;
+  sendOwnerMessage(ctx: ExtensionContext, message: OwnerMessageRecord, triggerTurn?: boolean): void;
   sessionRetired(ctx: ExtensionContext, runtime: Runtime): boolean | undefined;
   appendError(ctx: ExtensionContext, kind: string, error: unknown): void;
   onChanged(): void;
@@ -4867,10 +4326,7 @@ type ManagedAgentBootstrapPrepare = () =>
   | undefined
   | Promise<ManagedAgentBootstrapPreparation | undefined>;
 
-export function createAgentController(
-  pi: ExtensionAPI,
-  options: AgentControllerOptions,
-) {
+export function createAgentController(pi: ExtensionAPI, options: AgentControllerOptions) {
   let ready = false;
   let active = true;
   let recoveryComplete = false;
@@ -4891,17 +4347,11 @@ export function createAgentController(
   const askDeliveryInFlight = new Set<string>();
   const ownerMessageDeliveryInFlight = new Set<string>();
   const submittedOwnerMessages = new Set<string>();
-  const resultDeliveryRetries = new Map<
-    string,
-    ReturnType<typeof setTimeout>
-  >();
+  const resultDeliveryRetries = new Map<string, ReturnType<typeof setTimeout>>();
   const resultCleanupRetries = new Map<string, ReturnType<typeof setTimeout>>();
   const askDeliveryRetries = new Map<string, ReturnType<typeof setTimeout>>();
   const resultDeliveryEvidence = new Set<string>();
-  const resultDeliverySemanticRefs = new Map<
-    string,
-    Readonly<{ ref: string; index: number }>
-  >();
+  const resultDeliverySemanticRefs = new Map<string, Readonly<{ ref: string; index: number }>>();
   let assignGuidanceSent = false;
 
   const claimAssignmentLock = (
@@ -4915,8 +4365,7 @@ export function createAgentController(
       if (error instanceof ProcessLockOccupiedError)
         fail("agent_busy", error.message, operation, {
           ids,
-          nextAction:
-            "Let the current managed assignment transition finish, then retry.",
+          nextAction: "Let the current managed assignment transition finish, then retry.",
         });
       throw error;
     }
@@ -4943,23 +4392,14 @@ export function createAgentController(
       return claimExactSessionActivationLock(canonical);
     } catch (error) {
       if (error instanceof ProcessLockOccupiedError)
-        fail(
-          "agent_busy",
-          "The exact Pi session is already being activated",
-          "delegate",
-          {
-            nextAction:
-              "Let the current session activation finish, then retry.",
-          },
-        );
+        fail("agent_busy", "The exact Pi session is already being activated", "delegate", {
+          nextAction: "Let the current session activation finish, then retry.",
+        });
       throw error;
     }
   };
 
-  const sameIdentity = (
-    left: ManagedAgentState,
-    right: ManagedAgentState,
-  ): boolean =>
+  const sameIdentity = (left: ManagedAgentState, right: ManagedAgentState): boolean =>
     left.runId === right.runId &&
     left.ownerSessionId === right.ownerSessionId &&
     left.workspaceId === right.workspaceId &&
@@ -4980,10 +4420,8 @@ export function createAgentController(
   };
   const recordDependencies: Parameters<typeof listedAgentRecord>[5] = {
     persistedTranscriptReady,
-    cascadePlan: (items, state) =>
-      managedAgentCascadePlanFromSnapshot(items, state, sameIdentity),
-    assertCascadeSafe: (items) =>
-      assertManagedAgentCascadeSafe(items, sameIdentity),
+    cascadePlan: (items, state) => managedAgentCascadePlanFromSnapshot(items, state, sameIdentity),
+    assertCascadeSafe: (items) => assertManagedAgentCascadeSafe(items, sameIdentity),
     runtimeForLabel: (label) => runtimes.get(label),
     sameIdentity,
     runtimeIdentityState: (runtime) => ({
@@ -5011,14 +4449,7 @@ export function createAgentController(
     allWorkspaces = false,
     allowTranscriptDefinitionFallback = true,
   ) =>
-    snapshot(
-      context,
-      signal,
-      false,
-      allWorkspaces,
-      undefined,
-      allowTranscriptDefinitionFallback,
-    );
+    snapshot(context, signal, false, allWorkspaces, undefined, allowTranscriptDefinitionFallback);
   const withQuiescedTree = async <T>(
     context: ExtensionContext,
     ownerSessionId: string,
@@ -5032,32 +4463,22 @@ export function createAgentController(
     const freeze = async (sessionId: string): Promise<void> => {
       const key = `${workspaceId}\0${sessionId}`;
       if (held.has(key)) throw new Error("Managed Agent ancestry is ambiguous");
-      releases.push(
-        await waitForDelegationLock(workspaceId, sessionId, deadline, signal),
-      );
+      releases.push(await waitForDelegationLock(workspaceId, sessionId, deadline, signal));
       held.add(key);
       const snapshot = await snapshots(context, signal, true);
-      if (snapshot.stateIssues.length)
-        throw new Error("Owned Agent mailbox state is unresolved");
-      assertUniqueDurableIdentities(
-        snapshot.mailboxes.map(({ state }) => state),
-      );
+      if (snapshot.stateIssues.length) throw new Error("Owned Agent mailbox state is unresolved");
+      assertUniqueDurableIdentities(snapshot.mailboxes.map(({ state }) => state));
       const children = snapshot.agents
         .filter(
-          ({ state }) =>
-            state.workspaceId === workspaceId &&
-            state.ownerSessionId === sessionId,
+          ({ state }) => state.workspaceId === workspaceId && state.ownerSessionId === sessionId,
         )
         .map(({ state }) => state);
       for (const child of children) {
         managedAgentCascadePlanFromSnapshot(snapshot, child, sameIdentity);
         await freeze(child.piSessionId);
         const fresh = await snapshots(context, signal, true);
-        const matches = fresh.agents.filter(({ state }) =>
-          sameIdentity(state, child),
-        );
-        if (matches.length !== 1)
-          throw new Error("Managed Agent identity changed during shutdown");
+        const matches = fresh.agents.filter(({ state }) => sameIdentity(state, child));
+        if (matches.length !== 1) throw new Error("Managed Agent identity changed during shutdown");
       }
     };
     try {
@@ -5105,11 +4526,7 @@ export function createAgentController(
     );
     return {
       ...result,
-      visible: visibleAgentSnapshots(
-        result,
-        scope,
-        context.sessionManager.getSessionId(),
-      ),
+      visible: visibleAgentSnapshots(result, scope, context.sessionManager.getSessionId()),
     };
   };
   const listRecord = (
@@ -5168,12 +4585,7 @@ export function createAgentController(
     let callerTab: string | undefined;
     try {
       const panes = (
-        await runHerdr(
-          pi,
-          context,
-          ["pane", "list", "--workspace", workspaceId],
-          { signal },
-        )
+        await runHerdr(pi, context, ["pane", "list", "--workspace", workspaceId], { signal })
       )?.panes;
       const callerPanes = Array.isArray(panes)
         ? panes.filter(
@@ -5211,9 +4623,7 @@ export function createAgentController(
           !owners.has(state.ownerSessionId) &&
           presence.kind === "unknown" &&
           presence.relatedAgents.some(
-            (agent) =>
-              agent?.workspace_id === workspaceId &&
-              agent?.tab_id === candidate,
+            (agent) => agent?.workspace_id === workspaceId && agent?.tab_id === candidate,
           ),
       )
     )
@@ -5238,11 +4648,7 @@ export function createAgentController(
     }
     if (configured === "split") {
       if (!callerPaneId)
-        fail(
-          "invalid_request",
-          "Caller pane is required for split placement",
-          "delegate",
-        );
+        fail("invalid_request", "Caller pane is required for split placement", "delegate");
       return { kind: "split", paneId: callerPaneId };
     }
     if (configured === "subtree") return { kind: "tab", label };
@@ -5263,12 +4669,7 @@ export function createAgentController(
     for (let attempt = 0; ; attempt++) {
       let payload: any;
       try {
-        payload = await runHerdr(
-          pi,
-          context,
-          ["agent", "get", runtime.paneId],
-          { signal },
-        );
+        payload = await runHerdr(pi, context, ["agent", "get", runtime.paneId], { signal });
       } catch (error) {
         if (signal?.aborted) throw error;
         fail(
@@ -5279,29 +4680,16 @@ export function createAgentController(
       }
       agent = payload.agent;
       if (!herdrAliasMatchesIfReported(agent, runtime.herdrAgent))
-        fail(
-          "target_not_found",
-          "live Herdr agent alias mismatch",
-          "integration",
-        );
+        fail("target_not_found", "live Herdr agent alias mismatch", "integration");
       if (
-        (typeof agent.pane_id === "string" &&
-          agent.pane_id !== runtime.paneId) ||
-        (typeof agent.workspace_id === "string" &&
-          agent.workspace_id !== runtime.workspaceId) ||
+        (typeof agent.pane_id === "string" && agent.pane_id !== runtime.paneId) ||
+        (typeof agent.workspace_id === "string" && agent.workspace_id !== runtime.workspaceId) ||
         (typeof agent.cwd === "string" && !sameCwd(agent.cwd, runtime.cwd))
       )
-        fail(
-          "target_not_found",
-          "live Herdr agent identity mismatch",
-          "integration",
-        );
+        fail("target_not_found", "live Herdr agent identity mismatch", "integration");
       const observation = sessionIdentity(agent?.agent_session);
       if (!observation) {
-        if (
-          integrationOptions.waitForSession === true &&
-          attempt < INTEGRATION_SESSION_RETRIES
-        ) {
+        if (integrationOptions.waitForSession === true && attempt < INTEGRATION_SESSION_RETRIES) {
           await delay(INTEGRATION_SESSION_RETRY_MS, undefined, { signal });
           continue;
         }
@@ -5312,26 +4700,15 @@ export function createAgentController(
           { retryAttempted: attempt > 0 },
         );
       }
-      if (
-        !herdrSessionsMatch(
-          agent,
-          expectedSession(runtime.piSessionId, runtime.piSessionFile),
-        )
-      )
-        fail(
-          "target_not_found",
-          "live Herdr agent Pi session mismatch",
-          "integration",
-        );
+      if (!herdrSessionsMatch(agent, expectedSession(runtime.piSessionId, runtime.piSessionFile)))
+        fail("target_not_found", "live Herdr agent Pi session mismatch", "integration");
       break;
     }
     const presentation = parsePresentationTokens(agent.tokens);
     if (presentation.task !== undefined) runtime.task = presentation.task;
-    if (presentation.startedAt !== undefined)
-      runtime.startedAt = presentation.startedAt;
+    if (presentation.startedAt !== undefined) runtime.startedAt = presentation.startedAt;
     if (presentation.model !== undefined) runtime.model = presentation.model;
-    if (presentation.thinking !== undefined)
-      runtime.thinking = presentation.thinking;
+    if (presentation.thinking !== undefined) runtime.thinking = presentation.thinking;
     runtime.contextPercent = presentation.contextPercent;
   };
   const removeMailboxAfterRollback = (mailbox: string): void => {
@@ -5353,8 +4730,7 @@ export function createAgentController(
     const expectedAlias = herdrAgentAlias(workspaceId, label, runId);
     if (
       started.herdrAgent !== expectedAlias ||
-      (started.agent &&
-        !herdrAliasMatchesIfReported(started.agent, expectedAlias))
+      (started.agent && !herdrAliasMatchesIfReported(started.agent, expectedAlias))
     )
       throw new Error("Started agent returned conflicting Herdr agent aliases");
     await rollbackHerdrStart(pi, context, started);
@@ -5392,10 +4768,7 @@ export function createAgentController(
               item,
               herdrAgentAlias(state.workspaceId, state.agentLabel, state.runId),
             ) &&
-            herdrSessionsMatch(
-              item,
-              expectedSession(state.piSessionId, state.piSessionFile),
-            ),
+            herdrSessionsMatch(item, expectedSession(state.piSessionId, state.piSessionFile)),
         )
       : undefined;
     if (!state) {
@@ -5439,11 +4812,7 @@ export function createAgentController(
       cwd: runtime.cwd,
       session: expectedSession(runtime.piSessionId, runtime.piSessionFile),
     });
-    const expectedAlias = herdrAgentAlias(
-      state.workspaceId,
-      state.agentLabel,
-      state.runId,
-    );
+    const expectedAlias = herdrAgentAlias(state.workspaceId, state.agentLabel, state.runId);
     const after = await listHerdrAgents(pi, context);
     if (
       after.agents.some(
@@ -5453,9 +4822,7 @@ export function createAgentController(
           herdrAliasMatchesIfReported(agent, expectedAlias),
       )
     )
-      throw new Error(
-        "Agent ownership remained uncertain after internal failure",
-      );
+      throw new Error("Agent ownership remained uncertain after internal failure");
     removeMailboxAfterRollback(mailbox);
   };
   const hasDurableResult = (
@@ -5482,8 +4849,7 @@ export function createAgentController(
     allowTranscriptFallback = true,
     refreshCached = true,
   ): Runtime => {
-    const useCached =
-      cached !== undefined && runtimeIdentityMatches(cached, state, agent);
+    const useCached = cached !== undefined && runtimeIdentityMatches(cached, state, agent);
     const agentDefinition = agentDefinitionForRuntime(
       agent,
       state,
@@ -5494,11 +4860,7 @@ export function createAgentController(
       (useCached ? cached : undefined) ??
       ({
         label: agent.label,
-        herdrAgent: herdrAgentAlias(
-          agent.workspace_id,
-          agent.label,
-          state.runId,
-        ),
+        herdrAgent: herdrAgentAlias(agent.workspace_id, agent.label, state.runId),
         workspaceId: agent.workspace_id,
         paneId: agent.pane_id,
         cwd: agent.cwd,
@@ -5540,13 +4902,7 @@ export function createAgentController(
     cached: Runtime | undefined,
     signal: AbortSignal,
   ): Promise<AgentHealthDiagnostic> => {
-    const runtime = runtimeForListedAgent(
-      agent.listed,
-      state,
-      cached,
-      false,
-      false,
-    );
+    const runtime = runtimeForListedAgent(agent.listed, state, cached, false, false);
     return inspectHerdrAgent(
       pi,
       ctx,
@@ -5591,23 +4947,13 @@ export function createAgentController(
       (value): value is string => typeof value === "string" && value.length > 0,
     );
     if (aliases.some((alias) => alias !== runtime.herdrAgent))
-      fail(
-        "target_not_found",
-        "live Herdr agent alias mismatch",
-        "integration",
-      );
+      fail("target_not_found", "live Herdr agent alias mismatch", "integration");
     if (
-      (typeof agent?.pane_id === "string" &&
-        agent.pane_id !== runtime.paneId) ||
-      (typeof agent?.workspace_id === "string" &&
-        agent.workspace_id !== runtime.workspaceId) ||
+      (typeof agent?.pane_id === "string" && agent.pane_id !== runtime.paneId) ||
+      (typeof agent?.workspace_id === "string" && agent.workspace_id !== runtime.workspaceId) ||
       (typeof agent?.cwd === "string" && !sameCwd(agent.cwd, runtime.cwd))
     )
-      fail(
-        "target_not_found",
-        "live Herdr agent identity mismatch",
-        "integration",
-      );
+      fail("target_not_found", "live Herdr agent identity mismatch", "integration");
     if (
       !matchesExpectedSession(agent?.agent_session, {
         id: runtime.piSessionId,
@@ -5631,60 +4977,31 @@ export function createAgentController(
     controlState: ManagedAgentControlState;
   }> => {
     const snapshot = await snapshots(context, signal);
-    const matches = snapshot.agents.filter(
-      ({ listed }) => listed.label === agentLabel,
-    );
+    const matches = snapshot.agents.filter(({ listed }) => listed.label === agentLabel);
     if (!matches.length)
-      fail(
-        "target_not_found",
-        "No exact Herdr agent identity matched",
-        operation,
-      );
+      fail("target_not_found", "No exact Herdr agent identity matched", operation);
     if (matches.length > 1)
-      fail(
-        "target_ambiguous",
-        "The agent identity matched multiple live agents",
-        operation,
-      );
+      fail("target_ambiguous", "The agent identity matched multiple live agents", operation);
     const { listed: agent } = matches[0]!;
     const state = agent.label
       ? readAgentState(agentMailboxPath(agent.workspace_id, agent.label))
       : undefined;
-    if (!state)
-      fail(
-        "target_not_found",
-        "No valid managed state matched the agent",
-        operation,
-      );
+    if (!state) fail("target_not_found", "No valid managed state matched the agent", operation);
     if (state.ownerSessionId !== context.sessionManager.getSessionId())
-      fail(
-        "target_not_found",
-        "Agent belongs to another owner session",
-        operation,
-      );
+      fail("target_not_found", "Agent belongs to another owner session", operation);
     let cached = runtimes.get(agent.label);
     if (cached && !runtimeIdentityMatches(cached, state, agent)) {
       invalidateRuntime(agent.label);
       cached = undefined;
     }
-    if (
-      cached?.activeRequestId &&
-      cached.activeRequestId !== state.activeRequestId
-    )
+    if (cached?.activeRequestId && cached.activeRequestId !== state.activeRequestId)
       stopResultWatcher(cached, cached.activeRequestId);
-    if (
-      cached?.completedRequestId &&
-      cached.completedRequestId !== state.completedRequestId
-    )
+    if (cached?.completedRequestId && cached.completedRequestId !== state.completedRequestId)
       stopResultWatcher(cached, cached.completedRequestId);
     const runtime = runtimeForListedAgent(agent, state, cached, true);
     runtimes.set(runtime.label, runtime);
     if (!runtimeIdentityMatches(runtime, state, agent))
-      fail(
-        "target_not_found",
-        "Agent identity does not match managed state",
-        "identity",
-      );
+      fail("target_not_found", "Agent identity does not match managed state", "identity");
     await validateRuntimeIntegration(runtime, context, signal);
     return { runtime, agent, controlState: agent.state };
   };
@@ -5714,8 +5031,7 @@ export function createAgentController(
       };
     } = {},
   ): Promise<string> => {
-    if (!text.trim())
-      fail("invalid_request", "Message must not be empty", operation);
+    if (!text.trim()) fail("invalid_request", "Message must not be empty", operation);
     if (kind === "reply" && !askId)
       fail("invalid_request", "Reply request is missing its ask ID", operation);
     const request: RequestRecord = {
@@ -5731,9 +5047,7 @@ export function createAgentController(
       ...(kind === "reply" ? { askId } : {}),
       text,
       ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
-      ...(submitOptions.evidence
-        ? requestEvidenceFields(submitOptions.evidence)
-        : {}),
+      ...(submitOptions.evidence ? requestEvidenceFields(submitOptions.evidence) : {}),
       createdAt,
     };
     const limits = readConfig();
@@ -5746,24 +5060,14 @@ export function createAgentController(
       );
     await validateRuntimeIntegration(runtime, context, signal);
     const release = submitOptions.waitForLock
-      ? await acquireAssignmentLock(
-          runtime.mailboxPath,
-          signal,
-          operation,
-          runtime.label,
-        )
+      ? await acquireAssignmentLock(runtime.mailboxPath, signal, operation, runtime.label)
       : claimAssignmentLock(runtime.mailboxPath, operation, {
           label: runtime.label,
           paneId: runtime.paneId,
         });
     try {
       const current = readAgentState(runtime.mailboxPath);
-      if (!current)
-        fail(
-          "target_not_found",
-          "Agent mailbox state is unavailable",
-          operation,
-        );
+      if (!current) fail("target_not_found", "Agent mailbox state is unavailable", operation);
       if (
         !sameIdentity(current, {
           version: current.version,
@@ -5780,11 +5084,7 @@ export function createAgentController(
           updatedAt: current.updatedAt,
         })
       )
-        fail(
-          "target_not_found",
-          "Agent identity does not match managed state",
-          operation,
-        );
+        fail("target_not_found", "Agent identity does not match managed state", operation);
       requireCompatibleBuild(
         options.build,
         current.build,
@@ -5792,42 +5092,22 @@ export function createAgentController(
         `Agent ${current.agentLabel}`,
       );
       if (submitOptions.launchIdentity) {
-        if (
-          current.terminalId !== undefined ||
-          current.launchShellPid !== undefined
-        )
-          fail(
-            "target_ambiguous",
-            "Agent already has unexpected launch identity",
-            operation,
-          );
+        if (current.terminalId !== undefined || current.launchShellPid !== undefined)
+          fail("target_ambiguous", "Agent already has unexpected launch identity", operation);
         writeAgentState(runtime.mailboxPath, {
           ...current,
           ...submitOptions.launchIdentity,
           updatedAt: Date.now(),
         });
       }
-      if (
-        kind === "steer" &&
-        readUnacknowledgedRequest(runtime.mailboxPath, current)
-      )
-        fail(
-          "agent_busy",
-          "Agent has an unacknowledged control request",
-          operation,
-          {
-            nextAction:
-              "Resolve the pending control request before steering again.",
-          },
-        );
+      if (kind === "steer" && readUnacknowledgedRequest(runtime.mailboxPath, current))
+        fail("agent_busy", "Agent has an unacknowledged control request", operation, {
+          nextAction: "Resolve the pending control request before steering again.",
+        });
       if (current.lastAck) {
         try {
           removeRequest(runtime.mailboxPath, current.lastAck.requestId);
-          if (
-            runtime.cleanupError?.startsWith(
-              "Acknowledged request could not be removed:",
-            )
-          )
+          if (runtime.cleanupError?.startsWith("Acknowledged request could not be removed:"))
             runtime.cleanupError = undefined;
         } catch (error) {
           const message = `Acknowledged request could not be removed: ${String(error)}`;
@@ -5838,8 +5118,7 @@ export function createAgentController(
       }
       let requestWritten = false;
       const publish = () => {
-        if (requestWritten)
-          fail("internal_failure", "Request was already published", operation);
+        if (requestWritten) fail("internal_failure", "Request was already published", operation);
         writeRequest(runtime.mailboxPath, request);
         requestWritten = true;
         options.afterRequestPublishedForTest?.(runtime.mailboxPath, request);
@@ -5848,11 +5127,7 @@ export function createAgentController(
       if (!requestWritten) publish();
     } catch (error) {
       if (String(error).toLowerCase().includes("too large"))
-        fail(
-          "invalid_request",
-          "Request exceeds the mailbox size limit",
-          operation,
-        );
+        fail("invalid_request", "Request exceeds the mailbox size limit", operation);
       if (error instanceof OperationError) throw error;
       fail("internal_failure", String(error), operation);
     } finally {
@@ -5869,10 +5144,7 @@ export function createAgentController(
           { timeoutMs: 5000, signal },
         );
       } catch (error) {
-        if (
-          kind !== "steer" ||
-          !["TimeoutError", "AbortError"].includes((error as Error)?.name)
-        )
+        if (kind !== "steer" || !["TimeoutError", "AbortError"].includes((error as Error)?.name))
           throw error;
         const reconcileRelease = tryClaimAssignmentLock(runtime.mailboxPath);
         if (!reconcileRelease)
@@ -5930,18 +5202,9 @@ export function createAgentController(
         }
       }
       if (!state || state.lastAck?.requestId !== requestId)
-        fail(
-          "internal_failure",
-          "Agent acknowledgement identity did not match",
-          operation,
-        );
+        fail("internal_failure", "Agent acknowledgement identity did not match", operation);
       const ack = state.lastAck;
-      if (!ack)
-        fail(
-          "internal_failure",
-          "Agent acknowledgement was missing",
-          operation,
-        );
+      if (!ack) fail("internal_failure", "Agent acknowledgement was missing", operation);
       if (
         !sameIdentity(state, {
           version: state.version,
@@ -5958,9 +5221,7 @@ export function createAgentController(
           updatedAt: state.updatedAt,
         })
       ) {
-        const error = new Error(
-          "Acknowledged request identity changed after acknowledgement",
-        );
+        const error = new Error("Acknowledged request identity changed after acknowledgement");
         runtime.cleanupError = error.message;
         options.appendError(context, "pi_herdsman_cleanup_error", error);
         fail("target_not_found", error.message, operation);
@@ -5987,10 +5248,8 @@ export function createAgentController(
         runtime.startedAt = Date.now();
         runtime.contextPercent = undefined;
         watchResult(runtime, context, signal);
-        if (runtime.activeRequestId === requestId)
-          watchAsk(runtime, context, signal);
-        if (runtime.activeRequestId === requestId)
-          watchOwnerMessages(runtime, context, signal);
+        if (runtime.activeRequestId === requestId) watchAsk(runtime, context, signal);
+        if (runtime.activeRequestId === requestId) watchOwnerMessages(runtime, context, signal);
       }
       return requestId;
     } finally {
@@ -6019,11 +5278,7 @@ export function createAgentController(
                 current.lastAck?.requestId === requestId
               ) {
                 removeRequest(runtime.mailboxPath, requestId);
-                if (
-                  runtime.cleanupError?.startsWith(
-                    "Acknowledged request could not be removed:",
-                  )
-                )
+                if (runtime.cleanupError?.startsWith("Acknowledged request could not be removed:"))
                   runtime.cleanupError = undefined;
               }
             } finally {
@@ -6044,18 +5299,10 @@ export function createAgentController(
   };
   const controlAction = async (
     context: ExtensionContext,
-    params: Extract<
-      Params,
-      { action: "steer" | "interrupt" | "reply" | "inspect" }
-    >,
+    params: Extract<Params, { action: "steer" | "interrupt" | "reply" | "inspect" }>,
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>> => {
-    const resolved = await resolveRuntime(
-      context,
-      params.agent,
-      params.action,
-      signal,
-    );
+    const resolved = await resolveRuntime(context, params.agent, params.action, signal);
     const { runtime, agent, controlState } = resolved;
     if (params.action === "inspect") {
       const snapshot = await inspectHerdrAgent(
@@ -6100,17 +5347,13 @@ export function createAgentController(
         pane_id: runtime.paneId,
         captured_at: snapshot.capturedAt,
         recent_output_truncated: snapshot.recentOutputTruncated,
-        ...(snapshot.recentOutput
-          ? { recent_output: snapshot.recentOutput }
-          : {}),
+        ...(snapshot.recentOutput ? { recent_output: snapshot.recentOutput } : {}),
         ...(snapshot.process ? { process: snapshot.process } : {}),
       };
     }
     const operation = params.action;
     const fallbackToSteer =
-      operation === "interrupt" &&
-      controlState === "blocked" &&
-      agent.steerable === true;
+      operation === "interrupt" && controlState === "blocked" && agent.steerable === true;
     const kind = fallbackToSteer ? "steer" : operation;
     if (kind === "steer" && agent.steerable !== true) {
       const current = readAgentState(runtime.mailboxPath);
@@ -6124,20 +5367,13 @@ export function createAgentController(
           : controlState === "unknown"
             ? "Diagnose or recover the exact managed session before steering."
             : "Refresh list_agents after the underlying state changes and use steer_agent only when available_tools includes it.";
-      fail(
-        "agent_busy",
-        `Agent is not currently accepting steering: ${controlState}`,
-        "steer",
-        { nextAction },
-      );
+      fail("agent_busy", `Agent is not currently accepting steering: ${controlState}`, "steer", {
+        nextAction,
+      });
     }
     if (kind === "steer" && !runtime.activeRequestId)
       fail("agent_busy", "Agent has no active assignment", operation);
-    if (
-      operation === "interrupt" &&
-      controlState !== "working" &&
-      !fallbackToSteer
-    )
+    if (operation === "interrupt" && controlState !== "working" && !fallbackToSteer)
       fail(
         "agent_busy",
         `Agent has no interruptible active operation: ${controlState}`,
@@ -6157,15 +5393,9 @@ export function createAgentController(
       askId = current?.pendingAskId;
       let ask: AskRecord | undefined;
       try {
-        ask = current
-          ? readPendingAsk(runtime.mailboxPath, current)
-          : undefined;
+        ask = current ? readPendingAsk(runtime.mailboxPath, current) : undefined;
       } catch (error) {
-        fail(
-          "internal_failure",
-          `Agent ask is malformed or oversized: ${String(error)}`,
-          "reply",
-        );
+        fail("internal_failure", `Agent ask is malformed or oversized: ${String(error)}`, "reply");
       }
       if (!current?.activeRequestId || !askId || !ask)
         fail("agent_busy", "Agent is not waiting for an owner reply", "reply", {
@@ -6199,33 +5429,16 @@ export function createAgentController(
           updatedAt: current.updatedAt,
         })
       )
-        fail(
-          "target_not_found",
-          "Agent identity changed before reply",
-          "reply",
-        );
+        fail("target_not_found", "Agent identity changed before reply", "reply");
     }
     const limits = readConfig();
-    const manager = await options.managerEvidence?.(
-      context,
-      params.files ?? [],
-    );
+    const manager = await options.managerEvidence?.(context, params.files ?? []);
     const input = prepareMessageInput(
       params.message,
-      resolveMessageFiles(
-        context,
-        params.files,
-        operation,
-        manager?.retained,
-        manager?.roots,
-      ),
+      resolveMessageFiles(context, params.files, operation, manager?.retained, manager?.roots),
       context.cwd,
       operation,
-      operation === "reply"
-        ? "Reply"
-        : operation === "interrupt"
-          ? "Interrupt"
-          : "Steer",
+      operation === "reply" ? "Reply" : operation === "interrupt" ? "Interrupt" : "Steer",
       {
         inlineLimitBytes: limits.inlineAttachmentLimitBytes,
         mailboxLimitBytes: limits.mailboxPayloadLimitBytes,
@@ -6243,9 +5456,7 @@ export function createAgentController(
             kind,
             ...(kind === "reply" ? { askId } : {}),
             text,
-            ...(resultBindings.length
-              ? { resultBindings: [...resultBindings] }
-              : {}),
+            ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
             createdAt,
           }) <= limits.mailboxPayloadLimitBytes,
       },
@@ -6261,9 +5472,7 @@ export function createAgentController(
       requestId,
       operation,
       input.resultBindings,
-      manager
-        ? { beforeWrite: (publish) => manager.revalidate(publish) }
-        : undefined,
+      manager ? { beforeWrite: (publish) => manager.revalidate(publish) } : undefined,
     );
     return {
       ok: true,
@@ -6278,13 +5487,9 @@ export function createAgentController(
       presentation_agent_definition: runtime.agentDefinition,
       request_id: sentRequestId,
       ...(operation === "reply" ? { ask_id: askId } : {}),
-      ...(operation === "reply"
-        ? { assignment_request_id: runtime.activeRequestId }
-        : {}),
+      ...(operation === "reply" ? { assignment_request_id: runtime.activeRequestId } : {}),
       session_id: runtime.piSessionId,
-      ...(operation !== "reply"
-        ? { assignment_request_id: runtime.activeRequestId }
-        : {}),
+      ...(operation !== "reply" ? { assignment_request_id: runtime.activeRequestId } : {}),
     };
   };
   const listAction = async (
@@ -6293,11 +5498,7 @@ export function createAgentController(
   ): Promise<Record<string, unknown>> => {
     const scope = options.scope;
     const snapshot = await snapshots(context, signal);
-    const visible = visibleAgentSnapshots(
-      snapshot,
-      scope,
-      context.sessionManager.getSessionId(),
-    );
+    const visible = visibleAgentSnapshots(snapshot, scope, context.sessionManager.getSessionId());
     const unknown =
       scope?.kind === "root"
         ? snapshot.stateIssues.map(({ diagnostic }) => ({
@@ -6310,13 +5511,7 @@ export function createAgentController(
     const unresolved = unknown.length > 0;
     const view: ManagedAgentSnapshotView = { ...snapshot, visible };
     const agents = visible.map((item) =>
-      listRecord(
-        view,
-        item,
-        context.sessionManager.getSessionId(),
-        scope,
-        unresolved,
-      ),
+      listRecord(view, item, context.sessionManager.getSessionId(), scope, unresolved),
     );
     const definitions = scope
       ? visibleAgentCapabilities(
@@ -6340,30 +5535,15 @@ export function createAgentController(
   ): Promise<Record<string, unknown>> => {
     const scope = options.scope;
     const snapshot = await snapshots(context, signal);
-    const visible = visibleAgentSnapshots(
-      snapshot,
-      scope,
-      context.sessionManager.getSessionId(),
-    );
-    const candidates = visible.filter(
-      ({ listed }) => listed.label === agentLabel,
-    );
-    if (!candidates.length)
-      fail("target_not_found", "No exact agent identity matched", "close");
+    const visible = visibleAgentSnapshots(snapshot, scope, context.sessionManager.getSessionId());
+    const candidates = visible.filter(({ listed }) => listed.label === agentLabel);
+    if (!candidates.length) fail("target_not_found", "No exact agent identity matched", "close");
     if (candidates.length > 1)
-      fail(
-        "target_ambiguous",
-        "Agent identity matched multiple live agents",
-        "close",
-      );
+      fail("target_ambiguous", "Agent identity matched multiple live agents", "close");
     const candidate = candidates[0]!;
     const state = candidate.state;
     if (state.ownerSessionId !== context.sessionManager.getSessionId())
-      fail(
-        "target_not_found",
-        "Agent belongs to another owner session",
-        "close",
-      );
+      fail("target_not_found", "Agent belongs to another owner session", "close");
     const warnings = new Map<string, string>();
     let descendantContinuationWarning: string | undefined;
     const closed: { state: ManagedAgentState; definition: string }[] = [];
@@ -6376,8 +5556,7 @@ export function createAgentController(
         context,
         state.piSessionId,
         state.workspaceId,
-        async (heldLocks) =>
-          closeCascade(context, state, signal, undefined, report, heldLocks),
+        async (heldLocks) => closeCascade(context, state, signal, undefined, report, heldLocks),
         signal,
       );
     } catch (error) {
@@ -6401,11 +5580,7 @@ export function createAgentController(
     );
     if (descendants.length && options.persistClosedDescendants) {
       try {
-        for (const warning of await options.persistClosedDescendants(
-          context,
-          descendants,
-          state,
-        )) {
+        for (const warning of await options.persistClosedDescendants(context, descendants, state)) {
           descendantContinuationWarning = warning;
           break;
         }
@@ -6416,14 +5591,10 @@ export function createAgentController(
     }
     const ownerSessionId = context.sessionManager.getSessionId();
     const closedAssignment = !warnings.size
-      ? acceptedCloseProof(
-          context.sessionManager.getEntries(),
-          ownerSessionId,
-          {
-            state,
-            definition: candidate.agentDefinition,
-          },
-        )
+      ? acceptedCloseProof(context.sessionManager.getEntries(), ownerSessionId, {
+          state,
+          definition: candidate.agentDefinition,
+        })
       : undefined;
     return {
       ok: true,
@@ -6431,12 +5602,8 @@ export function createAgentController(
       agent: agentLabel,
       ...(closedAssignment ? { closed_assignment: closedAssignment } : {}),
       presentation_agent_definition: candidate.agentDefinition,
-      ...(warnings.size === 1
-        ? { cleanup_error: [...warnings.values()][0] }
-        : {}),
-      ...(warnings.size > 1
-        ? { cleanup_errors: Object.fromEntries(warnings) }
-        : {}),
+      ...(warnings.size === 1 ? { cleanup_error: [...warnings.values()][0] } : {}),
+      ...(warnings.size > 1 ? { cleanup_errors: Object.fromEntries(warnings) } : {}),
       ...(descendantContinuationWarning
         ? { descendant_continuation_warning: descendantContinuationWarning }
         : {}),
@@ -6452,30 +5619,16 @@ export function createAgentController(
       ...(await snapshots(context, signal)),
       visible: [] as VisibleManagedAgentSnapshot[],
     };
-    view.visible = visibleAgentSnapshots(
-      view,
-      scope,
-      context.sessionManager.getSessionId(),
-    );
-    const candidates = view.visible.filter(
-      ({ listed }) => listed.label === agentLabel,
-    );
+    view.visible = visibleAgentSnapshots(view, scope, context.sessionManager.getSessionId());
+    const candidates = view.visible.filter(({ listed }) => listed.label === agentLabel);
     if (!candidates.length)
       fail("target_not_found", "No exact agent identity matched", "transcript");
     if (candidates.length > 1)
-      fail(
-        "target_ambiguous",
-        "Agent identity matched multiple managed agents",
-        "transcript",
-      );
+      fail("target_ambiguous", "Agent identity matched multiple managed agents", "transcript");
     const candidate = candidates[0]!;
     const state = candidate.state;
     if (state.ownerSessionId !== context.sessionManager.getSessionId())
-      fail(
-        "target_not_found",
-        "Agent belongs to another owner session",
-        "transcript",
-      );
+      fail("target_not_found", "Agent belongs to another owner session", "transcript");
     const unresolved = scope?.kind === "root" && view.stateIssues.length > 0;
     const actions = listedAgentRecord(
       view,
@@ -6487,11 +5640,7 @@ export function createAgentController(
     ).available_tools as string[];
     if (!actions.includes("read_agent_transcript")) {
       if (candidate.presence.kind === "unknown")
-        fail(
-          "target_ambiguous",
-          "Agent transcript availability cannot be proved",
-          "transcript",
-        );
+        fail("target_ambiguous", "Agent transcript availability cannot be proved", "transcript");
       if (
         candidate.presence.kind === "live" &&
         !candidate.listed.recovery_only &&
@@ -6507,15 +5656,9 @@ export function createAgentController(
               "This is expected briefly after delegation. Do not poll or retry immediately; use read_agent_transcript later only when it is listed in available_tools and persisted transcript evidence is needed.",
           },
         );
-      fail(
-        "agent_busy",
-        "Agent transcript is not currently available",
-        "transcript",
-        {
-          nextAction:
-            "Use read_agent_transcript only when it is listed in available_tools.",
-        },
-      );
+      fail("agent_busy", "Agent transcript is not currently available", "transcript", {
+        nextAction: "Use read_agent_transcript only when it is listed in available_tools.",
+      });
     }
     const mailbox = agentMailboxPath(state.workspaceId, state.agentLabel);
     const result = options.readTranscript(state);
@@ -6616,26 +5759,18 @@ export function createAgentController(
         await herdrSessionSnapshot(pi, context, signal),
       );
       if (presence.kind === "unknown")
-        throw new Error(
-          "Managed agent presence is unresolved during result cleanup",
-        );
+        throw new Error("Managed agent presence is unresolved during result cleanup");
       if (presence.kind === "live") {
         const expected = {
           id: current.piSessionId,
           path: current.piSessionFile,
         };
         if (!matchesExpectedSession(presence.agent.agent_session, expected))
-          throw new Error(
-            "Managed agent session changed during result cleanup",
-          );
+          throw new Error("Managed agent session changed during result cleanup");
         await closeHerdrPane(
           pi,
           context,
-          herdrAgentAlias(
-            current.workspaceId,
-            current.agentLabel,
-            current.runId,
-          ),
+          herdrAgentAlias(current.workspaceId, current.agentLabel, current.runId),
           {
             paneId: current.paneId,
             workspaceId: current.workspaceId,
@@ -6675,10 +5810,7 @@ export function createAgentController(
   };
 
   type StopReport = {
-    onClosed?: (closed: {
-      state: ManagedAgentState;
-      definition: string;
-    }) => void;
+    onClosed?: (closed: { state: ManagedAgentState; definition: string }) => void;
     onCleanupFailure?: (label: string, message: string) => void;
   };
   const closeSnapshot = async (
@@ -6700,18 +5832,11 @@ export function createAgentController(
         });
     try {
       if (snapshot.presence.kind === "unknown")
-        fail(
-          "target_ambiguous",
-          "Managed agent presence cannot be proved safely",
-          "close",
-        );
+        fail("target_ambiguous", "Managed agent presence cannot be proved safely", "close");
       let current = readAgentState(mailbox);
       if (!current || !sameIdentity(current, state))
         fail("target_ambiguous", "Managed agent changed before close", "close");
-      if (
-        preserveOwnerMessages &&
-        !clearConfirmedOwnerMessages(mailbox, current, context)
-      )
+      if (preserveOwnerMessages && !clearConfirmedOwnerMessages(mailbox, current, context))
         throw new Error("Owner notification receipt is still unconfirmed");
       if (hasDurableResult(mailbox, current))
         fail(
@@ -6728,9 +5853,7 @@ export function createAgentController(
         current.terminalId &&
         current.launchShellPid !== undefined &&
         inventory.panes.some(
-          (pane) =>
-            pane.pane_id === currentPaneId &&
-            pane.workspace_id === currentWorkspaceId,
+          (pane) => pane.pane_id === currentPaneId && pane.workspace_id === currentWorkspaceId,
         ) &&
         (await verifyRetainedHerdrPane(
           pi,
@@ -6741,11 +5864,7 @@ export function createAgentController(
             terminalId: current.terminalId,
             launchShellPid: current.launchShellPid,
             cwd: current.cwd,
-            alias: herdrAgentAlias(
-              current.workspaceId,
-              current.agentLabel,
-              current.runId,
-            ),
+            alias: herdrAgentAlias(current.workspaceId, current.agentLabel, current.runId),
             session: { id: current.piSessionId, path: current.piSessionFile },
           },
           signal,
@@ -6753,11 +5872,7 @@ export function createAgentController(
       )
         presence = { kind: "lost", retainedPane: true };
       if (presence.kind === "unknown")
-        fail(
-          "target_ambiguous",
-          "Managed agent presence cannot be proved safely",
-          "close",
-        );
+        fail("target_ambiguous", "Managed agent presence cannot be proved safely", "close");
       if (presence.kind === "live") {
         const agent = presence.agent;
         if (
@@ -6769,19 +5884,11 @@ export function createAgentController(
             path: current.piSessionFile,
           })
         )
-          fail(
-            "target_not_found",
-            "Agent identity does not match managed state",
-            "close",
-          );
+          fail("target_not_found", "Agent identity does not match managed state", "close");
         await closeHerdrPane(
           pi,
           context,
-          herdrAgentAlias(
-            current.workspaceId,
-            current.agentLabel,
-            current.runId,
-          ),
+          herdrAgentAlias(current.workspaceId, current.agentLabel, current.runId),
           {
             paneId: current.paneId,
             workspaceId: current.workspaceId,
@@ -6791,24 +5898,12 @@ export function createAgentController(
           signal,
         );
         const after = readAgentState(mailbox);
-        if (
-          !after ||
-          !sameIdentity(after, current) ||
-          hasDurableResult(mailbox, after)
-        )
-          fail(
-            "target_ambiguous",
-            "Managed agent produced a durable result during close",
-            "close",
-          );
+        if (!after || !sameIdentity(after, current) || hasDurableResult(mailbox, after))
+          fail("target_ambiguous", "Managed agent produced a durable result during close", "close");
       } else {
         current = readAgentState(mailbox);
         if (!current || !sameIdentity(current, state))
-          fail(
-            "target_ambiguous",
-            "Managed agent changed before close",
-            "close",
-          );
+          fail("target_ambiguous", "Managed agent changed before close", "close");
         if (hasDurableResult(mailbox, current))
           fail(
             "target_ambiguous",
@@ -6836,11 +5931,7 @@ export function createAgentController(
               terminalId: current.terminalId,
               launchShellPid: current.launchShellPid,
               cwd: current.cwd,
-              alias: herdrAgentAlias(
-                current.workspaceId,
-                current.agentLabel,
-                current.runId,
-              ),
+              alias: herdrAgentAlias(current.workspaceId, current.agentLabel, current.runId),
               session: { id: current.piSessionId, path: current.piSessionFile },
             },
             signal,
@@ -6862,17 +5953,13 @@ export function createAgentController(
         }
       }
       try {
-        if (
-          preserveOwnerMessages &&
-          !clearConfirmedOwnerMessages(mailbox, current, context)
-        )
+        if (preserveOwnerMessages && !clearConfirmedOwnerMessages(mailbox, current, context))
           throw new Error("Owner notification receipt is still unconfirmed");
         removeAgentMailbox(mailbox);
       } catch (error) {
         const message = `Agent pane closed but mailbox cleanup failed: ${String(error)}`;
         const runtime = runtimes.get(state.agentLabel);
-        if (runtime?.workspaceId === state.workspaceId)
-          runtime.cleanupError = message;
+        if (runtime?.workspaceId === state.workspaceId) runtime.cleanupError = message;
         if (!report?.onCleanupFailure) throw error;
         options.appendError(context, "pi_herdsman_cleanup_error", error);
         report.onCleanupFailure(state.agentLabel, message);
@@ -6883,13 +5970,9 @@ export function createAgentController(
         pending?.requestId !== undefined &&
         pendingStarts.get(state.agentLabel) === pending &&
         runtime &&
-        sameIdentity(
-          recordDependencies.runtimeIdentityState(runtime),
-          current,
-        ) &&
+        sameIdentity(recordDependencies.runtimeIdentityState(runtime), current) &&
         (runtime.activeRequestId === pending.requestId ||
-          (current.lastAck?.accepted &&
-            current.lastAck.requestId === pending.requestId))
+          (current.lastAck?.accepted && current.lastAck.requestId === pending.requestId))
       )
         pendingStarts.delete(state.agentLabel);
       invalidateRuntime(state.agentLabel, state.workspaceId, true);
@@ -6913,10 +5996,7 @@ export function createAgentController(
     const release = heldLocks?.has(lockKey)
       ? undefined
       : claimDelegationLock(expected.workspaceId, expected.piSessionId);
-    const parentMailbox = agentMailboxPath(
-      expected.workspaceId,
-      expected.agentLabel,
-    );
+    const parentMailbox = agentMailboxPath(expected.workspaceId, expected.agentLabel);
     let parentRelease: (() => void) | undefined;
     try {
       parentRelease = claimAssignmentLock(parentMailbox, "close", {
@@ -6927,11 +6007,7 @@ export function createAgentController(
       if (!current || !sameIdentity(current, expected))
         fail("target_ambiguous", "Managed agent changed before close", "close");
       if (listAgentStateIssues().length)
-        fail(
-          "target_ambiguous",
-          "A managed mailbox has unresolved state",
-          "close",
-        );
+        fail("target_ambiguous", "A managed mailbox has unresolved state", "close");
       const inventory = await herdrSessionSnapshot(pi, context, signal);
       const snapshot = await managedAgentSnapshots(
         pi,
@@ -6944,11 +6020,7 @@ export function createAgentController(
       );
       if (!snapshot.agents.some(({ state }) => sameIdentity(state, current)))
         fail("target_ambiguous", "Managed agent changed before close", "close");
-      const plan = managedAgentCascadePlanFromSnapshot(
-        snapshot,
-        current,
-        sameIdentity,
-      );
+      const plan = managedAgentCascadePlanFromSnapshot(snapshot, current, sameIdentity);
       assertManagedAgentCascadeSafe(
         [plan.parent, ...plan.descendants],
         sameIdentity,
@@ -6969,22 +6041,13 @@ export function createAgentController(
             false,
             deliveredRootResultId !== undefined,
           );
-          if (
-            readAgentState(
-              agentMailboxPath(child.state.workspaceId, child.state.agentLabel),
-            )
-          )
-            fail(
-              "internal_failure",
-              "Descendant mailbox cleanup is unresolved",
-              "close",
-              {
-                ids: {
-                  label: child.state.agentLabel,
-                  paneId: child.state.paneId,
-                },
+          if (readAgentState(agentMailboxPath(child.state.workspaceId, child.state.agentLabel)))
+            fail("internal_failure", "Descendant mailbox cleanup is unresolved", "close", {
+              ids: {
+                label: child.state.agentLabel,
+                paneId: child.state.paneId,
               },
-            );
+            });
         } catch (error) {
           throw normalizeCloseFailure(
             error,
@@ -6994,20 +6057,13 @@ export function createAgentController(
         }
       }
       if (deliveredRootResultId) {
-        await finalizeDeliveredRoot(
-          context,
-          current,
-          deliveredRootResultId,
-          signal,
-          true,
-        );
+        await finalizeDeliveredRoot(context, current, deliveredRootResultId, signal, true);
         return;
       }
-      const parentSnapshot = (
-        await snapshots(context, signal, true)
-      ).agents.find(({ state }) => sameIdentity(state, current));
-      if (!parentSnapshot)
-        fail("target_not_found", "Parent agent changed before close", "close");
+      const parentSnapshot = (await snapshots(context, signal, true)).agents.find(({ state }) =>
+        sameIdentity(state, current),
+      );
+      if (!parentSnapshot) fail("target_not_found", "Parent agent changed before close", "close");
       await closeSnapshot(context, parentSnapshot, signal, report, true);
     } catch (error) {
       throw normalizeCloseFailure(
@@ -7030,44 +6086,29 @@ export function createAgentController(
   ): Promise<StopOwnedAgentsResult> => {
     const snapshot = await snapshots(context, signal, true);
     if (snapshot.stateIssues.length)
-      throw new Error(
-        "Owned Agent mailbox state is unresolved; work was preserved",
-      );
-    const visible = visibleAgentSnapshots(
-      snapshot,
-      { kind: "root" },
-      owner,
-    ).filter(({ state }) => state.workspaceId === workspaceId);
+      throw new Error("Owned Agent mailbox state is unresolved; work was preserved");
+    const visible = visibleAgentSnapshots(snapshot, { kind: "root" }, owner).filter(
+      ({ state }) => state.workspaceId === workspaceId,
+    );
     if (
       owner !== context.sessionManager.getSessionId() &&
       visible.some((agent) => agent.presence.kind === "unknown")
     )
-      throw new Error(
-        "Owned Agent presence is ambiguous; Lead and work were preserved",
-      );
+      throw new Error("Owned Agent presence is ambiguous; Lead and work were preserved");
     const reportable = [...visible]
       .sort((a, b) => a.state.agentLabel.localeCompare(b.state.agentLabel))
       .filter(
         (agent) =>
           agent.presence.kind !== "unknown" &&
-          (agent.presence.kind === "lost" ||
-            agent.listed.recovery_only !== true),
+          (agent.presence.kind === "lost" || agent.listed.recovery_only !== true),
       );
     const targets = visible.filter(
-      (agent) =>
-        agent.presence.kind !== "unknown" &&
-        agent.state.ownerSessionId === owner,
+      (agent) => agent.presence.kind !== "unknown" && agent.state.ownerSessionId === owner,
     );
     const discarded: string[] = [];
     for (const agent of reportable) {
-      const mailbox = agentMailboxPath(
-        agent.state.workspaceId,
-        agent.state.agentLabel,
-      );
-      if (
-        agent.state.activeRequestId ||
-        unacknowledgedRequestExists(mailbox, agent.state)
-      )
+      const mailbox = agentMailboxPath(agent.state.workspaceId, agent.state.agentLabel);
+      if (agent.state.activeRequestId || unacknowledgedRequestExists(mailbox, agent.state))
         discarded.push(`${agent.state.agentLabel}: active assignment`);
       if (
         agent.state.completedRequestId &&
@@ -7104,19 +6145,13 @@ export function createAgentController(
           });
         const current = matches[0]!.state;
         if (!sameIdentity(current, target.state))
-          fail(
-            "target_not_found",
-            "Agent identity changed after stop inventory",
-            "close",
-            { ids: { label: current.agentLabel, paneId: current.paneId } },
-          );
+          fail("target_not_found", "Agent identity changed after stop inventory", "close", {
+            ids: { label: current.agentLabel, paneId: current.paneId },
+          });
         if (current.ownerSessionId !== owner)
-          fail(
-            "target_not_found",
-            "Agent belongs to another owner session",
-            "close",
-            { ids: { label: current.agentLabel, paneId: current.paneId } },
-          );
+          fail("target_not_found", "Agent belongs to another owner session", "close", {
+            ids: { label: current.agentLabel, paneId: current.paneId },
+          });
         await closeCascade(
           context,
           current,
@@ -7124,9 +6159,7 @@ export function createAgentController(
           undefined,
           {
             onClosed: (outcome) => {
-              if (
-                !closed.some(({ state }) => sameIdentity(state, outcome.state))
-              )
+              if (!closed.some(({ state }) => sameIdentity(state, outcome.state)))
                 closed.push(outcome);
             },
             onCleanupFailure: (label, message) => {
@@ -7144,28 +6177,20 @@ export function createAgentController(
         const label = failure.detail.ids?.label ?? target.state.agentLabel;
         recordFailure(label, failure.detail.message);
         if (label !== target.state.agentLabel)
-          recordFailure(
-            target.state.agentLabel,
-            `not closed: ${failure.detail.message}`,
-          );
+          recordFailure(target.state.agentLabel, `not closed: ${failure.detail.message}`);
         if (!cleanupFailureReported)
           options.appendError(context, "pi_herdsman_cleanup_error", failure);
       }
     }
     const closedLabels = new Set(closed.map(({ state }) => state.agentLabel));
     for (const agent of reportable)
-      if (
-        !closedLabels.has(agent.state.agentLabel) &&
-        !failures.has(agent.state.agentLabel)
-      )
+      if (!closedLabels.has(agent.state.agentLabel) && !failures.has(agent.state.agentLabel))
         recordFailure(agent.state.agentLabel, "not closed");
     options.onChanged();
     const finalSnapshot = await snapshots(context, signal, true);
-    const remaining = visibleAgentSnapshots(
-      finalSnapshot,
-      { kind: "root" },
-      owner,
-    ).filter(({ state }) => state.workspaceId === workspaceId);
+    const remaining = visibleAgentSnapshots(finalSnapshot, { kind: "root" }, owner).filter(
+      ({ state }) => state.workspaceId === workspaceId,
+    );
     const trustworthy =
       finalSnapshot.stateIssues.length === 0 &&
       !remaining.some(({ presence }) => presence.kind === "unknown");
@@ -7178,8 +6203,7 @@ export function createAgentController(
       );
     if (!trustworthy && !failures.size)
       recordFailure("owned agents", "ownership state could not be verified");
-    const complete =
-      trustworthy && failures.size === 0 && remaining.length === 0;
+    const complete = trustworthy && failures.size === 0 && remaining.length === 0;
     if (!targets.length)
       return {
         complete,
@@ -7196,12 +6220,9 @@ export function createAgentController(
         : [`Stopped ${closed.length} of ${reportable.length} agents`];
     lines.push(
       ...closed.map(({ state }) => `✓ ${state.agentLabel}`),
-      ...[...failures.values()].map(
-        ({ label, message }) => `✗ ${label}: ${message}`,
-      ),
+      ...[...failures.values()].map(({ label, message }) => `✗ ${label}: ${message}`),
     );
-    if (discarded.length)
-      lines.push("Discarded:", ...discarded.map((entry) => `  ${entry}`));
+    if (discarded.length) lines.push("Discarded:", ...discarded.map((entry) => `  ${entry}`));
     return {
       complete,
       summary: lines.join("\n"),
@@ -7210,8 +6231,7 @@ export function createAgentController(
   };
 
   const stopResultWatcher = (runtime: Runtime, requestId?: string): void => {
-    const id =
-      requestId ?? runtime.activeRequestId ?? runtime.completedRequestId;
+    const id = requestId ?? runtime.activeRequestId ?? runtime.completedRequestId;
     if (!id) return;
     cancelResultRetry(resultDeliveryRetries, runtime, id);
     cancelResultRetry(resultCleanupRetries, runtime, id);
@@ -7234,22 +6254,14 @@ export function createAgentController(
     retireResultDiagnostics = false,
   ): void => {
     const runtime = runtimes.get(label);
-    if (
-      !runtime ||
-      (workspaceId !== undefined && runtime.workspaceId !== workspaceId)
-    )
-      return;
+    if (!runtime || (workspaceId !== undefined && runtime.workspaceId !== workspaceId)) return;
     stopResultWatcher(runtime);
     stopAskWatcher(runtime);
     stopOwnerMessageWatcher(runtime);
     for (const key of submittedOwnerMessages)
-      if (key.startsWith(`${runtime.mailboxPath}:`))
-        submittedOwnerMessages.delete(key);
+      if (key.startsWith(`${runtime.mailboxPath}:`)) submittedOwnerMessages.delete(key);
     cancelAskRetries(runtime);
-    for (const requestId of [
-      runtime.activeRequestId,
-      runtime.completedRequestId,
-    ]) {
+    for (const requestId of [runtime.activeRequestId, runtime.completedRequestId]) {
       if (!requestId) continue;
       const key = resultKey(runtime, requestId);
       resultDeliveryEvidence.delete(key);
@@ -7288,11 +6300,7 @@ export function createAgentController(
     resultWatchers.set(path, stop);
     check();
   };
-  const watchAsk = (
-    runtime: Runtime,
-    context: ExtensionContext,
-    signal?: AbortSignal,
-  ): void => {
+  const watchAsk = (runtime: Runtime, context: ExtensionContext, signal?: AbortSignal): void => {
     const path = agentStatePath(runtime.mailboxPath);
     stopAskWatcher(runtime);
     const check = () => {
@@ -7301,10 +6309,7 @@ export function createAgentController(
       try {
         deliverPendingAsk(runtime, context, signal);
       } catch (error) {
-        if (
-          error instanceof OperationError &&
-          error.detail.category === "incompatible_build"
-        )
+        if (error instanceof OperationError && error.detail.category === "incompatible_build")
           return;
         options.reportWatcherError(context, error);
       }
@@ -7355,21 +6360,12 @@ export function createAgentController(
   });
   const resultKey = (runtime: Runtime, requestId: string) =>
     JSON.stringify(Object.values(resultIdentity(runtime, requestId)));
-  const hasDeliveredResult = (
-    entries: readonly unknown[],
-    expected: Record<string, unknown>,
-  ) =>
+  const hasDeliveredResult = (entries: readonly unknown[], expected: Record<string, unknown>) =>
     entries.some((entry) => {
       const details = agentResultDetails(entry);
-      return (
-        !!details &&
-        Object.entries(expected).every(([key, value]) => details[key] === value)
-      );
+      return !!details && Object.entries(expected).every(([key, value]) => details[key] === value);
     });
-  const recoverRuntimes = async (
-    context: ExtensionContext,
-    signal: AbortSignal,
-  ): Promise<void> => {
+  const recoverRuntimes = async (context: ExtensionContext, signal: AbortSignal): Promise<void> => {
     recoveryComplete = false;
     if (signal.aborted) return;
     for (const label of runtimes.keys()) invalidateRuntime(label);
@@ -7407,11 +6403,7 @@ export function createAgentController(
         const presentation = parsePresentationTokens(match.listed.tokens);
         const runtime: Runtime = {
           label: state.agentLabel,
-          herdrAgent: herdrAgentAlias(
-            state.workspaceId,
-            state.agentLabel,
-            state.runId,
-          ),
+          herdrAgent: herdrAgentAlias(state.workspaceId, state.agentLabel, state.runId),
           workspaceId: state.workspaceId,
           paneId: state.paneId,
           cwd: state.cwd,
@@ -7430,13 +6422,9 @@ export function createAgentController(
           thinking: presentation.thinking ?? match.listed.thinking ?? null,
           agentDefinition: match.agentDefinition,
         };
-        const persistedResultRequestId =
-          runtime.activeRequestId ?? runtime.completedRequestId;
+        const persistedResultRequestId = runtime.activeRequestId ?? runtime.completedRequestId;
         if (persistedResultRequestId) {
-          const failureKey = resultReadFailureKey(
-            runtime,
-            persistedResultRequestId,
-          );
+          const failureKey = resultReadFailureKey(runtime, persistedResultRequestId);
           runtime.resultReadFailureKey = failureKey;
           runtime.resultReadError = resultReadFailures.get(failureKey);
         }
@@ -7470,17 +6458,8 @@ export function createAgentController(
           continue;
         }
         if (!hasDeliveredResult(entries, resultIdentity(runtime, requestId)))
-          throw new Error(
-            `Direct agent ${state.agentLabel} has no matching durable result entry`,
-          );
-        if (
-          !(await finalizeDeliveredResult(
-            runtime,
-            { requestId },
-            context,
-            signal,
-          ))
-        ) {
+          throw new Error(`Direct agent ${state.agentLabel} has no matching durable result entry`);
+        if (!(await finalizeDeliveredResult(runtime, { requestId }, context, signal))) {
           if (signal.aborted) return;
           scheduleResultCleanupRetry(runtime, { requestId }, context, signal);
         }
@@ -7496,16 +6475,11 @@ export function createAgentController(
     recoveryComplete = !incomplete;
     options.onChanged();
   };
-  const resultStatus = (
-    runtime: Runtime,
-    requestId: string,
-    entries: readonly unknown[],
-  ) => {
+  const resultStatus = (runtime: Runtime, requestId: string, entries: readonly unknown[]) => {
     try {
       const parent = listAgentStates().find(
         ({ state }) =>
-          state.workspaceId === runtime.workspaceId &&
-          state.piSessionId === runtime.ownerSessionId,
+          state.workspaceId === runtime.workspaceId && state.piSessionId === runtime.ownerSessionId,
       )?.state;
       if (!parent && options.scope?.kind === "managed-agent") return undefined;
       const direct = listAgentStates().filter(
@@ -7536,8 +6510,7 @@ export function createAgentController(
               piSessionFile: state.piSessionFile,
             };
             return Object.entries(excluded).every(
-              ([key, value]) =>
-                candidate[key as keyof typeof candidate] === value,
+              ([key, value]) => candidate[key as keyof typeof candidate] === value,
             );
           });
         if (sameResult) continue;
@@ -7561,8 +6534,7 @@ export function createAgentController(
         )
           pendingDirectResultCount++;
       }
-      const unresolvedDirectChildCount =
-        activeDirectChildCount + pendingDirectResultCount;
+      const unresolvedDirectChildCount = activeDirectChildCount + pendingDirectResultCount;
       const active = `${activeDirectChildCount} active direct agent${activeDirectChildCount === 1 ? "" : "s"}`;
       const pending = `${pendingDirectResultCount} pending direct result${pendingDirectResultCount === 1 ? "" : "s"}`;
       const unresolved =
@@ -7582,17 +6554,11 @@ export function createAgentController(
       return undefined;
     }
   };
-  const nextResultIndex = (
-    entries: readonly unknown[],
-    label: string,
-  ): number => {
+  const nextResultIndex = (entries: readonly unknown[], label: string): number => {
     let max = 0;
     for (const entry of entries) {
       const details = agentResultDetails(entry);
-      if (
-        details?.agentLabel === label &&
-        Number.isSafeInteger(details.resultIndex)
-      )
+      if (details?.agentLabel === label && Number.isSafeInteger(details.resultIndex))
         max = Math.max(max, details.resultIndex as number);
       if (!entry || typeof entry !== "object") continue;
       const record = entry as {
@@ -7604,9 +6570,7 @@ export function createAgentController(
       if (
         record.type !== "custom" ||
         record.customType !== "pi-herdsman-result-ref" ||
-        !isResultBinding(
-          data && { ref: data.ref, canonicalRef: data.canonicalRef },
-        )
+        !isResultBinding(data && { ref: data.ref, canonicalRef: data.canonicalRef })
       )
         continue;
       const semantic = parseSemanticResultRef(data!.ref as string);
@@ -7620,11 +6584,7 @@ export function createAgentController(
   };
   const resultReadFailureKey = (runtime: Runtime, requestId: string) =>
     `${runtime.workspaceId}\0${runtime.label}\0${runtime.runId}\0${runtime.ownerSessionId}\0${requestId}`;
-  const reportResultReadFailure = (
-    runtime: Runtime,
-    requestId: string,
-    error: unknown,
-  ) => {
+  const reportResultReadFailure = (runtime: Runtime, requestId: string, error: unknown) => {
     const message = `Result read failed for ${requestId}; retrying: ${String(error)}`;
     const key = resultReadFailureKey(runtime, requestId);
     if (resultReadFailures.get(key) === message) return;
@@ -7644,14 +6604,9 @@ export function createAgentController(
   };
   const retireResultReadFailures = (runtime: Runtime) => {
     let retired = false;
-    for (const requestId of [
-      runtime.activeRequestId,
-      runtime.completedRequestId,
-    ]) {
+    for (const requestId of [runtime.activeRequestId, runtime.completedRequestId]) {
       if (!requestId) continue;
-      retired =
-        resultReadFailures.delete(resultReadFailureKey(runtime, requestId)) ||
-        retired;
+      retired = resultReadFailures.delete(resultReadFailureKey(runtime, requestId)) || retired;
     }
     runtime.resultReadFailureKey = undefined;
     runtime.resultReadError = undefined;
@@ -7711,17 +6666,9 @@ export function createAgentController(
     const state = readAgentState(runtime.mailboxPath);
     if (!state?.pendingAskId) return false;
     try {
-      requireCompatibleBuild(
-        options.build,
-        state.build,
-        "ask",
-        `Agent ${state.agentLabel}`,
-      );
+      requireCompatibleBuild(options.build, state.build, "ask", `Agent ${state.agentLabel}`);
     } catch (error) {
-      if (
-        error instanceof OperationError &&
-        error.detail.category === "incompatible_build"
-      ) {
+      if (error instanceof OperationError && error.detail.category === "incompatible_build") {
         runtime.cleanupError = `Incompatible Pi Herdsman build: ${error.detail.message} ${error.detail.nextAction ?? ""}`;
         options.onChanged();
       }
@@ -7760,13 +6707,9 @@ export function createAgentController(
         ask.piSessionId !== state.piSessionId
       )
         return false;
-      const delivered = hasDeliveredAsk(
-        context.sessionManager.getBranch(),
-        ask,
-      );
+      const delivered = hasDeliveredAsk(context.sessionManager.getBranch(), ask);
       if (!delivered) {
-        if (budget && !includeFanInMessage({ ...budget }, content))
-          return false;
+        if (budget && !includeFanInMessage({ ...budget }, content)) return false;
         importResultBindings(pi, context, ask.resultBindings, "await_owner");
         options.sendAskMessage(context, ask, triggerTurn);
         if (budget) includeFanInMessage(budget, content);
@@ -7775,10 +6718,7 @@ export function createAgentController(
       clearCleanupError(runtime, "Ask delivery failed");
       return !delivered;
     } catch (error) {
-      if (
-        error instanceof OperationError &&
-        error.detail.category === "incompatible_build"
-      )
+      if (error instanceof OperationError && error.detail.category === "incompatible_build")
         return false;
       scheduleAskRetry(runtime, context, ask, signal, error);
       return false;
@@ -7802,8 +6742,7 @@ export function createAgentController(
       const state = readAgentState(runtime.mailboxPath);
       if (!state) return false;
       validateIdentity(runtime, state);
-      if (context.sessionManager.getSessionId() !== runtime.ownerSessionId)
-        return false;
+      if (context.sessionManager.getSessionId() !== runtime.ownerSessionId) return false;
       for (const ownerMessage of readOwnerMessages(runtime.mailboxPath)) {
         if (
           ownerMessage.runId !== runtime.runId ||
@@ -7815,23 +6754,17 @@ export function createAgentController(
           (ownerMessage.requestId !== runtime.activeRequestId &&
             ownerMessage.requestId !== runtime.completedRequestId)
         )
-          throw new Error(
-            `Owner notification identity did not match Agent ${runtime.label}`,
-          );
+          throw new Error(`Owner notification identity did not match Agent ${runtime.label}`);
         const messageKey = `${runtime.mailboxPath}:${ownerMessage.messageId}`;
         if (ownerMessageDeliveryInFlight.has(messageKey)) continue;
         ownerMessageDeliveryInFlight.add(messageKey);
         try {
           const entries = context.sessionManager.getEntries();
           if (hasDeliveredOwnerMessage(entries, ownerMessage)) {
-            const release = claimAssignmentLock(
-              runtime.mailboxPath,
-              "notify_owner",
-              {
-                label: runtime.label,
-                paneId: runtime.paneId,
-              },
-            );
+            const release = claimAssignmentLock(runtime.mailboxPath, "notify_owner", {
+              label: runtime.label,
+              paneId: runtime.paneId,
+            });
             try {
               const current = readAgentState(runtime.mailboxPath);
               const matching = readOwnerMessages(runtime.mailboxPath).find(
@@ -7843,9 +6776,7 @@ export function createAgentController(
                 !matching ||
                 !isDeepStrictEqual(matching, ownerMessage)
               )
-                throw new Error(
-                  "Owner notification changed before receipt cleanup",
-                );
+                throw new Error("Owner notification changed before receipt cleanup");
               removeOwnerMessage(runtime.mailboxPath, ownerMessage.messageId);
             } finally {
               release();
@@ -7854,17 +6785,11 @@ export function createAgentController(
             continue;
           }
           if (receiptsOnly) continue;
-          if (retryMessageIds && !retryMessageIds.has(ownerMessage.messageId))
-            continue;
+          if (retryMessageIds && !retryMessageIds.has(ownerMessage.messageId)) continue;
           if (submittedOwnerMessages.has(messageKey)) continue;
           const content = `Agent ${ownerMessage.agentLabel} notification:\n\n${ownerMessage.text}`;
           if (budget && !includeFanInMessage({ ...budget }, content)) continue;
-          importResultBindings(
-            pi,
-            context,
-            ownerMessage.resultBindings,
-            "notify_owner",
-          );
+          importResultBindings(pi, context, ownerMessage.resultBindings, "notify_owner");
           options.sendOwnerMessage(context, ownerMessage, shouldTriggerTurn);
           shouldTriggerTurn = false;
           submittedOwnerMessages.add(messageKey);
@@ -7875,10 +6800,7 @@ export function createAgentController(
         }
       }
     } catch (error) {
-      if (
-        !(error instanceof OperationError) ||
-        error.detail.category !== "incompatible_build"
-      )
+      if (!(error instanceof OperationError) || error.detail.category !== "incompatible_build")
         options.reportWatcherError(context, error);
     }
     return submitted;
@@ -7901,9 +6823,7 @@ export function createAgentController(
         ownerMessage.agentLabel !== state.agentLabel ||
         ownerMessage.paneId !== state.paneId ||
         ownerMessage.piSessionId !== state.piSessionId ||
-        ![state.activeRequestId, state.completedRequestId].includes(
-          ownerMessage.requestId,
-        )
+        ![state.activeRequestId, state.completedRequestId].includes(ownerMessage.requestId)
       )
         throw new Error("Owner notification identity changed before cleanup");
       if (!hasDeliveredOwnerMessage(entries, ownerMessage)) return false;
@@ -7912,13 +6832,8 @@ export function createAgentController(
     }
     return true;
   };
-  const resultCleanupReady = (
-    runtime: Runtime,
-    requestId: string,
-    entries: readonly unknown[],
-  ) => {
-    if (!hasDeliveredResult(entries, resultIdentity(runtime, requestId)))
-      return false;
+  const resultCleanupReady = (runtime: Runtime, requestId: string, entries: readonly unknown[]) => {
+    if (!hasDeliveredResult(entries, resultIdentity(runtime, requestId))) return false;
     const state = readAgentState(runtime.mailboxPath);
     let notifications: OwnerMessageRecord[];
     try {
@@ -7959,11 +6874,7 @@ export function createAgentController(
     let release: (() => void) | undefined;
     const managedAgent = options.scope?.kind === "managed-agent";
     try {
-      if (managedAgent)
-        release = claimDelegationLock(
-          runtime.workspaceId,
-          runtime.ownerSessionId,
-        );
+      if (managedAgent) release = claimDelegationLock(runtime.workspaceId, runtime.ownerSessionId);
       let state = readAgentState(runtime.mailboxPath);
       if (
         !state ||
@@ -8012,11 +6923,7 @@ export function createAgentController(
       );
       deliverOwnerMessages(runtime, context, signal, false);
       if (readOwnerMessages(runtime.mailboxPath).length) return false;
-      if (
-        managedAgent &&
-        !ownsDescendants &&
-        listAgentStateIssues().length === 0
-      )
+      if (managedAgent && !ownsDescendants && listAgentStateIssues().length === 0)
         await finalizeDeliveredRoot(context, state, result.requestId, signal);
       else await closeCascade(context, state, signal, result.requestId);
       return true;
@@ -8037,16 +6944,9 @@ export function createAgentController(
     context: ExtensionContext,
     signal?: AbortSignal,
   ): Promise<boolean> => {
-    if (
-      !resultCleanupReady(
-        runtime,
-        result.requestId,
-        context.sessionManager.getEntries(),
-      )
-    )
+    if (!resultCleanupReady(runtime, result.requestId, context.sessionManager.getEntries()))
       return false;
-    if (!(await cleanupAfterDeliveredResult(runtime, result, context, signal)))
-      return false;
+    if (!(await cleanupAfterDeliveredResult(runtime, result, context, signal))) return false;
     const key = resultKey(runtime, result.requestId);
     resultDeliveryEvidence.delete(key);
     resultDeliverySemanticRefs.delete(key);
@@ -8073,18 +6973,10 @@ export function createAgentController(
         resultCleanupRetries.delete(key);
         if (!active || runtimes.get(runtime.label) !== runtime) return;
         try {
-          if (
-            !(await finalizeDeliveredResult(runtime, result, context, signal))
-          )
+          if (!(await finalizeDeliveredResult(runtime, result, context, signal)))
             scheduleResultCleanupRetry(runtime, result, context, signal);
         } catch (retryError) {
-          scheduleResultCleanupRetry(
-            runtime,
-            result,
-            context,
-            signal,
-            retryError,
-          );
+          scheduleResultCleanupRetry(runtime, result, context, signal, retryError);
         }
       }, 250),
     );
@@ -8110,13 +7002,7 @@ export function createAgentController(
           const current = readResult(runtime.mailboxPath, result.requestId);
           if (current) void deliverResult(runtime, context, current, signal);
         } catch (readError) {
-          scheduleResultDeliveryRetry(
-            runtime,
-            result,
-            context,
-            signal,
-            readError,
-          );
+          scheduleResultDeliveryRetry(runtime, result, context, signal, readError);
         }
       }, 250),
     );
@@ -8156,16 +7042,12 @@ export function createAgentController(
         result.paneId !== runtime.paneId ||
         result.rootSessionId !== runtime.rootSessionId ||
         result.rootSessionId !== persistedState?.rootSessionId ||
-        result.requestId !==
-          (runtime.activeRequestId ?? runtime.completedRequestId);
+        result.requestId !== (runtime.activeRequestId ?? runtime.completedRequestId);
       if (identityMismatch) return false;
       deliverOwnerMessages(runtime, context, signal, false, budget);
       let entries = context.sessionManager.getEntries();
       const evidenceKey = JSON.stringify(Object.values(expected));
-      if (
-        !hasDeliveredResult(entries, expected) &&
-        !resultDeliveryEvidence.has(evidenceKey)
-      ) {
+      if (!hasDeliveredResult(entries, expected) && !resultDeliveryEvidence.has(evidenceKey)) {
         const forwardedResultBindings =
           result.status === "completed" ? (result.resultBindings ?? []) : [];
         if (forwardedResultBindings.length) {
@@ -8184,9 +7066,7 @@ export function createAgentController(
             ? result.completedAt - runtime.startedAt
             : undefined;
         const completion = truncateModelText(
-          result.status === "completed"
-            ? result.text!
-            : (result.error?.message ?? "Agent failed"),
+          result.status === "completed" ? result.text! : (result.error?.message ?? "Agent failed"),
           {
             keep: "head",
             sessionId: runtime.piSessionId ?? runtime.runId,
@@ -8218,11 +7098,7 @@ export function createAgentController(
           resultDeliverySemanticRefs.set(evidenceKey, semanticResult);
         }
         if (completion.persistenceError)
-          options.appendError(
-            context,
-            "pi_herdsman_result_error",
-            completion.persistenceError,
-          );
+          options.appendError(context, "pi_herdsman_result_error", completion.persistenceError);
         const sessionRetired = options.sessionRetired(context, runtime);
         const retirement =
           sessionRetired === true
@@ -8272,9 +7148,7 @@ export function createAgentController(
                 `To continue this session, use resume_agent with session="${usableSemanticResult.ref}".`,
               ]
             : exactSelector
-              ? [
-                  `To continue this session, use resume_agent with session="${exactSelector}".`,
-                ]
+              ? [`To continue this session, use resume_agent with session="${exactSelector}".`]
               : []),
           ...(forwardedResultBindings.length
             ? [
@@ -8295,12 +7169,8 @@ export function createAgentController(
           agentLabel: result.agentLabel,
           paneId: result.paneId,
           cwd: runtime.cwd,
-          ...(runtime.piSessionId !== undefined
-            ? { piSessionId: runtime.piSessionId }
-            : {}),
-          ...(runtime.piSessionFile !== undefined
-            ? { piSessionFile: runtime.piSessionFile }
-            : {}),
+          ...(runtime.piSessionId !== undefined ? { piSessionId: runtime.piSessionId } : {}),
+          ...(runtime.piSessionFile !== undefined ? { piSessionFile: runtime.piSessionFile } : {}),
           agentDefinition: runtime.agentDefinition,
           status: result.status,
           sessionRetired: sessionRetired ?? null,
@@ -8313,9 +7183,7 @@ export function createAgentController(
                 resultIndex: semanticResult.index,
               }
             : {}),
-          ...(completion.fullOutputPath
-            ? { fullOutputPath: completion.fullOutputPath }
-            : {}),
+          ...(completion.fullOutputPath ? { fullOutputPath: completion.fullOutputPath } : {}),
           ...(completion.persistenceError
             ? { resultPersistenceError: completion.persistenceError }
             : {}),
@@ -8329,16 +7197,8 @@ export function createAgentController(
             : {}),
           error: result.error,
         };
-        if (budget && !includeFanInMessage({ ...budget }, content))
-          return false;
-        options.sendResultMessage(
-          context,
-          runtime,
-          result,
-          content,
-          details,
-          triggerTurn,
-        );
+        if (budget && !includeFanInMessage({ ...budget }, content)) return false;
+        options.sendResultMessage(context, runtime, result, content, details, triggerTurn);
         if (budget) includeFanInMessage(budget, content);
         submitted = true;
         resultDeliveryEvidence.add(evidenceKey);
@@ -8366,10 +7226,7 @@ export function createAgentController(
       resultDeliveryInFlight.delete(key);
     }
   };
-  const settleAsks = (
-    context: ExtensionContext,
-    signal?: AbortSignal,
-  ): void => {
+  const settleAsks = (context: ExtensionContext, signal?: AbortSignal): void => {
     let ownerId: string;
     try {
       ownerId = context.sessionManager.getSessionId();
@@ -8381,18 +7238,12 @@ export function createAgentController(
         try {
           deliverPendingAsk(runtime, context, signal);
         } catch (error) {
-          if (!(
-            error instanceof OperationError &&
-            error.detail.category === "incompatible_build"
-          ))
+          if (!(error instanceof OperationError && error.detail.category === "incompatible_build"))
             options.appendError(context, "pi_herdsman_cleanup_error", error);
         }
       }
   };
-  const settleResults = async (
-    context: ExtensionContext,
-    signal?: AbortSignal,
-  ): Promise<void> => {
+  const settleResults = async (context: ExtensionContext, signal?: AbortSignal): Promise<void> => {
     let ownerId: string;
     try {
       ownerId = context.sessionManager.getSessionId();
@@ -8401,8 +7252,7 @@ export function createAgentController(
     }
     const entries = context.sessionManager.getEntries();
     for (const runtime of runtimes.values()) {
-      if (runtime.ownerSessionId !== ownerId || !runtime.completedRequestId)
-        continue;
+      if (runtime.ownerSessionId !== ownerId || !runtime.completedRequestId) continue;
       let result: ResultRecord | undefined;
       try {
         result = readResult(runtime.mailboxPath, runtime.completedRequestId);
@@ -8412,9 +7262,7 @@ export function createAgentController(
       }
       clearResultReadFailure(runtime, runtime.completedRequestId);
       if (!result) continue;
-      if (
-        !hasDeliveredResult(entries, resultIdentity(runtime, result.requestId))
-      )
+      if (!hasDeliveredResult(entries, resultIdentity(runtime, result.requestId)))
         resultDeliveryEvidence.delete(resultKey(runtime, result.requestId));
       await deliverResult(runtime, context, result, signal);
     }
@@ -8434,8 +7282,7 @@ export function createAgentController(
     let submitted = 0;
     for (const runtime of runtimes.values()) {
       if (runtime.ownerSessionId !== ownerId || !active) continue;
-      if (deliverOwnerMessages(runtime, context, context.signal, false, budget))
-        submitted++;
+      if (deliverOwnerMessages(runtime, context, context.signal, false, budget)) submitted++;
       const requestId = runtime.activeRequestId ?? runtime.completedRequestId;
       if (requestId) {
         try {
@@ -8443,14 +7290,7 @@ export function createAgentController(
           clearResultReadFailure(runtime, requestId);
           if (
             result &&
-            (await deliverResult(
-              runtime,
-              context,
-              result,
-              context.signal,
-              false,
-              budget,
-            ))
+            (await deliverResult(runtime, context, result, context.signal, false, budget))
           )
             submitted++;
         } catch (error) {
@@ -8459,15 +7299,9 @@ export function createAgentController(
       }
       if (phase === "settle")
         try {
-          if (
-            deliverPendingAsk(runtime, context, context.signal, false, budget)
-          )
-            submitted++;
+          if (deliverPendingAsk(runtime, context, context.signal, false, budget)) submitted++;
         } catch (error) {
-          if (!(
-            error instanceof OperationError &&
-            error.detail.category === "incompatible_build"
-          ))
+          if (!(error instanceof OperationError && error.detail.category === "incompatible_build"))
             options.reportWatcherError(context, error);
         }
     }
@@ -8481,33 +7315,14 @@ export function createAgentController(
     if (p.action === "delegate") p.retentionPersisted = false;
     const scope = options.scope;
     validateAssignmentRequest(p);
-    if (
-      p.action === "delegate" &&
-      scope?.kind === "root" &&
-      Object.hasOwn(p, "retain")
-    )
-      fail(
-        "invalid_request",
-        "retain is available only to managed Agents",
-        p.action,
-      );
+    if (p.action === "delegate" && scope?.kind === "root" && Object.hasOwn(p, "retain"))
+      fail("invalid_request", "retain is available only to managed Agents", p.action);
     const explicitCwd = p.action === "delegate" && Object.hasOwn(p, "cwd");
-    if (
-      explicitCwd &&
-      (scope?.kind !== "root" || !readConfig().allowAgentCwdOverride)
-    )
-      fail(
-        "invalid_request",
-        "Working directory override is unavailable",
-        "delegate",
-      );
+    if (explicitCwd && (scope?.kind !== "root" || !readConfig().allowAgentCwdOverride))
+      fail("invalid_request", "Working directory override is unavailable", "delegate");
     const rootAssignment =
-      (p.action === "delegate" || p.action === "continue") &&
-      scope?.kind === "root";
-    if (
-      rootAssignment &&
-      (!options.rootDelegationPolicy || !options.rootDelegationGeneration)
-    )
+      (p.action === "delegate" || p.action === "continue") && scope?.kind === "root";
+    if (rootAssignment && (!options.rootDelegationPolicy || !options.rootDelegationGeneration))
       fail(
         "invalid_request",
         "Root delegation authority is unavailable",
@@ -8517,9 +7332,7 @@ export function createAgentController(
     const initiatingRootGeneration = rootAssignment
       ? options.rootDelegationGeneration!()
       : undefined;
-    const initiatingSessionId = rootAssignment
-      ? ctx.sessionManager.getSessionId()
-      : undefined;
+    const initiatingSessionId = rootAssignment ? ctx.sessionManager.getSessionId() : undefined;
     if (rootAssignment && !initiatingRootGeneration)
       fail(
         "invalid_request",
@@ -8527,10 +7340,7 @@ export function createAgentController(
         p.action,
         actionDiagnosticDetails("root_delegation_unavailable"),
       );
-    if (
-      rootAssignment &&
-      initiatingRootGeneration!.sessionId !== initiatingSessionId
-    )
+    if (rootAssignment && initiatingRootGeneration!.sessionId !== initiatingSessionId)
       fail(
         "invalid_request",
         "Root delegation session changed",
@@ -8544,8 +7354,7 @@ export function createAgentController(
             createdAt: Date.now(),
             requestId: randomUUID(),
             runId: randomUUID(),
-            ownerSessionId:
-              initiatingSessionId ?? ctx.sessionManager.getSessionId(),
+            ownerSessionId: initiatingSessionId ?? ctx.sessionManager.getSessionId(),
             workspaceId: process.env.HERDR_WORKSPACE_ID ?? "",
           }
         : undefined;
@@ -8616,18 +7425,13 @@ export function createAgentController(
       const verifiedCwd = explicitCwd
         ? resolveDelegationCwd(requestedCwd, controllerCwd)
         : undefined;
-      const crossDirectory =
-        verifiedCwd !== undefined && !sameCwd(verifiedCwd.cwd, controllerCwd);
+      const crossDirectory = verifiedCwd !== undefined && !sameCwd(verifiedCwd.cwd, controllerCwd);
       if (
         crossDirectory &&
         (initiatingRootGeneration?.role !== "lead" ||
           initiatingRootGeneration.sessionKind !== "ordinary")
       )
-        fail(
-          "invalid_request",
-          "Cross-directory delegation requires an ordinary Lead",
-          "delegate",
-        );
+        fail("invalid_request", "Cross-directory delegation requires an ordinary Lead", "delegate");
       await herdrVersion(pi, ctx, signal);
       const agentDefinition =
         p.action === "continue"
@@ -8642,8 +7446,7 @@ export function createAgentController(
             ).definition
           : p.definition;
       const agentCwd = resumed?.cwd ?? verifiedCwd?.cwd ?? ctx.cwd;
-      const requestedLabel =
-        resumed?.label ?? (p.action === "delegate" ? p.label : undefined);
+      const requestedLabel = resumed?.label ?? (p.action === "delegate" ? p.label : undefined);
       const agentContext = await contextAgentDefinitions(ctx);
       const definition = agentContext.definitions.find(
         (candidate) => candidate.name === agentDefinition,
@@ -8655,10 +7458,7 @@ export function createAgentController(
           p.action,
           actionDiagnosticDetails("definition_unavailable"),
         );
-      if (
-        scope.kind === "managed-agent" &&
-        !scope.allowedAgentDefinitions.has(agentDefinition)
-      )
+      if (scope.kind === "managed-agent" && !scope.allowedAgentDefinitions.has(agentDefinition))
         fail(
           "invalid_request",
           `Agent definition ${agentDefinition} is not allowed for this delegating agent`,
@@ -8711,8 +7511,7 @@ export function createAgentController(
       };
       assertRootDelegationAllowed();
       const overrides =
-        p.action === "delegate" &&
-        (Object.hasOwn(p, "model") || Object.hasOwn(p, "thinking"))
+        p.action === "delegate" && (Object.hasOwn(p, "model") || Object.hasOwn(p, "thinking"))
           ? p
           : undefined;
       if (overrides) {
@@ -8743,9 +7542,7 @@ export function createAgentController(
         );
       const sessionArgs = resumed ? ["--session", resumed.path] : [];
       let releaseSessionActivation: (() => void) | undefined;
-      const live = (await snapshots(ctx, signal)).agents.map(
-        ({ listed }) => listed,
-      );
+      const live = (await snapshots(ctx, signal)).agents.map(({ listed }) => listed);
       if (!agentDefinitionEnabled(definition))
         fail(
           "invalid_request",
@@ -8782,8 +7579,7 @@ export function createAgentController(
               (state.piSessionFile !== undefined &&
                 samePersistedSessionPath(state.piSessionFile, resumed.path)),
           );
-          const exactState =
-            savedStates.length === 1 ? savedStates[0]!.state : undefined;
+          const exactState = savedStates.length === 1 ? savedStates[0]!.state : undefined;
           if (savedStates.length > 1)
             fail(
               "target_ambiguous",
@@ -8798,9 +7594,7 @@ export function createAgentController(
             exactState.lastAck.requestId === exactState.completedRequestId
           )
             reusableCompletedState = exactState;
-          const states = savedStates.filter(
-            ({ state }) => !!state.activeRequestId,
-          );
+          const states = savedStates.filter(({ state }) => !!state.activeRequestId);
           const representations = new Set(
             states.map(
               ({ state }) =>
@@ -8808,9 +7602,7 @@ export function createAgentController(
             ),
           );
           const statePanes = new Set(
-            savedStates.map(
-              ({ state }) => `${state.workspaceId}\0${state.paneId}`,
-            ),
+            savedStates.map(({ state }) => `${state.workspaceId}\0${state.paneId}`),
           );
           const closedReceipt = closedAssignmentReceipt(
             ctx.sessionManager.getBranch(),
@@ -8826,9 +7618,7 @@ export function createAgentController(
           const terminalResults = latestAccepted
             ? ownerEntries.flatMap((entry, index) => {
                 const details = agentResultDetails(entry);
-                return details?.requestId === latestAccepted.requestId
-                  ? [{ index, details }]
-                  : [];
+                return details?.requestId === latestAccepted.requestId ? [{ index, details }] : [];
               })
             : [];
           const terminal = terminalResults[0];
@@ -8838,16 +7628,11 @@ export function createAgentController(
             terminalResults.length === 1 &&
             terminal!.index > latestAccepted.index &&
             terminal!.details.status === "failed" &&
-            (terminal!.details.error as Record<string, unknown> | undefined)
-              ?.code === "aborted" &&
-            terminal!.details.ownerSessionId ===
-              ctx.sessionManager.getSessionId() &&
+            (terminal!.details.error as Record<string, unknown> | undefined)?.code === "aborted" &&
+            terminal!.details.ownerSessionId === ctx.sessionManager.getSessionId() &&
             terminal!.details.piSessionId === resumed.id &&
             typeof terminal!.details.piSessionFile === "string" &&
-            samePersistedSessionPath(
-              terminal!.details.piSessionFile,
-              resumed.path,
-            ) &&
+            samePersistedSessionPath(terminal!.details.piSessionFile, resumed.path) &&
             terminal!.details.agentLabel === resumed.label &&
             terminal!.details.agentDefinition === resumed.definition &&
             validId(terminal!.details.runId as string) &&
@@ -8857,17 +7642,11 @@ export function createAgentController(
             terminal!.details.paneId.length > 0;
           for (const agent of snapshot.liveAgents)
             if (
-              herdrSessionsMatch(
-                agent,
-                expectedSession(resumed.id, resumed.path),
-              ) &&
+              herdrSessionsMatch(agent, expectedSession(resumed.id, resumed.path)) &&
               !savedStates.some(
-                ({ state }) =>
-                  !state.activeRequestId && state.completedRequestId,
+                ({ state }) => !state.activeRequestId && state.completedRequestId,
               ) &&
-              !statePanes.has(
-                `${agent.workspace_id ?? ""}\0${agent.pane_id ?? ""}`,
-              )
+              !statePanes.has(`${agent.workspace_id ?? ""}\0${agent.pane_id ?? ""}`)
             ) {
               if (
                 historicalTerminal &&
@@ -8945,11 +7724,7 @@ export function createAgentController(
           labels.has(requestedLabel) &&
           !(resumed && requestedLabel === resumed.label)
         )
-          fail(
-            "agent_label_exists",
-            `Agent label already exists: ${requestedLabel}`,
-            p.action,
-          );
+          fail("agent_label_exists", `Agent label already exists: ${requestedLabel}`, p.action);
         const workspaceId = assignment!.workspaceId;
         let label = requestedLabel ?? chooseLabel(agentDefinition, labels);
         if (!validAgentLabel(label))
@@ -8960,14 +7735,11 @@ export function createAgentController(
           );
         const continuationEvidence = resumed?.evidence;
         let nestedEvidence =
-          scope.kind === "managed-agent"
-            ? currentManagedEvidence(ctx)
-            : undefined;
+          scope.kind === "managed-agent" ? currentManagedEvidence(ctx) : undefined;
         if (
           scope.kind === "managed-agent" &&
           continuationEvidence?.projectAssignmentId &&
-          continuationEvidence.projectAssignmentId !==
-            nestedEvidence?.projectAssignmentId
+          continuationEvidence.projectAssignmentId !== nestedEvidence?.projectAssignmentId
         )
           fail(
             "invalid_request",
@@ -8975,8 +7747,7 @@ export function createAgentController(
             "continue",
           );
         const projectAssignmentId =
-          nestedEvidence?.projectAssignmentId ??
-          continuationEvidence?.projectAssignmentId;
+          nestedEvidence?.projectAssignmentId ?? continuationEvidence?.projectAssignmentId;
         const projectEvidence =
           scope.kind === "root"
             ? await options.projectEvidence?.(ctx, signal)
@@ -8988,15 +7759,10 @@ export function createAgentController(
                 )
               : undefined;
         if (
-          (scope.kind === "root" &&
-            continuationEvidence?.projectAssignmentId) ||
-          (scope.kind === "managed-agent" &&
-            nestedEvidence?.projectAssignmentId)
+          (scope.kind === "root" && continuationEvidence?.projectAssignmentId) ||
+          (scope.kind === "managed-agent" && nestedEvidence?.projectAssignmentId)
         ) {
-          if (
-            !projectEvidence ||
-            projectEvidence.assignment.id !== projectAssignmentId
-          )
+          if (!projectEvidence || projectEvidence.assignment.id !== projectAssignmentId)
             fail(
               "invalid_request",
               "Saved project evidence no longer has current assignment authority",
@@ -9005,16 +7771,10 @@ export function createAgentController(
         }
         const projectAssignment = projectEvidence?.assignment;
         const managerEvidence =
-          scope.kind === "root"
-            ? await options.managerEvidence?.(ctx, p.files ?? [])
-            : undefined;
-        const evidenceProjectAssignmentId =
-          projectAssignmentId ?? projectAssignment?.id;
+          scope.kind === "root" ? await options.managerEvidence?.(ctx, p.files ?? []) : undefined;
+        const evidenceProjectAssignmentId = projectAssignmentId ?? projectAssignment?.id;
         let requiredEvidence = continuationEvidence
-          ? [
-              ...continuationEvidence.inheritedEvidence,
-              ...continuationEvidence.localEvidence,
-            ]
+          ? [...continuationEvidence.inheritedEvidence, ...continuationEvidence.localEvidence]
           : scope.kind === "managed-agent"
             ? [
                 ...(nestedEvidence?.inheritedEvidence ?? []),
@@ -9024,9 +7784,7 @@ export function createAgentController(
         const currentEvidenceIds =
           continuationEvidence?.currentEvidenceIds ??
           nestedEvidence?.currentEvidenceIds ??
-          (scope.kind === "root"
-            ? projectAssignment?.currentEvidenceIds
-            : undefined) ??
+          (scope.kind === "root" ? projectAssignment?.currentEvidenceIds : undefined) ??
           [];
         let handoffAdditions: RequiredEvidence[] = [];
         let retainedSelections: MessageFileInput[] = [];
@@ -9036,22 +7794,14 @@ export function createAgentController(
               maxBytes: 1024 * 1024,
             });
             if (!snapshot) return file;
-            const digest = createHash("sha256")
-              .update(snapshot.text, "utf8")
-              .digest("hex");
+            const digest = createHash("sha256").update(snapshot.text, "utf8").digest("hex");
             const matches = requiredEvidence.filter(
               (entry): entry is Extract<RequiredEvidence, { path: string }> =>
                 "path" in entry && entry.sha256 === digest,
             );
-            const named = matches.filter(
-              (entry) => entry.name === basename(file),
-            );
+            const named = matches.filter((entry) => entry.name === basename(file));
             const matched =
-              named.length === 1
-                ? named[0]
-                : matches.length === 1
-                  ? matches[0]
-                  : undefined;
+              named.length === 1 ? named[0] : matches.length === 1 ? matches[0] : undefined;
             if (!matched) return file;
             verifySemanticEvidenceReservation(matched.id, matched.ref!);
             readRequiredEvidenceSnapshot(matched.sourceAssignmentId, matched);
@@ -9069,26 +7819,15 @@ export function createAgentController(
         if (p.action === "delegate" && p.retain === true) {
           const retainedEvidenceScope = nestedEvidence;
           if (scope.kind !== "managed-agent" || !retainedEvidenceScope)
-            fail(
-              "invalid_request",
-              "Managed-Agent evidence scope is unavailable",
-              p.action,
-            );
+            fail("invalid_request", "Managed-Agent evidence scope is unavailable", p.action);
           if (!retainedEvidenceScope.evidenceAssignmentId)
             fail(
               "invalid_request",
               "Managed-Agent evidence assignment identity is unavailable",
               p.action,
             );
-          if (
-            !retainedEvidenceScope.workspaceId ||
-            !retainedEvidenceScope.inheritedEvidence
-          )
-            fail(
-              "invalid_request",
-              "Managed-Agent evidence scope is incomplete",
-              p.action,
-            );
+          if (!retainedEvidenceScope.workspaceId || !retainedEvidenceScope.inheritedEvidence)
+            fail("invalid_request", "Managed-Agent evidence scope is incomplete", p.action);
           if (!p.files?.length)
             fail(
               "invalid_request",
@@ -9098,92 +7837,75 @@ export function createAgentController(
           const state = readAgentState(process.env.PI_HERDSMAN_MAILBOX ?? "");
           if (
             !state?.activeRequestId ||
-            state.projectAssignmentId !==
-              retainedEvidenceScope.projectAssignmentId
+            state.projectAssignmentId !== retainedEvidenceScope.projectAssignmentId
           )
             fail(
               "invalid_request",
               "Managed-Agent assignment changed before evidence retention",
               p.action,
             );
-          const supplied = resolveMessageFiles(
-            ctx,
-            p.files,
-            p.action,
-            requiredEvidence,
-          ).map((file) =>
-            typeof file === "string" ? promoteMatchingEvidence(file) : file,
+          const supplied = resolveMessageFiles(ctx, p.files, p.action, requiredEvidence).map(
+            (file) => (typeof file === "string" ? promoteMatchingEvidence(file) : file),
           );
           const existingPaths = new Set(
             requiredEvidence
               .filter(
-                (
-                  entry,
-                ): entry is Exclude<
-                  RequiredEvidence,
-                  { result: ResultBinding }
-                > => !("result" in entry),
+                (entry): entry is Exclude<RequiredEvidence, { result: ResultBinding }> =>
+                  !("result" in entry),
               )
               .map((entry) => resolve(entry.path)),
           );
           const existingRefs = new Set(
             requiredEvidence
               .filter(
-                (
-                  entry,
-                ): entry is Extract<
-                  RequiredEvidence,
-                  { result: ResultBinding }
-                > => "result" in entry,
+                (entry): entry is Extract<RequiredEvidence, { result: ResultBinding }> =>
+                  "result" in entry,
               )
               .map((entry) => entry.result.ref),
           );
           const additions: RequiredEvidence[] = [];
           const retainedPaths = new Set<string>();
-          retainedSelections = supplied.flatMap<MessageFileInput>(
-            (file): MessageFileInput[] => {
-              if (typeof file === "string") {
-                let canonicalPath: string | undefined;
-                try {
-                  canonicalPath = realpathSync(resolve(ctx.cwd, file));
-                } catch {
-                  // Let snapshot validation report invalid paths as before.
-                }
-                if (
-                  canonicalPath &&
-                  (existingPaths.has(canonicalPath) ||
-                    retainedPaths.has(canonicalPath))
-                )
-                  return [];
-                const [addition] = persistRequiredTextFiles(
-                  retainedEvidenceScope.evidenceAssignmentId,
-                  [file],
-                  ctx.cwd,
-                  p.action,
-                );
-                if (!addition || "result" in addition) return [];
-                if (canonicalPath) retainedPaths.add(canonicalPath);
-                additions.push(addition);
-                return [
-                  {
-                    kind: "retainedEvidence" as const,
-                    ref: semanticEvidenceRef(addition),
-                    name: addition.name,
-                    path: addition.path,
-                    sha256: addition.sha256,
-                  },
-                ];
+          retainedSelections = supplied.flatMap<MessageFileInput>((file): MessageFileInput[] => {
+            if (typeof file === "string") {
+              let canonicalPath: string | undefined;
+              try {
+                canonicalPath = realpathSync(resolve(ctx.cwd, file));
+              } catch {
+                // Let snapshot validation report invalid paths as before.
               }
-              if ("kind" in file || existingRefs.has(file.ref)) return [file];
-              const addition = {
-                id: randomUUID(),
-                name: file.ref,
-                result: file,
-              };
+              if (
+                canonicalPath &&
+                (existingPaths.has(canonicalPath) || retainedPaths.has(canonicalPath))
+              )
+                return [];
+              const [addition] = persistRequiredTextFiles(
+                retainedEvidenceScope.evidenceAssignmentId,
+                [file],
+                ctx.cwd,
+                p.action,
+              );
+              if (!addition || "result" in addition) return [];
+              if (canonicalPath) retainedPaths.add(canonicalPath);
               additions.push(addition);
-              return [file];
-            },
-          );
+              return [
+                {
+                  kind: "retainedEvidence" as const,
+                  ref: semanticEvidenceRef(addition),
+                  name: addition.name,
+                  path: addition.path,
+                  sha256: addition.sha256,
+                },
+              ];
+            }
+            if ("kind" in file || existingRefs.has(file.ref)) return [file];
+            const addition = {
+              id: randomUUID(),
+              name: file.ref,
+              result: file,
+            };
+            additions.push(addition);
+            return [file];
+          });
           handoffAdditions = additions;
           const localEvidence = [...retainedEvidenceScope.localEvidence];
           for (const addition of additions)
@@ -9193,8 +7915,7 @@ export function createAgentController(
                   ? entry.result.ref === addition.result.ref
                   : "path" in entry && "path" in addition
                     ? entry.path === addition.path ||
-                      (entry.sourceAssignmentId ===
-                        addition.sourceAssignmentId &&
+                      (entry.sourceAssignmentId === addition.sourceAssignmentId &&
                         entry.name === addition.name &&
                         entry.sha256 === addition.sha256)
                     : false,
@@ -9217,23 +7938,17 @@ export function createAgentController(
             localEvidence,
             ...(retainedEvidenceScope.currentEvidenceIds !== undefined
               ? {
-                  currentEvidenceIds: [
-                    ...retainedEvidenceScope.currentEvidenceIds,
-                  ],
+                  currentEvidenceIds: [...retainedEvidenceScope.currentEvidenceIds],
                 }
               : {}),
           });
           nestedEvidence = { ...retainedEvidenceScope, localEvidence };
-          requiredEvidence = [
-            ...nestedEvidence.inheritedEvidence,
-            ...localEvidence,
-          ];
+          requiredEvidence = [...nestedEvidence.inheritedEvidence, ...localEvidence];
           p.retentionPersisted = true;
         }
         if (
           scope.kind === "managed-agent" &&
-          readAgentState(process.env.PI_HERDSMAN_MAILBOX ?? "")
-            ?.projectAssignmentId &&
+          readAgentState(process.env.PI_HERDSMAN_MAILBOX ?? "")?.projectAssignmentId &&
           !nestedEvidence
         )
           fail(
@@ -9253,10 +7968,7 @@ export function createAgentController(
         const inheritedEvidence = continuationEvidence
           ? continuationEvidence.inheritedEvidence
           : requiredEvidence;
-        const localEvidence = [
-          ...(continuationEvidence?.localEvidence ?? []),
-          taskEvidence,
-        ];
+        const localEvidence = [...(continuationEvidence?.localEvidence ?? []), taskEvidence];
         const evidenceMetadata = {
           ...(evidenceProjectAssignmentId
             ? { projectAssignmentId: evidenceProjectAssignmentId }
@@ -9268,31 +7980,24 @@ export function createAgentController(
           localEvidence,
           currentEvidenceIds,
         };
-        const requiredFiles: MessageFileInput[] = requiredEvidence.map(
-          (entry) => {
-            if ("result" in entry) return entry.result;
-            try {
-              verifySemanticEvidenceReservation(entry.id, entry.ref!);
-              readRequiredEvidenceSnapshot(entry.sourceAssignmentId, entry);
-            } catch {
-              fail(
-                "invalid_request",
-                `Required evidence ${entry.name} is unavailable`,
-                p.action,
-              );
-            }
-            return {
-              kind: "retainedEvidence",
-              ref: semanticEvidenceRef(entry),
-              name: entry.name,
-              path: entry.path,
-              sha256: entry.sha256,
-            };
-          },
-        );
+        const requiredFiles: MessageFileInput[] = requiredEvidence.map((entry) => {
+          if ("result" in entry) return entry.result;
+          try {
+            verifySemanticEvidenceReservation(entry.id, entry.ref!);
+            readRequiredEvidenceSnapshot(entry.sourceAssignmentId, entry);
+          } catch {
+            fail("invalid_request", `Required evidence ${entry.name} is unavailable`, p.action);
+          }
+          return {
+            kind: "retainedEvidence",
+            ref: semanticEvidenceRef(entry),
+            name: entry.name,
+            path: entry.path,
+            sha256: entry.sha256,
+          };
+        });
         const verifiedEvidence = requiredEvidence.filter(
-          (entry): entry is Extract<RequiredEvidence, { path: string }> =>
-            "path" in entry,
+          (entry): entry is Extract<RequiredEvidence, { path: string }> => "path" in entry,
         );
         const explicitFiles = (
           p.action === "delegate" && p.retain === true
@@ -9324,16 +8029,13 @@ export function createAgentController(
           if (typeof file === "string") continue;
           const matched =
             "kind" in file
-              ? requiredEvidence.find(
-                  (entry) => !("result" in entry) && entry.ref === file.ref,
-                )
+              ? requiredEvidence.find((entry) => !("result" in entry) && entry.ref === file.ref)
               : requiredEvidence.find(
                   (entry) => "result" in entry && entry.result.ref === file.ref,
                 );
           if (matched) selectedEvidenceIds.add(matched.id);
         }
-        for (const addition of handoffAdditions)
-          selectedEvidenceIds.add(addition.id);
+        for (const addition of handoffAdditions) selectedEvidenceIds.add(addition.id);
         const representedEvidenceIds = new Set<string>();
         const assignmentFiles = explicitFiles.flatMap((file) => {
           const index =
@@ -9353,9 +8055,7 @@ export function createAgentController(
         });
         for (const addition of handoffAdditions) {
           if (representedEvidenceIds.has(addition.id)) continue;
-          const index = requiredEvidence.findIndex(
-            (entry) => entry.id === addition.id,
-          );
+          const index = requiredEvidence.findIndex((entry) => entry.id === addition.id);
           if (index >= 0) {
             assignmentFiles.push(requiredFiles[index]!);
             representedEvidenceIds.add(addition.id);
@@ -9363,20 +8063,10 @@ export function createAgentController(
         }
         const parentTask =
           !continuationEvidence && nestedEvidence?.taskEvidenceId
-            ? requiredEvidence.find(
-                (entry) => entry.id === nestedEvidence.taskEvidenceId,
-              )
+            ? requiredEvidence.find((entry) => entry.id === nestedEvidence.taskEvidenceId)
             : undefined;
-        if (
-          !continuationEvidence &&
-          nestedEvidence?.taskEvidenceId &&
-          !parentTask
-        )
-          fail(
-            "invalid_request",
-            "Owner work assignment is unavailable",
-            p.action,
-          );
+        if (!continuationEvidence && nestedEvidence?.taskEvidenceId && !parentTask)
+          fail("invalid_request", "Owner work assignment is unavailable", p.action);
         const currentEvidence = currentEvidenceIds.map((id) => {
           const entry = requiredEvidence.find((item) => item.id === id);
           const inherited =
@@ -9384,11 +8074,7 @@ export function createAgentController(
             nestedEvidence?.inheritedEvidence ??
             requiredEvidence;
           if (!entry || !inherited.some((item) => item.id === id))
-            fail(
-              "invalid_request",
-              "Current evidence selection is invalid",
-              p.action,
-            );
+            fail("invalid_request", "Current evidence selection is invalid", p.action);
           return entry;
         });
         const automaticEvidence = [
@@ -9397,14 +8083,8 @@ export function createAgentController(
         ];
         const automaticCurrentFiles: MessageFileInput[] = [];
         for (const entry of automaticEvidence) {
-          if (
-            selectedEvidenceIds.has(entry.id) ||
-            representedEvidenceIds.has(entry.id)
-          )
-            continue;
-          const index = requiredEvidence.findIndex(
-            (item) => item.id === entry.id,
-          );
+          if (selectedEvidenceIds.has(entry.id) || representedEvidenceIds.has(entry.id)) continue;
+          const index = requiredEvidence.findIndex((item) => item.id === entry.id);
           automaticCurrentFiles.push(requiredFiles[index]!);
           representedEvidenceIds.add(entry.id);
         }
@@ -9435,28 +8115,19 @@ export function createAgentController(
           automaticReferenceFallback = true;
           assignmentTaskToSend = referenceOnlyTask();
         };
-        const prepareAssignmentInput = (
-          assignmentLabel: string,
-          includeAutomatic = true,
-        ) => {
+        const prepareAssignmentInput = (assignmentLabel: string, includeAutomatic = true) => {
           const fallbackManifest =
             includeAutomatic || !automaticCurrentFiles.length
               ? ""
               : `\n\nCurrent evidence — reference-only batch:\n${automaticEvidence
                   .filter((entry) => !selectedEvidenceIds.has(entry.id))
-                  .map(
-                    (entry) =>
-                      `- ${semanticEvidenceRef(entry)} — ${entry.name}`,
-                  )
+                  .map((entry) => `- ${semanticEvidenceRef(entry)} — ${entry.name}`)
                   .join(
                     "\n",
                   )}\nThis batch was not embedded. Use read_evidence to retrieve the items relevant to your task.`;
           const input = prepareMessageInput(
             `${assignmentTask}${fallbackManifest}`,
-            [
-              ...(includeAutomatic ? automaticCurrentFiles : []),
-              ...assignmentFiles,
-            ],
+            [...(includeAutomatic ? automaticCurrentFiles : []), ...assignmentFiles],
             ctx.cwd,
             p.action,
             "Task",
@@ -9471,9 +8142,7 @@ export function createAgentController(
                   for (const entry of currentEvidence)
                     if (
                       "result" in entry &&
-                      !bindings.some(
-                        (binding) => binding.ref === entry.result.ref,
-                      )
+                      !bindings.some((binding) => binding.ref === entry.result.ref)
                     )
                       bindings.push(entry.result);
                 return prospectiveAssignmentFits(
@@ -9556,16 +8225,13 @@ export function createAgentController(
           p.action,
         );
         const preparedDefinition =
-          preparedBody === definition.body
-            ? definition
-            : { ...definition, body: preparedBody };
+          preparedBody === definition.body ? definition : { ...definition, body: preparedBody };
         const childDepth = childAgentDepth(scope);
         const effectiveDefinition = projectAgentDefinition(
           preparedDefinition,
           agentScopeAtDepth(childDepth, maxAgentDepth),
         );
-        const delegationEnabled =
-          agentDefinitionDelegationEnabled(effectiveDefinition);
+        const delegationEnabled = agentDefinitionDelegationEnabled(effectiveDefinition);
         const runId = assignment!.runId;
         const owner = assignment!.ownerSessionId;
         const verifiedRootSessionId =
@@ -9579,17 +8245,10 @@ export function createAgentController(
             ? (process.env.PI_SUBAGENT_PARENT_SESSION ?? owner)
             : owner;
         const configuredPlacement = readConfig().spawnPlacement;
-        const placement = await physicalPlacement(
-          ctx,
-          label,
-          configuredPlacement,
-          signal,
-        );
+        const placement = await physicalPlacement(ctx, label, configuredPlacement, signal);
         const placementRevalidator =
           scope?.kind !== "managed-agent" && configuredPlacement === "tab"
-            ? async (
-                current: HerdrStartPlacement,
-              ): Promise<HerdrStartPlacement> => {
+            ? async (current: HerdrStartPlacement): Promise<HerdrStartPlacement> => {
                 if (current.kind !== "tab") return current;
                 const candidate = await reusableLeadTab(ctx, signal);
                 return {
@@ -9611,11 +8270,7 @@ export function createAgentController(
             if (resumed) labels.delete(resumed.label);
             else labels.add(label);
             if (requestedLabel) {
-              fail(
-                "agent_label_exists",
-                `Agent label already exists: ${label}`,
-                p.action,
-              );
+              fail("agent_label_exists", `Agent label already exists: ${label}`, p.action);
             }
             labels.add(label);
             label = chooseLabel(agentDefinition, labels);
@@ -9630,10 +8285,7 @@ export function createAgentController(
             continue;
           }
           try {
-            if (
-              !requestedLabel &&
-              guardMailboxOccupancy(mailbox, label, p.action, false)
-            ) {
+            if (!requestedLabel && guardMailboxOccupancy(mailbox, label, p.action, false)) {
               releaseClaim();
               releaseClaim = undefined;
               labels.add(label);
@@ -9664,8 +8316,7 @@ export function createAgentController(
                     !!current &&
                     current.piSessionId === resumed.id &&
                     !current.activeRequestId &&
-                    current.completedRequestId ===
-                      reusableCompletedState.completedRequestId &&
+                    current.completedRequestId === reusableCompletedState.completedRequestId &&
                     current.lastAck?.accepted === true &&
                     current.lastAck.requestId === current.completedRequestId &&
                     !unacknowledgedRequestExists(mailbox, current) &&
@@ -9732,25 +8383,18 @@ export function createAgentController(
           } finally {
             resetRelease();
           }
-          let ownerDisplay =
-            scope.kind === "root" ? initiatingRootGeneration?.role : undefined;
+          let ownerDisplay = scope.kind === "root" ? initiatingRootGeneration?.role : undefined;
           if (scope.kind === "managed-agent") {
             const definition = process.env.PI_HERDSMAN_AGENT_DEFINITION;
             const parentLabel = process.env.PI_HERDSMAN_LABEL;
             if (!definition || !parentLabel)
-              throw new Error(
-                "Managed-Agent launch is missing its definition or label",
-              );
+              throw new Error("Managed-Agent launch is missing its definition or label");
             ownerDisplay = displayIdentity(definition, parentLabel);
           }
-          if (!ownerDisplay)
-            throw new Error("Verified direct owner role is unavailable");
+          if (!ownerDisplay) throw new Error("Verified direct owner role is unavailable");
           let reservedChildSessionId: string | undefined;
           if (p.action === "delegate") {
-            const registrations = new Map<
-              string,
-              ManagedAgentBootstrapPrepare
-            >();
+            const registrations = new Map<string, ManagedAgentBootstrapPrepare>();
             let open = true;
             let preparing = true;
             let registrationError: Error | undefined;
@@ -9762,17 +8406,11 @@ export function createAgentController(
                 context: ctx,
                 agent: label,
                 reserveChildSessionId() {
-                  if (!preparing)
-                    throw new Error(
-                      "Managed-Agent bootstrap preparation is closed",
-                    );
+                  if (!preparing) throw new Error("Managed-Agent bootstrap preparation is closed");
                   return (reservedChildSessionId ??= randomUUID());
                 },
                 register(id: string, prepare: ManagedAgentBootstrapPrepare) {
-                  if (!open)
-                    throw new Error(
-                      "Managed-agent bootstrap registration is closed",
-                    );
+                  if (!open) throw new Error("Managed-agent bootstrap registration is closed");
                   if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(id)) {
                     registrationError ??= new Error(
                       "Invalid managed-agent bootstrap participant ID",
@@ -9802,8 +8440,7 @@ export function createAgentController(
                   if (
                     !result ||
                     typeof result.payload !== "string" ||
-                    (result.commit !== undefined &&
-                      typeof result.commit !== "function")
+                    (result.commit !== undefined && typeof result.commit !== "function")
                   )
                     throw new Error(
                       `Invalid preparation from managed-agent bootstrap participant "${id}"`,
@@ -9827,9 +8464,7 @@ export function createAgentController(
                 ownerSessionId: owner,
                 workspaceId,
                 agentLabel: label,
-                ...(reservedChildSessionId
-                  ? { childSessionId: reservedChildSessionId }
-                  : {}),
+                ...(reservedChildSessionId ? { childSessionId: reservedChildSessionId } : {}),
                 participants,
               });
           }
@@ -9857,8 +8492,7 @@ export function createAgentController(
           // Use the same snapshot for thinking validation and the ordinary
           // inherited-model launch arguments after asynchronous preparation.
           const inheritedModel = resumed ? undefined : ctx.model;
-          const assignmentModel =
-            overrides && validateAgentModelOverridePolicy(ctx, overrides);
+          const assignmentModel = overrides && validateAgentModelOverridePolicy(ctx, overrides);
           const childModel = resolveChildModel({
             assignment: assignmentModel
               ? {
@@ -9874,14 +8508,13 @@ export function createAgentController(
                 }
               : undefined,
           });
-          let expectedStartupModel: StartupModelExpectation | undefined =
-            assignmentModel
-              ? {
-                  provider: assignmentModel.provider,
-                  id: assignmentModel.id,
-                  requireCatalog: true,
-                }
-              : undefined;
+          let expectedStartupModel: StartupModelExpectation | undefined = assignmentModel
+            ? {
+                provider: assignmentModel.provider,
+                id: assignmentModel.id,
+                requireCatalog: true,
+              }
+            : undefined;
           if (overrides && Object.hasOwn(overrides, "thinking")) {
             const selected = validateAgentThinkingOverride(
               ctx,
@@ -9903,18 +8536,11 @@ export function createAgentController(
               inheritedModel,
             );
           if (expectedStartupModel)
-            env.push(
-              `${EXPECTED_STARTUP_MODEL_ENV}=${JSON.stringify(expectedStartupModel)}`,
-            );
-          if (
-            (resumed?.savedModel || resumed?.savedModelUnresolved) &&
-            !configured
-          )
+            env.push(`${EXPECTED_STARTUP_MODEL_ENV}=${JSON.stringify(expectedStartupModel)}`);
+          if ((resumed?.savedModel || resumed?.savedModelUnresolved) && !configured)
             env.push("PI_HERDSMAN_RESTORE_MODEL=saved-session");
           const launchArgs = agentLaunchArgs(effectiveDefinition, {
-            ...(effectiveDefinition.body
-              ? { bodyPromptPath: promptPaths[0] }
-              : {}),
+            ...(effectiveDefinition.body ? { bodyPromptPath: promptPaths[0] } : {}),
             sharedPromptPath: promptPaths[effectiveDefinition.body ? 1 : 0],
             cwd: agentCwd,
             managedAgent: true,
@@ -9926,8 +8552,7 @@ export function createAgentController(
             ...(!resumed ? { inheritedThinking: pi.getThinkingLevel() } : {}),
             modelDecision: childModel,
             assignmentThinking:
-              overrides?.thinking ??
-              (overrides?.model === undefined ? undefined : null),
+              overrides?.thinking ?? (overrides?.model === undefined ? undefined : null),
           });
           // Role/profile preflight may have changed while this assignment was prepared.
           assertRootDelegationAllowed();
@@ -9948,9 +8573,7 @@ export function createAgentController(
                 "Working directory override was disabled during preflight; retry delegation",
                 "delegate",
               );
-            const assignments = crossDirectory
-              ? readDelegationProjectAssignments()
-              : undefined;
+            const assignments = crossDirectory ? readDelegationProjectAssignments() : undefined;
             const current = resolveDelegationCwd(requestedCwd, ctx.cwd);
             const stillCrossDirectory = !sameCwd(current.cwd, ctx.cwd);
             if (
@@ -9971,8 +8594,7 @@ export function createAgentController(
                 // path. Compare against the physical target, without following
                 // a redirect at a stale recorded path.
                 if (assignment.checkoutPath) {
-                  if (cwdIsWithin(assignment.checkoutPath, current.cwd))
-                    rejectAssignedCheckout();
+                  if (cwdIsWithin(assignment.checkoutPath, current.cwd)) rejectAssignedCheckout();
                   continue;
                 }
                 const checkout = legacyAssignmentCheckout(assignment);
@@ -10015,12 +8637,10 @@ export function createAgentController(
               // once per checkout, not every repository or branch in authority.
               const observed = new Map<string, string | undefined>();
               for (const checkout of legacy.keys()) {
-                const topology = await runHerdr(
-                  pi,
-                  ctx,
-                  ["worktree", "list", "--cwd", checkout],
-                  { signal, timeout: 10_000 },
-                ).catch(() => undefined);
+                const topology = await runHerdr(pi, ctx, ["worktree", "list", "--cwd", checkout], {
+                  signal,
+                  timeout: 10_000,
+                }).catch(() => undefined);
                 if (
                   typeof topology?.source?.repo_key !== "string" ||
                   !Array.isArray(topology.worktrees)
@@ -10030,11 +8650,7 @@ export function createAgentController(
                     "Unable to verify the legacy Manager checkout; retry delegation",
                     "delegate",
                   );
-                const placement = resolveAssignmentCheckout(
-                  {},
-                  topology.worktrees,
-                  checkout,
-                );
+                const placement = resolveAssignmentCheckout({}, topology.worktrees, checkout);
                 if (placement.status === "conflict")
                   fail(
                     "invalid_request",
@@ -10043,16 +8659,12 @@ export function createAgentController(
                   );
                 observed.set(
                   checkout,
-                  placement.status === "matched"
-                    ? topology.source.repo_key
-                    : undefined,
+                  placement.status === "matched" ? topology.source.repo_key : undefined,
                 );
               }
               // No assignment-authority lock spans a Herdr call. Recheck all
               // authority and cwd after the probes and reject unseen candidates.
-              for (const [checkout, repositories] of checkLaunchAuthority(
-                launchCwd,
-              )) {
+              for (const [checkout, repositories] of checkLaunchAuthority(launchCwd)) {
                 if (!observed.has(checkout))
                   fail(
                     "invalid_request",
@@ -10060,8 +8672,7 @@ export function createAgentController(
                     "delegate",
                   );
                 const repo = observed.get(checkout);
-                if (repo !== undefined && repositories.has(repo))
-                  rejectAssignedCheckout();
+                if (repo !== undefined && repositories.has(repo)) rejectAssignedCheckout();
               }
               recheckModelPolicy();
             })();
@@ -10089,8 +8700,7 @@ export function createAgentController(
             timeoutMs: 30_000,
             signal,
           }).catch((error: unknown) => {
-            if (error instanceof DOMException && error.name === "TimeoutError")
-              return undefined;
+            if (error instanceof DOMException && error.name === "TimeoutError") return undefined;
             throw error;
           });
           if (!outcome) {
@@ -10099,15 +8709,7 @@ export function createAgentController(
             try {
               const result = await pi.exec(
                 "herdr",
-                [
-                  "pane",
-                  "read",
-                  started.paneId,
-                  "--source",
-                  "recent-unwrapped",
-                  "--lines",
-                  "40",
-                ],
+                ["pane", "read", started.paneId, "--source", "recent-unwrapped", "--lines", "40"],
                 { cwd: ctx.cwd, signal, timeout: 5_000 },
               );
               if (result.code === 0 && !result.killed) {
@@ -10117,11 +8719,7 @@ export function createAgentController(
                 );
                 if (bytes.length) {
                   let start = Math.max(0, bytes.length - 4096);
-                  while (
-                    start < bytes.length &&
-                    (bytes[start]! & 0xc0) === 0x80
-                  )
-                    start++;
+                  while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) start++;
                   startupDiagnostic = bytes.subarray(start).toString("utf8");
                 }
               }
@@ -10142,12 +8740,12 @@ export function createAgentController(
                 startupProcess = {
                   pane_id: process.pane_id,
                   shell_pid: process.shell_pid,
-                  foreground_processes: (
-                    process.foreground_processes ?? []
-                  ).map(({ argv0, state }) => ({
-                    ...(argv0 ? { argv0 } : {}),
-                    ...(state ? { state } : {}),
-                  })),
+                  foreground_processes: (process.foreground_processes ?? []).map(
+                    ({ argv0, state }) => ({
+                      ...(argv0 ? { argv0 } : {}),
+                      ...(state ? { state } : {}),
+                    }),
+                  ),
                 };
             } catch {
               // Process evidence is optional; preserve the original failure.
@@ -10173,17 +8771,8 @@ export function createAgentController(
             outcome.agentLabel !== label ||
             outcome.paneId !== started.paneId
           )
-            fail(
-              "target_not_found",
-              "Managed Agent startup identity did not match",
-              p.action,
-            );
-          requireCompatibleBuild(
-            options.build,
-            outcome.build,
-            p.action,
-            `Agent ${label} startup`,
-          );
+            fail("target_not_found", "Managed Agent startup identity did not match", p.action);
+          requireCompatibleBuild(options.build, outcome.build, p.action, `Agent ${label} startup`);
           if (outcome.status === "failed")
             fail(
               "pane_not_ready",
@@ -10193,11 +8782,7 @@ export function createAgentController(
             );
           const state = readAgentState(mailbox);
           if (!state)
-            fail(
-              "internal_failure",
-              "Agent reported ready without managed state",
-              p.action,
-            );
+            fail("internal_failure", "Agent reported ready without managed state", p.action);
           if (
             state.runId !== runId ||
             state.ownerSessionId !== owner ||
@@ -10210,10 +8795,7 @@ export function createAgentController(
               "Managed Agent state identity did not match startup",
               p.action,
             );
-          if (
-            reservedChildSessionId &&
-            state.piSessionId !== reservedChildSessionId
-          )
+          if (reservedChildSessionId && state.piSessionId !== reservedChildSessionId)
             fail(
               "target_not_found",
               "Managed Agent started with an unexpected Pi session ID",
@@ -10226,25 +8808,13 @@ export function createAgentController(
             `Agent ${label} in pane ${started.paneId}`,
           );
           const shellPid = started.shellProcess?.shell_pid;
-          if (
-            !Number.isInteger(shellPid) ||
-            shellPid! <= 0 ||
-            !started.terminalId?.trim()
-          )
-            fail(
-              "target_ambiguous",
-              "Original pane shell is unproven",
-              p.action,
-            );
+          if (!Number.isInteger(shellPid) || shellPid! <= 0 || !started.terminalId?.trim())
+            fail("target_ambiguous", "Original pane shell is unproven", p.action);
           const launchIdentity = {
             terminalId: started.terminalId,
             launchShellPid: shellPid!,
           };
-          const expectedHerdrAgent = herdrAgentAlias(
-            workspaceId,
-            label,
-            state.runId,
-          );
+          const expectedHerdrAgent = herdrAgentAlias(workspaceId, label, state.runId);
           if (started.herdrAgent !== expectedHerdrAgent)
             fail(
               "target_not_found",
@@ -10252,10 +8822,7 @@ export function createAgentController(
               p.action,
               { ids: { label, paneId: started.paneId } },
             );
-          if (
-            started.agent &&
-            !herdrAliasMatchesIfReported(started.agent, expectedHerdrAgent)
-          )
+          if (started.agent && !herdrAliasMatchesIfReported(started.agent, expectedHerdrAgent))
             fail(
               "target_not_found",
               "Agent launch returned conflicting Herdr agent aliases",
@@ -10291,10 +8858,7 @@ export function createAgentController(
           const prepareFinalAssignment = () => {
             const input = prepareMessageInput(
               assignmentTaskToSend,
-              [
-                ...(!automaticReferenceFallback ? automaticCurrentFiles : []),
-                ...assignmentFiles,
-              ],
+              [...(!automaticReferenceFallback ? automaticCurrentFiles : []), ...assignmentFiles],
               ctx.cwd,
               p.action,
               "Task",
@@ -10310,9 +8874,7 @@ export function createAgentController(
                     for (const entry of currentEvidence)
                       if (
                         "result" in entry &&
-                        !bindings.some(
-                          (binding) => binding.ref === entry.result.ref,
-                        )
+                        !bindings.some((binding) => binding.ref === entry.result.ref)
                       )
                         bindings.push(entry.result);
                   return requestRecordBytesFor(
@@ -10358,8 +8920,7 @@ export function createAgentController(
             signal,
             waitForSession: true,
           });
-          for (const participant of preparedBootstrap)
-            await participant.commit?.();
+          for (const participant of preparedBootstrap) await participant.commit?.();
           runtimes.set(label, runtime);
           options.onChanged();
           const requestId = await submit(
@@ -10383,10 +8944,8 @@ export function createAgentController(
                   const current = currentManagedEvidence(ctx);
                   if (
                     !current ||
-                    current.projectAssignmentId !==
-                      nestedEvidence.projectAssignmentId ||
-                    current.evidenceAssignmentId !==
-                      nestedEvidence.evidenceAssignmentId ||
+                    current.projectAssignmentId !== nestedEvidence.projectAssignmentId ||
+                    current.evidenceAssignmentId !== nestedEvidence.evidenceAssignmentId ||
                     current.taskEvidenceId !== nestedEvidence.taskEvidenceId ||
                     JSON.stringify(current.inheritedEvidence) !==
                       JSON.stringify(nestedEvidence.inheritedEvidence) ||
@@ -10402,10 +8961,7 @@ export function createAgentController(
                 if (continuationEvidence && resumed) {
                   const savedPath = canonicalSessionPath(resumed.path);
                   const saved = SessionManager.open(savedPath);
-                  const identity = sessionAgentIdentity(
-                    saved.getEntries(),
-                    saved.getSessionId(),
-                  );
+                  const identity = sessionAgentIdentity(saved.getEntries(), saved.getSessionId());
                   if (
                     savedPath !== resumed.path ||
                     saved.getSessionId() !== resumed.id ||
@@ -10425,35 +8981,26 @@ export function createAgentController(
                     .find(
                       (entry: any) =>
                         entry?.type === "custom" &&
-                        entry.customType ===
-                          "pi-herdsman-agent-required-evidence",
+                        entry.customType === "pi-herdsman-agent-required-evidence",
                     ) as any;
                   const record = entries.at(-1)?.data;
                   if (
                     !consistentRequiredEvidenceUpdates(entries) ||
                     (continuationEvidence.terminal &&
-                      latestEvidence?.data?.requestId !==
-                        continuationEvidence.requestId) ||
+                      latestEvidence?.data?.requestId !== continuationEvidence.requestId) ||
                     !record ||
                     record.requestId !== continuationEvidence.requestId ||
-                    record.projectAssignmentId !==
-                      continuationEvidence.projectAssignmentId ||
-                    record.evidenceAssignmentId !==
-                      continuationEvidence.evidenceAssignmentId ||
-                    record.taskEvidenceId !==
-                      continuationEvidence.taskEvidenceId ||
+                    record.projectAssignmentId !== continuationEvidence.projectAssignmentId ||
+                    record.evidenceAssignmentId !== continuationEvidence.evidenceAssignmentId ||
+                    record.taskEvidenceId !== continuationEvidence.taskEvidenceId ||
                     JSON.stringify(record.inheritedEvidence) !==
                       JSON.stringify(continuationEvidence.inheritedEvidence) ||
                     JSON.stringify(record.currentEvidenceIds ?? []) !==
-                      JSON.stringify(
-                        continuationEvidence.currentEvidenceIds ?? [],
-                      ) ||
+                      JSON.stringify(continuationEvidence.currentEvidenceIds ?? []) ||
                     JSON.stringify(record.localEvidence) !==
                       JSON.stringify(continuationEvidence.localEvidence)
                   )
-                    throw new Error(
-                      "Saved assignment evidence changed during continuation; retry",
-                    );
+                    throw new Error("Saved assignment evidence changed during continuation; retry");
                   if (
                     continuationEvidence.terminal &&
                     (() => {
@@ -10469,10 +9016,7 @@ export function createAgentController(
                         );
                       return (
                         !records.length ||
-                        records.some(
-                          (details) =>
-                            !sameTerminalProvenance(details, expected),
-                        )
+                        records.some((details) => !sameTerminalProvenance(details, expected))
                       );
                     })()
                   )
@@ -10488,29 +9032,20 @@ export function createAgentController(
                     throw new Error(
                       "Project assignment authority is no longer current; retry delegation",
                     );
-                  if (managerEvidence)
-                    await managerEvidence.revalidate(publish);
+                  if (managerEvidence) await managerEvidence.revalidate(publish);
                   return;
                 }
                 await projectEvidence.revalidate(async () => {
                   if (scope.kind === "root") {
-                    const current = await options.projectEvidence?.(
-                      ctx,
-                      signal,
-                    );
+                    const current = await options.projectEvidence?.(ctx, signal);
                     if (
                       !current ||
                       current.assignment.id !== projectAssignment.id ||
                       (!resumed &&
-                        (JSON.stringify(
-                          current.assignment.requiredEvidence ?? [],
-                        ) !== JSON.stringify(requiredEvidence) ||
-                          JSON.stringify(
-                            current.assignment.currentEvidenceIds ?? [],
-                          ) !==
-                            JSON.stringify(
-                              projectAssignment.currentEvidenceIds ?? [],
-                            )))
+                        (JSON.stringify(current.assignment.requiredEvidence ?? []) !==
+                          JSON.stringify(requiredEvidence) ||
+                          JSON.stringify(current.assignment.currentEvidenceIds ?? []) !==
+                            JSON.stringify(projectAssignment.currentEvidenceIds ?? [])))
                     )
                       throw new Error(
                         "Project assignment or required evidence changed during Agent startup; retry delegation",
@@ -10521,13 +9056,9 @@ export function createAgentController(
                         latest.id !== current.assignment.id ||
                         (!resumed &&
                           (JSON.stringify(latest.requiredEvidence ?? []) !==
-                            JSON.stringify(
-                              current.assignment.requiredEvidence ?? [],
-                            ) ||
+                            JSON.stringify(current.assignment.requiredEvidence ?? []) ||
                             JSON.stringify(latest.currentEvidenceIds ?? []) !==
-                              JSON.stringify(
-                                current.assignment.currentEvidenceIds ?? [],
-                              )))
+                              JSON.stringify(current.assignment.currentEvidenceIds ?? [])))
                       )
                         throw new Error(
                           "Project assignment or required evidence changed during Agent startup; retry delegation",
@@ -10543,10 +9074,7 @@ export function createAgentController(
                             projectAssignmentId,
                           )
                         : undefined;
-                    if (
-                      !current ||
-                      current.assignment.id !== projectAssignment.id
-                    )
+                    if (!current || current.assignment.id !== projectAssignment.id)
                       throw new Error(
                         "Project assignment or required evidence changed during Agent startup; retry delegation",
                       );
@@ -10586,15 +9114,10 @@ export function createAgentController(
             currentInline: currentRefs.filter((ref) => inlineNames.has(ref)),
             explicitInline: (assignmentInput?.attachments ?? [])
               .filter(
-                (attachment) =>
-                  attachment.inline &&
-                  !currentRefs.includes(attachment.ref ?? ""),
+                (attachment) => attachment.inline && !currentRefs.includes(attachment.ref ?? ""),
               )
               .map((attachment) => attachment.name),
-            referenced: [
-              ...currentRefs.filter((ref) => !inlineNames.has(ref)),
-              ...historicalRefs,
-            ],
+            referenced: [...currentRefs.filter((ref) => !inlineNames.has(ref)), ...historicalRefs],
           };
           return {
             ok: true,
@@ -10602,9 +9125,7 @@ export function createAgentController(
             agent: label,
             definition: agentDefinition,
             ...(p.action === "delegate" ? { cwd: runtime.cwd } : {}),
-            ...(overrides?.model === undefined
-              ? {}
-              : { requested_model: overrides.model }),
+            ...(overrides?.model === undefined ? {} : { requested_model: overrides.model }),
             ...(overrides?.thinking === undefined
               ? {}
               : { requested_thinking: overrides.thinking }),
@@ -10619,8 +9140,7 @@ export function createAgentController(
         } catch (caught) {
           if (historicalMailboxPreflightFailed) throw caught;
           if (promptWriteFailed) throw caught;
-          const startupFailure =
-            caught instanceof HerdrStartFailure ? caught : undefined;
+          const startupFailure = caught instanceof HerdrStartFailure ? caught : undefined;
           const error = startupFailure?.cause ?? caught;
           if (startupFailure) {
             started = startupFailure.attempt;
@@ -10629,10 +9149,7 @@ export function createAgentController(
                 ...error.detail.details,
                 stage: startupFailure.stage,
               };
-            if (
-              startupFailure.retryAttempted &&
-              error instanceof OperationError
-            )
+            if (startupFailure.retryAttempted && error instanceof OperationError)
               error.detail.retryAttempted = true;
           }
           let rollbackError: unknown;
@@ -10666,7 +9183,8 @@ export function createAgentController(
                     operation: p.action,
                   };
           const embeddedIds = embeddedDetails?.ids as
-            { label?: string; paneId?: string; tabId?: string } | undefined;
+            | { label?: string; paneId?: string; tabId?: string }
+            | undefined;
           const ids = {
             label,
             ...(started?.paneId ? { paneId: started.paneId } : {}),
@@ -10688,14 +9206,7 @@ export function createAgentController(
           invalidateRuntime(label);
           try {
             if (started) {
-              await rollbackStartedAgent(
-                ctx,
-                started,
-                label,
-                workspaceId,
-                runId,
-                mailbox,
-              );
+              await rollbackStartedAgent(ctx, started, label, workspaceId, runId, mailbox);
             } else {
               await rollbackUnknownStartedAgent(ctx, label, mailbox);
             }
@@ -10712,11 +9223,7 @@ export function createAgentController(
               cleanup: cleanupCause,
               ids,
             });
-            options.appendError(
-              ctx,
-              "pi_herdsman_cleanup_error",
-              cleanupDetail,
-            );
+            options.appendError(ctx, "pi_herdsman_cleanup_error", cleanupDetail);
           }
           if (rollbackError) {
             options.onChanged();
@@ -10739,8 +9246,7 @@ export function createAgentController(
                   : startupFailure
                     ? { details: { stage: startupFailure.stage } }
                     : {}),
-                nextAction:
-                  "Resolve the reported cleanup failure before retrying.",
+                nextAction: "Resolve the reported cleanup failure before retrying.",
               },
             );
           }
@@ -10751,16 +9257,11 @@ export function createAgentController(
               cleanup: embeddedDetails.cleanup,
               ids,
             });
-            options.appendError(
-              ctx,
-              "pi_herdsman_cleanup_error",
-              durableDetail,
-            );
+            options.appendError(ctx, "pi_herdsman_cleanup_error", durableDetail);
           }
           if (error instanceof OperationError) {
             error.detail.rollbackOccurred = true;
-            if (startupFailure?.retryAttempted)
-              error.detail.retryAttempted = true;
+            if (startupFailure?.retryAttempted) error.detail.retryAttempted = true;
             error.detail.ids = ids;
             throw error;
           }
@@ -10772,9 +9273,7 @@ export function createAgentController(
               ...(started?.paneId ? { paneId: started.paneId } : {}),
               ...(started?.tabId ? { tabId: started.tabId } : {}),
             },
-            ...(startupFailure
-              ? { details: { stage: startupFailure.stage } }
-              : {}),
+            ...(startupFailure ? { details: { stage: startupFailure.stage } } : {}),
           });
         } finally {
           if (!accepted && pendingStarts.get(label) === pendingStart) {
@@ -10782,34 +9281,26 @@ export function createAgentController(
             options.onChanged();
           }
           for (const promptPath of promptPaths)
-            if (statSync(promptPath, { throwIfNoEntry: false }))
-              unlinkSync(promptPath);
+            if (statSync(promptPath, { throwIfNoEntry: false })) unlinkSync(promptPath);
           if (releaseClaim) releaseClaim();
         }
       } finally {
         if (releaseSessionActivation) releaseSessionActivation();
       }
     }
-    fail(
-      "invalid_request",
-      `Unsupported agent action: ${p.action}`,
-      "controller",
-    );
+    fail("invalid_request", `Unsupported agent action: ${p.action}`, "controller");
   };
 
   let refreshDelegateSchema = () => {};
 
-  const registerTools = (
-    onAssignmentStarted?: (ctx: ExtensionContext) => void,
-  ): void => {
+  const registerTools = (onAssignmentStarted?: (ctx: ExtensionContext) => void): void => {
     const controllerScope = options.scope;
     if (!controllerScope) return;
     const FILES_SCHEMA = Type.Optional(
       Type.Array(
         Type.String({
           minLength: 1,
-          description:
-            "Readable regular local file path or exact result ref returned by Herdsman.",
+          description: "Readable regular local file path or exact result ref returned by Herdsman.",
         }),
         {
           description:
@@ -10823,8 +9314,7 @@ export function createAgentController(
         name: "read_evidence",
         label: "Read accepted evidence",
         exposure: "direct",
-        description:
-          "Read a bounded page from evidence accepted by this assigned project Lead.",
+        description: "Read a bounded page from evidence accepted by this assigned project Lead.",
         parameters: Type.Object(
           {
             ref: Type.String({ minLength: 1 }),
@@ -10844,11 +9334,8 @@ export function createAgentController(
           try {
             const scope = await options.projectEvidence?.(ctx);
             const manager = await options.managerEvidence?.(ctx, [params.ref]);
-            const {
-              evidencePageContent,
-              readEvidencePage,
-              authorizedScopedResult,
-            } = await import("./managed-agent-runtime.ts");
+            const { evidencePageContent, readEvidencePage, authorizedScopedResult } =
+              await import("./managed-agent-runtime.ts");
             const accepted = [
               ...(scope?.assignment.requiredEvidence ?? []),
               ...(manager?.retained ?? []),
@@ -10880,10 +9367,7 @@ export function createAgentController(
       });
     }
     const agentListParameters = emptyParameters;
-    const agentDelegateParameters = (
-      exposeCwd: boolean,
-      exposeModelOverrides: boolean,
-    ) =>
+    const agentDelegateParameters = (exposeCwd: boolean, exposeModelOverrides: boolean) =>
       Type.Object(
         {
           definition:
@@ -10913,8 +9397,7 @@ export function createAgentController(
                 model: Type.Optional(
                   Type.String({
                     minLength: 1,
-                    description:
-                      "Exact permitted provider/model ID for this assignment.",
+                    description: "Exact permitted provider/model ID for this assignment.",
                   }),
                 ),
                 thinking: Type.Optional(StringEnum([...VALID_THINKING_LEVELS])),
@@ -10977,12 +9460,9 @@ export function createAgentController(
       name: "list_agents",
       label: "list agents",
       exposure: agentExposure,
-      promptSnippet:
-        "Delegate and coordinate work with owned asynchronous agents",
+      promptSnippet: "Delegate and coordinate work with owned asynchronous agents",
       promptGuidelines: [
-        ...(controllerScope.kind === "managed-agent"
-          ? [AGENT_DELEGATION_GUIDANCE]
-          : []),
+        ...(controllerScope.kind === "managed-agent" ? [AGENT_DELEGATION_GUIDANCE] : []),
         AGENT_EXECUTION_OWNERSHIP_GUIDANCE,
         AGENT_HANDOFF_GUIDANCE,
         AGENT_UNRESOLVED_GUIDANCE,
@@ -11056,14 +9536,11 @@ export function createAgentController(
               : typeof value.definition === "string"
                 ? value.definition
                 : undefined;
-          const bounded = truncateModelText(
-            formatToolModelResult(p.action, value),
-            {
-              keep: "head",
-              sessionId: ctx.sessionManager.getSessionId(),
-              key: _id,
-            },
-          );
+          const bounded = truncateModelText(formatToolModelResult(p.action, value), {
+            keep: "head",
+            sessionId: ctx.sessionManager.getSessionId(),
+            key: _id,
+          });
           return {
             content: [
               {
@@ -11079,9 +9556,7 @@ export function createAgentController(
                   }
                 : {}),
               truncated: bounded.truncated,
-              ...(bounded.fullOutputPath
-                ? { full_output_path: bounded.fullOutputPath }
-                : {}),
+              ...(bounded.fullOutputPath ? { full_output_path: bounded.fullOutputPath } : {}),
             },
           };
         } catch (e) {
@@ -11109,9 +9584,7 @@ export function createAgentController(
               ok: false,
               error: detail,
               truncated: bounded.truncated,
-              ...(bounded.fullOutputPath
-                ? { full_output_path: bounded.fullOutputPath }
-                : {}),
+              ...(bounded.fullOutputPath ? { full_output_path: bounded.fullOutputPath } : {}),
             },
           };
         }
@@ -11128,14 +9601,7 @@ export function createAgentController(
         });
       },
       renderResult: (result: any, options: any, theme: any, context: any) =>
-        renderCoordinationResult(
-          "agent",
-          "list",
-          result,
-          options,
-          theme,
-          context,
-        ),
+        renderCoordinationResult("agent", "list", result, options, theme, context),
     };
     pi.registerTool({
       ...agentTool,
@@ -11147,10 +9613,7 @@ export function createAgentController(
         ctx: ExtensionContext,
       ) => agentTool.execute(id, { action: "list" }, signal, update, ctx),
     });
-    const registerDelegate = (
-      exposeCwd: boolean,
-      exposeModelOverrides: boolean,
-    ) =>
+    const registerDelegate = (exposeCwd: boolean, exposeModelOverrides: boolean) =>
       pi.registerTool({
         ...agentTool,
         name: "delegate_agent",
@@ -11167,14 +9630,7 @@ export function createAgentController(
           signal: AbortSignal | undefined,
           update: unknown,
           ctx: ExtensionContext,
-        ) =>
-          agentTool.execute(
-            id,
-            { action: "delegate", ...params },
-            signal,
-            update,
-            ctx,
-          ),
+        ) => agentTool.execute(id, { action: "delegate", ...params }, signal, update, ctx),
         renderCall: (a: unknown, t: any, c: any) =>
           renderCoordinationCall("agent", "delegate", a, t, c),
         renderResult: (r: any, o: any, t: any, c: any) =>
@@ -11199,8 +9655,7 @@ export function createAgentController(
       try {
         registerDelegate(gates.cwd, gates.model);
       } finally {
-        if (!isDeepStrictEqual(pi.getActiveTools(), activeTools))
-          pi.setActiveTools(activeTools);
+        if (!isDeepStrictEqual(pi.getActiveTools(), activeTools)) pi.setActiveTools(activeTools);
       }
       advertisedGates = gates;
     };
@@ -11220,14 +9675,7 @@ export function createAgentController(
         signal: AbortSignal | undefined,
         update: unknown,
         ctx: ExtensionContext,
-      ) =>
-        agentTool.execute(
-          id,
-          { action: "continue", ...params },
-          signal,
-          update,
-          ctx,
-        ),
+      ) => agentTool.execute(id, { action: "continue", ...params }, signal, update, ctx),
       renderCall: (a: unknown, t: any, c: any) =>
         renderCoordinationCall("agent", "continue", a, t, c),
       renderResult: (r: any, o: any, t: any, c: any) =>
@@ -11237,8 +9685,7 @@ export function createAgentController(
       ...agentTool,
       name: "steer_agent",
       label: "steer agent",
-      description:
-        "Cooperatively change a live direct Agent's current assignment.",
+      description: "Cooperatively change a live direct Agent's current assignment.",
       parameters: agentMessageParameters,
       promptSnippet: undefined,
       promptGuidelines: [FILE_HANDOFF_GUIDANCE],
@@ -11248,16 +9695,8 @@ export function createAgentController(
         signal: AbortSignal | undefined,
         update: unknown,
         ctx: ExtensionContext,
-      ) =>
-        agentTool.execute(
-          id,
-          { action: "steer", ...params },
-          signal,
-          update,
-          ctx,
-        ),
-      renderCall: (a: unknown, t: any, c: any) =>
-        renderCoordinationCall("agent", "steer", a, t, c),
+      ) => agentTool.execute(id, { action: "steer", ...params }, signal, update, ctx),
+      renderCall: (a: unknown, t: any, c: any) => renderCoordinationCall("agent", "steer", a, t, c),
       renderResult: (r: any, o: any, t: any, c: any) =>
         renderCoordinationResult("agent", "steer", r, o, t, c),
     });
@@ -11276,14 +9715,7 @@ export function createAgentController(
         signal: AbortSignal | undefined,
         update: unknown,
         ctx: ExtensionContext,
-      ) =>
-        agentTool.execute(
-          id,
-          { action: "interrupt", ...params },
-          signal,
-          update,
-          ctx,
-        ),
+      ) => agentTool.execute(id, { action: "interrupt", ...params }, signal, update, ctx),
       renderCall: (a: unknown, t: any, c: any) =>
         renderCoordinationCall("agent", "interrupt", a, t, c),
       renderResult: (r: any, o: any, t: any, c: any) =>
@@ -11293,8 +9725,7 @@ export function createAgentController(
       ...agentTool,
       name: "reply_agent",
       label: "reply agent",
-      description:
-        "Answer the exact pending await_owner question for a direct Agent.",
+      description: "Answer the exact pending await_owner question for a direct Agent.",
       parameters: agentMessageParameters,
       promptSnippet: undefined,
       promptGuidelines: [FILE_HANDOFF_GUIDANCE],
@@ -11304,16 +9735,8 @@ export function createAgentController(
         signal: AbortSignal | undefined,
         update: unknown,
         ctx: ExtensionContext,
-      ) =>
-        agentTool.execute(
-          id,
-          { action: "reply", ...params },
-          signal,
-          update,
-          ctx,
-        ),
-      renderCall: (a: unknown, t: any, c: any) =>
-        renderCoordinationCall("agent", "reply", a, t, c),
+      ) => agentTool.execute(id, { action: "reply", ...params }, signal, update, ctx),
+      renderCall: (a: unknown, t: any, c: any) => renderCoordinationCall("agent", "reply", a, t, c),
       renderResult: (r: any, o: any, t: any, c: any) =>
         renderCoordinationResult("agent", "reply", r, o, t, c),
     });
@@ -11333,8 +9756,7 @@ export function createAgentController(
         update: unknown,
         ctx: ExtensionContext,
       ) => agentTool.execute(id, { action: "stop", ...p }, signal, update, ctx),
-      renderCall: (a: unknown, t: any, c: any) =>
-        renderCoordinationCall("agent", "stop", a, t, c),
+      renderCall: (a: unknown, t: any, c: any) => renderCoordinationCall("agent", "stop", a, t, c),
       renderResult: (r: any, o: any, t: any, c: any) =>
         renderCoordinationResult("agent", "stop", r, o, t, c),
     });
@@ -11342,8 +9764,7 @@ export function createAgentController(
       ...agentTool,
       name: "inspect_agent",
       label: "inspect agent",
-      description:
-        "Read bounded live terminal/process evidence for an eligible Agent.",
+      description: "Read bounded live terminal/process evidence for an eligible Agent.",
       parameters: agentTargetParameters,
       promptSnippet: undefined,
       promptGuidelines: undefined,
@@ -11353,8 +9774,7 @@ export function createAgentController(
         signal: AbortSignal | undefined,
         update: unknown,
         ctx: ExtensionContext,
-      ) =>
-        agentTool.execute(id, { action: "inspect", ...p }, signal, update, ctx),
+      ) => agentTool.execute(id, { action: "inspect", ...p }, signal, update, ctx),
       renderCall: (a: unknown, t: any, c: any) =>
         renderCoordinationCall("agent", "inspect", a, t, c),
       renderResult: (r: any, o: any, t: any, c: any) =>
@@ -11364,8 +9784,7 @@ export function createAgentController(
       ...agentTool,
       name: "read_agent_transcript",
       label: "read agent transcript",
-      description:
-        "Read bounded persisted Pi conversation/tool evidence for an eligible Agent.",
+      description: "Read bounded persisted Pi conversation/tool evidence for an eligible Agent.",
       parameters: agentTargetParameters,
       promptSnippet: undefined,
       promptGuidelines: undefined,
@@ -11375,14 +9794,7 @@ export function createAgentController(
         signal: AbortSignal | undefined,
         update: unknown,
         ctx: ExtensionContext,
-      ) =>
-        agentTool.execute(
-          id,
-          { action: "transcript", ...p },
-          signal,
-          update,
-          ctx,
-        ),
+      ) => agentTool.execute(id, { action: "transcript", ...p }, signal, update, ctx),
       renderCall: (a: unknown, t: any, c: any) =>
         renderCoordinationCall("agent", "transcript", a, t, c),
       renderResult: (r: any, o: any, t: any, c: any) =>
@@ -11427,10 +9839,8 @@ export function createAgentController(
       );
     if (scope.kind === "root") {
       if (params.action === "list") return listAction(ctx, signal);
-      if (params.action === "stop")
-        return closeAction(ctx, params.agent, signal);
-      if (params.action === "transcript")
-        return transcriptAction(ctx, params.agent, signal);
+      if (params.action === "stop") return closeAction(ctx, params.agent, signal);
+      if (params.action === "transcript") return transcriptAction(ctx, params.agent, signal);
       if (
         params.action === "steer" ||
         params.action === "interrupt" ||
@@ -11445,11 +9855,7 @@ export function createAgentController(
         );
         try {
           if (options.rootAgentAdmissionBlocked?.())
-            fail(
-              "agent_busy",
-              "Chief hierarchy shutdown is in progress",
-              "lifecycle",
-            );
+            fail("agent_busy", "Chief hierarchy shutdown is in progress", "lifecycle");
           return await actionUnsafeWithRetentionOutcome();
         } finally {
           release();
@@ -11463,39 +9869,23 @@ export function createAgentController(
         "Delegation controller is not initialized as an exact managed agent",
         "controller",
       );
-    if (
-      params.action === "list" ||
-      params.action === "inspect" ||
-      params.action === "transcript"
-    )
+    if (params.action === "list" || params.action === "inspect" || params.action === "transcript")
       return params.action === "list"
         ? listAction(ctx, signal)
         : params.action === "inspect"
           ? controlAction(ctx, params, signal)
           : transcriptAction(ctx, params.agent, signal);
-    const release = claimDelegationLock(
-      options.workspaceId(),
-      ctx.sessionManager.getSessionId(),
-    );
+    const release = claimDelegationLock(options.workspaceId(), ctx.sessionManager.getSessionId());
     try {
-      if (params.action === "stop")
-        return await closeAction(ctx, params.agent, signal);
-      if (
-        params.action === "steer" ||
-        params.action === "interrupt" ||
-        params.action === "reply"
-      )
+      if (params.action === "stop") return await closeAction(ctx, params.agent, signal);
+      if (params.action === "steer" || params.action === "interrupt" || params.action === "reply")
         return await controlAction(ctx, params, signal);
       return await actionUnsafeWithRetentionOutcome();
     } finally {
       release();
     }
   };
-  const attentionDue = (
-    runId: string,
-    episode: string,
-    now: number,
-  ): boolean => {
+  const attentionDue = (runId: string, episode: string, now: number): boolean => {
     const reminder = attentionReminders.get(runId);
     return reminder?.episode !== episode || now >= reminder.nextAt;
   };
@@ -11505,11 +9895,7 @@ export function createAgentController(
       ? Math.max(HEALTH_ATTENTION_REPEAT_MIN_MS, reminder.intervalMs / 2)
       : HEALTH_ATTENTION_FIRST_REPEAT_MS;
   };
-  const recordAttention = (
-    runId: string,
-    episode: string,
-    intervalMs: number,
-  ): void => {
+  const recordAttention = (runId: string, episode: string, intervalMs: number): void => {
     const sentAt = Date.now();
     attentionReminders.set(runId, {
       episode,
@@ -11573,9 +9959,7 @@ export function createAgentController(
     nextReminderMs: number,
     signal: AbortSignal,
     retainedPane = false,
-  ):
-    | (Parameters<ExtensionAPI["sendMessage"]>[0] & { content: string })
-    | undefined => {
+  ): (Parameters<ExtensionAPI["sendMessage"]>[0] & { content: string }) | undefined => {
     const mailbox = agentMailboxPath(state.workspaceId, state.agentLabel);
     const current = readAgentState(mailbox);
     if (
@@ -11591,8 +9975,7 @@ export function createAgentController(
       currentHandoff?.requestId,
     ].filter((value): value is string => !!value);
     try {
-      if (requestIds.some((requestId) => readResult(mailbox, requestId)))
-        return undefined;
+      if (requestIds.some((requestId) => readResult(mailbox, requestId))) return undefined;
     } catch {
       return undefined;
     }
@@ -11600,17 +9983,14 @@ export function createAgentController(
     if (!latest || !sameIdentity(latest, current)) return undefined;
     const latestHandoff = readUnacknowledgedRequest(mailbox, latest);
     const latestRequestId =
-      latest.completedRequestId ??
-      latest.activeRequestId ??
-      latestHandoff?.requestId;
+      latest.completedRequestId ?? latest.activeRequestId ?? latestHandoff?.requestId;
     const latestRequestIds = [
       latest.completedRequestId,
       latest.activeRequestId,
       latestHandoff?.requestId,
     ].filter((value): value is string => !!value);
     try {
-      if (latestRequestIds.some((requestId) => readResult(mailbox, requestId)))
-        return undefined;
+      if (latestRequestIds.some((requestId) => readResult(mailbox, requestId))) return undefined;
     } catch {
       return undefined;
     }
@@ -11645,8 +10025,7 @@ export function createAgentController(
         paneId: current.paneId,
         piSessionId: current.piSessionId,
         piSessionFile: current.piSessionFile,
-        agentDefinition:
-          current.agentDefinition ?? snapshotAgentDefinition ?? "unknown",
+        agentDefinition: current.agentDefinition ?? snapshotAgentDefinition ?? "unknown",
         requestId: latestRequestId,
         availableActions,
         nextReminderMs,
@@ -11658,12 +10037,10 @@ export function createAgentController(
     signal: AbortSignal,
     generation: number,
   ): Promise<void> => {
-    if (signal.aborted || generation !== healthGeneration || !ctx.isIdle())
-      return;
+    if (signal.aborted || generation !== healthGeneration || !ctx.isIdle()) return;
     const ownerSessionId = ctx.sessionManager.getSessionId();
     const snapshot = await snapshots(ctx, signal, false, false);
-    if (signal.aborted || generation !== healthGeneration || !ctx.isIdle())
-      return;
+    if (signal.aborted || generation !== healthGeneration || !ctx.isIdle()) return;
     const view: ManagedAgentSnapshotView = {
       ...snapshot,
       visible: visibleAgentSnapshots(snapshot, options.scope, ownerSessionId),
@@ -11680,14 +10057,7 @@ export function createAgentController(
       if (!ownedRuns.has(runId)) attentionReminders.delete(runId);
     type PendingAttention = {
       state: ManagedAgentState;
-      condition:
-        | "result_error"
-        | "lost"
-        | "unknown"
-        | "ask"
-        | "blocked"
-        | "handoff"
-        | "stale";
+      condition: "result_error" | "lost" | "unknown" | "ask" | "blocked" | "handoff" | "stale";
       message: Parameters<ExtensionAPI["sendMessage"]>[0] & { content: string };
       stillEligible: () => boolean;
       onSubmitted: () => void;
@@ -11701,8 +10071,7 @@ export function createAgentController(
       return true;
     };
     for (const agent of snapshot.agents) {
-      if (signal.aborted || generation !== healthGeneration || !ctx.isIdle())
-        return;
+      if (signal.aborted || generation !== healthGeneration || !ctx.isIdle()) return;
       const { state, listed } = agent;
       if (state.ownerSessionId !== ownerSessionId) continue;
       let availableActions = currentAvailableActions(
@@ -11805,8 +10174,7 @@ export function createAgentController(
                 signal,
                 retainedPane,
               ),
-            onSubmitted: () =>
-              recordAttention(state.runId, episode, intervalMs),
+            onSubmitted: () => recordAttention(state.runId, episode, intervalMs),
           });
         continue;
       }
@@ -11853,10 +10221,7 @@ export function createAgentController(
       if (state.pendingAskId) {
         let ask: AskRecord | undefined;
         try {
-          ask = readPendingAsk(
-            agentMailboxPath(state.workspaceId, state.agentLabel),
-            state,
-          );
+          ask = readPendingAsk(agentMailboxPath(state.workspaceId, state.agentLabel), state);
         } catch {}
         if (ask && hasDeliveredAsk(ctx.sessionManager.getBranch(), ask)) {
           const episode = `ask:${ask.askId}`;
@@ -11920,8 +10285,7 @@ export function createAgentController(
             },
             stillEligible: () => {
               const latest = currentOwnedState(state, ownerSessionId);
-              if (!latest?.pendingAskId || latest.pendingAskId !== ask.askId)
-                return false;
+              if (!latest?.pendingAskId || latest.pendingAskId !== ask.askId) return false;
               try {
                 const latestAsk = readPendingAsk(
                   agentMailboxPath(latest.workspaceId, latest.agentLabel),
@@ -11936,8 +10300,7 @@ export function createAgentController(
                 return false;
               }
             },
-            onSubmitted: () =>
-              recordAttention(state.runId, episode, intervalMs),
+            onSubmitted: () => recordAttention(state.runId, episode, intervalMs),
           });
         } else {
           attentionReminders.delete(state.runId);
@@ -11953,8 +10316,7 @@ export function createAgentController(
         if (!attentionDue(state.runId, episode, now)) continue;
         const intervalMs = nextAttentionInterval(state.runId, episode);
         const current = currentOwnedState(state, ownerSessionId);
-        if (!current?.activeRequestId || current.pendingAskId || !ctx.isIdle())
-          continue;
+        if (!current?.activeRequestId || current.pendingAskId || !ctx.isIdle()) continue;
         stageAttention({
           state,
           condition: "blocked",
@@ -12006,11 +10368,7 @@ export function createAgentController(
       } catch {
         continue;
       }
-      if (
-        request &&
-        request.createdAt <= now &&
-        now - request.createdAt >= HEALTH_STALE_AFTER_MS
-      ) {
+      if (request && request.createdAt <= now && now - request.createdAt >= HEALTH_STALE_AFTER_MS) {
         const episode = `handoff:${request.requestId}`;
         if (!attentionDue(state.runId, episode, now)) continue;
         const intervalMs = nextAttentionInterval(state.runId, episode);
@@ -12025,11 +10383,7 @@ export function createAgentController(
         } catch {
           continue;
         }
-        if (
-          !currentRequest ||
-          currentRequest.requestId !== request.requestId ||
-          !ctx.isIdle()
-        )
+        if (!currentRequest || currentRequest.requestId !== request.requestId || !ctx.isIdle())
           continue;
         stageAttention({
           state,
@@ -12092,8 +10446,7 @@ export function createAgentController(
       }
       const episode = `stale:${state.activeRequestId}:${state.lastActivityAt}`;
       if (!attentionDue(state.runId, episode, now)) continue;
-      const firstAttention =
-        attentionReminders.get(state.runId)?.episode !== episode;
+      const firstAttention = attentionReminders.get(state.runId)?.episode !== episode;
       const intervalMs = HEALTH_ATTENTION_FIRST_REPEAT_MS;
       const current = currentOwnedState(state, ownerSessionId);
       if (
@@ -12105,8 +10458,7 @@ export function createAgentController(
         continue;
       if (signal.aborted || generation !== healthGeneration) return;
       let diagnostic: AgentHealthDiagnostic | undefined;
-      const attemptedDiagnostic =
-        firstAttention && availableActions.includes("inspect");
+      const attemptedDiagnostic = firstAttention && availableActions.includes("inspect");
       if (attemptedDiagnostic && initialStaleInspectionUsed) continue;
       if (attemptedDiagnostic) {
         initialStaleInspectionUsed = true;
@@ -12135,18 +10487,12 @@ export function createAgentController(
         }
         const refreshedAgent = refreshed.agents.find(
           (candidate) =>
-            sameIdentity(candidate.state, current) &&
-            candidate.presence.kind === "live",
+            sameIdentity(candidate.state, current) && candidate.presence.kind === "live",
         );
-        if (!refreshedAgent || refreshedAgent.listed.state !== "working")
-          continue;
+        if (!refreshedAgent || refreshedAgent.listed.state !== "working") continue;
         const refreshedView: ManagedAgentSnapshotView = {
           ...refreshed,
-          visible: visibleAgentSnapshots(
-            refreshed,
-            options.scope,
-            ownerSessionId,
-          ),
+          visible: visibleAgentSnapshots(refreshed, options.scope, ownerSessionId),
         };
         availableActions = currentAvailableActions(
           refreshedAgent,
@@ -12167,10 +10513,7 @@ export function createAgentController(
         !ctx.isIdle()
       )
         continue;
-      if (
-        diagnostic &&
-        normalizeHerdrLifecycleState(diagnostic.identity.agent) !== "working"
-      )
+      if (diagnostic && normalizeHerdrLifecycleState(diagnostic.identity.agent) !== "working")
         continue;
       const inactiveMs = Date.now() - latest.lastActivityAt!;
       const foreground =
@@ -12197,8 +10540,7 @@ export function createAgentController(
         : firstAttention
           ? [
               "",
-              ...(availableActions.includes("inspect") ||
-              availableActions.includes("transcript")
+              ...(availableActions.includes("inspect") || availableActions.includes("transcript")
                 ? [
                     "Automatic live diagnostic evidence was unavailable.",
                     "Before returning to passive waiting, perform at most one currently available diagnostic read: use read_agent_transcript for persisted conversation/tool history or inspect_agent for live terminal/process evidence.",
@@ -12251,12 +10593,8 @@ export function createAgentController(
               ? {
                   captured_at: diagnostic.capturedAt,
                   recent_output_truncated: diagnostic.recentOutputTruncated,
-                  ...(diagnostic.recentOutput
-                    ? { recent_output: diagnostic.recentOutput }
-                    : {}),
-                  ...(diagnostic.process
-                    ? { process: diagnostic.process }
-                    : {}),
+                  ...(diagnostic.recentOutput ? { recent_output: diagnostic.recentOutput } : {}),
+                  ...(diagnostic.process ? { process: diagnostic.process } : {}),
                 }
               : {}),
           },
@@ -12281,41 +10619,26 @@ export function createAgentController(
     } catch {
       return;
     }
-    if (signal.aborted || generation !== healthGeneration || !ctx.isIdle())
-      return;
+    if (signal.aborted || generation !== healthGeneration || !ctx.isIdle()) return;
     const ready = pending.filter((item) => {
       if (!item.stillEligible()) return false;
       const latest = finalSnapshot.agents.find(({ state: candidate }) =>
         sameIdentity(candidate, item.state),
       );
-      if (!latest || latest.state.ownerSessionId !== ownerSessionId)
-        return false;
+      if (!latest || latest.state.ownerSessionId !== ownerSessionId) return false;
       switch (item.condition) {
         case "lost":
-          return (
-            latest.presence.kind === "lost" && !latest.state.completedRequestId
-          );
+          return latest.presence.kind === "lost" && !latest.state.completedRequestId;
         case "stale":
-          return (
-            latest.presence.kind === "live" && latest.listed.state === "working"
-          );
+          return latest.presence.kind === "live" && latest.listed.state === "working";
         case "ask":
-          return (
-            latest.presence.kind !== "lost" &&
-            latest.presence.kind !== "unknown"
-          );
+          return latest.presence.kind !== "lost" && latest.presence.kind !== "unknown";
         case "unknown":
           return latest.presence.kind === "unknown";
         case "blocked":
-          return (
-            latest.presence.kind === "live" &&
-            latest.lifecycleState === "blocked"
-          );
+          return latest.presence.kind === "live" && latest.lifecycleState === "blocked";
         case "handoff":
-          return (
-            latest.presence.kind !== "lost" &&
-            latest.presence.kind !== "unknown"
-          );
+          return latest.presence.kind !== "lost" && latest.presence.kind !== "unknown";
         case "result_error":
           return true;
       }
@@ -12344,10 +10667,7 @@ export function createAgentController(
     }
     if (triggerSubmitted) for (const item of submitted) item.onSubmitted();
   };
-  const runAgentHealthScanner = (
-    ctx: ExtensionContext,
-    signal: AbortSignal,
-  ): void => {
+  const runAgentHealthScanner = (ctx: ExtensionContext, signal: AbortSignal): void => {
     const generation = ++healthGeneration;
     let healthInFlight = false;
     let healthRescanRequested = false;
@@ -12418,15 +10738,7 @@ export function createAgentController(
         submittedOwnerMessages.delete(key);
       }
       // Only retry messages previously submitted by this exact owner runtime.
-      deliverOwnerMessages(
-        runtime,
-        context,
-        undefined,
-        true,
-        undefined,
-        false,
-        retryMessageIds,
-      );
+      deliverOwnerMessages(runtime, context, undefined, true, undefined, false, retryMessageIds);
     }
   });
   return {
@@ -12455,9 +10767,7 @@ export function createAgentController(
         const inventory = scanAgentStates();
         return (
           inventory.issues.length === 0 &&
-          !inventory.states.some(
-            ({ state }) => state.ownerSessionId === ownerSessionId,
-          )
+          !inventory.states.some(({ state }) => state.ownerSessionId === ownerSessionId)
         );
       } catch (error) {
         options.appendError(context, "pi_herdsman_recovery_error", error);
@@ -12508,13 +10818,7 @@ export function createAgentController(
       signal?: AbortSignal,
       assignmentLockHeld = false,
     ) {
-      return finalizeDeliveredRoot(
-        context,
-        state,
-        requestId,
-        signal,
-        assignmentLockHeld,
-      );
+      return finalizeDeliveredRoot(context, state, requestId, signal, assignmentLockHeld);
     },
     closeSnapshot,
     closeCascade,
@@ -12607,10 +10911,7 @@ export function createAgentController(
     },
     invalidateRuntime,
     clearResultDeliveryState(runtime: Runtime) {
-      for (const requestId of [
-        runtime.activeRequestId,
-        runtime.completedRequestId,
-      ])
+      for (const requestId of [runtime.activeRequestId, runtime.completedRequestId])
         if (requestId) {
           const key = resultKey(runtime, requestId);
           resultDeliveryEvidence.delete(key);
@@ -12686,10 +10987,7 @@ function sessionUsageTotals(
     if (entry.type === "usage") {
       key = `${entry.provider}/${entry.model}`;
       usage = entry.usage;
-    } else if (
-      (entry.type === "compaction" || entry.type === "branch_summary") &&
-      entry.usage
-    ) {
+    } else if ((entry.type === "compaction" || entry.type === "branch_summary") && entry.usage) {
       key = "Tools/summaries";
       usage = entry.usage;
     } else if (entry.type === "message") {
@@ -12767,10 +11065,7 @@ export function collectSessionUsage(
       complete = false;
     }
   }
-  const walk = (
-    ownerId: string,
-    ownerEntries: readonly SessionEntry[],
-  ): void => {
+  const walk = (ownerId: string, ownerEntries: readonly SessionEntry[]): void => {
     for (const child of ownedChildren(ownerEntries, ownerId, true, () => {
       complete = false;
     })) {

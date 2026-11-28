@@ -1,19 +1,9 @@
 import assert from "node:assert/strict";
-import {
-  mkdtempSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import {
-  cleanupSmokeFixture,
-  isMissingDockerResource,
-} from "./peer-federation-cleanup.mjs";
+import { cleanupSmokeFixture, isMissingDockerResource } from "./peer-federation-cleanup.mjs";
 
 function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), "peer-cleanup-test-"));
@@ -27,12 +17,7 @@ function fixture(t) {
     runId,
     root,
     containers: ["a".repeat(64), "b".repeat(64)],
-    volumes: [
-      `ph-a-home-${runId}`,
-      `ph-a-ssh-${runId}`,
-      `ph-b-home-${runId}`,
-      `ph-b-ssh-${runId}`,
-    ],
+    volumes: [`ph-a-home-${runId}`, `ph-a-ssh-${runId}`, `ph-b-home-${runId}`, `ph-b-ssh-${runId}`],
     network: "c".repeat(64),
     imageTag: `${runId}:fixture`,
     image: `sha256:${"d".repeat(64)}`,
@@ -118,30 +103,17 @@ test("cleanup preflights all fixture resources before deleting the owned set", (
   const firstRemoval = f.events.findIndex(([event]) => event === "remove");
   assert.equal(firstRemoval, 8);
   assert.equal(
-    f.events
-      .slice(firstRemoval + 8, -1)
-      .filter(([event]) => event === "inspect").length,
+    f.events.slice(firstRemoval + 8, -1).filter(([event]) => event === "inspect").length,
     8,
   );
   assert.deepEqual(
     f.events.filter(([event]) => event === "remove").map(([, kind]) => kind),
-    [
-      "container",
-      "container",
-      "volume",
-      "volume",
-      "volume",
-      "volume",
-      "network",
-      "image",
-    ],
+    ["container", "container", "volume", "volume", "volume", "volume", "network", "image"],
   );
   assert.equal(f.events.at(-1)[0], "removeRoot");
   assert.equal(f.events.at(-1)[1], realpathSync(f.root));
   assert.deepEqual(
-    f.events.findLast(
-      ([event, kind]) => event === "remove" && kind === "image",
-    ),
+    f.events.findLast(([event, kind]) => event === "remove" && kind === "image"),
     ["remove", "image", f.resources.imageTag],
   );
 });
@@ -151,8 +123,7 @@ test("failed removal preserves the recovery manifest and fixture root", (t) => {
   const remainingVolume = f.resources.volumes[0];
   f.options.removeResource = (kind, id) => {
     f.events.push(["remove", kind, id]);
-    if (kind !== "volume" || id !== remainingVolume)
-      f.active.delete(`${kind}:${id}`);
+    if (kind !== "volume" || id !== remainingVolume) f.active.delete(`${kind}:${id}`);
   };
 
   assert.throws(
@@ -200,8 +171,7 @@ test("misleading not found inspection error preserves the recovery manifest and 
   f.options.removeResource = (kind, id) => {
     removalStarted = true;
     f.events.push(["remove", kind, id]);
-    if (kind !== "volume" || id !== remainingVolume)
-      f.active.delete(`${kind}:${id}`);
+    if (kind !== "volume" || id !== remainingVolume) f.active.delete(`${kind}:${id}`);
   };
   f.options.inspectResource = (kind, id) => {
     if (removalStarted && kind === "volume" && id === remainingVolume) {
@@ -225,10 +195,7 @@ test("misleading not found inspection error preserves the recovery manifest and 
 });
 
 test("missing-resource diagnostics require the exact resource type and ID", () => {
-  assert.equal(
-    isMissingDockerResource("volume", "target-volume", "resource not found"),
-    false,
-  );
+  assert.equal(isMissingDockerResource("volume", "target-volume", "resource not found"), false);
   assert.equal(
     isMissingDockerResource(
       "volume",
@@ -241,24 +208,13 @@ test("missing-resource diagnostics require the exact resource type and ID", () =
 
 test("lowercase missing-container diagnostics require the exact container ID", () => {
   const id = "a".repeat(64);
+  assert.equal(isMissingDockerResource("container", id, `error: no such object: ${id}`), true);
   assert.equal(
-    isMissingDockerResource("container", id, `error: no such object: ${id}`),
-    true,
-  );
-  assert.equal(
-    isMissingDockerResource(
-      "container",
-      id,
-      `error: no such object: ${"b".repeat(64)}`,
-    ),
+    isMissingDockerResource("container", id, `error: no such object: ${"b".repeat(64)}`),
     false,
   );
   assert.equal(
-    isMissingDockerResource(
-      "container",
-      id,
-      `error: no such object: ${id}extra`,
-    ),
+    isMissingDockerResource("container", id, `error: no such object: ${id}extra`),
     false,
   );
 });

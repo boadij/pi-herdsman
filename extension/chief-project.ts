@@ -48,10 +48,7 @@ import {
   startHerdrManagerInPane,
   type HerdrManagerPaneSelection,
 } from "./herdr.ts";
-import {
-  ensureManagerGitRepository,
-  requireNoLiveLegacyManager,
-} from "./manager-git.ts";
+import { ensureManagerGitRepository, requireNoLiveLegacyManager } from "./manager-git.ts";
 import { readSavedManagerSession } from "./manager-recovery.ts";
 import {
   cloneRepository,
@@ -90,9 +87,7 @@ import {
 } from "./agent-definitions.ts";
 
 const STARTUP_TIMEOUT_MS = 90_000;
-type Repository = NonNullable<
-  Awaited<ReturnType<typeof ensureManagerGitRepository>>
->;
+type Repository = NonNullable<Awaited<ReturnType<typeof ensureManagerGitRepository>>>;
 type Session = { id: string; path: string };
 type LaunchGuard = {
   version: 1;
@@ -117,15 +112,12 @@ export function listUnsettledManagerLaunches(runtime: SupervisionRuntime): {
   try {
     names = readdirSync(runtime.managers);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT")
-      return { complete: true, sessions: [] };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { complete: true, sessions: [] };
     return { complete: false, sessions: [] };
   }
   const sessions: string[] = [];
   let complete = true;
-  for (const name of names.filter((entry) =>
-    /^[0-9a-f]{64}\.json\.unsettled$/u.test(entry),
-  )) {
+  for (const name of names.filter((entry) => /^[0-9a-f]{64}\.json\.unsettled$/u.test(entry))) {
     try {
       const guard = readLaunchGuard(join(runtime.managers, name));
       if (guard?.chiefRoot === runtime.root) sessions.push(guard.session.id);
@@ -141,13 +133,9 @@ function readLaunchGuard(path: string): LaunchGuard | undefined {
   if (!stat) return undefined;
   if (!stat.isFile() || stat.size > LAUNCH_GUARD_MAX_BYTES)
     throw new Error("Invalid unsettled Manager launch record");
-  const record = JSON.parse(
-    readFileSync(path, "utf8"),
-  ) as Partial<LaunchGuard> | null;
+  const record = JSON.parse(readFileSync(path, "utf8")) as Partial<LaunchGuard> | null;
   const identity = (value: unknown): value is string =>
-    typeof value === "string" &&
-    value.trim().length > 0 &&
-    !value.includes("\0");
+    typeof value === "string" && value.trim().length > 0 && !value.includes("\0");
   if (
     record?.version !== 1 ||
     !identity(record.chiefRoot) ||
@@ -162,8 +150,7 @@ function readLaunchGuard(path: string): LaunchGuard | undefined {
     !identity(record.tabId) ||
     !identity(record.paneId) ||
     !identity(record.terminalId) ||
-    (record.previousCoordinator !== undefined &&
-      !identity(record.previousCoordinator)) ||
+    (record.previousCoordinator !== undefined && !identity(record.previousCoordinator)) ||
     (record.definition !== undefined && !identity(record.definition)) ||
     (record.launchConfiguration !== undefined &&
       (typeof record.launchConfiguration !== "string" ||
@@ -220,12 +207,7 @@ function clearLaunchGuard(path: string): void {
 type ProjectResult =
   | { status: "cloned"; repository: string; workspaceId: string }
   | {
-      status:
-        | "started"
-        | "resumed"
-        | "already_running"
-        | "resume_required"
-        | "cancelled";
+      status: "started" | "resumed" | "already_running" | "resume_required" | "cancelled";
       repository: string;
       definition?: string;
     }
@@ -254,11 +236,7 @@ type Host = {
   build: RuntimeBuild;
   extensionPath: string;
   managerTools?: readonly string[];
-  resolveDefinition?(
-    category: "manager",
-    name: string,
-    projectRoot?: string,
-  ): AgentDefinition;
+  resolveDefinition?(category: "manager", name: string, projectRoot?: string): AgentDefinition;
   remoteIdentity(
     ctx: ExtensionContext,
     descriptor: Pick<
@@ -273,11 +251,7 @@ type Host = {
   ): Promise<unknown>;
 };
 
-function partial(
-  repository: string,
-  stage: string,
-  error: unknown,
-): ProjectResult {
+function partial(repository: string, stage: string, error: unknown): ProjectResult {
   return {
     status: "partial_failure",
     repository,
@@ -293,10 +267,7 @@ function reserveManagerSession(checkout: string): Session {
   return reserveCoordinatorSession(checkout, "manager");
 }
 
-function reserveCoordinatorSession(
-  checkout: string,
-  role: "manager" | "lead",
-): Session {
+function reserveCoordinatorSession(checkout: string, role: "manager" | "lead"): Session {
   const dir = SessionManager.create(checkout).getSessionDir();
   const path = join(realpathSync(dir), `${role}-${randomUUID()}.jsonl`);
   closeSync(openSync(path, "wx", 0o600));
@@ -341,22 +312,17 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
     await host.assertChief(ctx);
     let repository: Awaited<ReturnType<typeof cloneRepository>>;
     try {
-      repository = await cloneRepository(
-        pi,
-        url,
-        readConfig().projectsDirectory,
-        { destination, signal: ctx.signal },
-      );
+      repository = await cloneRepository(pi, url, readConfig().projectsDirectory, {
+        destination,
+        signal: ctx.signal,
+      });
     } catch (error) {
       if (error instanceof RepositoryCloneError)
         return partial(error.destination, error.stage, error);
       throw error;
     }
     try {
-      const lock = claimManagerStartupLock(
-        host.runtime(),
-        repository.canonicalRepoKey,
-      );
+      const lock = claimManagerStartupLock(host.runtime(), repository.canonicalRepoKey);
       try {
         const { workspaceId } = await ensurePrimaryWorkspace(pi, ctx, {
           repository,
@@ -375,9 +341,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
     } catch (error) {
       return partial(
         repository.checkoutPath,
-        error instanceof HerdrManagerPreparationFailure
-          ? error.stage
-          : "workspace",
+        error instanceof HerdrManagerPreparationFailure ? error.stage : "workspace",
         error,
       );
     }
@@ -411,25 +375,11 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
       requireCompatibleBuild,
     );
     if (!(await host.remoteIdentity(ctx, descriptor)))
-      throw new Error(
-        "Manager Herdr placement or session identity could not be verified",
-      );
-    await verifyPaneProcess(
-      ctx,
-      repository,
-      descriptor,
-      descriptor.claim.pid,
-      terminalId,
-    );
+      throw new Error("Manager Herdr placement or session identity could not be verified");
+    await verifyPaneProcess(ctx, repository, descriptor, descriptor.claim.pid, terminalId);
     await host.assertChief(ctx);
-    const current = readManagerDescriptorStatus(
-      runtime,
-      repository.canonicalRepoKey,
-    );
-    if (
-      !current?.live ||
-      !sameManagerDescriptor(current.descriptor, descriptor)
-    )
+    const current = readManagerDescriptorStatus(runtime, repository.canonicalRepoKey);
+    if (!current?.live || !sameManagerDescriptor(current.descriptor, descriptor))
       throw new Error("Manager authority changed during verification");
   }
 
@@ -441,9 +391,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
     terminalId?: string,
   ) {
     const { signal } = ctx;
-    const pane = (
-      await runHerdr(pi, ctx, ["pane", "get", placement.paneId], { signal })
-    )?.pane;
+    const pane = (await runHerdr(pi, ctx, ["pane", "get", placement.paneId], { signal }))?.pane;
     if (
       pane?.pane_id !== placement.paneId ||
       pane.tab_id !== placement.tabId ||
@@ -453,18 +401,9 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
       !sameDirectory(pane.cwd, repository.checkoutPath)
     )
       throw new Error("Manager Herdr pane no longer matches the repository");
-    const process = await paneProcess(
-      pi,
-      ctx,
-      placement.paneId,
-      signal,
-      undefined,
-      true,
-    );
+    const process = await paneProcess(pi, ctx, placement.paneId, signal, undefined, true);
     if (!process?.foreground_processes?.some((entry) => entry.pid === pid))
-      throw new Error(
-        "Manager lease owner is not the exact running Herdr pane process",
-      );
+      throw new Error("Manager lease owner is not the exact running Herdr pane process");
   }
 
   async function verifyLaunchReady(
@@ -483,16 +422,12 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
       descriptor.tabId !== guard.tabId ||
       descriptor.paneId !== guard.paneId
     )
-      throw new Error(
-        "Manager lease does not match the requested Pi session and pane",
-      );
+      throw new Error("Manager lease does not match the requested Pi session and pane");
     const currentRecovery = () =>
       readManagerRecoveryReference(runtime, repository.canonicalRepoKey);
     const recovery = currentRecovery();
     if (recovery && !matchesSession(recovery, session))
-      throw new Error(
-        "Manager recovery reference does not match the requested Pi session",
-      );
+      throw new Error("Manager recovery reference does not match the requested Pi session");
     const coordinator = readLeadCoordinationState(runtime, session.id);
     if (
       !recovery ||
@@ -503,21 +438,16 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
       return false;
     if (
       guard.launchConfiguration !== undefined &&
-      coordinator.startupAttestation?.launchConfiguration !==
-        guard.launchConfiguration
+      coordinator.startupAttestation?.launchConfiguration !== guard.launchConfiguration
     ) {
       if (coordinator.startupAttestation?.launchConfiguration !== undefined)
-        throw new Error(
-          "Manager startup attested a different launch configuration",
-        );
+        throw new Error("Manager startup attested a different launch configuration");
       return false;
     }
     await verifyActive(ctx, runtime, repository, descriptor, guard.terminalId);
     const confirmed = currentRecovery();
     if (!confirmed || !matchesSession(confirmed, session))
-      throw new Error(
-        "Manager recovery reference changed during readiness verification",
-      );
+      throw new Error("Manager recovery reference changed during readiness verification");
     return true;
   }
 
@@ -557,9 +487,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
     if (action === "resume" && source.kind !== "local")
       throw new Error("resume_manager requires a local repository path");
     const effectiveCheckoutOrigin =
-      action === "start" &&
-      source.kind === "local" &&
-      destination !== undefined;
+      action === "start" && source.kind === "local" && destination !== undefined;
     let repositoryPath = source.kind === "local" ? source.path : input;
     let stage = "repository";
     let preparationChanged = false;
@@ -567,9 +495,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
       const approve = async (target: string) => {
         if (readConfig().managerGitBootstrapWithoutConfirmation) return true;
         if (!ctx.hasUI)
-          throw new Error(
-            "Chief requires interactive confirmation to initialize Git",
-          );
+          throw new Error("Chief requires interactive confirmation to initialize Git");
         return ctx.ui.confirm(
           "Prepare Manager repository?",
           `Initialize Git at ${target}, creating the directory if missing? Existing files will not be committed.`,
@@ -581,12 +507,11 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
         await host.assertChief(ctx);
       }
       if (source.kind === "remote") {
-        repository = await cloneRepository(
-          pi,
-          source.url,
-          readConfig().projectsDirectory,
-          { destination, signal, effectiveCheckoutOrigin },
-        );
+        repository = await cloneRepository(pi, source.url, readConfig().projectsDirectory, {
+          destination,
+          signal,
+          effectiveCheckoutOrigin,
+        });
         preparationChanged = true;
       } else {
         let selected = resolveLocalRepositoryPath(source.path);
@@ -597,9 +522,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
             createIfMissing: false,
           });
         if (!repository && action === "resume")
-          throw new Error(
-            "Recovery requires a verified local primary Git checkout",
-          );
+          throw new Error("Recovery requires a verified local primary Git checkout");
         if (!repository) {
           stage = "git_setup";
           const needsCreation = !selected.exists;
@@ -629,12 +552,10 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
                 throw new Error("Approved local repository path changed");
             },
           });
-          if (!repository)
-            return { status: "cancelled", repository: repositoryPath };
+          if (!repository) return { status: "cancelled", repository: repositoryPath };
         }
       }
-      if (!repository)
-        throw new Error("Manager repository could not be prepared");
+      if (!repository) throw new Error("Manager repository could not be prepared");
       repositoryPath = repository.checkoutPath;
       const { canonicalRepoKey } = repository;
       const runtime = host.runtime();
@@ -665,23 +586,12 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
                 guard.workspaceId,
                 signal,
               );
-              const active = readManagerDescriptorStatus(
-                runtime,
-                canonicalRepoKey,
-              );
+              const active = readManagerDescriptorStatus(runtime, canonicalRepoKey);
               if (
                 !active?.live ||
-                !(await verifyLaunchReady(
-                  ctx,
-                  runtime,
-                  repository,
-                  active.descriptor,
-                  guard,
-                ))
+                !(await verifyLaunchReady(ctx, runtime, repository, active.descriptor, guard))
               )
-                throw new Error(
-                  "The exact Manager has not reached verified readiness",
-                );
+                throw new Error("The exact Manager has not reached verified readiness");
               removeManagerStartIntent(runtime, guard.session.id);
               clearLaunchGuard(guardPath);
               return { status: "already_running", repository: repositoryPath };
@@ -704,13 +614,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
             ),
           );
         }
-        await requireNoLiveLegacyManager(
-          pi,
-          runtime,
-          canonicalRepoKey,
-          undefined,
-          signal,
-        );
+        await requireNoLiveLegacyManager(pi, runtime, canonicalRepoKey, undefined, signal);
         const active = readManagerDescriptorStatus(runtime, canonicalRepoKey);
         if (active?.live && action === "start") {
           // Optional auto-activation holds live authority without a durable role.
@@ -725,8 +629,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
                     { checkout: repositoryPath },
                   ).definition
                 : undefined;
-            const name =
-              binding?.category === "manager" ? binding.name : "manager";
+            const name = binding?.category === "manager" ? binding.name : "manager";
             if (name !== definitionName)
               throw new Error(
                 `An active Manager uses definition ${name}; it cannot be replaced with ${definitionName}`,
@@ -737,27 +640,20 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
 
         stage = "recovery";
         const readRecovery = () => {
-          const recovery = readManagerRecoveryReference(
-            runtime,
-            canonicalRepoKey,
-          );
+          const recovery = readManagerRecoveryReference(runtime, canonicalRepoKey);
           if (!recovery) return undefined;
           const saved = {
             id: recovery.piSessionId,
             path: realpathSync(recovery.piSessionFile),
           };
           if (readSavedRole(saved, repositoryPath) !== "manager")
-            throw new Error(
-              "Saved Pi session does not have a persisted Manager role",
-            );
+            throw new Error("Saved Pi session does not have a persisted Manager role");
           return saved;
         };
         try {
           session = readRecovery();
           if (!session && action === "resume")
-            throw new Error(
-              "No saved Manager session is available for this repository",
-            );
+            throw new Error("No saved Manager session is available for this repository");
         } catch (error) {
           return partial(repositoryPath, stage, error);
         }
@@ -765,20 +661,14 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
           const binding = readSavedManagerSession(session, {
             checkout: repositoryPath,
           }).definition;
-          if (
-            definitionName &&
-            binding?.category === "manager" &&
-            definitionName !== binding.name
-          )
+          if (definitionName && binding?.category === "manager" && definitionName !== binding.name)
             throw new Error(
               `Manager definition ${binding.name} is saved for this session; it cannot be replaced with ${definitionName}`,
             );
           return {
             status: "resume_required",
             repository: repositoryPath,
-            ...(binding?.category === "manager"
-              ? { definition: binding.name }
-              : {}),
+            ...(binding?.category === "manager" ? { definition: binding.name } : {}),
           };
         }
 
@@ -799,25 +689,12 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
         stage = "preflight";
         const agentDir = resolve(getAgentDir());
         const savedBinding = session
-          ? readSavedManagerSession(session, { checkout: repositoryPath })
-              .definition
+          ? readSavedManagerSession(session, { checkout: repositoryPath }).definition
           : undefined;
-        const managerBinding =
-          savedBinding?.category === "manager" ? savedBinding : undefined;
-        const selectedName =
-          managerBinding?.name ?? definitionName ?? "manager";
-        const definition = managerDefinition(
-          selectedName,
-          repositoryPath,
-          agentDir,
-          ctx,
-          host,
-        );
-        if (
-          session &&
-          definitionName &&
-          managerBinding?.name !== definitionName
-        )
+        const managerBinding = savedBinding?.category === "manager" ? savedBinding : undefined;
+        const selectedName = managerBinding?.name ?? definitionName ?? "manager";
+        const definition = managerDefinition(selectedName, repositoryPath, agentDir, ctx, host);
+        if (session && definitionName && managerBinding?.name !== definitionName)
           throw new Error(
             `Manager session is bound to ${managerBinding?.name ?? "manager"}; it cannot be replaced with ${definitionName}`,
           );
@@ -825,17 +702,11 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
           cwd: repositoryPath,
           // Pi's native allowlist filters registration. The runtime decides
           // which Agent tools to expose from the role policy and owned work.
-          requiredTools: [
-            ...(host.managerTools ?? []),
-            ...AGENT_COORDINATION_TOOLS,
-          ],
+          requiredTools: [...(host.managerTools ?? []), ...AGENT_COORDINATION_TOOLS],
           nativeCoordinatorDefaults: true,
           omitBodyPrompt: true,
         });
-        const launchConfiguration = coordinatorLaunchConfiguration(
-          definition,
-          repositoryPath,
-        );
+        const launchConfiguration = coordinatorLaunchConfiguration(definition, repositoryPath);
         requireHerdrPiIntegration(agentDir);
         stage = "workspace";
         const assertCurrentAuthority = () => host.assertChief(ctx);
@@ -849,13 +720,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
         };
         const pane = await prepareHerdrManagerPane(pi, ctx, options);
         preparationChanged = true;
-        await requireNoLiveLegacyManager(
-          pi,
-          runtime,
-          canonicalRepoKey,
-          pane.workspaceId,
-          signal,
-        );
+        await requireNoLiveLegacyManager(pi, runtime, canonicalRepoKey, pane.workspaceId, signal);
 
         stage = "session";
         await host.assertChief(ctx);
@@ -889,10 +754,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
           paneId: pane.paneId,
           terminalId: pane.terminalId,
           definition: selectedName,
-          previousCoordinator: readLeadCoordinationState(
-            runtime,
-            launchSession.id,
-          )?.instanceId,
+          previousCoordinator: readLeadCoordinationState(runtime, launchSession.id)?.instanceId,
           launchConfiguration,
         };
         try {
@@ -913,15 +775,9 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
                   saved.id !== launchSession.id ||
                   !sameObservedSessionPath(saved.path, launchSession.path)
                 )
-                  throw new Error(
-                    "Manager recovery reference changed before launch",
-                  );
-              } else if (
-                readManagerRecoveryReference(runtime, canonicalRepoKey)
-              ) {
-                throw new Error(
-                  "Manager recovery reference appeared before launch",
-                );
+                  throw new Error("Manager recovery reference changed before launch");
+              } else if (readManagerRecoveryReference(runtime, canonicalRepoKey)) {
+                throw new Error("Manager recovery reference appeared before launch");
               }
               if (!launchMayHaveStarted) {
                 // Herdr calls this immediately before it can request Pi startup.
@@ -948,21 +804,11 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
           signal?.throwIfAborted();
           await host.assertChief(ctx);
           let pendingPid: number | undefined;
-          const status = readManagerDescriptorStatus(
-            runtime,
-            canonicalRepoKey,
-            (claim) => {
-              pendingPid = claim.pid;
-            },
-          );
+          const status = readManagerDescriptorStatus(runtime, canonicalRepoKey, (claim) => {
+            pendingPid = claim.pid;
+          });
           if (pendingPid !== undefined) {
-            await verifyPaneProcess(
-              ctx,
-              repository,
-              pane,
-              pendingPid,
-              pane.terminalId,
-            );
+            await verifyPaneProcess(ctx, repository, pane, pendingPid, pane.terminalId);
             if (
               !(await host.remoteIdentity(ctx, {
                 ...pane,
@@ -970,19 +816,11 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
                 piSessionFile: session.path,
               }))
             )
-              throw new Error(
-                "Pending Manager claim does not match the launched Herdr session",
-              );
+              throw new Error("Pending Manager claim does not match the launched Herdr session");
           }
           if (
             status?.live &&
-            (await verifyLaunchReady(
-              ctx,
-              runtime,
-              repository,
-              status.descriptor,
-              guard,
-            ))
+            (await verifyLaunchReady(ctx, runtime, repository, status.descriptor, guard))
           ) {
             if (hasIntent) removeManagerStartIntent(runtime, session.id);
             clearLaunchGuard(guardPath);
@@ -1063,9 +901,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
       throw new Error("workspace must be an exact Herdr workspace ID");
     const intents = listCoordinatorStartIntents(host.runtime());
     if (!intents.complete)
-      throw new Error(
-        "Cannot verify Coordinator startup reservations; no Lead was launched",
-      );
+      throw new Error("Cannot verify Coordinator startup reservations; no Lead was launched");
     const existing = intents.intents.find(
       (intent) => intent.role === "lead" && intent.workspaceId === workspaceId,
     );
@@ -1075,13 +911,9 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
       );
 
     const snapshot = await herdrSessionSnapshot(pi, ctx, signal);
-    const matches = snapshot.workspaces.filter(
-      (item) => item?.workspace_id === workspaceId,
-    );
+    const matches = snapshot.workspaces.filter((item) => item?.workspace_id === workspaceId);
     if (matches.length !== 1)
-      throw new Error(
-        "Selected Herdr workspace is missing or ambiguous in the current profile",
-      );
+      throw new Error("Selected Herdr workspace is missing or ambiguous in the current profile");
     const workspace = matches[0]!;
     const membershipPath = workspace.worktree?.checkout_path;
     const observedPaths =
@@ -1110,28 +942,16 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
     try {
       repository = await gitRepositoryScope(pi, checkout, signal);
       if (!sameDirectory(repository.checkoutPath, checkout))
-        throw new Error(
-          "Selected workspace does not resolve to its exact Git checkout root",
-        );
+        throw new Error("Selected workspace does not resolve to its exact Git checkout root");
       if (
         workspace.worktree &&
-        (!sameDirectory(
-          workspace.worktree.checkout_path,
-          repository.checkoutPath,
-        ) ||
-          !sameDirectory(
-            workspace.worktree.repo_key,
-            repository.canonicalRepoKey,
-          ))
+        (!sameDirectory(workspace.worktree.checkout_path, repository.checkoutPath) ||
+          !sameDirectory(workspace.worktree.repo_key, repository.canonicalRepoKey))
       )
-        throw new Error(
-          "Herdr workspace association conflicts with Git checkout identity",
-        );
+        throw new Error("Herdr workspace association conflicts with Git checkout identity");
     } catch (error) {
       if (workspace.worktree)
-        throw new Error(
-          `Selected Git workspace could not be verified: ${String(error)}`,
-        );
+        throw new Error(`Selected Git workspace could not be verified: ${String(error)}`);
       // A workspace without Herdr worktree metadata may be non-Git. Confirm that
       // Git did not resolve it into an enclosing repository before treating its
       // exact observed directory as an ordinary checkout.
@@ -1140,29 +960,16 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
         signal,
         timeout: 2_000,
       });
-      if (
-        probe.code === 0 ||
-        !/not a git repository/iu.test(probe.stderr ?? "")
-      )
-        throw new Error(
-          "Selected workspace checkout is not unambiguously Git or non-Git",
-        );
+      if (probe.code === 0 || !/not a git repository/iu.test(probe.stderr ?? ""))
+        throw new Error("Selected workspace checkout is not unambiguously Git or non-Git");
     }
 
     let activeManager = false;
     if (repository) {
-      const status = readManagerDescriptorStatus(
-        host.runtime(),
-        repository.canonicalRepoKey,
-      );
+      const status = readManagerDescriptorStatus(host.runtime(), repository.canonicalRepoKey);
       if (status?.live) {
         try {
-          const group = await worktreeGroupScope(
-            pi,
-            ctx,
-            status.descriptor.workspaceId,
-            signal,
-          );
+          const group = await worktreeGroupScope(pi, ctx, status.descriptor.workspaceId, signal);
           activeManager =
             group.workspaceIds.includes(workspaceId) &&
             !!(await host.remoteIdentity(ctx, status.descriptor));
@@ -1180,8 +987,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
       );
 
     const agentDir = resolve(getAgentDir());
-    const projectTrusted =
-      new ProjectTrustStore(agentDir).get(checkout) === true;
+    const projectTrusted = new ProjectTrustStore(agentDir).get(checkout) === true;
     const mode =
       requestedDefinition === "flexible-lead"
         ? "flexible"
@@ -1189,8 +995,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
           ? "orchestrate"
           : readConfig().defaultLeadExecution;
     const definitionName =
-      requestedDefinition ??
-      (mode === "flexible" ? "flexible-lead" : "orchestrator-lead");
+      requestedDefinition ?? (mode === "flexible" ? "flexible-lead" : "orchestrator-lead");
     const definition = resolveDefinition("lead", definitionName, {
       ...(projectTrusted ? { projectRoot: checkout } : {}),
       onWarning: (warning) => notifyDefinitionWarning(ctx, warning),
@@ -1201,10 +1006,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
       nativeCoordinatorDefaults: true,
       omitBodyPrompt: true,
     });
-    const launchConfiguration = coordinatorLaunchConfiguration(
-      definition,
-      checkout,
-    );
+    const launchConfiguration = coordinatorLaunchConfiguration(definition, checkout);
     const session = reserveCoordinatorSession(checkout, "lead");
     let pane: HerdrManagerPaneSelection | undefined;
     try {
@@ -1232,10 +1034,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
         admission: admissionClaim,
       };
       writeManagerStartIntent(host.runtime(), intent);
-      const previousInstance = readLeadCoordinationState(
-        host.runtime(),
-        session.id,
-      )?.instanceId;
+      const previousInstance = readLeadCoordinationState(host.runtime(), session.id)?.instanceId;
       const startedAt = Date.now();
       let launched = false;
       try {
@@ -1256,17 +1055,11 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
         });
         launched = true;
       } catch (error) {
-        if (
-          error instanceof HerdrStartFailure &&
-          !error.attempt.launchMayHaveStarted
-        ) {
+        if (error instanceof HerdrStartFailure && !error.attempt.launchMayHaveStarted) {
           removeManagerStartIntent(host.runtime(), session.id);
           throw error;
         }
-        launched =
-          error instanceof HerdrStartFailure
-            ? error.attempt.launchMayHaveStarted
-            : true;
+        launched = error instanceof HerdrStartFailure ? error.attempt.launchMayHaveStarted : true;
         if (!launched) removeManagerStartIntent(host.runtime(), session.id);
         throw error;
       }
@@ -1284,8 +1077,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
             agent?.tab_id === pane!.tabId &&
             herdrSessionId(agent) === session.id,
         );
-        if (agents.length > 1)
-          throw new Error("Ordinary Lead session is ambiguous in Herdr");
+        if (agents.length > 1) throw new Error("Ordinary Lead session is ambiguous in Herdr");
         const state = readLeadCoordinationState(host.runtime(), session.id);
         if (
           agents.length === 1 &&
@@ -1293,8 +1085,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
           state.piSessionId === session.id &&
           state.updatedAt >= startedAt &&
           state.instanceId !== previousInstance &&
-          state.startupAttestation?.launchConfiguration ===
-            launchConfiguration &&
+          state.startupAttestation?.launchConfiguration === launchConfiguration &&
           isRuntimeBuild(state.build) &&
           sameRuntimeBuild(state.build, host.build) &&
           (await host.remoteIdentity(ctx, {
@@ -1315,23 +1106,17 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
           `Ordinary Lead ${session.id} in pane ${pane.paneId} did not reach exact fresh readiness; inspect the exact session for startup definition, project trust, or model selection errors before retrying`,
         );
       await host.assertChief(ctx);
-      let initialMessage: "not_requested" | "queued" | "not_queued" =
-        "not_requested";
+      let initialMessage: "not_requested" | "queued" | "not_queued" = "not_requested";
       let messageResult: unknown;
       if (message) {
         try {
           if (!host.sendInitialLeadMessage)
             throw new Error("Authorized Chief staff messaging is unavailable");
-          messageResult = await host.sendInitialLeadMessage(
-            session.id,
-            message,
-            ctx,
-          );
+          messageResult = await host.sendInitialLeadMessage(session.id, message, ctx);
           initialMessage = "queued";
         } catch (error) {
           initialMessage = "not_queued";
-          messageResult =
-            error instanceof Error ? error.message : String(error);
+          messageResult = error instanceof Error ? error.message : String(error);
         }
       }
       return {
@@ -1340,11 +1125,7 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
         checkout,
         session,
         definition: definitionName,
-        supervisor: activeManager
-          ? "manager"
-          : repository
-            ? "chief"
-            : "unknown",
+        supervisor: activeManager ? "manager" : repository ? "chief" : "unknown",
         initialMessage,
         ...(messageResult !== undefined ? { messageResult } : {}),
       };
@@ -1368,14 +1149,10 @@ export function createChiefProjectRuntime(pi: ExtensionAPI, host: Host) {
 
   return {
     clone,
-    unsettledManagerLaunches: () =>
-      listUnsettledManagerLaunches(host.runtime()),
+    unsettledManagerLaunches: () => listUnsettledManagerLaunches(host.runtime()),
     verifyActive,
-    start: (
-      repository: string,
-      destination: string | undefined,
-      ctx: ExtensionContext,
-    ) => manage("start", repository, destination, undefined, ctx),
+    start: (repository: string, destination: string | undefined, ctx: ExtensionContext) =>
+      manage("start", repository, destination, undefined, ctx),
     resume: (repository: string, ctx: ExtensionContext) =>
       manage("resume", repository, undefined, undefined, ctx),
     startNamed: (

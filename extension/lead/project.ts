@@ -1,8 +1,4 @@
-import {
-  getAgentDir,
-  SessionManager,
-  SettingsManager,
-} from "@earendil-works/pi-coding-agent";
+import { getAgentDir, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type {
   AgentToolResult,
   ExtensionAPI,
@@ -72,10 +68,7 @@ import {
 import { acceptedCloseProof, STOP_CLOSURE_ENTRY } from "../agent-controller.ts";
 import type { ExpectedSession, HerdrRecord } from "../herdr.ts";
 import type { RuntimeBuild } from "../compatibility.ts";
-import {
-  rememberCoordinatorTarget,
-  resolveCoordinatorTarget,
-} from "../coordinator-target.ts";
+import { rememberCoordinatorTarget, resolveCoordinatorTarget } from "../coordinator-target.ts";
 import {
   agentLaunchArgs,
   configuredModel,
@@ -124,9 +117,7 @@ export function isFreshLeadStartupAttestation(
     state.startupAttestation?.kind === "model_restore" &&
     state.startupAttestation.assignmentId === sessionId &&
     state.startupAttestation.generation === state.instanceId &&
-    ["verified", "definition_override", "no_saved_model"].includes(
-      state.startupAttestation.result,
-    )
+    ["verified", "definition_override", "no_saved_model"].includes(state.startupAttestation.result)
   );
 }
 
@@ -145,9 +136,7 @@ export type ManagerEvidence = (
 >;
 
 export function hasManagerEvidenceSelectors(refs: readonly string[]): boolean {
-  return refs.some(
-    (ref) => ref.startsWith("result:") || ref.startsWith("evidence:"),
-  );
+  return refs.some((ref) => ref.startsWith("result:") || ref.startsWith("evidence:"));
 }
 
 function requiredFiles(
@@ -158,14 +147,10 @@ function requiredFiles(
   operation: string,
 ): RequiredEvidence[] {
   return files.flatMap<RequiredEvidence>((file) => {
-    if (typeof file === "string")
-      return persistRequiredTextFiles(id, [file], cwd, operation);
+    if (typeof file === "string") return persistRequiredTextFiles(id, [file], cwd, operation);
     if ("kind" in file && file.kind === "retainedEvidence") {
-      const source = retained.find(
-        (entry) => !("result" in entry) && entry.ref === file.ref,
-      );
-      if (!source || "result" in source)
-        throw new Error("Retained evidence source is unavailable");
+      const source = retained.find((entry) => !("result" in entry) && entry.ref === file.ref);
+      if (!source || "result" in source) throw new Error("Retained evidence source is unavailable");
       return [
         persistRequiredEvidenceSnapshot(
           id,
@@ -199,10 +184,7 @@ export type LeadProjectHost = {
   acquireProcessLock: typeof import("../lock.ts").acquireProcessLock;
   currentManager(ctx: ExtensionContext): Promise<ManagerDescriptor | undefined>;
   managerLease(): ManagerLease | undefined;
-  sameManagerDescriptor(
-    left: ManagerDescriptor,
-    right: ManagerDescriptor,
-  ): boolean;
+  sameManagerDescriptor(left: ManagerDescriptor, right: ManagerDescriptor): boolean;
   worktreeGroupScope: typeof import("../herdr.ts").worktreeGroupScope;
   localRepositoryScope?: typeof localRepositoryScope;
   listAgents(ctx: ExtensionContext): Promise<{ agents: HerdrRecord[] }>;
@@ -235,22 +217,11 @@ export type LeadProjectHost = {
   prepareCoordinationInput: ReturnType<
     typeof import("./coordination.ts").createLeadCoordinationRuntime
   >["prepareCoordinationInput"];
-  appendDurableError(
-    pi: ExtensionAPI,
-    ctx: ExtensionContext,
-    kind: string,
-    error: unknown,
-  ): void;
-  currentProjectAssignment(
-    ctx: ExtensionContext,
-  ): Promise<ProjectAssignment | undefined>;
+  appendDurableError(pi: ExtensionAPI, ctx: ExtensionContext, kind: string, error: unknown): void;
+  currentProjectAssignment(ctx: ExtensionContext): Promise<ProjectAssignment | undefined>;
   writeProjectAssignment: typeof import("../supervision.ts").writeProjectAssignment;
   liveLead(ctx: ExtensionContext, sessionId: string): Promise<HerdrRecord[]>;
-  liveAgent(
-    ctx: ExtensionContext,
-    sessionId: string,
-    sessionPath?: string,
-  ): Promise<HerdrRecord[]>;
+  liveAgent(ctx: ExtensionContext, sessionId: string, sessionPath?: string): Promise<HerdrRecord[]>;
   runHerdr: typeof import("../herdr.ts").runHerdr;
   startHerdrCoordinatorInPane?: typeof import("../herdr.ts").startHerdrCoordinatorInPane;
   prepareHerdrCoordinatorPane?: typeof import("../herdr.ts").prepareHerdrCoordinatorPane;
@@ -267,9 +238,7 @@ export type LeadProjectHost = {
   inspectHerdrAgent: typeof import("../herdr.ts").inspectHerdrAgent;
   readPersistedTranscript: (
     target: Pick<ManagedAgentState, "piSessionId" | "piSessionFile">,
-  ) => ReturnType<
-    typeof import("../agent-controller.ts").readPersistedTranscript
-  >;
+  ) => ReturnType<typeof import("../agent-controller.ts").readPersistedTranscript>;
   stopHerdrAgentPreservingPane: typeof import("../herdr.ts").stopHerdrAgentPreservingPane;
   expectedSession(id: string, path?: string): ExpectedSession;
   herdrSessionSnapshot: typeof import("../herdr.ts").herdrSessionSnapshot;
@@ -279,10 +248,7 @@ export type LeadProjectHost = {
   readLeadCoordinationState: typeof import("../supervision.ts").readLeadCoordinationState;
   requireCompatibleBuild: typeof import("../compatibility.ts").requireCompatibleBuild;
   HERDSMAN_BUILD: RuntimeBuild;
-  supervisedSessionFile(
-    agent: HerdrRecord,
-    sessionId: string,
-  ): string | undefined;
+  supervisedSessionFile(agent: HerdrRecord, sessionId: string): string | undefined;
   sameObservedSessionPath: typeof sameObservedSessionPath;
   withProjectAssignmentLock<T>(
     repoKey: string,
@@ -345,19 +311,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
   };
   const persistActiveStopClosures = async (
     ctx: ExtensionContext,
-    closures: NonNullable<
-      import("../agent-controller.ts").StopOwnedAgentsResult["closures"]
-    >,
+    closures: NonNullable<import("../agent-controller.ts").StopOwnedAgentsResult["closures"]>,
   ) => {
     let persisted = 0;
     const owner = ctx.sessionManager.getSessionId();
     for (const closed of closures) {
       if (closed.state.ownerSessionId !== owner) continue;
-      const proof = stopClosureProof(
-        ctx.sessionManager.getBranch(),
-        owner,
-        closed,
-      );
+      const proof = stopClosureProof(ctx.sessionManager.getBranch(), owner, closed);
       if (proof) {
         await host.pi.appendEntry(stopClosureEntry, { version: 1, proof });
         const entries = ctx.sessionManager.getEntries() as readonly any[];
@@ -371,8 +331,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           entries.filter(saved).length === 1 &&
           branch.filter(saved).length === 1 &&
           stopClosureProof(branch, owner, closed) &&
-          JSON.stringify(stopClosureProof(branch, owner, closed)) ===
-            JSON.stringify(proof)
+          JSON.stringify(stopClosureProof(branch, owner, closed)) === JSON.stringify(proof)
         )
           persisted++;
       }
@@ -381,9 +340,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
   };
   const persistNestedStopClosures = async (
     ctx: ExtensionContext,
-    closures: NonNullable<
-      import("../agent-controller.ts").StopOwnedAgentsResult["closures"]
-    >,
+    closures: NonNullable<import("../agent-controller.ts").StopOwnedAgentsResult["closures"]>,
   ): Promise<number> => {
     let persisted = 0;
     const root = ctx.sessionManager.getSessionId();
@@ -402,10 +359,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       try {
         const canonical = realpathSync(path);
         release = claimSessionActivationLock(canonical);
-        if (
-          !(await stoppedClosureOwner(ctx, owner, root, closures, ctx.signal))
-        )
-          continue;
+        if (!(await stoppedClosureOwner(ctx, owner, root, closures, ctx.signal))) continue;
         const manager = host.SessionManager.open(canonical);
         if (
           manager.getSessionId() !== owner ||
@@ -445,28 +399,21 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     ctx: ExtensionContext,
     owner: string,
     leadSessionId: string,
-    closures: NonNullable<
-      import("../agent-controller.ts").StopOwnedAgentsResult["closures"]
-    >,
+    closures: NonNullable<import("../agent-controller.ts").StopOwnedAgentsResult["closures"]>,
     signal?: AbortSignal,
   ): Promise<boolean> => {
-    if (owner === leadSessionId)
-      return (await host.liveLead(ctx, leadSessionId)).length === 0;
+    if (owner === leadSessionId) return (await host.liveLead(ctx, leadSessionId)).length === 0;
     const parent = closures.find(({ state }) => state.piSessionId === owner);
     if (!parent) return false;
     const snapshot = await host.herdrSessionSnapshot(host.pi, ctx, signal);
     if (!Array.isArray(snapshot?.agents)) return false;
-    return !snapshot.agents.some(
-      (agent: HerdrRecord) => host.herdrSessionId(agent) === owner,
-    );
+    return !snapshot.agents.some((agent: HerdrRecord) => host.herdrSessionId(agent) === owner);
   };
   const persistForeignStopClosures = async (
     ctx: ExtensionContext,
     target: HerdrRecord,
     ownerSessionId: string,
-    closures: NonNullable<
-      import("../agent-controller.ts").StopOwnedAgentsResult["closures"]
-    >,
+    closures: NonNullable<import("../agent-controller.ts").StopOwnedAgentsResult["closures"]>,
     signal?: AbortSignal,
   ): Promise<number> => {
     if (!closures.length) return 0;
@@ -486,16 +433,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       try {
         const canonical = realpathSync(ownerFile);
         release = claimSessionActivationLock(canonical);
-        if (
-          !(await stoppedClosureOwner(
-            ctx,
-            owner,
-            ownerSessionId,
-            closures,
-            signal,
-          ))
-        )
-          continue;
+        if (!(await stoppedClosureOwner(ctx, owner, ownerSessionId, closures, signal))) continue;
         const manager = host.SessionManager.open(canonical);
         if (
           manager.getSessionId() !== owner ||
@@ -506,16 +444,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         const proof = stopClosureProof(manager.getBranch(), owner, closed);
         if (!proof) continue;
         // Recheck exact owner absence while activation is excluded, before the write.
-        if (
-          !(await stoppedClosureOwner(
-            ctx,
-            owner,
-            ownerSessionId,
-            closures,
-            signal,
-          ))
-        )
-          continue;
+        if (!(await stoppedClosureOwner(ctx, owner, ownerSessionId, closures, signal))) continue;
         manager.appendCustomEntry(stopClosureEntry, { version: 1, proof });
         const entries = manager.getEntries() as readonly any[];
         const branch = manager.getBranch() as readonly any[];
@@ -534,13 +463,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               entry.data?.version === 1 &&
               JSON.stringify(entry.data.proof) === JSON.stringify(proof),
           ) &&
-          (await stoppedClosureOwner(
-            ctx,
-            owner,
-            ownerSessionId,
-            closures,
-            signal,
-          ))
+          (await stoppedClosureOwner(ctx, owner, ownerSessionId, closures, signal))
         )
           persisted++;
       } catch {
@@ -565,8 +488,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       signal,
       heldLocks,
     );
-    if (!result.complete)
-      throw new Error(`Agent-tree cleanup failed: ${result.summary}`);
+    if (!result.complete) throw new Error(`Agent-tree cleanup failed: ${result.summary}`);
     await host.stopProjectLeadPane(ctx, target, session, signal);
     if ((await host.liveLead(ctx, session)).length)
       throw new Error("Lead remains live after stop; work was preserved");
@@ -593,18 +515,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
   ) => {
     const manager = await host.currentManager(ctx);
     const lease = host.managerLease();
-    if (
-      !manager ||
-      !lease ||
-      !host.sameManagerDescriptor(manager, lease.descriptor)
-    )
+    if (!manager || !lease || !host.sameManagerDescriptor(manager, lease.descriptor))
       throw new Error("Manager lease is no longer active");
-    const scope = await host.worktreeGroupScope(
-      host.pi,
-      ctx,
-      manager.workspaceId,
-      signal,
-    );
+    const scope = await host.worktreeGroupScope(host.pi, ctx, manager.workspaceId, signal);
     const assignments = host.findProjectAssignmentBySession(
       host.supervisionRuntime(),
       manager.repoKey,
@@ -622,23 +535,16 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error("Project assignment changed before stop");
     const close = async (heldLocks: ReadonlySet<string>) => {
       if (
-        host.readProjectAssignment(
-          host.supervisionRuntime(),
-          manager.repoKey,
-          assignment.branch,
-        )?.id !== assignment.id
+        host.readProjectAssignment(host.supervisionRuntime(), manager.repoKey, assignment.branch)
+          ?.id !== assignment.id
       )
         throw new Error("Project assignment changed before close");
       const live = (await host.liveLead(ctx, session)).filter((agent: any) =>
         scope.workspaceIds.includes(agent.workspace_id),
       );
-      if (live.length !== 1)
-        throw new Error("Exact live Lead was not found or is ambiguous");
+      if (live.length !== 1) throw new Error("Exact live Lead was not found or is ambiguous");
       if (expectedLead) {
-        const state = host.readLeadCoordinationState(
-          host.supervisionRuntime(),
-          session,
-        );
+        const state = host.readLeadCoordinationState(host.supervisionRuntime(), session);
         if (
           live[0].workspace_id !== expectedLead.workspaceId ||
           live[0].pane_id !== expectedLead.paneId ||
@@ -657,20 +563,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       if (
         !currentManager ||
         !host.sameManagerDescriptor(currentManager, manager) ||
-        host.readProjectAssignment(
-          host.supervisionRuntime(),
-          manager.repoKey,
-          assignment.branch,
-        )?.id !== assignment.id
+        host.readProjectAssignment(host.supervisionRuntime(), manager.repoKey, assignment.branch)
+          ?.id !== assignment.id
       )
         throw new Error("Manager or project assignment changed before stop");
-      const stopped = await stopExecution(
-        session,
-        live[0],
-        ctx,
-        signal,
-        heldLocks,
-      );
+      const stopped = await stopExecution(session, live[0], ctx, signal, heldLocks);
       return {
         content: [
           {
@@ -686,29 +583,25 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         },
       };
     };
-    return host.withProjectWorkLock(
-      `${manager.repoKey}\0${assignment.branch}`,
-      async () => {
-        const preflight = (await host.liveLead(ctx, session)).filter(
-          (agent: any) => scope.workspaceIds.includes(agent.workspace_id),
-        );
-        if (preflight.length !== 1)
-          throw new Error("Exact live Lead was not found or is ambiguous");
-        return host.withQuiescedTree(
-          ctx,
-          session,
-          preflight[0].workspace_id,
-          (heldLocks) =>
-            host.withProjectAssignmentLock(
-              manager.repoKey,
-              assignment.branch,
-              () => close(heldLocks),
-              signal,
-            ),
-          signal,
-        );
-      },
-    );
+    return host.withProjectWorkLock(`${manager.repoKey}\0${assignment.branch}`, async () => {
+      const preflight = (await host.liveLead(ctx, session)).filter((agent: any) =>
+        scope.workspaceIds.includes(agent.workspace_id),
+      );
+      if (preflight.length !== 1) throw new Error("Exact live Lead was not found or is ambiguous");
+      return host.withQuiescedTree(
+        ctx,
+        session,
+        preflight[0].workspace_id,
+        (heldLocks) =>
+          host.withProjectAssignmentLock(
+            manager.repoKey,
+            assignment.branch,
+            () => close(heldLocks),
+            signal,
+          ),
+        signal,
+      );
+    });
   };
   const stopCoordinatorExecution = async (
     target: {
@@ -725,10 +618,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
   ) => {
     const verify = async () => {
       await revalidate();
-      const state = host.readLeadCoordinationState(
-        host.supervisionRuntime(),
-        target.sessionId,
-      );
+      const state = host.readLeadCoordinationState(host.supervisionRuntime(), target.sessionId);
       if (
         !state ||
         state.piSessionId !== target.sessionId ||
@@ -742,8 +632,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           agent.pane_id === target.paneId &&
           agent.tab_id === target.tabId,
       );
-      if (live.length !== 1)
-        throw new Error("Exact Coordinator execution is missing or ambiguous");
+      if (live.length !== 1) throw new Error("Exact Coordinator execution is missing or ambiguous");
       return live[0] as HerdrRecord;
     };
     await verify();
@@ -753,13 +642,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       target.workspaceId,
       async (heldLocks) => {
         const exact = await verify();
-        const stopped = await stopExecution(
-          target.sessionId,
-          exact,
-          ctx,
-          signal,
-          heldLocks,
-        );
+        const stopped = await stopExecution(target.sessionId, exact, ctx, signal, heldLocks);
         return {
           closures: stopped.result.closures?.length ?? 0,
           continuityProofs: stopped.persisted,
@@ -776,26 +659,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
   ) => {
     const manager = await host.currentManager(ctx);
     const lease = host.managerLease();
-    if (
-      !manager ||
-      !lease ||
-      !host.sameManagerDescriptor(manager, lease.descriptor)
-    )
+    if (!manager || !lease || !host.sameManagerDescriptor(manager, lease.descriptor))
       throw new Error("Manager lease is no longer active");
-    const group = await host.worktreeGroupScope(
-      host.pi,
-      ctx,
-      manager.workspaceId,
-      signal,
-    );
+    const group = await host.worktreeGroupScope(host.pi, ctx, manager.workspaceId, signal);
     if (group.repoKey !== manager.repoKey)
       throw new Error("Manager worktree group is not authoritative");
-    const localScope = await localRepositoryScope(
-      host.pi,
-      ctx,
-      manager.workspaceId,
-      signal,
-    );
+    const localScope = await localRepositoryScope(host.pi, ctx, manager.workspaceId, signal);
     if (!localScope.isPrimary || localScope.repoKey !== manager.repoKey)
       throw new Error("Manager checkout is not the verified primary checkout");
     const topology = await host.runHerdr(
@@ -807,10 +676,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (
       topology?.source?.repo_key !== manager.repoKey ||
       typeof topology?.source?.source_checkout_path !== "string" ||
-      !sameDirectory(
-        topology.source.source_checkout_path,
-        localScope.checkoutPath,
-      ) ||
+      !sameDirectory(topology.source.source_checkout_path, localScope.checkoutPath) ||
       !Array.isArray(topology?.worktrees)
     )
       throw new Error("Herdr worktree topology is not authoritative");
@@ -820,16 +686,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (assignments.length !== 1)
       throw new Error("Branch is not one exact current project assignment");
     const assignment = assignments[0]!;
-    const current = host.readProjectAssignment(
-      host.supervisionRuntime(),
-      manager.repoKey,
-      branch,
-    );
-    if (
-      !current ||
-      current.id !== assignment.id ||
-      current.repoKey !== manager.repoKey
-    )
+    const current = host.readProjectAssignment(host.supervisionRuntime(), manager.repoKey, branch);
+    if (!current || current.id !== assignment.id || current.repoKey !== manager.repoKey)
       throw new Error("Project assignment changed during removal");
     let sessionCwd: string | undefined;
     if (assignment.piSessionFile) {
@@ -838,16 +696,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         if (session.getSessionId() !== assignment.id) throw new Error();
         sessionCwd = session.getCwd();
       } catch {
-        throw new Error(
-          "Persisted project session provenance is unavailable; worktree preserved",
-        );
+        throw new Error("Persisted project session provenance is unavailable; worktree preserved");
       }
     }
-    const placement = resolveAssignmentCheckout(
-      assignment,
-      topology.worktrees,
-      sessionCwd,
-    );
+    const placement = resolveAssignmentCheckout(assignment, topology.worktrees, sessionCwd);
     if (placement.status !== "matched")
       throw new Error(
         `Assigned checkout is not verified (${placement.reason}); worktree preserved`,
@@ -885,11 +737,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         signal,
         timeout: 10_000,
       }),
-      host.pi.exec(
-        "git",
-        ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-        { cwd: checkoutPath, signal, timeout: 10_000 },
-      ),
+      host.pi.exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+        cwd: checkoutPath,
+        signal,
+        timeout: 10_000,
+      }),
       host.pi.exec("git", ["worktree", "list", "--porcelain", "-z"], {
         cwd: topology.source.source_checkout_path,
         signal,
@@ -898,9 +750,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     ]);
     let gitWorktrees: ReturnType<typeof parseGitWorktreeInventory>;
     try {
-      gitWorktrees = parseGitWorktreeInventory(
-        String(gitInventory.stdout ?? ""),
-      );
+      gitWorktrees = parseGitWorktreeInventory(String(gitInventory.stdout ?? ""));
       if (
         gitRoot.code !== 0 ||
         gitRoot.killed ||
@@ -912,13 +762,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         gitInventory.killed ||
         gitInventory.stderr?.trim() ||
         !sameDirectory(String(gitRoot.stdout ?? "").trim(), checkoutPath) ||
-        !sameDirectory(
-          String(gitCommonDir.stdout ?? "").trim(),
-          manager.repoKey,
-        ) ||
+        !sameDirectory(String(gitCommonDir.stdout ?? "").trim(), manager.repoKey) ||
         !gitWorktrees ||
-        gitWorktrees.filter((entry) => sameDirectory(entry.path, checkoutPath))
-          .length !== 1
+        gitWorktrees.filter((entry) => sameDirectory(entry.path, checkoutPath)).length !== 1
       )
         throw new Error();
     } catch {
@@ -926,20 +772,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         "Git could not verify the exact linked checkout and repository; worktree preserved",
       );
     }
-    const git = await host.pi.exec(
-      "git",
-      ["status", "--porcelain=v1", "--untracked-files=all"],
-      { cwd: checkoutPath, signal, timeout: 10_000 },
-    );
-    if (
-      git.code !== 0 ||
-      git.killed ||
-      git.stderr?.trim() ||
-      git.stdout?.trim()
-    )
-      throw new Error(
-        "Checkout is dirty or could not be verified; worktree preserved",
-      );
+    const git = await host.pi.exec("git", ["status", "--porcelain=v1", "--untracked-files=all"], {
+      cwd: checkoutPath,
+      signal,
+      timeout: 10_000,
+    });
+    if (git.code !== 0 || git.killed || git.stderr?.trim() || git.stdout?.trim())
+      throw new Error("Checkout is dirty or could not be verified; worktree preserved");
     if (checkSubmoduleRemovalEligibility) {
       const gitOptions = { cwd: checkoutPath, signal, timeout: 10_000 };
       const metadata = await host.pi.exec(
@@ -961,56 +800,33 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         /[\r\n]/u.test(modulesPath) ||
         !isAbsolute(modulesPath)
       )
-        throw new Error(
-          "Git submodule metadata could not be verified; worktree preserved",
-        );
+        throw new Error("Git submodule metadata could not be verified; worktree preserved");
       let hasModulesDirectory = false;
       try {
         hasModulesDirectory = statSync(modulesPath).isDirectory();
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-          throw new Error(
-            "Git submodule metadata could not be inspected; worktree preserved",
-          );
+          throw new Error("Git submodule metadata could not be inspected; worktree preserved");
       }
       if (hasModulesDirectory)
-        throw new Error(
-          "Worktree retains Git submodule metadata; assigned Lead was not stopped",
-        );
-      const submodules = await host.pi.exec(
-        "git",
-        ["submodule", "status"],
-        gitOptions,
-      );
-      if (
-        submodules.code !== 0 ||
-        submodules.killed ||
-        submodules.stderr?.trim()
-      )
-        throw new Error(
-          "Git submodule state could not be verified; worktree preserved",
-        );
+        throw new Error("Worktree retains Git submodule metadata; assigned Lead was not stopped");
+      const submodules = await host.pi.exec("git", ["submodule", "status"], gitOptions);
+      if (submodules.code !== 0 || submodules.killed || submodules.stderr?.trim())
+        throw new Error("Git submodule state could not be verified; worktree preserved");
       if (
         String(submodules.stdout ?? "")
           .split(/\r?\n/u)
           .some((line) => line.length > 0 && line[0] !== "-")
       )
-        throw new Error(
-          "Worktree contains initialized submodules; assigned Lead was not stopped",
-        );
+        throw new Error("Worktree contains initialized submodules; assigned Lead was not stopped");
     }
     const leads = await host.liveLead(ctx, assignment.id);
     if (leads.length > 1)
-      throw new Error(
-        "Assigned Lead identity is ambiguous; worktree preserved",
-      );
+      throw new Error("Assigned Lead identity is ambiguous; worktree preserved");
     let leadInstanceId: string | undefined;
     if (leads.length === 1) {
       const lead = leads[0]!;
-      const state = host.readLeadCoordinationState(
-        host.supervisionRuntime(),
-        assignment.id,
-      );
+      const state = host.readLeadCoordinationState(host.supervisionRuntime(), assignment.id);
       host.requireCompatibleBuild(
         host.HERDSMAN_BUILD,
         state?.build,
@@ -1024,9 +840,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         (state.role ?? "lead") !== "lead" ||
         state.piSessionId !== assignment.id
       )
-        throw new Error(
-          "Assigned Lead placement is ambiguous; worktree preserved",
-        );
+        throw new Error("Assigned Lead placement is ambiguous; worktree preserved");
       leadInstanceId = state.instanceId;
     }
     return {
@@ -1034,8 +848,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       assignment,
       worktree,
       checkoutPath,
-      checkedOutBranch:
-        typeof worktree.branch === "string" ? worktree.branch : undefined,
+      checkedOutBranch: typeof worktree.branch === "string" ? worktree.branch : undefined,
       sourceCheckoutPath: topology.source.source_checkout_path,
       liveLead: leads[0],
       leadInstanceId,
@@ -1127,9 +940,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (!data || typeof data !== "object" || Array.isArray(data)) return;
     const value = data as Record<string, unknown>;
     const valid = (key: string, max: number) =>
-      typeof value[key] === "string" &&
-      value[key].length > 0 &&
-      value[key].length <= max;
+      typeof value[key] === "string" && value[key].length > 0 && value[key].length <= max;
     if (
       value.version !== 1 ||
       !valid("id", 128) ||
@@ -1140,11 +951,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     )
       return;
     if (value.action === "resolve") {
-      if (
-        Object.keys(value).some(
-          (key) => !["version", "action", "id", "sessionId"].includes(key),
-        )
-      )
+      if (Object.keys(value).some((key) => !["version", "action", "id", "sessionId"].includes(key)))
         return;
       return {
         action: "resolve",
@@ -1191,8 +998,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     const pending = new Map<string, PendingRemoval>();
     const sessionId = ctx.sessionManager.getSessionId();
     for (const entry of ctx.sessionManager.getBranch()) {
-      if (entry.type !== "custom" || entry.customType !== REMOVAL_ENTRY)
-        continue;
+      if (entry.type !== "custom" || entry.customType !== REMOVAL_ENTRY) continue;
       const event = parseRemovalEntry(entry.data);
       if (!event || event.sessionId !== sessionId) continue;
       if (event.action === "request") pending.set(event.branch, event);
@@ -1204,10 +1010,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
   };
   const updateRemovalStatus = (ctx: ExtensionContext) => {
     if (!ctx.hasUI || typeof ctx.ui.setStatus !== "function") return;
-    const count =
-      activeRole() === "manager" && host.managerLease()
-        ? pendingRemovals(ctx).size
-        : 0;
+    const count = activeRole() === "manager" && host.managerLease() ? pendingRemovals(ctx).size : 0;
     ctx.ui.setStatus(
       "pi-herdsman-removal",
       count
@@ -1215,10 +1018,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         : undefined,
     );
   };
-  const resolvePendingRemoval = (
-    request: PendingRemoval,
-    ctx: ExtensionContext,
-  ) => {
+  const resolvePendingRemoval = (request: PendingRemoval, ctx: ExtensionContext) => {
     host.pi.appendEntry(REMOVAL_ENTRY, {
       version: 1,
       action: "resolve",
@@ -1243,16 +1043,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     } = {},
   ) => {
     const pendingAtStart = pendingRemovals(ctx).get(branch);
-    if (activeRole() !== "manager")
-      throw new Error("Only Managers can remove project worktrees");
+    if (activeRole() !== "manager") throw new Error("Only Managers can remove project worktrees");
     const operationSignal = signal ?? ctx.signal;
     operationSignal?.throwIfAborted();
-    const candidate = await inspectRemovalTarget(
-      branch,
-      ctx,
-      operationSignal,
-      true,
-    );
+    const candidate = await inspectRemovalTarget(branch, ctx, operationSignal, true);
     if (
       options.expected &&
       (options.expected.repoKey !== candidate.manager.repoKey ||
@@ -1264,15 +1058,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     )
       throw new Error("Pending removal target changed; worktree preserved");
     await assertNoUnrelatedPiExecution(candidate, ctx, operationSignal);
-    const preauthorized = isWorktreeRemovalPreapproved(
-      candidate.manager.repoKey,
-    );
+    const preauthorized = isWorktreeRemovalPreapproved(candidate.manager.repoKey);
     const integrated = options.integration;
     const usedRemovalPreapproval = preauthorized && !integrated;
     const mergeAuthorized = () =>
-      !!integrated &&
-      effectiveMergePolicy(host.readConfig(), candidate.manager.repoKey)
-        .enabled;
+      !!integrated && effectiveMergePolicy(host.readConfig(), candidate.manager.repoKey).enabled;
     if (integrated) {
       if (
         !mergeAuthorized() ||
@@ -1280,34 +1070,24 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         integrated.targetPath !== candidate.sourceCheckoutPath ||
         !integrated.targetBranch
       )
-        throw new Error(
-          "Verified integration authorization is stale; worktree preserved",
-        );
+        throw new Error("Verified integration authorization is stale; worktree preserved");
       const [source, target] = await Promise.all([
         host.pi.exec("git", ["rev-parse", "HEAD"], {
           cwd: candidate.checkoutPath,
           signal: operationSignal,
           timeout: 10_000,
         }),
-        host.pi.exec(
-          "git",
-          ["merge-base", "--is-ancestor", integrated.sourceHead, "HEAD"],
-          {
-            cwd: candidate.sourceCheckoutPath,
-            signal: operationSignal,
-            timeout: 10_000,
-          },
-        ),
-      ]);
-      const branch = await host.pi.exec(
-        "git",
-        ["symbolic-ref", "--quiet", "--short", "HEAD"],
-        {
+        host.pi.exec("git", ["merge-base", "--is-ancestor", integrated.sourceHead, "HEAD"], {
           cwd: candidate.sourceCheckoutPath,
           signal: operationSignal,
           timeout: 10_000,
-        },
-      );
+        }),
+      ]);
+      const branch = await host.pi.exec("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], {
+        cwd: candidate.sourceCheckoutPath,
+        signal: operationSignal,
+        timeout: 10_000,
+      });
       if (
         source.code !== 0 ||
         String(source.stdout ?? "").trim() !== integrated.sourceHead ||
@@ -1318,14 +1098,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         branch.stderr?.trim() ||
         String(branch.stdout ?? "").trim() !== integrated.targetBranch
       )
-        throw new Error(
-          "Integrated source or target could not be reverified; worktree preserved",
-        );
+        throw new Error("Integrated source or target could not be reverified; worktree preserved");
     }
-    if (
-      usedRemovalPreapproval &&
-      !isWorktreeRemovalPreapproved(candidate.manager.repoKey)
-    )
+    if (usedRemovalPreapproval && !isWorktreeRemovalPreapproved(candidate.manager.repoKey))
       throw new Error("Project removal preauthorization was revoked");
     const bypass = preauthorized || !!integrated;
     if (!bypass && !ctx.hasUI)
@@ -1337,8 +1112,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             "Remove worktree",
             "",
             `Branch: ${branch}`,
-            ...(candidate.checkedOutBranch &&
-            candidate.checkedOutBranch !== branch
+            ...(candidate.checkedOutBranch && candidate.checkedOutBranch !== branch
               ? [`Checked-out branch: ${candidate.checkedOutBranch}`]
               : []),
             `Checkout: ${candidate.checkoutPath}`,
@@ -1365,327 +1139,267 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         ],
         details: { ok: false, action: "remove", branch, cancelled: true },
       };
-    return host.withProjectWorkLock(
-      `${candidate.manager.repoKey}\0${branch}`,
-      async () => {
-        let reopened = false;
-        let leadStopped = false;
-        const removed = await withCandidateLeadQuiesced(
-          candidate,
-          ctx,
-          operationSignal,
-          (heldLocks) =>
-            host
-              .withProjectAssignmentLock(
-                candidate.manager.repoKey,
-                branch,
-                async () => {
-                  operationSignal?.throwIfAborted();
-                  const current = await inspectRemovalTarget(
-                    branch,
-                    ctx,
-                    operationSignal,
-                    true,
-                  );
-                  if (
-                    current.assignment.id !== candidate.assignment.id ||
-                    !sameDirectory(
-                      current.checkoutPath,
-                      candidate.checkoutPath,
-                    ) ||
-                    !host.sameManagerDescriptor(
-                      current.manager,
-                      candidate.manager,
-                    )
-                  )
-                    throw new Error(
-                      "Removal target changed during confirmation; worktree preserved",
-                    );
-                  assertCandidateLeadUnchanged(candidate, current);
-                  if (
-                    (usedRemovalPreapproval &&
-                      !isWorktreeRemovalPreapproved(current.manager.repoKey)) ||
-                    (integrated &&
-                      (!mergeAuthorized() ||
-                        integrated.assignmentId !== current.assignment.id))
-                  )
-                    throw new Error(
-                      "Project removal preauthorization was revoked",
-                    );
-                  await assertNoUnrelatedPiExecution(
-                    current,
-                    ctx,
-                    operationSignal,
-                  );
-                  if (current.liveLead) {
-                    try {
-                      if (
-                        (usedRemovalPreapproval &&
-                          !isWorktreeRemovalPreapproved(
-                            current.manager.repoKey,
-                          )) ||
-                        (integrated && !mergeAuthorized())
-                      )
-                        throw new Error(
-                          "Project removal preauthorization was revoked",
-                        );
-                      await stopExecution(
-                        current.assignment.id,
-                        current.liveLead,
-                        ctx,
-                        operationSignal,
-                        heldLocks,
-                      );
-                      leadStopped = true;
-                    } catch (error) {
-                      throw new Error(
-                        `Managed execution could not be stopped; worktree was preserved: ${error instanceof Error ? error.message : String(error)}`,
-                      );
-                    }
-                  }
-                  const inventory = await host.herdrSessionSnapshot(
-                    host.pi,
-                    ctx,
-                    operationSignal,
-                  );
-                  const occupants = inventory.agents.filter(
-                    (agent) =>
-                      agent.workspace_id ===
-                        current.worktree.open_workspace_id &&
-                      host.isPiAgent(agent),
-                  );
-                  if (occupants.length)
-                    throw new Error(
-                      `${leadStopped ? "Assigned Lead stopped; " : ""}unrelated or remaining Pi execution occupies the worktree; removal was not attempted`,
-                    );
-                  let workspaceId = current.worktree.open_workspace_id;
-                  if (!workspaceId) {
-                    const opened = await host.runHerdr(
-                      host.pi,
-                      ctx,
-                      [
-                        "worktree",
-                        "open",
-                        "--workspace",
-                        current.manager.workspaceId,
-                        "--path",
-                        current.checkoutPath,
-                        "--no-focus",
-                      ],
-                      { signal: operationSignal },
-                    );
-                    workspaceId = opened?.workspace?.workspace_id;
-                    if (
-                      !workspaceId ||
-                      workspaceId === current.manager.workspaceId ||
-                      !sameDirectory(
-                        opened?.worktree?.path ?? "",
-                        current.checkoutPath,
-                      )
-                    )
-                      throw new Error(
-                        "Herdr reopened a different or ambiguous worktree; checkout preserved",
-                      );
-                    reopened = true;
-                  }
-                  let final: Awaited<ReturnType<typeof inspectRemovalTarget>>;
+    return host.withProjectWorkLock(`${candidate.manager.repoKey}\0${branch}`, async () => {
+      let reopened = false;
+      let leadStopped = false;
+      const removed = await withCandidateLeadQuiesced(
+        candidate,
+        ctx,
+        operationSignal,
+        (heldLocks) =>
+          host
+            .withProjectAssignmentLock(
+              candidate.manager.repoKey,
+              branch,
+              async () => {
+                operationSignal?.throwIfAborted();
+                const current = await inspectRemovalTarget(branch, ctx, operationSignal, true);
+                if (
+                  current.assignment.id !== candidate.assignment.id ||
+                  !sameDirectory(current.checkoutPath, candidate.checkoutPath) ||
+                  !host.sameManagerDescriptor(current.manager, candidate.manager)
+                )
+                  throw new Error("Removal target changed during confirmation; worktree preserved");
+                assertCandidateLeadUnchanged(candidate, current);
+                if (
+                  (usedRemovalPreapproval &&
+                    !isWorktreeRemovalPreapproved(current.manager.repoKey)) ||
+                  (integrated &&
+                    (!mergeAuthorized() || integrated.assignmentId !== current.assignment.id))
+                )
+                  throw new Error("Project removal preauthorization was revoked");
+                await assertNoUnrelatedPiExecution(current, ctx, operationSignal);
+                if (current.liveLead) {
                   try {
-                    final = await inspectRemovalTarget(
-                      branch,
-                      ctx,
-                      operationSignal,
-                      true,
-                    );
-                  } catch (error) {
-                    if (!leadStopped) throw error;
-                    throw new Error(
-                      `Assigned Lead stopped; checkout was preserved because final verification failed: ${error instanceof Error ? error.message : String(error)}`,
-                    );
-                  }
-                  if (
-                    final.assignment.id !== current.assignment.id ||
-                    final.worktree.open_workspace_id !== workspaceId ||
-                    !sameDirectory(final.checkoutPath, current.checkoutPath)
-                  )
-                    throw new Error(
-                      "Removal target changed before native removal; worktree preserved",
-                    );
-                  try {
-                    operationSignal?.throwIfAborted();
                     if (
                       (usedRemovalPreapproval &&
-                        !isWorktreeRemovalPreapproved(final.manager.repoKey)) ||
-                      (integrated &&
-                        (!mergeAuthorized() ||
-                          final.assignment.id !== integrated.assignmentId))
+                        !isWorktreeRemovalPreapproved(current.manager.repoKey)) ||
+                      (integrated && !mergeAuthorized())
                     )
-                      throw new Error(
-                        "Project removal preauthorization was revoked",
-                      );
-                    if (integrated) {
-                      const [source, target, targetBranch] = await Promise.all([
-                        host.pi.exec("git", ["rev-parse", "HEAD"], {
-                          cwd: final.checkoutPath,
+                      throw new Error("Project removal preauthorization was revoked");
+                    await stopExecution(
+                      current.assignment.id,
+                      current.liveLead,
+                      ctx,
+                      operationSignal,
+                      heldLocks,
+                    );
+                    leadStopped = true;
+                  } catch (error) {
+                    throw new Error(
+                      `Managed execution could not be stopped; worktree was preserved: ${error instanceof Error ? error.message : String(error)}`,
+                    );
+                  }
+                }
+                const inventory = await host.herdrSessionSnapshot(host.pi, ctx, operationSignal);
+                const occupants = inventory.agents.filter(
+                  (agent) =>
+                    agent.workspace_id === current.worktree.open_workspace_id &&
+                    host.isPiAgent(agent),
+                );
+                if (occupants.length)
+                  throw new Error(
+                    `${leadStopped ? "Assigned Lead stopped; " : ""}unrelated or remaining Pi execution occupies the worktree; removal was not attempted`,
+                  );
+                let workspaceId = current.worktree.open_workspace_id;
+                if (!workspaceId) {
+                  const opened = await host.runHerdr(
+                    host.pi,
+                    ctx,
+                    [
+                      "worktree",
+                      "open",
+                      "--workspace",
+                      current.manager.workspaceId,
+                      "--path",
+                      current.checkoutPath,
+                      "--no-focus",
+                    ],
+                    { signal: operationSignal },
+                  );
+                  workspaceId = opened?.workspace?.workspace_id;
+                  if (
+                    !workspaceId ||
+                    workspaceId === current.manager.workspaceId ||
+                    !sameDirectory(opened?.worktree?.path ?? "", current.checkoutPath)
+                  )
+                    throw new Error(
+                      "Herdr reopened a different or ambiguous worktree; checkout preserved",
+                    );
+                  reopened = true;
+                }
+                let final: Awaited<ReturnType<typeof inspectRemovalTarget>>;
+                try {
+                  final = await inspectRemovalTarget(branch, ctx, operationSignal, true);
+                } catch (error) {
+                  if (!leadStopped) throw error;
+                  throw new Error(
+                    `Assigned Lead stopped; checkout was preserved because final verification failed: ${error instanceof Error ? error.message : String(error)}`,
+                  );
+                }
+                if (
+                  final.assignment.id !== current.assignment.id ||
+                  final.worktree.open_workspace_id !== workspaceId ||
+                  !sameDirectory(final.checkoutPath, current.checkoutPath)
+                )
+                  throw new Error(
+                    "Removal target changed before native removal; worktree preserved",
+                  );
+                try {
+                  operationSignal?.throwIfAborted();
+                  if (
+                    (usedRemovalPreapproval &&
+                      !isWorktreeRemovalPreapproved(final.manager.repoKey)) ||
+                    (integrated &&
+                      (!mergeAuthorized() || final.assignment.id !== integrated.assignmentId))
+                  )
+                    throw new Error("Project removal preauthorization was revoked");
+                  if (integrated) {
+                    const [source, target, targetBranch] = await Promise.all([
+                      host.pi.exec("git", ["rev-parse", "HEAD"], {
+                        cwd: final.checkoutPath,
+                        signal: operationSignal,
+                        timeout: 10_000,
+                      }),
+                      host.pi.exec(
+                        "git",
+                        ["merge-base", "--is-ancestor", integrated.sourceHead, "HEAD"],
+                        {
+                          cwd: final.sourceCheckoutPath,
                           signal: operationSignal,
                           timeout: 10_000,
-                        }),
-                        host.pi.exec(
-                          "git",
-                          [
-                            "merge-base",
-                            "--is-ancestor",
-                            integrated.sourceHead,
-                            "HEAD",
-                          ],
-                          {
-                            cwd: final.sourceCheckoutPath,
-                            signal: operationSignal,
-                            timeout: 10_000,
-                          },
-                        ),
-                        host.pi.exec(
-                          "git",
-                          ["symbolic-ref", "--quiet", "--short", "HEAD"],
-                          {
-                            cwd: final.sourceCheckoutPath,
-                            signal: operationSignal,
-                            timeout: 10_000,
-                          },
-                        ),
-                      ]);
-                      if (
-                        source.code !== 0 ||
-                        source.killed ||
-                        String(source.stdout ?? "").trim() !==
-                          integrated.sourceHead ||
-                        target.code !== 0 ||
-                        target.killed ||
-                        targetBranch.code !== 0 ||
-                        targetBranch.killed ||
-                        targetBranch.stderr?.trim() ||
-                        String(targetBranch.stdout ?? "").trim() !==
-                          integrated.targetBranch
-                      )
-                        throw new Error(
-                          "Integrated source or target changed before removal; worktree preserved",
-                        );
-                    }
-                    return {
-                      result: await host.runHerdr(
-                        host.pi,
-                        ctx,
-                        ["worktree", "remove", "--workspace", workspaceId],
-                        { signal: operationSignal, timeout: 180_000 },
+                        },
                       ),
-                    };
-                  } catch (error) {
-                    return {
-                      error:
-                        error instanceof Error ? error.message : String(error),
-                      commandInterrupted:
-                        error instanceof OperationError &&
-                        error.detail.details?.killed === true,
-                      reopened,
-                    };
+                      host.pi.exec("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], {
+                        cwd: final.sourceCheckoutPath,
+                        signal: operationSignal,
+                        timeout: 10_000,
+                      }),
+                    ]);
+                    if (
+                      source.code !== 0 ||
+                      source.killed ||
+                      String(source.stdout ?? "").trim() !== integrated.sourceHead ||
+                      target.code !== 0 ||
+                      target.killed ||
+                      targetBranch.code !== 0 ||
+                      targetBranch.killed ||
+                      targetBranch.stderr?.trim() ||
+                      String(targetBranch.stdout ?? "").trim() !== integrated.targetBranch
+                    )
+                      throw new Error(
+                        "Integrated source or target changed before removal; worktree preserved",
+                      );
                   }
-                },
-                operationSignal,
-              )
-              .catch((error) => {
-                if (!leadStopped && !reopened) throw error;
-                throw new Error(
-                  `${leadStopped ? "Assigned Lead stopped; " : ""}${reopened ? "Herdr workspace reopened; " : ""}worktree removal did not complete: ${error instanceof Error ? error.message : String(error)}`,
-                );
-              }),
+                  return {
+                    result: await host.runHerdr(
+                      host.pi,
+                      ctx,
+                      ["worktree", "remove", "--workspace", workspaceId],
+                      { signal: operationSignal, timeout: 180_000 },
+                    ),
+                  };
+                } catch (error) {
+                  return {
+                    error: error instanceof Error ? error.message : String(error),
+                    commandInterrupted:
+                      error instanceof OperationError && error.detail.details?.killed === true,
+                    reopened,
+                  };
+                }
+              },
+              operationSignal,
+            )
+            .catch((error) => {
+              if (!leadStopped && !reopened) throw error;
+              throw new Error(
+                `${leadStopped ? "Assigned Lead stopped; " : ""}${reopened ? "Herdr workspace reopened; " : ""}worktree removal did not complete: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }),
+      );
+      let assignmentRetired = false;
+      let retirementError: string | undefined;
+      const checkoutState = gitPathStatus(candidate.checkoutPath);
+      const checkoutRemoved = checkoutState === "absent";
+      try {
+        await host.reconcileProjectAssignments(
+          ctx,
+          candidate.manager.repoKey,
+          candidate.manager.workspaceId,
+          candidate.sourceCheckoutPath,
+          true,
+          branch,
+          false,
+          integrated?.assignmentId,
         );
-        let assignmentRetired = false;
-        let retirementError: string | undefined;
-        const checkoutState = gitPathStatus(candidate.checkoutPath);
-        const checkoutRemoved = checkoutState === "absent";
+        assignmentRetired = !host.readProjectAssignment(
+          host.supervisionRuntime(),
+          candidate.manager.repoKey,
+          branch,
+        );
+      } catch (error) {
+        assignmentRetired = !host.readProjectAssignment(
+          host.supervisionRuntime(),
+          candidate.manager.repoKey,
+          branch,
+        );
+        retirementError = error instanceof Error ? error.message : String(error);
+      }
+      let pendingResolutionError: string | undefined;
+      const currentPending = pendingRemovals(ctx).get(branch);
+      if (
+        checkoutRemoved &&
+        pendingAtStart &&
+        pendingAtStart.repoKey === candidate.manager.repoKey &&
+        pendingAtStart.assignmentId === candidate.assignment.id &&
+        pendingAtStart.checkoutPath === candidate.checkoutPath &&
+        currentPending?.id === pendingAtStart.id &&
+        currentPending.repoKey === pendingAtStart.repoKey &&
+        currentPending.assignmentId === pendingAtStart.assignmentId &&
+        currentPending.checkoutPath === pendingAtStart.checkoutPath
+      ) {
         try {
-          await host.reconcileProjectAssignments(
-            ctx,
-            candidate.manager.repoKey,
-            candidate.manager.workspaceId,
-            candidate.sourceCheckoutPath,
-            true,
-            branch,
-            false,
-            integrated?.assignmentId,
-          );
-          assignmentRetired = !host.readProjectAssignment(
-            host.supervisionRuntime(),
-            candidate.manager.repoKey,
-            branch,
-          );
+          resolvePendingRemoval(pendingAtStart, ctx);
         } catch (error) {
-          assignmentRetired = !host.readProjectAssignment(
-            host.supervisionRuntime(),
-            candidate.manager.repoKey,
-            branch,
-          );
-          retirementError =
-            error instanceof Error ? error.message : String(error);
+          pendingResolutionError = error instanceof Error ? error.message : String(error);
         }
-        let pendingResolutionError: string | undefined;
-        const currentPending = pendingRemovals(ctx).get(branch);
-        if (
-          checkoutRemoved &&
-          pendingAtStart &&
-          pendingAtStart.repoKey === candidate.manager.repoKey &&
-          pendingAtStart.assignmentId === candidate.assignment.id &&
-          pendingAtStart.checkoutPath === candidate.checkoutPath &&
-          currentPending?.id === pendingAtStart.id &&
-          currentPending.repoKey === pendingAtStart.repoKey &&
-          currentPending.assignmentId === pendingAtStart.assignmentId &&
-          currentPending.checkoutPath === pendingAtStart.checkoutPath
-        ) {
-          try {
-            resolvePendingRemoval(pendingAtStart, ctx);
-          } catch (error) {
-            pendingResolutionError =
-              error instanceof Error ? error.message : String(error);
-          }
-        }
-        const mayFinishLater =
-          "error" in removed && removed.commandInterrupted
-            ? " Herdr may still complete removal after the CLI stopped."
-            : "";
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: checkoutRemoved
-                ? assignmentRetired
-                  ? `${leadStopped ? "Assigned Lead stopped; " : ""}removed checkout for ${branch}; assignment retired. Git branch and Pi conversation preserved.${pendingResolutionError ? ` Warning: pending removal approval could not be resolved: ${pendingResolutionError}` : ""}`
-                  : `${leadStopped ? "Assigned Lead stopped; " : ""}checkout removed for ${branch}; assignment retirement is unconfirmed${retirementError ? `: ${retirementError}` : "."}${pendingResolutionError ? ` Warning: pending removal approval could not be resolved: ${pendingResolutionError}` : ""}`
-                : checkoutState === "present"
-                  ? `${leadStopped ? "Assigned Lead stopped; " : ""}worktree removal is unconfirmed for ${branch}; checkout was present at the last check; assignment ${assignmentRetired ? "was retired" : "remains recorded"}${"error" in removed ? `: ${removed.error}` : "."}${mayFinishLater}`
-                  : `${leadStopped ? "Assigned Lead stopped; " : ""}worktree removal result is unknown for ${branch}; assignment ${assignmentRetired ? "was retired" : "retirement is unconfirmed"}${"error" in removed ? `: ${removed.error}` : "."}${mayFinishLater}`,
-            },
-          ],
-          details: {
-            ok: checkoutRemoved && assignmentRetired,
-            action: "remove",
-            branch,
-            checkout_path: candidate.checkoutPath,
-            lead_stopped: leadStopped,
-            checkout_removed: checkoutRemoved,
-            assignment_retired: assignmentRetired,
-            repo_key: candidate.manager.repoKey,
-            assignment_id: candidate.assignment.id,
-            forced: false,
-            checkout_state: checkoutRemoved ? "removed" : checkoutState,
-            ...("error" in removed ? { removal_error: removed.error } : {}),
-            ...("error" in removed && removed.reopened
-              ? { workspace_reopened: true }
-              : {}),
-            ...(retirementError ? { retirement_error: retirementError } : {}),
-            ...(pendingResolutionError ? { pendingResolutionError } : {}),
+      }
+      const mayFinishLater =
+        "error" in removed && removed.commandInterrupted
+          ? " Herdr may still complete removal after the CLI stopped."
+          : "";
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: checkoutRemoved
+              ? assignmentRetired
+                ? `${leadStopped ? "Assigned Lead stopped; " : ""}removed checkout for ${branch}; assignment retired. Git branch and Pi conversation preserved.${pendingResolutionError ? ` Warning: pending removal approval could not be resolved: ${pendingResolutionError}` : ""}`
+                : `${leadStopped ? "Assigned Lead stopped; " : ""}checkout removed for ${branch}; assignment retirement is unconfirmed${retirementError ? `: ${retirementError}` : "."}${pendingResolutionError ? ` Warning: pending removal approval could not be resolved: ${pendingResolutionError}` : ""}`
+              : checkoutState === "present"
+                ? `${leadStopped ? "Assigned Lead stopped; " : ""}worktree removal is unconfirmed for ${branch}; checkout was present at the last check; assignment ${assignmentRetired ? "was retired" : "remains recorded"}${"error" in removed ? `: ${removed.error}` : "."}${mayFinishLater}`
+                : `${leadStopped ? "Assigned Lead stopped; " : ""}worktree removal result is unknown for ${branch}; assignment ${assignmentRetired ? "was retired" : "retirement is unconfirmed"}${"error" in removed ? `: ${removed.error}` : "."}${mayFinishLater}`,
           },
-        };
-      },
-    );
+        ],
+        details: {
+          ok: checkoutRemoved && assignmentRetired,
+          action: "remove",
+          branch,
+          checkout_path: candidate.checkoutPath,
+          lead_stopped: leadStopped,
+          checkout_removed: checkoutRemoved,
+          assignment_retired: assignmentRetired,
+          repo_key: candidate.manager.repoKey,
+          assignment_id: candidate.assignment.id,
+          forced: false,
+          checkout_state: checkoutRemoved ? "removed" : checkoutState,
+          ...("error" in removed ? { removal_error: removed.error } : {}),
+          ...("error" in removed && removed.reopened ? { workspace_reopened: true } : {}),
+          ...(retirementError ? { retirement_error: retirementError } : {}),
+          ...(pendingResolutionError ? { pendingResolutionError } : {}),
+        },
+      };
+    });
   };
   const listPendingRemovals = (ctx: ExtensionContext) => {
     const requests = [...pendingRemovals(ctx).values()];
@@ -1707,12 +1421,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       expected: selected,
     });
   };
-  const cancelPendingRemoval = (
-    selected: PendingRemoval,
-    ctx: ExtensionContext,
-  ) => {
-    if (pendingRemovals(ctx).get(selected.branch)?.id !== selected.id)
-      return false;
+  const cancelPendingRemoval = (selected: PendingRemoval, ctx: ExtensionContext) => {
+    if (pendingRemovals(ctx).get(selected.branch)?.id !== selected.id) return false;
     resolvePendingRemoval(selected, ctx);
     return true;
   };
@@ -1731,9 +1441,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       host.leadRuntime.roleSuspended ||
       !host.sameManagerDescriptor(initialManager, lease.descriptor)
     )
-      throw new Error(
-        "Only the active, lease-verified Manager can forget an assignment",
-      );
+      throw new Error("Only the active, lease-verified Manager can forget an assignment");
     const before = host.readProjectAssignment(
       host.supervisionRuntime(),
       initialManager.repoKey,
@@ -1757,10 +1465,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (
       initialTopology?.source?.repo_key !== initialManager.repoKey ||
       typeof initialTopology?.source?.source_checkout_path !== "string" ||
-      !sameDirectory(
-        initialTopology.source.source_checkout_path,
-        localScope.checkoutPath,
-      )
+      !sameDirectory(initialTopology.source.source_checkout_path, localScope.checkoutPath)
     )
       throw new Error("Herdr worktree topology is unavailable or inconsistent");
     await host.reconcileProjectAssignments(
@@ -1798,14 +1503,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         !manager ||
         !host.sameManagerDescriptor(manager, initialManager) ||
         !host.managerLease() ||
-        !host.sameManagerDescriptor(
-          host.managerLease()!.descriptor,
-          initialManager,
-        )
+        !host.sameManagerDescriptor(host.managerLease()!.descriptor, initialManager)
       )
-        throw new Error(
-          "Manager authority changed; assignment was not retired",
-        );
+        throw new Error("Manager authority changed; assignment was not retired");
       const group = await host.worktreeGroupScope(
         host.pi,
         ctx,
@@ -1821,9 +1521,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         operationSignal,
       );
       if (!localScope.isPrimary || localScope.repoKey !== manager.repoKey)
-        throw new Error(
-          "Manager checkout is not the verified primary checkout",
-        );
+        throw new Error("Manager checkout is not the verified primary checkout");
       const topology = await host.runHerdr(
         host.pi,
         ctx,
@@ -1833,22 +1531,16 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       if (
         topology?.source?.repo_key !== manager.repoKey ||
         typeof topology?.source?.source_checkout_path !== "string" ||
-        !sameDirectory(
-          topology.source.source_checkout_path,
-          localScope.checkoutPath,
-        ) ||
+        !sameDirectory(topology.source.source_checkout_path, localScope.checkoutPath) ||
         !Array.isArray(topology.worktrees) ||
         topology.worktrees.some(
           (worktree: any) =>
             typeof worktree?.path !== "string" ||
             !worktree.path ||
-            (worktree.branch !== undefined &&
-              typeof worktree.branch !== "string"),
+            (worktree.branch !== undefined && typeof worktree.branch !== "string"),
         )
       )
-        throw new Error(
-          "Herdr worktree topology is unavailable or inconsistent",
-        );
+        throw new Error("Herdr worktree topology is unavailable or inconsistent");
       const current = host.readProjectAssignment(
         host.supervisionRuntime(),
         manager.repoKey,
@@ -1872,9 +1564,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             /Checkout provenance|identity conflicts/u.test(error.message)
           )
             throw error;
-          throw new Error(
-            "Assignment session provenance is unavailable or conflicting",
-          );
+          throw new Error("Assignment session provenance is unavailable or conflicting");
         }
       }
       const [git, common, root] = await Promise.all([
@@ -1883,15 +1573,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           signal: operationSignal,
           timeout: 10_000,
         }),
-        host.pi.exec(
-          "git",
-          ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-          {
-            cwd: topology.source.source_checkout_path,
-            signal: operationSignal,
-            timeout: 10_000,
-          },
-        ),
+        host.pi.exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+          cwd: topology.source.source_checkout_path,
+          signal: operationSignal,
+          timeout: 10_000,
+        }),
         host.pi.exec("git", ["rev-parse", "--show-toplevel"], {
           cwd: topology.source.source_checkout_path,
           signal: operationSignal,
@@ -1911,38 +1597,27 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         root.killed ||
         root.stderr?.trim() ||
         !sameDirectory(String(common.stdout ?? "").trim(), manager.repoKey) ||
-        !sameDirectory(
-          String(root.stdout ?? "").trim(),
-          topology.source.source_checkout_path,
-        ) ||
+        !sameDirectory(String(root.stdout ?? "").trim(), topology.source.source_checkout_path) ||
         !inventory.some((worktree) =>
           sameDirectory(worktree.path, topology.source.source_checkout_path),
         )
       )
-        throw new Error(
-          "Git worktree inventory is unavailable or inconsistent",
-        );
+        throw new Error("Git worktree inventory is unavailable or inconsistent");
       if (
         inventory.some((worktree) => worktree.branch === branch) ||
         topology.worktrees.some((worktree: any) => worktree?.branch === branch)
       )
-        throw new Error(
-          "A checkout still uses this branch; assignment preserved",
-        );
+        throw new Error("A checkout still uses this branch; assignment preserved");
       const [leads, snapshot] = await Promise.all([
         host.liveLead(ctx, current.id),
         host.herdrSessionSnapshot(host.pi, ctx, operationSignal),
       ]);
       const agentStates = host.scanAgentStates();
       if (agentStates.issues.length)
-        throw new Error(
-          "Agent ownership inventory is incomplete; assignment preserved",
-        );
+        throw new Error("Agent ownership inventory is incomplete; assignment preserved");
       if (
         leads.length ||
-        snapshot.agents.some(
-          (agent) => host.herdrSessionId(agent) === current.id,
-        ) ||
+        snapshot.agents.some((agent) => host.herdrSessionId(agent) === current.id) ||
         agentStates.states.some(
           ({ state }) =>
             state.ownerSessionId === current.id ||
@@ -1950,24 +1625,17 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             state.projectAssignmentId === current.id,
         )
       )
-        throw new Error(
-          "Live or potentially active execution is known; assignment preserved",
-        );
+        throw new Error("Live or potentially active execution is known; assignment preserved");
       return { manager, current };
     };
     const assignments = host
       .listProjectAssignments(host.supervisionRuntime(), initialManager.repoKey)
       .filter((assignment) => assignment.branch === branch);
     if (assignments.length !== 1)
-      throw new Error(
-        "Branch does not identify exactly one current assignment",
-      );
+      throw new Error("Branch does not identify exactly one current assignment");
     const expectedId = assignments[0]!.id;
     await verify(expectedId);
-    if (!ctx.hasUI)
-      throw new Error(
-        "Legacy assignment release requires interactive confirmation",
-      );
+    if (!ctx.hasUI) throw new Error("Legacy assignment release requires interactive confirmation");
     const answer = await ctx.ui.input(
       `Release Manager authority for ${branch}?\n\nThis removes the durable project assignment and retires its pending project messages. Git checkouts, branches, Pi conversations, processes, and Agent ownership are not changed.\n\nNo live target execution or matching branch checkout was found, but unobserved execution cannot be ruled out.\n\nType forget ${branch} to confirm.`,
       undefined,
@@ -1983,43 +1651,31 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         ],
         details: { ok: false, cancelled: true, branch },
       };
-    return host.withProjectWorkLock(
-      `${initialManager.repoKey}\0${branch}`,
-      () =>
-        host.withProjectAssignmentLock(
-          initialManager.repoKey,
-          branch,
-          async () => {
-            const { current } = await verify(expectedId);
-            if (
-              !host.retireProjectAssignment(host.supervisionRuntime(), current)
-            )
-              throw new Error("Assignment changed; nothing was retired");
-            try {
-              host.removeProjectMessagesForAssignment(
-                host.supervisionRuntime(),
-                current,
-              );
-            } catch (error) {
-              host.appendDurableError(
-                host.pi,
-                ctx,
-                "pi_herdsman_state_error",
-                error,
-              );
-            }
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text: `Released Manager authority for ${branch}; Git and Pi history preserved.`,
-                },
-              ],
-              details: { ok: true, branch, assignment_id: expectedId },
-            };
-          },
-          operationSignal,
-        ),
+    return host.withProjectWorkLock(`${initialManager.repoKey}\0${branch}`, () =>
+      host.withProjectAssignmentLock(
+        initialManager.repoKey,
+        branch,
+        async () => {
+          const { current } = await verify(expectedId);
+          if (!host.retireProjectAssignment(host.supervisionRuntime(), current))
+            throw new Error("Assignment changed; nothing was retired");
+          try {
+            host.removeProjectMessagesForAssignment(host.supervisionRuntime(), current);
+          } catch (error) {
+            host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error);
+          }
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Released Manager authority for ${branch}; Git and Pi history preserved.`,
+              },
+            ],
+            details: { ok: true, branch, assignment_id: expectedId },
+          };
+        },
+        operationSignal,
+      ),
     );
   };
   type RepositorySettingsIdentity = {
@@ -2056,9 +1712,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     const sessionFile = ctx.sessionManager.getSessionFile();
     const cwd = ctx.cwd;
     if (!workspaceId || !paneId || !tabId || !sessionId)
-      throw new Error(
-        "Verified workspace, pane, tab and session identity are required",
-      );
+      throw new Error("Verified workspace, pane, tab and session identity are required");
     const agent = await verifiedHerdrAgent(
       {
         piSessionId: sessionId,
@@ -2081,9 +1735,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       },
     );
     if (!agent)
-      throw new Error(
-        "Herdr session-to-workspace identity is unavailable or conflicting",
-      );
+      throw new Error("Herdr session-to-workspace identity is unavailable or conflicting");
     const scope = await (host.localRepositoryScope ?? localRepositoryScope)(
       host.pi,
       ctx,
@@ -2115,8 +1767,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
   ) => {
     const current = await repositorySettingsIdentity(ctx);
     ctx.signal?.throwIfAborted();
-    if (!ctx.hasUI)
-      throw new Error("Interactive session is no longer available");
+    if (!ctx.hasUI) throw new Error("Interactive session is no longer available");
     if (!sameRepositorySettingsIdentity(current, expected))
       throw new Error("Repository or session changed; reopen the selector");
   };
@@ -2134,14 +1785,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     expectedIdentity?: RepositorySettingsIdentity,
   ) => {
     if (!ctx.hasUI)
-      throw new Error(
-        "An interactive user is required to change repository settings",
-      );
+      throw new Error("An interactive user is required to change repository settings");
     const identity = await repositorySettingsIdentity(ctx);
-    if (
-      expectedIdentity &&
-      !sameRepositorySettingsIdentity(identity, expectedIdentity)
-    )
+    if (expectedIdentity && !sameRepositorySettingsIdentity(identity, expectedIdentity))
       throw new Error("Repository or session changed; reopen the selector");
     const previous = isWorktreeRemovalPreapproved(identity.repoKey);
     if (enabled && !previous) {
@@ -2161,8 +1807,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     await revalidateRepositorySettings(ctx, identity);
     if (isWorktreeRemovalPreapproved(identity.repoKey) !== previous)
       throw new Error("Removal policy changed before saving the setting");
-    if (previous !== enabled)
-      setWorktreeRemovalPreapproved(identity.repoKey, enabled, previous);
+    if (previous !== enabled) setWorktreeRemovalPreapproved(identity.repoKey, enabled, previous);
     return true;
   };
   const setRepositoryMergeOverride = async (
@@ -2175,20 +1820,16 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     },
   ) => {
     if (!ctx.hasUI)
-      throw new Error(
-        "An interactive user is required to change repository settings",
-      );
+      throw new Error("An interactive user is required to change repository settings");
     const identity = await repositorySettingsIdentity(ctx);
     if (!sameRepositorySettingsIdentity(identity, expectedIdentity))
       throw new Error("Repository or session changed; reopen the selector");
-    const level = (value: ManagerMergeSetting) =>
-      value === false ? 0 : value === true ? 1 : 2;
+    const level = (value: ManagerMergeSetting) => (value === false ? 0 : value === true ? 1 : 2);
     const previous = expected.override ?? expected.global;
     const next = enabled ?? expected.global;
     if (
       next !== false &&
-      (level(next) > level(previous) ||
-        (enabled !== undefined && expected.override === undefined))
+      (level(next) > level(previous) || (enabled !== undefined && expected.override === undefined))
     ) {
       const confirmed = await ctx.ui.confirm(
         `Allow Manager integration for ${identity.repoKey}?`,
@@ -2252,9 +1893,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
   const openAssignedSession = (assignment: ProjectAssignment, path: string) => {
     const saved = host.SessionManager.open(path);
     if (saved.getSessionId() !== assignment.id)
-      throw new Error(
-        "Saved Lead session restoration failed: mismatched session ID",
-      );
+      throw new Error("Saved Lead session restoration failed: mismatched session ID");
     verifyAssignedLeadDefinition(
       readCoordinatorDefinitionBinding(saved.getEntries(), assignment.id),
       assignment.definition ?? MANAGED_LEAD_DEFINITION_NAME,
@@ -2282,13 +1921,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           current.definition !== assignment.definition
         )
           throw new Error("Project assignment changed during Lead activation");
-        if (current.definition !== undefined)
-          openAssignedSession(current, piSessionFile);
+        if (current.definition !== undefined) openAssignedSession(current, piSessionFile);
         if (current.piSessionFile) {
           if (!sameObservedSessionPath(current.piSessionFile, piSessionFile))
-            throw new Error(
-              "Lead session path conflicts with persisted project identity",
-            );
+            throw new Error("Lead session path conflicts with persisted project identity");
           return current;
         }
         const bound = { ...current, piSessionFile };
@@ -2310,9 +1946,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     signal?: AbortSignal,
   ): Promise<ProjectAssignment> => {
     const piSessionFile = supervisedSessionFile(lead, assignment.id);
-    return piSessionFile
-      ? persistLeadSessionFile(assignment, piSessionFile, signal)
-      : assignment;
+    return piSessionFile ? persistLeadSessionFile(assignment, piSessionFile, signal) : assignment;
   };
   type ProjectLeadActivation =
     | {
@@ -2386,12 +2020,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
   ) => {
     const admission = acquireCoordinatorAdmission();
     try {
-      return await activateProjectLeadUnderAdmission(
-        params,
-        ctx,
-        signal,
-        admission.claim,
-      );
+      return await activateProjectLeadUnderAdmission(params, ctx, signal, admission.claim);
     } finally {
       admission.release();
     }
@@ -2425,12 +2054,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         ? {
             ...params,
             id: randomUUID(),
-            branch:
-              params.branch ?? `herdsman/work-${randomUUID().slice(0, 8)}`,
+            branch: params.branch ?? `herdsman/work-${randomUUID().slice(0, 8)}`,
           }
         : params;
-    if (!operation.branch.trim())
-      throw new Error("Project branch must not be empty");
+    if (!operation.branch.trim()) throw new Error("Project branch must not be empty");
     if (
       operation.definition !== undefined &&
       (typeof operation.definition !== "string" ||
@@ -2442,11 +2069,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       (typeof operation.message !== "string" || !operation.message.trim())
     )
       throw new Error("Resume instruction must not be empty");
-    if (
-      operation.action === "delegate" &&
-      operation.base !== undefined &&
-      !operation.base.trim()
-    )
+    if (operation.action === "delegate" && operation.base !== undefined && !operation.base.trim())
       throw new Error("Base ref must not be empty");
     return withProjectWorkLock(`${repoKey}\0${operation.branch}`, () =>
       activateProjectLeadLocked(operation, ctx, signal, admissionClaim),
@@ -2513,11 +2136,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       )
         return "completion_revision_mismatch";
       try {
-        if (!target.assignment.piSessionFile)
-          return "completion_evidence_unavailable";
-        const session = host.SessionManager.open(
-          target.assignment.piSessionFile,
-        );
+        if (!target.assignment.piSessionFile) return "completion_evidence_unavailable";
+        const session = host.SessionManager.open(target.assignment.piSessionFile);
         if (session.getSessionId() !== target.assignment.id)
           return "completion_evidence_unavailable";
         const entries = session.getBranch();
@@ -2540,14 +2160,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 (entry?.type === "custom" &&
                   entry.customType === "pi-herdsman-herd-run" &&
                   entry.data?.sessionId === target.assignment.id &&
-                  [
-                    "lead_started",
-                    "lead_start_unpersisted",
-                    "report_pending",
-                  ].includes(entry.data?.phase)) ||
+                  ["lead_started", "lead_start_unpersisted", "report_pending"].includes(
+                    entry.data?.phase,
+                  )) ||
                 (entry?.type === "message" &&
-                  (entry.message?.role === "user" ||
-                    entry.message?.role === "assistant")),
+                  (entry.message?.role === "user" || entry.message?.role === "assistant")),
             )
         )
           return "completion_evidence_superseded";
@@ -2556,9 +2173,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       }
       if (
         target.liveLead &&
-        !["idle", "done"].includes(
-          normalizeHerdrLifecycleState(target.liveLead),
-        )
+        !["idle", "done"].includes(normalizeHerdrLifecycleState(target.liveLead))
       )
         return "lead_execution_active";
       return undefined;
@@ -2592,11 +2207,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         }
       }
       for (const { path, state } of inventory.states) {
-        if (
-          !owned.has(state.piSessionId) ||
-          state.piSessionId === target.assignment.id
-        )
-          continue;
+        if (!owned.has(state.piSessionId) || state.piSessionId === target.assignment.id) continue;
         try {
           if (
             state.activeRequestId ||
@@ -2605,19 +2216,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             state.lastAck?.accepted === false ||
             state.lastAck?.code === "delivery" ||
             unacknowledgedRequestExists(path, state) ||
-            (state.completedRequestId &&
-              readResult(path, state.completedRequestId))
+            (state.completedRequestId && readResult(path, state.completedRequestId))
           )
             return "owned_work_unresolved";
         } catch {
           return "owned_work_unresolved";
         }
       }
-      const descendants = await host.herdrSessionSnapshot(
-        host.pi,
-        ctx,
-        operationSignal,
-      );
+      const descendants = await host.herdrSessionSnapshot(host.pi, ctx, operationSignal);
       if (
         descendants.agents.some(
           (agent) =>
@@ -2655,12 +2261,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       // Reconcile a vanished source only when Git independently proves its accepted SHA is integrated.
       const manager = await host.currentManager(ctx);
       const assignment =
-        manager &&
-        host.readProjectAssignment(
-          host.supervisionRuntime(),
-          manager.repoKey,
-          branch,
-        );
+        manager && host.readProjectAssignment(host.supervisionRuntime(), manager.repoKey, branch);
       if (
         !manager ||
         !assignment ||
@@ -2672,10 +2273,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         !activeManager ||
         !host.sameManagerDescriptor(activeManager, manager) ||
         !leadRuntime.managerLease ||
-        !host.sameManagerDescriptor(
-          leadRuntime.managerLease.descriptor,
-          manager,
-        )
+        !host.sameManagerDescriptor(leadRuntime.managerLease.descriptor, manager)
       )
         throw sourceError;
       const localScope = await localRepositoryScope(
@@ -2685,9 +2283,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         operationSignal,
       );
       if (!localScope.isPrimary || localScope.repoKey !== manager.repoKey)
-        throw new Error(
-          "Manager checkout is not the verified primary checkout",
-        );
+        throw new Error("Manager checkout is not the verified primary checkout");
       const topology = await host.runHerdr(
         host.pi,
         ctx,
@@ -2697,10 +2293,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       if (
         topology?.source?.repo_key !== manager.repoKey ||
         typeof topology?.source?.source_checkout_path !== "string" ||
-        !sameDirectory(
-          topology.source.source_checkout_path,
-          localScope.checkoutPath,
-        )
+        !sameDirectory(topology.source.source_checkout_path, localScope.checkoutPath)
       )
         throw sourceError;
       const targetPath = topology.source.source_checkout_path;
@@ -2726,11 +2319,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           signal: operationSignal,
           timeout: 10_000,
         }),
-        host.pi.exec(
-          "git",
-          ["merge-base", "--is-ancestor", expectedHead, "HEAD"],
-          { cwd: targetPath, signal: operationSignal, timeout: 10_000 },
-        ),
+        host.pi.exec("git", ["merge-base", "--is-ancestor", expectedHead, "HEAD"], {
+          cwd: targetPath,
+          signal: operationSignal,
+          timeout: 10_000,
+        }),
       ]);
       if (
         branchResult.code !== 0 ||
@@ -2742,8 +2335,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       const targetBranch = String(branchResult.stdout ?? "").trim();
       const targetHead = String(targetResult.stdout ?? "").trim();
       if (!targetBranch || !targetHead) throw sourceError;
-      if (!assignment.piSessionFile || !Array.isArray(topology.worktrees))
-        throw sourceError;
+      if (!assignment.piSessionFile || !Array.isArray(topology.worktrees)) throw sourceError;
       let sourcePath: string;
       try {
         const session = host.SessionManager.open(assignment.piSessionFile);
@@ -2757,26 +2349,22 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         topology.worktrees.some(
           (worktree: any) =>
             worktree?.branch === branch ||
-            (typeof worktree?.path === "string" &&
-              resolve(worktree.path) === sourcePath),
+            (typeof worktree?.path === "string" && resolve(worktree.path) === sourcePath),
         )
       )
         throw sourceError;
-      const inventory = await host.pi.exec(
-        "git",
-        ["worktree", "list", "--porcelain", "-z"],
-        { cwd: targetPath, signal: operationSignal, timeout: 10_000 },
-      );
-      const parsedInventory = parseGitWorktreeInventory(
-        String(inventory.stdout ?? ""),
-      );
+      const inventory = await host.pi.exec("git", ["worktree", "list", "--porcelain", "-z"], {
+        cwd: targetPath,
+        signal: operationSignal,
+        timeout: 10_000,
+      });
+      const parsedInventory = parseGitWorktreeInventory(String(inventory.stdout ?? ""));
       if (
         inventory.code !== 0 ||
         inventory.killed ||
         !parsedInventory ||
         parsedInventory.some(
-          (worktree) =>
-            worktree.branch === branch || resolve(worktree.path) === sourcePath,
+          (worktree) => worktree.branch === branch || resolve(worktree.path) === sourcePath,
         )
       )
         throw sourceError;
@@ -2790,10 +2378,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         !finalManager ||
         !host.sameManagerDescriptor(finalManager, manager) ||
         !leadRuntime.managerLease ||
-        !host.sameManagerDescriptor(
-          leadRuntime.managerLease.descriptor,
-          manager,
-        ) ||
+        !host.sameManagerDescriptor(leadRuntime.managerLease.descriptor, manager) ||
         finalAssignment?.id !== assignment.id ||
         finalAssignment.branch !== branch ||
         finalAssignment.repoKey !== manager.repoKey
@@ -2838,8 +2423,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         },
       };
     }
-    const permission = () =>
-      effectiveMergePolicy(host.readConfig(), candidate.manager.repoKey);
+    const permission = () => effectiveMergePolicy(host.readConfig(), candidate.manager.repoKey);
     if (!permission().enabled)
       throw new Error("Manager local merge is not enabled for this repository");
     const runGit = async (cwd: string, args: string[]) => {
@@ -2857,10 +2441,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         throw new Error(`Git verification failed: ${result.stderr || args[0]}`);
       return String(result.stdout ?? "").trim();
     };
-    const sourceHead = await output(candidate.checkoutPath, [
-      "rev-parse",
-      "HEAD",
-    ]);
+    const sourceHead = await output(candidate.checkoutPath, ["rev-parse", "HEAD"]);
     if (sourceHead !== expectedHead)
       throw new Error("Accepted source SHA is stale; worktree preserved");
     const sourceBranch = await output(candidate.checkoutPath, [
@@ -2869,9 +2450,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       "HEAD",
     ]).catch(() => "");
     if (!sourceBranch || sourceBranch !== candidate.checkedOutBranch)
-      throw new Error(
-        "Assigned checkout must be on its verified named branch; worktree preserved",
-      );
+      throw new Error("Assigned checkout must be on its verified named branch; worktree preserved");
     if (
       (await output(candidate.checkoutPath, [
         "show-ref",
@@ -2880,32 +2459,15 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         `refs/heads/${sourceBranch}`,
       ])) !== expectedHead
     )
-      throw new Error(
-        "Accepted source branch ref is stale; worktree preserved",
-      );
+      throw new Error("Accepted source branch ref is stale; worktree preserved");
     const targetPath = candidate.sourceCheckoutPath;
-    const targetBranch = await output(targetPath, [
-      "symbolic-ref",
-      "--short",
-      "HEAD",
-    ]);
+    const targetBranch = await output(targetPath, ["symbolic-ref", "--short", "HEAD"]);
     const targetHead = await output(targetPath, ["rev-parse", "HEAD"]);
     const initialTargetHead = targetHead;
     const clean = async (path: string) => {
-      const status = await runGit(path, [
-        "status",
-        "--porcelain=v1",
-        "--untracked-files=all",
-      ]);
-      if (
-        status.code !== 0 ||
-        status.killed ||
-        status.stderr?.trim() ||
-        status.stdout?.trim()
-      )
-        throw new Error(
-          "Source and target worktrees must be clean; no changes were discarded",
-        );
+      const status = await runGit(path, ["status", "--porcelain=v1", "--untracked-files=all"]);
+      if (status.code !== 0 || status.killed || status.stderr?.trim() || status.stdout?.trim())
+        throw new Error("Source and target worktrees must be clean; no changes were discarded");
       for (const state of [
         "MERGE_HEAD",
         "REBASE_HEAD",
@@ -2922,31 +2484,18 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         } catch (error) {
           if (
             (error as NodeJS.ErrnoException).code !== "ENOENT" &&
-            !(
-              error instanceof Error &&
-              error.message.startsWith("Git operation ")
-            )
+            !(error instanceof Error && error.message.startsWith("Git operation "))
           )
             throw new Error("Git operation state is unverifiable");
-          if (
-            error instanceof Error &&
-            error.message.startsWith("Git operation ")
-          )
-            throw error;
+          if (error instanceof Error && error.message.startsWith("Git operation ")) throw error;
         }
       }
     };
     await clean(targetPath);
     await clean(candidate.checkoutPath);
-    const targetOccupants = await host.herdrSessionSnapshot(
-      host.pi,
-      ctx,
-      operationSignal,
-    );
+    const targetOccupants = await host.herdrSessionSnapshot(host.pi, ctx, operationSignal);
     const managerOccupants = targetOccupants.agents.filter(
-      (agent) =>
-        agent.workspace_id === candidate.manager.workspaceId &&
-        host.isPiAgent(agent),
+      (agent) => agent.workspace_id === candidate.manager.workspaceId && host.isPiAgent(agent),
     );
     const isCurrentManager = (agent: (typeof managerOccupants)[number]) =>
       agent.workspace_id === candidate.manager.workspaceId &&
@@ -2967,10 +2516,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         ancestor,
         descendant,
       ]);
-      if (result.code === 0 && !result.killed && !result.stderr?.trim())
-        return true;
-      if (result.code === 1 && !result.killed && !result.stderr?.trim())
-        return false;
+      if (result.code === 0 && !result.killed && !result.stderr?.trim()) return true;
+      if (result.code === 1 && !result.killed && !result.stderr?.trim()) return false;
       throw new Error("Git ancestry could not be verified");
     };
     const verifyPreviouslyIntegratedMerges = async (head: string) => {
@@ -2981,8 +2528,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         "--ancestry-path",
         `${expectedHead}..${head}`,
       ]);
-      if (history.code !== 0 || history.killed || history.stderr?.trim())
-        return false;
+      if (history.code !== 0 || history.killed || history.stderr?.trim()) return false;
       for (const line of String(history.stdout ?? "")
         .trim()
         .split("\n")) {
@@ -3010,11 +2556,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     const initiallyFastForwardable = initiallyIntegrated
       ? false
       : await ancestry(targetHead, expectedHead);
-    if (
-      !initiallyIntegrated &&
-      !initiallyFastForwardable &&
-      !permission().allowDivergence
-    )
+    if (!initiallyIntegrated && !initiallyFastForwardable && !permission().allowDivergence)
       return {
         content: [
           {
@@ -3040,87 +2582,124 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     const integration = await host.withProjectWorkLock(
       `${candidate.manager.repoKey}\0${branch}`,
       () =>
-        withCandidateLeadQuiesced(
-          candidate,
-          ctx,
-          operationSignal,
-          (heldLocks) =>
-            host.withProjectAssignmentLock(
-              candidate.manager.repoKey,
-              branch,
-              async (): Promise<Integration> => {
-                const lockPath = `${host.projectAssignmentPath(host.supervisionRuntime(), candidate.manager.repoKey, "__integration__")}.lock`;
-                const lease = host.acquireProcessLock(lockPath, {
-                  name: "repository integration lock",
-                });
-                try {
-                  const current = await inspectRemovalTarget(
-                    branch,
-                    ctx,
-                    operationSignal,
-                  );
-                  if (
-                    current.assignment.id !== candidate.assignment.id ||
-                    current.checkoutPath !== candidate.checkoutPath ||
-                    current.checkedOutBranch !== sourceBranch ||
-                    current.sourceCheckoutPath !== targetPath
-                  )
-                    throw new Error(
-                      "Merge target changed; no integration performed",
-                    );
-                  assertCandidateLeadUnchanged(candidate, current);
-                  if (!permission().enabled)
-                    throw new Error(
-                      "Manager local merge permission was revoked",
-                    );
-                  await assertNoUnrelatedPiExecution(
-                    current,
-                    ctx,
-                    operationSignal,
-                  );
-                  await clean(targetPath);
-                  await clean(current.checkoutPath);
-                  const preStopTarget = await output(targetPath, [
-                    "rev-parse",
-                    "HEAD",
-                  ]);
-                  if (await ancestry(expectedHead, preStopTarget)) {
-                    if (
-                      !(await verifyPreviouslyIntegratedMerges(preStopTarget))
-                    )
-                      return {
-                        kind: "blocked",
-                        targetHead: preStopTarget,
-                        targetBranch,
-                        integrated: true,
-                        reason: "already_integrated_divergent_merge_unverified",
-                      };
+        withCandidateLeadQuiesced(candidate, ctx, operationSignal, (heldLocks) =>
+          host.withProjectAssignmentLock(
+            candidate.manager.repoKey,
+            branch,
+            async (): Promise<Integration> => {
+              const lockPath = `${host.projectAssignmentPath(host.supervisionRuntime(), candidate.manager.repoKey, "__integration__")}.lock`;
+              const lease = host.acquireProcessLock(lockPath, {
+                name: "repository integration lock",
+              });
+              try {
+                const current = await inspectRemovalTarget(branch, ctx, operationSignal);
+                if (
+                  current.assignment.id !== candidate.assignment.id ||
+                  current.checkoutPath !== candidate.checkoutPath ||
+                  current.checkedOutBranch !== sourceBranch ||
+                  current.sourceCheckoutPath !== targetPath
+                )
+                  throw new Error("Merge target changed; no integration performed");
+                assertCandidateLeadUnchanged(candidate, current);
+                if (!permission().enabled)
+                  throw new Error("Manager local merge permission was revoked");
+                await assertNoUnrelatedPiExecution(current, ctx, operationSignal);
+                await clean(targetPath);
+                await clean(current.checkoutPath);
+                const preStopTarget = await output(targetPath, ["rev-parse", "HEAD"]);
+                if (await ancestry(expectedHead, preStopTarget)) {
+                  if (!(await verifyPreviouslyIntegratedMerges(preStopTarget)))
                     return {
-                      kind: "integrated",
+                      kind: "blocked",
                       targetHead: preStopTarget,
                       targetBranch,
-                      alreadyIntegrated: true as const,
+                      integrated: true,
+                      reason: "already_integrated_divergent_merge_unverified",
+                    };
+                  return {
+                    kind: "integrated",
+                    targetHead: preStopTarget,
+                    targetBranch,
+                    alreadyIntegrated: true as const,
+                  };
+                }
+                const eligibility = await currentExecutionEligibility(current);
+                if (eligibility)
+                  return {
+                    kind: "tool-result",
+                    result: completionRefusal(eligibility),
+                  };
+                const preStopFastForward = await ancestry(preStopTarget, expectedHead);
+                if (!preStopFastForward && !permission().allowDivergence)
+                  return {
+                    kind: "tool-result",
+                    result: {
+                      content: [
+                        {
+                          type: "text" as const,
+                          text: `Branch ${branch} needs to incorporate target ${targetBranch} at ${preStopTarget}.`,
+                        },
+                      ],
+                      details: {
+                        ok: false,
+                        action: "merge",
+                        branch,
+                        target_branch: targetBranch,
+                        source_head: expectedHead,
+                        target_head: preStopTarget,
+                        status: "needs_update",
+                        reason: "divergent_fast_forward_only",
+                        integrated: false,
+                        checkout_removed: false,
+                        assignment_retired: false,
+                      },
+                    },
+                  };
+                let expectedMergeTree: string | undefined;
+                if (!preStopFastForward) {
+                  if (preStopTarget !== initialTargetHead)
+                    return {
+                      kind: "blocked",
+                      targetHead: preStopTarget,
+                      targetBranch,
+                      integrated: false,
+                      reason: "target_changed_before_merge",
+                    };
+                  let preview;
+                  try {
+                    preview = await runGit(targetPath, [
+                      "merge-tree",
+                      "--write-tree",
+                      preStopTarget,
+                      expectedHead,
+                    ]);
+                  } catch {
+                    return {
+                      kind: "blocked",
+                      targetHead: preStopTarget,
+                      targetBranch,
+                      integrated: false,
+                      reason: operationSignal?.aborted
+                        ? "merge_preview_interrupted"
+                        : "merge_preview_unavailable",
                     };
                   }
-                  const eligibility =
-                    await currentExecutionEligibility(current);
-                  if (eligibility)
+                  if (preview.killed || operationSignal?.aborted)
                     return {
-                      kind: "tool-result",
-                      result: completionRefusal(eligibility),
+                      kind: "blocked",
+                      targetHead: preStopTarget,
+                      targetBranch,
+                      integrated: false,
+                      reason: "merge_preview_interrupted",
                     };
-                  const preStopFastForward = await ancestry(
-                    preStopTarget,
-                    expectedHead,
-                  );
-                  if (!preStopFastForward && !permission().allowDivergence)
+                  if (preview.code === 1)
                     return {
                       kind: "tool-result",
                       result: {
                         content: [
                           {
                             type: "text" as const,
-                            text: `Branch ${branch} needs to incorporate target ${targetBranch} at ${preStopTarget}.`,
+                            text: `Branch ${branch} conflicts with target ${targetBranch}; the Lead was not stopped and neither checkout was changed.`,
                           },
                         ],
                         details: {
@@ -3131,395 +2710,289 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                           source_head: expectedHead,
                           target_head: preStopTarget,
                           status: "needs_update",
-                          reason: "divergent_fast_forward_only",
+                          reason: "merge_conflict",
                           integrated: false,
                           checkout_removed: false,
                           assignment_retired: false,
                         },
                       },
                     };
-                  let expectedMergeTree: string | undefined;
-                  if (!preStopFastForward) {
-                    if (preStopTarget !== initialTargetHead)
-                      return {
-                        kind: "blocked",
-                        targetHead: preStopTarget,
-                        targetBranch,
-                        integrated: false,
-                        reason: "target_changed_before_merge",
-                      };
-                    let preview;
-                    try {
-                      preview = await runGit(targetPath, [
-                        "merge-tree",
-                        "--write-tree",
-                        preStopTarget,
-                        expectedHead,
-                      ]);
-                    } catch {
-                      return {
-                        kind: "blocked",
-                        targetHead: preStopTarget,
-                        targetBranch,
-                        integrated: false,
-                        reason: operationSignal?.aborted
-                          ? "merge_preview_interrupted"
-                          : "merge_preview_unavailable",
-                      };
-                    }
-                    if (preview.killed || operationSignal?.aborted)
-                      return {
-                        kind: "blocked",
-                        targetHead: preStopTarget,
-                        targetBranch,
-                        integrated: false,
-                        reason: "merge_preview_interrupted",
-                      };
-                    if (preview.code === 1)
-                      return {
-                        kind: "tool-result",
-                        result: {
-                          content: [
-                            {
-                              type: "text" as const,
-                              text: `Branch ${branch} conflicts with target ${targetBranch}; the Lead was not stopped and neither checkout was changed.`,
-                            },
-                          ],
-                          details: {
-                            ok: false,
-                            action: "merge",
-                            branch,
-                            target_branch: targetBranch,
-                            source_head: expectedHead,
-                            target_head: preStopTarget,
-                            status: "needs_update",
-                            reason: "merge_conflict",
-                            integrated: false,
-                            checkout_removed: false,
-                            assignment_retired: false,
-                          },
-                        },
-                      };
-                    const tree = String(preview.stdout ?? "").trim();
-                    if (preview.code !== 0 || !/^[0-9a-f]{40,64}$/i.test(tree))
-                      return {
-                        kind: "blocked",
-                        targetHead: preStopTarget,
-                        targetBranch,
-                        integrated: false,
-                        reason: "merge_preview_unavailable",
-                      };
-                    expectedMergeTree = tree;
-                  }
-                  const stopTarget = await inspectRemovalTarget(
-                    branch,
-                    ctx,
-                    operationSignal,
-                  );
-                  if (
-                    stopTarget.assignment.id !== current.assignment.id ||
-                    stopTarget.checkoutPath !== current.checkoutPath ||
-                    stopTarget.checkedOutBranch !== sourceBranch ||
-                    stopTarget.sourceCheckoutPath !== targetPath
-                  )
-                    return {
-                      kind: "tool-result",
-                      result: completionRefusal(
-                        "completion_evidence_superseded",
-                      ),
-                    };
-                  assertCandidateLeadUnchanged(current, stopTarget);
-                  const finalEligibility =
-                    await currentExecutionEligibility(stopTarget);
-                  if (finalEligibility)
-                    return {
-                      kind: "tool-result",
-                      result: completionRefusal(finalEligibility),
-                    };
-                  if (stopTarget.liveLead)
-                    await stopExecution(
-                      stopTarget.assignment.id,
-                      stopTarget.liveLead,
-                      ctx,
-                      operationSignal,
-                      heldLocks,
-                    );
-                  const targetOccupantsNow = await host.herdrSessionSnapshot(
-                    host.pi,
-                    ctx,
-                    operationSignal,
-                  );
-                  const currentTargetOccupants =
-                    targetOccupantsNow.agents.filter(
-                      (agent) =>
-                        agent.workspace_id === current.manager.workspaceId &&
-                        host.isPiAgent(agent),
-                    );
-                  if (
-                    currentTargetOccupants.filter(isCurrentManager).length !==
-                      1 ||
-                    currentTargetOccupants.some(
-                      (agent) => !isCurrentManager(agent),
-                    )
-                  )
-                    throw new Error(
-                      "An active execution occupies the primary target; no integration was attempted",
-                    );
-                  await clean(targetPath);
-                  await clean(current.checkoutPath);
-                  const currentSource = await output(current.checkoutPath, [
-                    "rev-parse",
-                    "HEAD",
-                  ]);
-                  const currentSourceBranch = await output(
-                    current.checkoutPath,
-                    ["symbolic-ref", "--short", "HEAD"],
-                  ).catch(() => "");
-                  const currentTargetBranch = await output(targetPath, [
-                    "symbolic-ref",
-                    "--short",
-                    "HEAD",
-                  ]);
-                  const currentTarget = await output(targetPath, [
-                    "rev-parse",
-                    "HEAD",
-                  ]);
-                  if (
-                    currentSource !== expectedHead ||
-                    currentSourceBranch !== sourceBranch ||
-                    (await output(current.checkoutPath, [
-                      "show-ref",
-                      "--verify",
-                      "--hash",
-                      `refs/heads/${sourceBranch}`,
-                    ])) !== expectedHead
-                  )
-                    throw new Error(
-                      "Accepted source branch or SHA changed before integration",
-                    );
-                  if (currentTargetBranch !== targetBranch)
-                    throw new Error(
-                      "Primary target branch changed before integration",
-                    );
-                  if (await ancestry(expectedHead, currentTarget)) {
-                    if (
-                      !(await verifyPreviouslyIntegratedMerges(currentTarget))
-                    )
-                      return {
-                        kind: "blocked",
-                        targetHead: currentTarget,
-                        targetBranch,
-                        integrated: true,
-                        reason: "already_integrated_divergent_merge_unverified",
-                      };
-                    return {
-                      kind: "integrated",
-                      targetHead: currentTarget,
-                      targetBranch,
-                      alreadyIntegrated: true as const,
-                    };
-                  }
-                  if (
-                    !(await ancestry(currentTarget, expectedHead)) &&
-                    !permission().allowDivergence
-                  )
-                    return {
-                      kind: "tool-result",
-                      result: {
-                        content: [
-                          {
-                            type: "text" as const,
-                            text: `Branch ${branch} needs to incorporate target ${targetBranch} at ${currentTarget}.`,
-                          },
-                        ],
-                        details: {
-                          ok: false,
-                          action: "merge",
-                          branch,
-                          target_branch: targetBranch,
-                          source_head: expectedHead,
-                          target_head: currentTarget,
-                          status: "needs_update",
-                          integrated: false,
-                          checkout_removed: false,
-                          assignment_retired: false,
-                        },
-                      },
-                    };
-                  if (!preStopFastForward && currentTarget !== preStopTarget)
+                  const tree = String(preview.stdout ?? "").trim();
+                  if (preview.code !== 0 || !/^[0-9a-f]{40,64}$/i.test(tree))
                     return {
                       kind: "blocked",
-                      targetHead: currentTarget,
+                      targetHead: preStopTarget,
                       targetBranch,
                       integrated: false,
-                      reason: "target_changed_before_merge",
+                      reason: "merge_preview_unavailable",
                     };
-                  if (
-                    !permission().enabled ||
-                    (!preStopFastForward && !permission().allowDivergence)
-                  )
-                    throw new Error(
-                      "Manager local merge permission was revoked",
-                    );
-                  let mergeError: string | undefined;
-                  const merged = await runGit(targetPath, [
-                    "merge",
-                    ...(preStopFastForward
-                      ? ["--ff-only"]
-                      : ["--no-ff", "--no-edit", "-s", "ort"]),
-                    "--no-autostash",
-                    "--no-overwrite-ignore",
-                    expectedHead,
-                  ]).catch((error) => {
-                    mergeError =
-                      error instanceof Error ? error.message : String(error);
-                    return {
-                      code: -1,
-                      killed: true,
-                      stdout: "",
-                      stderr: mergeError,
-                    };
-                  });
-                  const interrupted =
-                    merged.killed === true || operationSignal?.aborted === true;
-                  const observed = await host.pi.exec(
-                    "git",
-                    ["rev-parse", "HEAD"],
-                    { cwd: targetPath, timeout: 10_000 },
+                  expectedMergeTree = tree;
+                }
+                const stopTarget = await inspectRemovalTarget(branch, ctx, operationSignal);
+                if (
+                  stopTarget.assignment.id !== current.assignment.id ||
+                  stopTarget.checkoutPath !== current.checkoutPath ||
+                  stopTarget.checkedOutBranch !== sourceBranch ||
+                  stopTarget.sourceCheckoutPath !== targetPath
+                )
+                  return {
+                    kind: "tool-result",
+                    result: completionRefusal("completion_evidence_superseded"),
+                  };
+                assertCandidateLeadUnchanged(current, stopTarget);
+                const finalEligibility = await currentExecutionEligibility(stopTarget);
+                if (finalEligibility)
+                  return {
+                    kind: "tool-result",
+                    result: completionRefusal(finalEligibility),
+                  };
+                if (stopTarget.liveLead)
+                  await stopExecution(
+                    stopTarget.assignment.id,
+                    stopTarget.liveLead,
+                    ctx,
+                    operationSignal,
+                    heldLocks,
                   );
-                  const index = await host.pi.exec(
-                    "git",
-                    ["ls-files", "--unmerged"],
-                    { cwd: targetPath, timeout: 10_000 },
+                const targetOccupantsNow = await host.herdrSessionSnapshot(
+                  host.pi,
+                  ctx,
+                  operationSignal,
+                );
+                const currentTargetOccupants = targetOccupantsNow.agents.filter(
+                  (agent) =>
+                    agent.workspace_id === current.manager.workspaceId && host.isPiAgent(agent),
+                );
+                if (
+                  currentTargetOccupants.filter(isCurrentManager).length !== 1 ||
+                  currentTargetOccupants.some((agent) => !isCurrentManager(agent))
+                )
+                  throw new Error(
+                    "An active execution occupies the primary target; no integration was attempted",
                   );
-                  const status = await host.pi.exec(
-                    "git",
-                    ["status", "--porcelain=v1", "--untracked-files=all"],
-                    { cwd: targetPath, timeout: 10_000 },
-                  );
-                  const containsAccepted = await host.pi.exec(
-                    "git",
-                    ["merge-base", "--is-ancestor", expectedHead, "HEAD"],
-                    { cwd: targetPath, timeout: 10_000 },
-                  );
-                  const parents = !preStopFastForward
-                    ? await host.pi.exec(
-                        "git",
-                        ["show", "-s", "--format=%P", "HEAD"],
-                        { cwd: targetPath, timeout: 10_000 },
-                      )
-                    : undefined;
-                  const mergedTree = !preStopFastForward
-                    ? await host.pi.exec("git", ["rev-parse", "HEAD^{tree}"], {
-                        cwd: targetPath,
-                        timeout: 10_000,
-                      })
-                    : undefined;
-                  const containsOriginalTarget = !preStopFastForward
-                    ? await host.pi.exec(
-                        "git",
-                        ["merge-base", "--is-ancestor", preStopTarget, "HEAD"],
-                        { cwd: targetPath, timeout: 10_000 },
-                      )
-                    : undefined;
-                  const observedBranch = await host.pi.exec(
-                    "git",
-                    ["symbolic-ref", "--quiet", "--short", "HEAD"],
-                    { cwd: targetPath, timeout: 10_000 },
-                  );
-                  const operationStates: string[] = [];
-                  let stateUnknown = false;
-                  for (const state of [
-                    "MERGE_HEAD",
-                    "REBASE_HEAD",
-                    "CHERRY_PICK_HEAD",
-                    "rebase-merge",
-                    "rebase-apply",
-                  ]) {
-                    const path = await host.pi.exec(
-                      "git",
-                      ["rev-parse", "--git-path", state],
-                      { cwd: targetPath, timeout: 10_000 },
-                    );
-                    if (path.code !== 0 || path.killed) {
-                      stateUnknown = true;
-                      continue;
-                    }
-                    try {
-                      statSync(
-                        resolve(targetPath, String(path.stdout ?? "").trim()),
-                      );
-                      operationStates.push(state);
-                    } catch (error) {
-                      if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-                        stateUnknown = true;
-                    }
-                  }
-                  const observedHead =
-                    observed.code === 0 && !observed.killed
-                      ? String(observed.stdout ?? "").trim()
-                      : "";
-                  const integrationVerified =
-                    !!observedHead &&
-                    containsAccepted.code === 0 &&
-                    !containsAccepted.killed &&
-                    observedBranch.code === 0 &&
-                    !observedBranch.killed &&
-                    !observedBranch.stderr?.trim() &&
-                    String(observedBranch.stdout ?? "").trim() === targetBranch;
-                  const gitStateClean =
-                    status.code === 0 &&
-                    !status.killed &&
-                    !status.stderr?.trim() &&
-                    !status.stdout?.trim() &&
-                    index.code === 0 &&
-                    !index.killed &&
-                    !index.stdout?.trim() &&
-                    !stateUnknown &&
-                    operationStates.length === 0;
-                  const divergentVerified =
-                    preStopFastForward ||
-                    (!!parents &&
-                      parents.code === 0 &&
-                      !parents.killed &&
-                      String(parents.stdout ?? "").trim() ===
-                        `${preStopTarget} ${expectedHead}` &&
-                      !!mergedTree &&
-                      mergedTree.code === 0 &&
-                      !mergedTree.killed &&
-                      String(mergedTree.stdout ?? "").trim() ===
-                        expectedMergeTree &&
-                      containsOriginalTarget?.code === 0 &&
-                      !containsOriginalTarget.killed);
-                  if (
-                    !integrationVerified ||
-                    !gitStateClean ||
-                    !divergentVerified ||
-                    (merged.code !== 0 && !interrupted)
-                  )
+                await clean(targetPath);
+                await clean(current.checkoutPath);
+                const currentSource = await output(current.checkoutPath, ["rev-parse", "HEAD"]);
+                const currentSourceBranch = await output(current.checkoutPath, [
+                  "symbolic-ref",
+                  "--short",
+                  "HEAD",
+                ]).catch(() => "");
+                const currentTargetBranch = await output(targetPath, [
+                  "symbolic-ref",
+                  "--short",
+                  "HEAD",
+                ]);
+                const currentTarget = await output(targetPath, ["rev-parse", "HEAD"]);
+                if (
+                  currentSource !== expectedHead ||
+                  currentSourceBranch !== sourceBranch ||
+                  (await output(current.checkoutPath, [
+                    "show-ref",
+                    "--verify",
+                    "--hash",
+                    `refs/heads/${sourceBranch}`,
+                  ])) !== expectedHead
+                )
+                  throw new Error("Accepted source branch or SHA changed before integration");
+                if (currentTargetBranch !== targetBranch)
+                  throw new Error("Primary target branch changed before integration");
+                if (await ancestry(expectedHead, currentTarget)) {
+                  if (!(await verifyPreviouslyIntegratedMerges(currentTarget)))
                     return {
                       kind: "blocked",
-                      targetHead: observedHead || currentTarget,
+                      targetHead: currentTarget,
                       targetBranch,
-                      integrated: integrationVerified,
-                      reason: !integrationVerified
-                        ? "accepted_revision_not_verified_after_merge"
-                        : !divergentVerified
-                          ? "divergent_merge_verification_failed"
-                          : `git_state_after_merge:${stateUnknown ? "unknown" : operationStates.join(",") || (index.stdout?.trim() ? "unmerged_index" : status.stdout?.trim() ? "dirty_worktree" : mergeError || merged.stderr || "merge_failed")}`,
+                      integrated: true,
+                      reason: "already_integrated_divergent_merge_unverified",
                     };
                   return {
                     kind: "integrated",
-                    targetHead: observedHead,
+                    targetHead: currentTarget,
                     targetBranch,
-                    alreadyIntegrated: false as const,
+                    alreadyIntegrated: true as const,
                   };
-                } finally {
-                  lease.release();
                 }
-              },
-              operationSignal,
-            ),
+                if (!(await ancestry(currentTarget, expectedHead)) && !permission().allowDivergence)
+                  return {
+                    kind: "tool-result",
+                    result: {
+                      content: [
+                        {
+                          type: "text" as const,
+                          text: `Branch ${branch} needs to incorporate target ${targetBranch} at ${currentTarget}.`,
+                        },
+                      ],
+                      details: {
+                        ok: false,
+                        action: "merge",
+                        branch,
+                        target_branch: targetBranch,
+                        source_head: expectedHead,
+                        target_head: currentTarget,
+                        status: "needs_update",
+                        integrated: false,
+                        checkout_removed: false,
+                        assignment_retired: false,
+                      },
+                    },
+                  };
+                if (!preStopFastForward && currentTarget !== preStopTarget)
+                  return {
+                    kind: "blocked",
+                    targetHead: currentTarget,
+                    targetBranch,
+                    integrated: false,
+                    reason: "target_changed_before_merge",
+                  };
+                if (!permission().enabled || (!preStopFastForward && !permission().allowDivergence))
+                  throw new Error("Manager local merge permission was revoked");
+                let mergeError: string | undefined;
+                const merged = await runGit(targetPath, [
+                  "merge",
+                  ...(preStopFastForward ? ["--ff-only"] : ["--no-ff", "--no-edit", "-s", "ort"]),
+                  "--no-autostash",
+                  "--no-overwrite-ignore",
+                  expectedHead,
+                ]).catch((error) => {
+                  mergeError = error instanceof Error ? error.message : String(error);
+                  return {
+                    code: -1,
+                    killed: true,
+                    stdout: "",
+                    stderr: mergeError,
+                  };
+                });
+                const interrupted = merged.killed === true || operationSignal?.aborted === true;
+                const observed = await host.pi.exec("git", ["rev-parse", "HEAD"], {
+                  cwd: targetPath,
+                  timeout: 10_000,
+                });
+                const index = await host.pi.exec("git", ["ls-files", "--unmerged"], {
+                  cwd: targetPath,
+                  timeout: 10_000,
+                });
+                const status = await host.pi.exec(
+                  "git",
+                  ["status", "--porcelain=v1", "--untracked-files=all"],
+                  { cwd: targetPath, timeout: 10_000 },
+                );
+                const containsAccepted = await host.pi.exec(
+                  "git",
+                  ["merge-base", "--is-ancestor", expectedHead, "HEAD"],
+                  { cwd: targetPath, timeout: 10_000 },
+                );
+                const parents = !preStopFastForward
+                  ? await host.pi.exec("git", ["show", "-s", "--format=%P", "HEAD"], {
+                      cwd: targetPath,
+                      timeout: 10_000,
+                    })
+                  : undefined;
+                const mergedTree = !preStopFastForward
+                  ? await host.pi.exec("git", ["rev-parse", "HEAD^{tree}"], {
+                      cwd: targetPath,
+                      timeout: 10_000,
+                    })
+                  : undefined;
+                const containsOriginalTarget = !preStopFastForward
+                  ? await host.pi.exec(
+                      "git",
+                      ["merge-base", "--is-ancestor", preStopTarget, "HEAD"],
+                      { cwd: targetPath, timeout: 10_000 },
+                    )
+                  : undefined;
+                const observedBranch = await host.pi.exec(
+                  "git",
+                  ["symbolic-ref", "--quiet", "--short", "HEAD"],
+                  { cwd: targetPath, timeout: 10_000 },
+                );
+                const operationStates: string[] = [];
+                let stateUnknown = false;
+                for (const state of [
+                  "MERGE_HEAD",
+                  "REBASE_HEAD",
+                  "CHERRY_PICK_HEAD",
+                  "rebase-merge",
+                  "rebase-apply",
+                ]) {
+                  const path = await host.pi.exec("git", ["rev-parse", "--git-path", state], {
+                    cwd: targetPath,
+                    timeout: 10_000,
+                  });
+                  if (path.code !== 0 || path.killed) {
+                    stateUnknown = true;
+                    continue;
+                  }
+                  try {
+                    statSync(resolve(targetPath, String(path.stdout ?? "").trim()));
+                    operationStates.push(state);
+                  } catch (error) {
+                    if ((error as NodeJS.ErrnoException).code !== "ENOENT") stateUnknown = true;
+                  }
+                }
+                const observedHead =
+                  observed.code === 0 && !observed.killed
+                    ? String(observed.stdout ?? "").trim()
+                    : "";
+                const integrationVerified =
+                  !!observedHead &&
+                  containsAccepted.code === 0 &&
+                  !containsAccepted.killed &&
+                  observedBranch.code === 0 &&
+                  !observedBranch.killed &&
+                  !observedBranch.stderr?.trim() &&
+                  String(observedBranch.stdout ?? "").trim() === targetBranch;
+                const gitStateClean =
+                  status.code === 0 &&
+                  !status.killed &&
+                  !status.stderr?.trim() &&
+                  !status.stdout?.trim() &&
+                  index.code === 0 &&
+                  !index.killed &&
+                  !index.stdout?.trim() &&
+                  !stateUnknown &&
+                  operationStates.length === 0;
+                const divergentVerified =
+                  preStopFastForward ||
+                  (!!parents &&
+                    parents.code === 0 &&
+                    !parents.killed &&
+                    String(parents.stdout ?? "").trim() === `${preStopTarget} ${expectedHead}` &&
+                    !!mergedTree &&
+                    mergedTree.code === 0 &&
+                    !mergedTree.killed &&
+                    String(mergedTree.stdout ?? "").trim() === expectedMergeTree &&
+                    containsOriginalTarget?.code === 0 &&
+                    !containsOriginalTarget.killed);
+                if (
+                  !integrationVerified ||
+                  !gitStateClean ||
+                  !divergentVerified ||
+                  (merged.code !== 0 && !interrupted)
+                )
+                  return {
+                    kind: "blocked",
+                    targetHead: observedHead || currentTarget,
+                    targetBranch,
+                    integrated: integrationVerified,
+                    reason: !integrationVerified
+                      ? "accepted_revision_not_verified_after_merge"
+                      : !divergentVerified
+                        ? "divergent_merge_verification_failed"
+                        : `git_state_after_merge:${stateUnknown ? "unknown" : operationStates.join(",") || (index.stdout?.trim() ? "unmerged_index" : status.stdout?.trim() ? "dirty_worktree" : mergeError || merged.stderr || "merge_failed")}`,
+                  };
+                return {
+                  kind: "integrated",
+                  targetHead: observedHead,
+                  targetBranch,
+                  alreadyIntegrated: false as const,
+                };
+              } finally {
+                lease.release();
+              }
+            },
+            operationSignal,
+          ),
         ),
     );
     if (integration.kind === "blocked")
@@ -3578,8 +3051,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         },
       });
       const d = removed.details as Record<string, unknown>;
-      const complete =
-        d.checkout_removed === true && d.assignment_retired === true;
+      const complete = d.checkout_removed === true && d.assignment_retired === true;
       return {
         content: [
           {
@@ -3641,8 +3113,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     let resumeMessageQueued = false;
     let resumeMessageQueueAttempted = false;
     let evidenceRetained = false;
-    const operationName =
-      operation.action === "resume" ? "resume_work" : "delegate_work";
+    const operationName = operation.action === "resume" ? "resume_work" : "delegate_work";
     const manager = await currentManager(ctx);
     if (
       !manager ||
@@ -3650,12 +3121,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       !sameManagerDescriptor(manager, leadRuntime.managerLease.descriptor)
     )
       throw new Error("Manager lease is no longer active");
-    const localScope = await localRepositoryScope(
-      pi,
-      ctx,
-      manager.workspaceId,
-      signal,
-    );
+    const localScope = await localRepositoryScope(pi, ctx, manager.workspaceId, signal);
     if (!localScope.isPrimary || localScope.repoKey !== manager.repoKey)
       throw new Error("Manager checkout is not the verified primary checkout");
     const primaryWorkspaceId = manager.workspaceId;
@@ -3670,9 +3136,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       const configured = override
         ? SettingsManager.inMemory({ sessionDir: override }).getSessionDir()
         : SettingsManager.create(cwd, agentDir).getSessionDir();
-      return configured
-        ? resolve(cwd, configured)
-        : SessionManager.create(cwd).getSessionDir();
+      return configured ? resolve(cwd, configured) : SessionManager.create(cwd).getSessionDir();
     };
     const topology = await runHerdr(
       pi,
@@ -3680,17 +3144,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       ["worktree", "list", "--cwd", localScope.checkoutPath],
       { signal },
     );
-    if (
-      topology?.source?.repo_key !== manager.repoKey ||
-      !Array.isArray(topology?.worktrees)
-    )
-      throw new Error(
-        "Herdr worktree topology is not authoritative during project activation",
-      );
+    if (topology?.source?.repo_key !== manager.repoKey || !Array.isArray(topology?.worktrees))
+      throw new Error("Herdr worktree topology is not authoritative during project activation");
     const existing = readProjectAssignment(runtime, manager.repoKey, branch);
-    const assertRequestedDefinition = (
-      assignment: ProjectAssignment | undefined,
-    ) => {
+    const assertRequestedDefinition = (assignment: ProjectAssignment | undefined) => {
       if (operation.action !== "resume" || !assignment) return;
       const saved = assignment.definition ?? MANAGED_LEAD_DEFINITION_NAME;
       if (operation.definition !== undefined && operation.definition !== saved)
@@ -3716,9 +3173,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (currentAssignment && currentAssignment.repoKey !== manager.repoKey)
       throw new Error("Project assignment belongs to another repository");
     if (operation.action === "delegate" && currentAssignment)
-      throw new Error(
-        `Work already exists on ${branch}; resume it with resume_work.`,
-      );
+      throw new Error(`Work already exists on ${branch}; resume it with resume_work.`);
     if (operation.action === "resume" && !currentAssignment)
       throw new Error(
         `No existing work was found on ${branch}; start it with delegate_work and a task.`,
@@ -3729,11 +3184,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         : (operation.definition ?? MANAGED_LEAD_DEFINITION_NAME);
     assertRequestedDefinition(currentAssignment);
     const presentationTask =
-      operation.action === "resume"
-        ? projectTaskSummary(currentAssignment!.text)
-        : undefined;
-    const id =
-      operation.action === "resume" ? currentAssignment!.id : operation.id;
+      operation.action === "resume" ? projectTaskSummary(currentAssignment!.text) : undefined;
+    const id = operation.action === "resume" ? currentAssignment!.id : operation.id;
     let resumeSenderEnvironment: SenderEnvironment | undefined;
     const resumeRecord = (
       text: string,
@@ -3750,23 +3202,15 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       leadSessionId: id,
       branch: currentAssignment!.branch,
       text,
-      ...(resumeSenderEnvironment
-        ? { senderEnvironment: resumeSenderEnvironment }
-        : {}),
+      ...(resumeSenderEnvironment ? { senderEnvironment: resumeSenderEnvironment } : {}),
       ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
       createdAt,
     });
-    let preparedResumeMessage:
-      Awaited<ReturnType<typeof prepareCoordinationInput>> | undefined;
+    let preparedResumeMessage: Awaited<ReturnType<typeof prepareCoordinationInput>> | undefined;
     let resumeEvidenceScope: Awaited<ReturnType<ManagerEvidence>> | undefined;
     const prepareResumeHandoff = async () => {
       if (operation.action !== "resume") return;
-      await withProjectAssignmentLock(
-        manager.repoKey,
-        branch,
-        assertResumePlacement,
-        signal,
-      );
+      await withProjectAssignmentLock(manager.repoKey, branch, assertResumePlacement, signal);
       resumeSenderEnvironment = await captureSenderEnvironment(host.pi, ctx);
       resumeMessageId ??= randomUUID();
       try {
@@ -3783,11 +3227,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           },
           (current) => {
             if (current.definition !== currentAssignment!.definition)
-              throw new Error(
-                "Project assignment definition changed before evidence retention",
-              );
-            if (placement?.status === "matched")
-              assertResumeDefinition(current, placement.path);
+              throw new Error("Project assignment definition changed before evidence retention");
+            if (placement?.status === "matched") assertResumeDefinition(current, placement.path);
           },
         );
         resumeEvidenceScope = handoff.evidenceScope;
@@ -3797,8 +3238,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           handoff.files,
           "resume_work",
           "Message",
-          (candidate, resultBindings) =>
-            resumeRecord(candidate, resultBindings, Date.now()),
+          (candidate, resultBindings) => resumeRecord(candidate, resultBindings, Date.now()),
         );
       } catch (error) {
         if (!evidenceRetained) throw error;
@@ -3832,9 +3272,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         // the assignment write cannot start a turn with stale task context.
         const publish = () => {
           resumeMessageQueueAttempted = true;
-          writeChiefMessage(
-            resumeRecord(prepared.text, prepared.resultBindings, createdAt + 1),
-          );
+          writeChiefMessage(resumeRecord(prepared.text, prepared.resultBindings, createdAt + 1));
           if (includeAssignment)
             writeChiefMessage({
               version: 2,
@@ -3847,9 +3285,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               leadSessionId: id,
               branch: currentAssignment!.branch,
               text: "Project assignment ready.",
-              ...(resumeSenderEnvironment
-                ? { senderEnvironment: resumeSenderEnvironment }
-                : {}),
+              ...(resumeSenderEnvironment ? { senderEnvironment: resumeSenderEnvironment } : {}),
               createdAt,
             });
         };
@@ -3864,8 +3300,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             },
             signal,
           );
-        if (resumeEvidenceScope)
-          await resumeEvidenceScope.revalidate(verifyAndPublish);
+        if (resumeEvidenceScope) await resumeEvidenceScope.revalidate(verifyAndPublish);
         else await verifyAndPublish();
       } catch (error) {
         if (!resumeMessageQueueAttempted) throw error;
@@ -3875,18 +3310,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       }
       resumeMessageQueued = true;
     };
-    const live =
-      operation.action === "resume"
-        ? await liveAgent(ctx, currentAssignment!.id)
-        : [];
+    const live = operation.action === "resume" ? await liveAgent(ctx, currentAssignment!.id) : [];
     let savedSessionCwd: string | undefined;
     if (operation.action === "resume" && currentAssignment!.piSessionFile) {
       let saved: ReturnType<typeof host.SessionManager.open>;
       try {
-        saved = openAssignedSession(
-          currentAssignment!,
-          currentAssignment!.piSessionFile!,
-        );
+        saved = openAssignedSession(currentAssignment!, currentAssignment!.piSessionFile!);
       } catch (error) {
         throw new Error(
           `Saved Lead session restoration failed for ${currentAssignment!.id}: recorded session history is unavailable or unreadable; existing work was preserved. ${error instanceof Error ? error.message : String(error)}`,
@@ -3896,20 +3325,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     }
     const placement =
       operation.action === "resume"
-        ? resolveAssignmentCheckout(
-            currentAssignment!,
-            topology.worktrees,
-            savedSessionCwd,
-          )
+        ? resolveAssignmentCheckout(currentAssignment!, topology.worktrees, savedSessionCwd)
         : undefined;
     if (placement && placement.status !== "matched")
       throw new Error(
         `Assigned checkout could not be verified: ${placement.reason}; existing work was preserved.`,
       );
     const resumeSessionDirectory =
-      placement?.status === "matched"
-        ? sessionDirectory(placement.path)
-        : undefined;
+      placement?.status === "matched" ? sessionDirectory(placement.path) : undefined;
     const assertResumeDefinition = (latest: ProjectAssignment, cwd: string) => {
       const nativePath = SessionManager.findById(
         canonicalCwd(cwd),
@@ -3922,34 +3345,26 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           ? !sameObservedSessionPath(latest.piSessionFile, nativePath)
           : name !== MANAGED_LEAD_DEFINITION_NAME)
       )
-        throw new Error(
-          "Saved Lead session conflicts with native exact-session lookup",
-        );
+        throw new Error("Saved Lead session conflicts with native exact-session lookup");
       const path = latest.piSessionFile ?? nativePath;
       if (path) openAssignedSession(latest, path);
       if (!path && live.length && name !== MANAGED_LEAD_DEFINITION_NAME)
-        throw new Error(
-          "Named Lead session binding is not yet recoverable on disk",
-        );
+        throw new Error("Named Lead session binding is not yet recoverable on disk");
     };
-    if (placement?.status === "matched")
-      assertResumeDefinition(currentAssignment!, placement.path);
+    if (placement?.status === "matched") assertResumeDefinition(currentAssignment!, placement.path);
     if (currentAssignment && operation.action === "resume") {
       const migrated = await migrateProjectAssignmentEvidenceAfter(
         runtime,
         currentAssignment,
         signal,
       );
-      if (!migrated)
-        throw new Error("Project assignment changed during resume");
+      if (!migrated) throw new Error("Project assignment changed during resume");
       currentAssignment = migrated;
     }
     const branchWorktrees =
       operation.action === "resume"
         ? [placement!.worktree]
-        : topology.worktrees.filter(
-            (worktree: any) => worktree?.branch === branch,
-          );
+        : topology.worktrees.filter((worktree: any) => worktree?.branch === branch);
     const assertResumePlacement = async () => {
       if (operation.action !== "resume" || !placement) return;
       const latest = readProjectAssignment(runtime, manager.repoKey, branch);
@@ -3959,9 +3374,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         latest.branch !== currentAssignment!.branch ||
         latest.definition !== currentAssignment!.definition
       )
-        throw new Error(
-          "Project assignment checkout changed during resume handoff",
-        );
+        throw new Error("Project assignment checkout changed during resume handoff");
       const currentTopology = await runHerdr(
         pi,
         ctx,
@@ -3984,23 +3397,15 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         currentPlacement.status !== "matched" ||
         !sameDirectory(currentPlacement.path, placement.path)
       )
-        throw new Error(
-          "Assigned checkout placement changed during resume handoff",
-        );
+        throw new Error("Assigned checkout placement changed during resume handoff");
       assertResumeDefinition(latest, currentPlacement.path);
     };
     if (branchWorktrees.length > 1)
       throw new Error(`Multiple Herdr worktrees match branch ${branch}`);
-    if (live.length > 1)
-      throw new Error(`Assignment ${id} has ambiguous live Lead identity`);
+    if (live.length > 1) throw new Error(`Assignment ${id} has ambiguous live Lead identity`);
     if (live.length === 1) {
       const state = readLeadCoordinationState(runtime, id);
-      requireCompatibleBuild(
-        HERDSMAN_BUILD,
-        state?.build,
-        operationName,
-        `Lead ${id}`,
-      );
+      requireCompatibleBuild(HERDSMAN_BUILD, state?.build, operationName, `Lead ${id}`);
       if (
         !branchWorktrees[0]?.open_workspace_id ||
         live[0].workspace_id !== branchWorktrees[0].open_workspace_id ||
@@ -4016,18 +3421,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       if (!fresh || !sameManagerDescriptor(fresh, manager))
         throw new Error("Manager changed during project activation");
       const latestState = readLeadCoordinationState(runtime, id);
-      requireCompatibleBuild(
-        HERDSMAN_BUILD,
-        latestState?.build,
-        operationName,
-        `Lead ${id}`,
-      );
+      requireCompatibleBuild(HERDSMAN_BUILD, latestState?.build, operationName, `Lead ${id}`);
       await bindLeadSessionFile(currentAssignment!, live[0]);
-      const stillAssigned = readProjectAssignment(
-        runtime,
-        manager.repoKey,
-        branch,
-      );
+      const stillAssigned = readProjectAssignment(runtime, manager.repoKey, branch);
       if (!stillAssigned || stillAssigned.id !== id)
         throw new Error("Project assignment changed during Lead activation");
       const current = await currentManager(ctx);
@@ -4037,11 +3433,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       if (partial) return partial;
       try {
         const postPrepareManager = await currentManager(ctx);
-        const postPrepareAssignment = readProjectAssignment(
-          runtime,
-          manager.repoKey,
-          branch,
-        );
+        const postPrepareAssignment = readProjectAssignment(runtime, manager.repoKey, branch);
         const postPrepareLive = await liveAgent(ctx, id);
         if (
           !postPrepareManager ||
@@ -4049,8 +3441,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           !postPrepareAssignment ||
           postPrepareAssignment.id !== id ||
           postPrepareLive.length !== 1 ||
-          postPrepareLive[0].workspace_id !==
-            branchWorktrees[0]?.open_workspace_id
+          postPrepareLive[0].workspace_id !== branchWorktrees[0]?.open_workspace_id
         )
           throw new Error(
             "Manager, assignment, or running Lead changed during resume handoff preparation",
@@ -4072,9 +3463,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             action: "resume",
             branch,
             session: id,
-            ...(uncertain
-              ? { enqueue_uncertain: true }
-              : { message_queued: false }),
+            ...(uncertain ? { enqueue_uncertain: true } : { message_queued: false }),
             recovery_verified: false,
             evidence_retained: true,
             status: uncertain ? "enqueue_unconfirmed" : "handoff_incomplete",
@@ -4104,17 +3493,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         },
       };
     }
-    if (
-      operation.action === "delegate" &&
-      branchWorktrees.length &&
-      operation.base
-    )
+    if (operation.action === "delegate" && branchWorktrees.length && operation.base)
       throw new Error("base applies only when Herdsman creates a new worktree");
     const assertUnoccupied = async (workspaceId: string) => {
       const inventory = await herdrSessionSnapshot(pi, ctx, signal);
-      const managed = new Set(
-        scanAgentStates().states.map(({ state }) => state.piSessionId),
-      );
+      const managed = new Set(scanAgentStates().states.map(({ state }) => state.piSessionId));
       const leads = inventory.agents.filter((agent: any) => {
         const session = herdrSessionId(agent);
         if (
@@ -4159,11 +3542,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         evidenceScope?.retained,
         evidenceScope?.roots,
       );
-      const projectBrief = persistRequiredEvidenceSnapshot(
-        id,
-        "project-brief.md",
-        operation.task,
-      );
+      const projectBrief = persistRequiredEvidenceSnapshot(id, "project-brief.md", operation.task);
       const attachedEvidence = requiredFiles(
         id,
         suppliedFiles,
@@ -4177,8 +3556,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         attachedEvidence.map<MessageFileInput>((evidence) => {
           if ("result" in evidence) return evidence.result;
 
-          if (!evidence.ref)
-            throw new Error("Required evidence has no semantic reference");
+          if (!evidence.ref) throw new Error("Required evidence has no semantic reference");
 
           return {
             kind: "retainedEvidence",
@@ -4202,17 +3580,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               branch,
               definition: name,
               text: candidate,
-              ...(resultBindings.length
-                ? { resultBindings: [...resultBindings] }
-                : {}),
+              ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
             }),
         },
       );
       const preCreationManager = await currentManager(ctx);
-      if (
-        !preCreationManager ||
-        !sameManagerDescriptor(preCreationManager, manager)
-      )
+      if (!preCreationManager || !sameManagerDescriptor(preCreationManager, manager))
         throw new Error("Manager changed before project activation");
       assignment = {
         version: 2,
@@ -4223,19 +3596,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         text: prepared.text,
         ...(requiredEvidence.length ? { requiredEvidence } : {}),
         currentEvidenceIds: requiredEvidence.map((evidence) => evidence.id),
-        ...(prepared.resultBindings.length
-          ? { resultBindings: prepared.resultBindings }
-          : {}),
+        ...(prepared.resultBindings.length ? { resultBindings: prepared.resultBindings } : {}),
       };
     }
     const promptPaths: string[] = [];
     try {
-      const currentScope = await localRepositoryScope(
-        pi,
-        ctx,
-        manager.workspaceId,
-        signal,
-      );
+      const currentScope = await localRepositoryScope(pi, ctx, manager.workspaceId, signal);
       const current = await currentManager(ctx);
       if (
         !currentScope.isPrimary ||
@@ -4255,31 +3621,21 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       let selectedDefinition: ReturnType<typeof resolveDefinition> | undefined;
       const assignedPlacement =
         operation.action === "resume"
-          ? resolveAssignmentCheckout(
-              assignment,
-              topology.worktrees,
-              savedSessionCwd,
-            )
+          ? resolveAssignmentCheckout(assignment, topology.worktrees, savedSessionCwd)
           : undefined;
       const matchingWorktrees =
         operation.action === "resume"
           ? assignedPlacement?.status === "matched"
             ? [assignedPlacement.worktree]
             : []
-          : topology.worktrees.filter(
-              (worktree: any) => worktree?.branch === assignment.branch,
-            );
+          : topology.worktrees.filter((worktree: any) => worktree?.branch === assignment.branch);
       if (matchingWorktrees.length > 1)
-        throw new Error(
-          `Multiple Herdr worktrees match assignment branch ${assignment.branch}`,
-        );
+        throw new Error(`Multiple Herdr worktrees match assignment branch ${assignment.branch}`);
       if (matchingWorktrees.length === 1) {
         const worktree = matchingWorktrees[0];
         cwd = worktree?.path;
         if (typeof cwd !== "string" || !cwd)
-          throw new Error(
-            `Herdr worktree for branch ${assignment.branch} has no exact path`,
-          );
+          throw new Error(`Herdr worktree for branch ${assignment.branch} has no exact path`);
         {
           const opened = await runHerdr(
             pi,
@@ -4305,9 +3661,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             (!opened?.worktree?.path ||
               !sameDirectory(opened.worktree.path, assignedPlacement.path))
           )
-            throw new Error(
-              "Herdr opened a different checkout than the persisted assignment",
-            );
+            throw new Error("Herdr opened a different checkout than the persisted assignment");
         }
       } else {
         if (operation.action === "resume")
@@ -4320,11 +3674,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               ["for-each-ref", "--format=%(refname)", destinationRef],
               { cwd: localScope.checkoutPath, signal, timeout: 3_000 },
             );
-            if (
-              destination.code !== 0 ||
-              destination.killed ||
-              destination.truncated
-            )
+            if (destination.code !== 0 || destination.killed || destination.truncated)
               throw new Error("branch lookup unavailable");
             const branchExists = String(destination.stdout ?? "")
               .split(/\r?\n/u)
@@ -4364,21 +3714,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               ) {
                 const commit = await pi.exec(
                   "git",
-                  [
-                    "rev-parse",
-                    "--verify",
-                    "--end-of-options",
-                    `${operation.base}^{commit}`,
-                  ],
+                  ["rev-parse", "--verify", "--end-of-options", `${operation.base}^{commit}`],
                   { cwd: localScope.checkoutPath, signal, timeout: 3_000 },
                 );
                 signal?.throwIfAborted();
-                if (
-                  commit.code !== 0 ||
-                  commit.killed ||
-                  commit.truncated ||
-                  commit.stderr?.trim()
-                )
+                if (commit.code !== 0 || commit.killed || commit.truncated || commit.stderr?.trim())
                   throw new Error("comparison commit lookup unavailable");
                 const sha = String(commit.stdout ?? "").trim();
                 if (sha === operation.base.toLowerCase()) {
@@ -4386,12 +3726,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                   // Git ancestry alone cannot establish later PR retargeting intent.
                   const parents = await pi.exec(
                     "git",
-                    [
-                      "for-each-ref",
-                      `--points-at=${sha}`,
-                      "--format=%(refname)",
-                      "refs/heads/",
-                    ],
+                    ["for-each-ref", `--points-at=${sha}`, "--format=%(refname)", "refs/heads/"],
                     { cwd: localScope.checkoutPath, signal, timeout: 3_000 },
                   );
                   signal?.throwIfAborted();
@@ -4416,8 +3751,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             }
           } catch {
             if (signal?.aborted) throw signal.reason;
-            comparisonWarning =
-              "Could not initialize the branch comparison target.";
+            comparisonWarning = "Could not initialize the branch comparison target.";
           }
         }
         const args = [
@@ -4438,10 +3772,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         initialPaneId = created?.root_pane?.pane_id;
         initialTabId = created?.tab?.tab_id;
         cwd = created?.worktree?.path;
-        if (
-          created?.worktree?.branch &&
-          created.worktree.branch !== assignment.branch
-        )
+        if (created?.worktree?.branch && created.worktree.branch !== assignment.branch)
           throw new Error(
             "Herdr created a worktree on a different branch than the persisted assignment",
           );
@@ -4459,11 +3790,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         throw new Error("Herdr did not return exact worktree identities");
       const assertAssignedGitCheckout = async (checkout: string) => {
         const [common, branchResult] = await Promise.all([
-          pi.exec(
-            "git",
-            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-            { cwd: checkout, signal, timeout: 10_000 },
-          ),
+          pi.exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+            cwd: checkout,
+            signal,
+            timeout: 10_000,
+          }),
           pi.exec("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], {
             cwd: checkout,
             signal,
@@ -4481,26 +3812,18 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           !sameDirectory(String(common.stdout).trim(), manager.repoKey) ||
           String(branchResult.stdout ?? "").trim() !== assignment.branch
         )
-          throw new Error(
-            "Herdr checkout does not match the assigned repository and branch",
-          );
+          throw new Error("Herdr checkout does not match the assigned repository and branch");
       };
       if (operation.action === "delegate") {
         await assertAssignedGitCheckout(cwd);
         if (
           !isAbsolute(cwd!) ||
           workspaceId === primaryWorkspaceId ||
-          !sameDirectory(
-            topology.source.source_checkout_path,
-            localScope.checkoutPath,
-          ) ||
+          !sameDirectory(topology.source.source_checkout_path, localScope.checkoutPath) ||
           sameDirectory(cwd!, topology.source.source_checkout_path) ||
-          (matchingWorktrees.length === 1 &&
-            !sameDirectory(cwd!, matchingWorktrees[0]!.path))
+          (matchingWorktrees.length === 1 && !sameDirectory(cwd!, matchingWorktrees[0]!.path))
         )
-          throw new Error(
-            "Herdr checkout is not the verified linked project worktree",
-          );
+          throw new Error("Herdr checkout is not the verified linked project worktree");
         effectiveProjectTrusted = ctx.isProjectTrusted();
         selectedDefinition = resolveDefinition("lead", name, {
           usage: "assigned-lead",
@@ -4510,9 +3833,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         assignment = { ...assignment, checkoutPath: realpathSync.native(cwd!) };
         const fresh = await currentManager(ctx);
         if (!fresh || !sameManagerDescriptor(fresh, manager))
-          throw new Error(
-            "Manager changed before project assignment was published",
-          );
+          throw new Error("Manager changed before project assignment was published");
         await withProjectAssignmentLock(
           manager.repoKey,
           assignment.branch,
@@ -4525,19 +3846,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               signal,
               () => {
                 const currentLease = host.managerLease();
-                const liveManager = readManagerDescriptor(
-                  runtime,
-                  manager.canonicalRepoKey,
-                );
+                const liveManager = readManagerDescriptor(runtime, manager.canonicalRepoKey);
                 if (
                   host.activeRole() !== "manager" ||
                   host.leadRuntime.roleSuspended ||
                   ctx.sessionManager.getSessionId() !== manager.piSessionId ||
                   !currentLease ||
-                  !host.sameManagerDescriptor(
-                    currentLease.descriptor,
-                    manager,
-                  ) ||
+                  !host.sameManagerDescriptor(currentLease.descriptor, manager) ||
                   currentLease.descriptor.leaseId !== manager.leaseId ||
                   !liveManager ||
                   !host.sameManagerDescriptor(liveManager, manager)
@@ -4554,19 +3869,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                     let claimedPath = existing.checkoutPath;
                     if (!claimedPath && existing.piSessionFile) {
                       try {
-                        const saved = host.SessionManager.open(
-                          existing.piSessionFile,
-                        );
-                        if (saved.getSessionId() === existing.id)
-                          claimedPath = saved.getCwd();
+                        const saved = host.SessionManager.open(existing.piSessionFile);
+                        if (saved.getSessionId() === existing.id) claimedPath = saved.getCwd();
                       } catch {
                         // Unverifiable legacy records do not establish a checkout claim.
                       }
                     }
-                    return (
-                      !!claimedPath &&
-                      sameDirectory(claimedPath, assignment.checkoutPath!)
-                    );
+                    return !!claimedPath && sameDirectory(claimedPath, assignment.checkoutPath!);
                   });
                 if (competingClaim)
                   throw new Error(
@@ -4595,8 +3904,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         (agent.name === expectedName ||
           (isPiAgent(agent) &&
             (herdrSessionId(agent) === assignment.id ||
-              (agent.pane_id === initialPaneId &&
-                agent.tab_id === initialTabId))));
+              (agent.pane_id === initialPaneId && agent.tab_id === initialTabId))));
       const assertManagerCurrent = async () => {
         const fresh = await currentManager(ctx);
         if (!fresh || !sameManagerDescriptor(fresh, manager))
@@ -4622,33 +3930,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             // The project work lock serializes Herdsman operations; external Git edits are not coordinated.
             const written = await pi.exec(
               "git",
-              [
-                "config",
-                "--local",
-                "--no-includes",
-                "--add",
-                key,
-                comparisonTarget,
-              ],
+              ["config", "--local", "--no-includes", "--add", key, comparisonTarget],
               { cwd: localScope.checkoutPath, signal, timeout: 3_000 },
             );
-            if (
-              written.code !== 0 ||
-              written.killed ||
-              written.truncated ||
-              written.stderr?.trim()
-            )
+            if (written.code !== 0 || written.killed || written.truncated || written.stderr?.trim())
               throw new Error("comparison target write failed");
             const readback = await pi.exec(
               "git",
-              [
-                "config",
-                "--local",
-                "--no-includes",
-                "--null",
-                "--get-all",
-                key,
-              ],
+              ["config", "--local", "--no-includes", "--null", "--get-all", key],
               { cwd: localScope.checkoutPath, signal, timeout: 3_000 },
             );
             const values = String(readback.stdout ?? "").split("\0");
@@ -4675,8 +3964,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           if (signal?.aborted) throw signal.reason;
           await assertManagerCurrent();
           await assertAssignedGitCheckout(cwd!);
-          comparisonWarning =
-            "Could not initialize the branch comparison target.";
+          comparisonWarning = "Could not initialize the branch comparison target.";
         }
       }
       const verifyLeadCandidate = (candidate: any): boolean => {
@@ -4684,14 +3972,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         if (!reported) return false;
         const resolvedSessionId = herdrSessionId(candidate);
         if (resolvedSessionId && resolvedSessionId !== assignment.id)
-          throw new Error(
-            "Herdr session identity does not match the Manager assignment",
-          );
+          throw new Error("Herdr session identity does not match the Manager assignment");
         if (requireResolvedSession && !resolvedSessionId) return false;
-        const state = readLeadCoordinationState(
-          supervisionRuntime(),
-          assignment.id,
-        );
+        const state = readLeadCoordinationState(supervisionRuntime(), assignment.id);
         if (state)
           requireCompatibleBuild(
             HERDSMAN_BUILD,
@@ -4704,13 +3987,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         );
         if (
           managed ||
-          (state &&
-            ((state.role ?? "lead") !== "lead" ||
-              state.piSessionId !== assignment.id))
+          (state && ((state.role ?? "lead") !== "lead" || state.piSessionId !== assignment.id))
         )
-          throw new Error(
-            "Existing session in new worktree has a conflicting role or identity",
-          );
+          throw new Error("Existing session in new worktree has a conflicting role or identity");
         if (startedLead) {
           freshRestorationAttestation =
             leadStartupStartedAt !== undefined &&
@@ -4725,10 +4004,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         return state?.role === "lead" && state.piSessionId === assignment.id;
       };
       const currentInventory = await herdrSessionSnapshot(pi, ctx, signal);
-      const currentCandidates =
-        currentInventory.agents.filter(isCurrentCandidate);
-      if (currentCandidates.length > 1)
-        throw new Error("Ambiguous Lead session in new worktree");
+      const currentCandidates = currentInventory.agents.filter(isCurrentCandidate);
+      if (currentCandidates.length > 1) throw new Error("Ambiguous Lead session in new worktree");
       if (currentCandidates.length === 1) {
         const candidate = currentCandidates[0];
         if (
@@ -4737,12 +4014,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           typeof candidate.tab_id !== "string" ||
           !candidate.tab_id
         )
-          throw new Error(
-            "Herdr did not report exact existing Lead tab identities",
-          );
+          throw new Error("Herdr did not report exact existing Lead tab identities");
         requireResolvedSession =
-          candidate.pane_id !== initialPaneId ||
-          candidate.tab_id !== initialTabId;
+          candidate.pane_id !== initialPaneId || candidate.tab_id !== initialTabId;
         paneId = candidate.pane_id;
         tabId = candidate.tab_id;
         if (verifyLeadCandidate(candidate)) lead = candidate;
@@ -4764,14 +4038,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         );
       };
       if (!lead) {
-        const piAlreadyRunning =
-          currentCandidates.length === 1 || (await originalPaneRunsPi());
+        const piAlreadyRunning = currentCandidates.length === 1 || (await originalPaneRunsPi());
         if (!piAlreadyRunning) {
           await assertResumePlacement();
           await assertUnoccupied(workspaceId!);
           requireHerdrPiIntegration(agentDir);
-          const projectTrusted =
-            effectiveProjectTrusted ?? ctx.isProjectTrusted();
+          const projectTrusted = effectiveProjectTrusted ?? ctx.isProjectTrusted();
           effectiveProjectTrusted = projectTrusted;
           const definition =
             selectedDefinition ??
@@ -4782,25 +4054,15 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             });
           if (operation.action === "resume") {
             const fresh = await currentManager(ctx);
-            const stillAssigned = readProjectAssignment(
-              runtime,
-              manager.repoKey,
-              branch,
-            );
+            const stillAssigned = readProjectAssignment(runtime, manager.repoKey, branch);
             if (!fresh || !sameManagerDescriptor(fresh, manager))
               throw new Error("Manager changed before resume handoff");
             if (!stillAssigned || stillAssigned.id !== assignment.id)
-              throw new Error(
-                "Project assignment changed before resume handoff",
-              );
+              throw new Error("Project assignment changed before resume handoff");
             const partial = await prepareResumeHandoff();
             if (partial) return partial;
             const postPrepareManager = await currentManager(ctx);
-            const postPrepareAssignment = readProjectAssignment(
-              runtime,
-              manager.repoKey,
-              branch,
-            );
+            const postPrepareAssignment = readProjectAssignment(runtime, manager.repoKey, branch);
             if (
               !postPrepareManager ||
               !sameManagerDescriptor(postPrepareManager, manager) ||
@@ -4820,8 +4082,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             body === definition.body ? definition : { ...definition, body };
           if (body) promptPaths.push(...writePrivatePromptSnapshots([body]));
           const configured = configuredModel(effectiveDefinition.frontmatter);
-          const inheritedModel =
-            operation.action === "delegate" ? ctx.model : undefined;
+          const inheritedModel = operation.action === "delegate" ? ctx.model : undefined;
           const modelDecision = resolveChildModel({
             configured,
             inherited: inheritedModel
@@ -4833,10 +4094,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           });
           const expectedStartupModel =
             !configured && inheritedModel
-              ? inheritedStartupModelExpectation(
-                  ctx.modelRegistry,
-                  inheritedModel,
-                )
+              ? inheritedStartupModelExpectation(ctx.modelRegistry, inheritedModel)
               : undefined;
           const launchArgs = agentLaunchArgs(effectiveDefinition, {
             ...(body ? { bodyPromptPath: promptPaths.at(-1)! } : {}),
@@ -4850,49 +4108,34 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           });
           // Keep the initial tab: Herdr cannot conditionally close it while
           // proving atomically that no user process has taken ownership.
-          const pane = await (
-            host.prepareHerdrCoordinatorPane ?? prepareHerdrCoordinatorPane
-          )(pi, ctx, {
-            workspaceId: workspaceId!,
-            cwd: cwd!,
-            agentDir,
-            label,
-            signal,
-            workspaceVerified: true,
-            env: [
-              `${EXPECTED_ASSIGNED_LEAD_DEFINITION_ENV}=${JSON.stringify({ sessionId: assignment.id, name, projectTrusted })}`,
-              ...(expectedStartupModel
-                ? [
-                    `${EXPECTED_STARTUP_MODEL_ENV}=${JSON.stringify(expectedStartupModel)}`,
-                  ]
-                : []),
-            ],
-            assertCurrentAuthority: assertManagerCurrent,
-          });
-          if (operation.action === "delegate")
-            await assertAssignedGitCheckout(cwd);
+          const pane = await (host.prepareHerdrCoordinatorPane ?? prepareHerdrCoordinatorPane)(
+            pi,
+            ctx,
+            {
+              workspaceId: workspaceId!,
+              cwd: cwd!,
+              agentDir,
+              label,
+              signal,
+              workspaceVerified: true,
+              env: [
+                `${EXPECTED_ASSIGNED_LEAD_DEFINITION_ENV}=${JSON.stringify({ sessionId: assignment.id, name, projectTrusted })}`,
+                ...(expectedStartupModel
+                  ? [`${EXPECTED_STARTUP_MODEL_ENV}=${JSON.stringify(expectedStartupModel)}`]
+                  : []),
+              ],
+              assertCurrentAuthority: assertManagerCurrent,
+            },
+          );
+          if (operation.action === "delegate") await assertAssignedGitCheckout(cwd);
           else await assertResumePlacement();
           const latestInventory = await assertUnoccupied(workspaceId!);
-          if (
-            latestInventory.agents.some(isCurrentCandidate) ||
-            (await originalPaneRunsPi())
-          )
-            throw new Error(
-              "A Lead appeared during tab creation; work was preserved",
-            );
+          if (latestInventory.agents.some(isCurrentCandidate) || (await originalPaneRunsPi()))
+            throw new Error("A Lead appeared during tab creation; work was preserved");
           await assertManagerCurrent();
-          const latest = readProjectAssignment(
-            runtime,
-            manager.repoKey,
-            branch,
-          );
-          if (
-            latest?.id !== assignment.id ||
-            latest.definition !== assignment.definition
-          )
-            throw new Error(
-              "Project assignment changed during Lead tab creation",
-            );
+          const latest = readProjectAssignment(runtime, manager.repoKey, branch);
+          if (latest?.id !== assignment.id || latest.definition !== assignment.definition)
+            throw new Error("Project assignment changed during Lead tab creation");
           tabId = pane.tabId;
           paneId = pane.paneId;
           previousLeadInstanceId = readLeadCoordinationState(
@@ -4901,9 +4144,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           )?.instanceId;
           leadStartupStartedAt = Date.now();
           if (!admissionClaim || !workspaceId || !tabId || !paneId || !cwd)
-            throw new Error(
-              "Assigned Lead launch is missing its Coordinator admission identity",
-            );
+            throw new Error("Assigned Lead launch is missing its Coordinator admission identity");
           const agentArgs = [
             ...launchArgs,
             "--session-dir",
@@ -4926,9 +4167,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             admission: admissionClaim,
           };
           writeCoordinatorStartIntent(runtime, intent);
-          await (
-            host.startHerdrCoordinatorInPane ?? startHerdrCoordinatorInPane
-          )(pi, ctx, {
+          await (host.startHerdrCoordinatorInPane ?? startHerdrCoordinatorInPane)(pi, ctx, {
             agentDir,
             workspaceId,
             tabId,
@@ -4941,29 +4180,16 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             session: { id: assignment.id },
             assertCurrentAuthority: async () => {
               await assertManagerCurrent();
-              const current = readProjectAssignment(
-                runtime,
-                manager.repoKey,
-                branch,
-              );
-              if (
-                current?.id !== assignment.id ||
-                current.definition !== assignment.definition
-              )
-                throw new Error(
-                  "Project assignment changed before Lead launch",
-                );
-              if (operation.action === "delegate")
-                await assertAssignedGitCheckout(cwd);
+              const current = readProjectAssignment(runtime, manager.repoKey, branch);
+              if (current?.id !== assignment.id || current.definition !== assignment.definition)
+                throw new Error("Project assignment changed before Lead launch");
+              if (operation.action === "delegate") await assertAssignedGitCheckout(cwd);
               else await assertResumePlacement();
             },
             agentArgs,
             signal,
           }).catch((error: unknown) => {
-            if (
-              error instanceof HerdrStartFailure &&
-              !error.attempt.launchMayHaveStarted
-            ) {
+            if (error instanceof HerdrStartFailure && !error.attempt.launchMayHaveStarted) {
               try {
                 removeCoordinatorStartIntent(runtime, intent);
               } catch (cleanupError) {
@@ -4993,21 +4219,16 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             agent.pane_id === paneId &&
             agent.tab_id === tabId,
         );
-        if (candidates.length > 1)
-          throw new Error("Ambiguous Lead session in new worktree");
+        if (candidates.length > 1) throw new Error("Ambiguous Lead session in new worktree");
         if (candidates.length === 1) {
           piProcessSeen = true;
           herdrSessionReported = Boolean(candidates[0]?.agent_session);
           const sessionId = herdrSessionId(candidates[0]);
           sessionIdResolved = Boolean(sessionId);
-          const candidateState = readLeadCoordinationState(
-            supervisionRuntime(),
-            assignment.id,
-          );
+          const candidateState = readLeadCoordinationState(supervisionRuntime(), assignment.id);
           leadStateObserved = Boolean(candidateState);
           leadIdentityObserved =
-            candidateState?.role === "lead" &&
-            candidateState.piSessionId === assignment.id;
+            candidateState?.role === "lead" && candidateState.piSessionId === assignment.id;
           if (candidateState)
             requireCompatibleBuild(
               HERDSMAN_BUILD,
@@ -5021,12 +4242,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           }
         }
         try {
-          const process = await runHerdr(
-            pi,
-            ctx,
-            ["pane", "process-info", "--pane", paneId],
-            { signal },
-          );
+          const process = await runHerdr(pi, ctx, ["pane", "process-info", "--pane", paneId], {
+            signal,
+          });
           const foreground = process?.process_info?.foreground_processes;
           piProcessSeen ||=
             Array.isArray(foreground) &&
@@ -5056,23 +4274,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                     : "Lead coordination state was present but not a valid Lead identity";
         let processInfo = "unavailable";
         try {
-          const process = await runHerdr(
-            pi,
-            ctx,
-            ["pane", "process-info", "--pane", paneId],
-            { signal },
-          );
+          const process = await runHerdr(pi, ctx, ["pane", "process-info", "--pane", paneId], {
+            signal,
+          });
           processInfo = JSON.stringify(process?.process_info).slice(0, 1024);
         } catch {
           processInfo = "unavailable";
         }
-        const pane = await captureStartupDiagnostic(
-          pi,
-          ctx,
-          paneId,
-          Date.now() + 2_000,
-          signal,
-        );
+        const pane = await captureStartupDiagnostic(pi, ctx, paneId, Date.now() + 2_000, signal);
         const diagnostic = JSON.stringify({
           readiness,
           paneId,
@@ -5089,18 +4298,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       if (operation.action === "resume" && !resumeMessageQueued) {
         if (name !== MANAGED_LEAD_DEFINITION_NAME) {
           const path = supervisedSessionFile(lead, assignment.id);
-          if (!path)
-            throw new Error(
-              "Named Lead session binding is not yet recoverable on disk",
-            );
+          if (!path) throw new Error("Named Lead session binding is not yet recoverable on disk");
           openAssignedSession(assignment, path);
         }
         const fresh = await currentManager(ctx);
-        const stillAssigned = readProjectAssignment(
-          runtime,
-          manager.repoKey,
-          branch,
-        );
+        const stillAssigned = readProjectAssignment(runtime, manager.repoKey, branch);
         if (!fresh || !sameManagerDescriptor(fresh, manager))
           throw new Error("Manager changed before resume handoff");
         if (!stillAssigned || stillAssigned.id !== assignment.id)
@@ -5108,11 +4310,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         const partial = await prepareResumeHandoff();
         if (partial) return partial;
         const postPrepareManager = await currentManager(ctx);
-        const postPrepareAssignment = readProjectAssignment(
-          runtime,
-          manager.repoKey,
-          branch,
-        );
+        const postPrepareAssignment = readProjectAssignment(runtime, manager.repoKey, branch);
         if (
           !postPrepareManager ||
           !sameManagerDescriptor(postPrepareManager, manager) ||
@@ -5126,10 +4324,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         await queueResumeHandoff(false);
       }
       await assertManagerCurrent();
-      const latestState = readLeadCoordinationState(
-        supervisionRuntime(),
-        assignment.id,
-      );
+      const latestState = readLeadCoordinationState(supervisionRuntime(), assignment.id);
       requireCompatibleBuild(
         HERDSMAN_BUILD,
         latestState?.build,
@@ -5167,9 +4362,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             candidate.tab_id === tabId,
         );
         if (exact.length > 1)
-          throw new Error(
-            "Lead identity became ambiguous during project activation",
-          );
+          throw new Error("Lead identity became ambiguous during project activation");
         if (exact.length === 1) {
           if (name !== MANAGED_LEAD_DEFINITION_NAME) {
             const path = supervisedSessionFile(exact[0], assignment.id);
@@ -5180,8 +4373,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 .some(
                   (entry) =>
                     entry.type === "message" &&
-                    (entry.message.role === "user" ||
-                      entry.message.role === "assistant"),
+                    (entry.message.role === "user" || entry.message.role === "assistant"),
                 )
             ) {
               await delay(100, undefined, { signal });
@@ -5227,11 +4419,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       }
       await assertManagerCurrent();
       if (rediscoveredSessionFile)
-        await persistLeadSessionFile(
-          assignment,
-          rediscoveredSessionFile,
-          signal,
-        );
+        await persistLeadSessionFile(assignment, rediscoveredSessionFile, signal);
       else await bindLeadSessionFile(assignment, rediscovered, signal);
       return {
         content: [
@@ -5243,9 +4431,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               session: leadSessionId,
               workspace_id: workspaceId,
               branch: assignment.branch,
-              ...(comparisonWarning
-                ? { comparison_warning: comparisonWarning }
-                : {}),
+              ...(comparisonWarning ? { comparison_warning: comparisonWarning } : {}),
               ...(effectiveProjectTrusted === undefined
                 ? {}
                 : {
@@ -5270,9 +4456,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           session: leadSessionId,
           workspace_id: workspaceId,
           branch: assignment.branch,
-          ...(comparisonWarning
-            ? { comparison_warning: comparisonWarning }
-            : {}),
+          ...(comparisonWarning ? { comparison_warning: comparisonWarning } : {}),
           ...(effectiveProjectTrusted === undefined
             ? {}
             : {
@@ -5361,8 +4545,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw error;
     } finally {
       for (const promptPath of promptPaths)
-        if (statSync(promptPath, { throwIfNoEntry: false }))
-          unlinkSync(promptPath);
+        if (statSync(promptPath, { throwIfNoEntry: false })) unlinkSync(promptPath);
     }
   };
   const executeStaff = async (
@@ -5373,9 +4556,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     ctx: ExtensionContext,
   ): Promise<AgentToolResult<any>> => {
     const action =
-      raw && typeof raw === "object"
-        ? (raw as { action?: unknown }).action
-        : undefined;
+      raw && typeof raw === "object" ? (raw as { action?: unknown }).action : undefined;
     if (
       action !== "delegate" &&
       action !== "resume" &&
@@ -5386,14 +4567,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       return executeStaffUnderAdmission(_id, raw, signal, _update, ctx);
     const admission = acquireCoordinatorAdmission();
     try {
-      return await executeStaffUnderAdmission(
-        _id,
-        raw,
-        signal,
-        _update,
-        ctx,
-        admission.claim,
-      );
+      return await executeStaffUnderAdmission(_id, raw, signal, _update, ctx, admission.claim);
     } finally {
       admission.release();
     }
@@ -5409,28 +4583,20 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     if (activeRole() !== "chief" && activeRole() !== "manager")
       throw new Error("Staff is available only to active supervisors");
     const authority =
-      activeRole() === "chief"
-        ? await currentChiefAuthority(ctx)
-        : await currentManager(ctx);
+      activeRole() === "chief" ? await currentChiefAuthority(ctx) : await currentManager(ctx);
     if (!authority || leadRuntime.roleSuspended)
       throw new Error("Supervisor lease is no longer active");
     const params = raw as StaffOperation;
     const resolveActiveAssignedBranch = async (branch: string) => {
       const manager = await currentManager(ctx);
       const assignment =
-        manager &&
-        host.readProjectAssignment(
-          host.supervisionRuntime(),
-          manager.repoKey,
-          branch,
-        );
+        manager && host.readProjectAssignment(host.supervisionRuntime(), manager.repoKey, branch);
       if (!assignment) throw new Error("Project assignment was not found");
       const snapshot = await loadSupervisionSnapshot(ctx);
       if ("managers" in snapshot)
         throw new Error("Assigned work is unavailable in a Chief snapshot");
       const matches = snapshot.work?.filter(
-        (work: any) =>
-          work.branch === assignment.branch && work.session === assignment.id,
+        (work: any) => work.branch === assignment.branch && work.session === assignment.id,
       );
       const incompatible = snapshot.incompatible?.find(
         (report) => report.role === "lead" && report.session === assignment.id,
@@ -5443,9 +4609,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           `lead on branch ${branch}`,
         );
       if (matches?.length === 1 && matches[0]?.status === "unknown")
-        throw new Error(
-          "Assigned Lead verification is unavailable; no staff action was taken",
-        );
+        throw new Error("Assigned Lead verification is unavailable; no staff action was taken");
       if (matches?.length !== 1 || matches[0]?.status !== "active") {
         throw new Error("Assigned work is not uniquely active");
       }
@@ -5455,24 +4619,15 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           lead.relationship === "assigned" &&
           lead.branch === assignment.branch,
       );
-      if (leads.length !== 1)
-        throw new Error("Assigned Lead is not eligible for staff action");
+      if (leads.length !== 1) throw new Error("Assigned Lead is not eligible for staff action");
       const lead = leads[0]!;
-      if (!lead.instanceId)
-        throw new Error("Assigned Lead identity is unavailable");
+      if (!lead.instanceId) throw new Error("Assigned Lead identity is unavailable");
       return { assignment, lead: { ...lead, instanceId: lead.instanceId } };
     };
     if (params.action === "delegate" || params.action === "resume") {
-      if (activeRole() !== "manager")
-        throw new Error("Only Managers can control project work");
-      if (!admissionClaim)
-        throw new Error("Coordinator admission claim is unavailable");
-      return activateProjectLeadUnderAdmission(
-        params,
-        ctx,
-        signal,
-        admissionClaim,
-      );
+      if (activeRole() !== "manager") throw new Error("Only Managers can control project work");
+      if (!admissionClaim) throw new Error("Coordinator admission claim is unavailable");
+      return activateProjectLeadUnderAdmission(params, ctx, signal, admissionClaim);
     }
     if (params.action === "merge") {
       if (activeRole() !== "manager")
@@ -5480,23 +4635,16 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       return mergeProject(params.branch, params.expected_head, ctx, signal);
     }
     if (params.action === "remove") {
-      if (activeRole() !== "manager")
-        throw new Error("Only Managers can remove project worktrees");
+      if (activeRole() !== "manager") throw new Error("Only Managers can remove project worktrees");
       const operationSignal = signal ?? ctx.signal;
       operationSignal?.throwIfAborted();
-      const target = await inspectRemovalTarget(
-        params.branch,
-        ctx,
-        operationSignal,
-        true,
-      );
+      const target = await inspectRemovalTarget(params.branch, ctx, operationSignal, true);
       await assertNoUnrelatedPiExecution(target, ctx, operationSignal);
       if (isWorktreeRemovalPreapproved(target.manager.repoKey))
         return removeWorktree(params.branch, ctx, operationSignal, {
           preauthorized: true,
         });
-      if (!ctx.hasUI)
-        throw new Error("Worktree removal approval requires an interactive UI");
+      if (!ctx.hasUI) throw new Error("Worktree removal approval requires an interactive UI");
       const pending: PendingRemoval = {
         id: randomUUID(),
         branch: params.branch,
@@ -5506,12 +4654,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         checkedOutBranch: target.checkedOutBranch,
         sessionId: ctx.sessionManager.getSessionId(),
       };
-      const verifiedAgain = await inspectRemovalTarget(
-        params.branch,
-        ctx,
-        operationSignal,
-        true,
-      );
+      const verifiedAgain = await inspectRemovalTarget(params.branch, ctx, operationSignal, true);
       if (
         host.activeRole() !== "manager" ||
         pending.sessionId !== ctx.sessionManager.getSessionId()
@@ -5565,10 +4708,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       };
     }
     if (params.action === "stop") {
-      if (activeRole() !== "manager")
-        throw new Error("Only Managers can control project work");
-      if (!params.branch?.trim())
-        throw new Error("Provide the exact assigned branch");
+      if (activeRole() !== "manager") throw new Error("Only Managers can control project work");
+      if (!params.branch?.trim()) throw new Error("Provide the exact assigned branch");
       const selected = await resolveActiveAssignedBranch(params.branch);
       const current = (
         await directReports(ctx, undefined, undefined, undefined, {
@@ -5576,27 +4717,17 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         })
       ).filter(
         (lead) =>
-          ("lead" in lead ? lead.lead : lead.session) ===
-            selected.assignment.id &&
+          ("lead" in lead ? lead.lead : lead.session) === selected.assignment.id &&
           "relationship" in lead &&
           lead.relationship === "assigned" &&
           lead.branch === selected.assignment.branch,
       );
-      if (current.length !== 1)
-        throw new Error("Assigned Lead is no longer eligible for stop");
-      return projectStop(
-        selected.assignment.id,
-        ctx,
-        signal,
-        selected.assignment,
-        selected.lead,
-      );
+      if (current.length !== 1) throw new Error("Assigned Lead is no longer eligible for stop");
+      return projectStop(selected.assignment.id, ctx, signal, selected.assignment, selected.lead);
     }
     if (
       params.action !== "list" &&
-      Number(params.branch !== undefined) +
-        Number(params.target !== undefined) !==
-        1
+      Number(params.branch !== undefined) + Number(params.target !== undefined) !== 1
     )
       throw new Error("Provide exactly one of branch or target");
     let selectedAssignment: ProjectAssignment | undefined;
@@ -5619,22 +4750,18 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         details: {
           ...value,
           truncated: bounded.truncated,
-          ...(bounded.fullOutputPath
-            ? { full_output_path: bounded.fullOutputPath }
-            : {}),
+          ...(bounded.fullOutputPath ? { full_output_path: bounded.fullOutputPath } : {}),
         },
       };
     };
     let reports: any[] = [];
-    let incompatibleReports: import("../supervision.ts").IncompatibleStaff[] =
-      [];
+    let incompatibleReports: import("../supervision.ts").IncompatibleStaff[] = [];
     let discoveryWarning: string | undefined;
     let managerSnapshot: SupervisionSnapshot | undefined;
     if (params.action === "list") {
       const current = await loadSupervisionSnapshot(ctx);
       if (activeRole() === "manager") {
-        if ("managers" in current)
-          throw new Error("Manager snapshot is unavailable");
+        if ("managers" in current) throw new Error("Manager snapshot is unavailable");
         managerSnapshot = current;
       }
       reports = [
@@ -5657,13 +4784,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         discoveryWarning =
           "Some staff sessions run an incompatible Herdsman build and are observation-only; reload those Pi sessions with a matching Herdsman build.";
     }
-    const reportSession = (report: any): string =>
-      report.session ?? report.lead;
+    const reportSession = (report: any): string => report.session ?? report.lead;
     if (params.action === "list") {
       if (
-        !(activeRole() === "chief"
-          ? await currentChiefAuthority(ctx)
-          : await currentManager(ctx))
+        !(activeRole() === "chief" ? await currentChiefAuthority(ctx) : await currentManager(ctx))
       )
         throw new Error("Supervisor lease is no longer active");
       return result({
@@ -5678,9 +4802,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               work: managerSnapshot.work?.map((item) => ({
                 branch: item.branch,
                 status: item.status,
-                ...(item.runtimeState
-                  ? { runtime_state: item.runtimeState }
-                  : {}),
+                ...(item.runtimeState ? { runtime_state: item.runtimeState } : {}),
                 ...(item.task ? { task: item.task } : {}),
                 ...(item.issue ? { issue: item.issue } : {}),
               })),
@@ -5703,12 +4825,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               !(activeRole() === "manager" && relationship === "assigned");
             const target =
               actionable && (role === "lead" || role === "manager")
-                ? rememberCoordinatorTarget(
-                    pi,
-                    ctx,
-                    role,
-                    reportSession(report),
-                  )
+                ? rememberCoordinatorTarget(pi, ctx, role, reportSession(report))
                 : undefined;
             return {
               role,
@@ -5727,16 +4844,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               ...(activeRole() === "chief"
                 ? {
                     project: "project" in report ? report.project : "",
-                    lead_counts:
-                      "leadCounts" in report ? report.leadCounts : undefined,
+                    lead_counts: "leadCounts" in report ? report.leadCounts : undefined,
                     leads:
                       "leads" in report
                         ? report.leads.map((lead: any) => ({
                             display_name: lead.display_name,
                             runtime_state: lead.runtime_state,
-                            ...(lead.agent_counts
-                              ? { agent_counts: lead.agent_counts }
-                              : {}),
+                            ...(lead.agent_counts ? { agent_counts: lead.agent_counts } : {}),
                             ...(lead.compatibility === "incompatible"
                               ? {
                                   compatibility: "incompatible",
@@ -5763,9 +4877,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       });
     }
     const resolvedTarget =
-      params.target !== undefined
-        ? resolveCoordinatorTarget(ctx, params.target)
-        : undefined;
+      params.target !== undefined ? resolveCoordinatorTarget(ctx, params.target) : undefined;
     const targetSession = selectedAssignment?.id ?? resolvedTarget?.sessionId;
     const unverified: UnverifiedLead[] = [];
     const incompatible: import("../supervision.ts").IncompatibleStaff[] = [];
@@ -5776,9 +4888,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           undefined,
           undefined,
           incompatible,
-          activeRole() === "manager"
-            ? { exactSession: targetSession, unverified }
-            : undefined,
+          activeRole() === "manager" ? { exactSession: targetSession, unverified } : undefined,
         );
     const verificationFailure = (
       failures: UnverifiedLead[],
@@ -5795,13 +4905,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           `${incompatibleTarget.role} ${params.target ?? selectedAssignment?.branch ?? "target"}`,
         );
       const failure = failures.find((item) => item.lead === targetSession);
-      if (failure)
-        throw new Error(`Staff target verification failed: ${failure.issue}`);
+      if (failure) throw new Error(`Staff target verification failed: ${failure.issue}`);
     };
     const revalidateTarget = async () => {
       const failures: UnverifiedLead[] = [];
-      const incompatibleReports: import("../supervision.ts").IncompatibleStaff[] =
-        [];
+      const incompatibleReports: import("../supervision.ts").IncompatibleStaff[] = [];
       const current = await directReports(
         ctx,
         undefined,
@@ -5820,9 +4928,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       }
       return matches[0];
     };
-    const targets = reports.filter(
-      (candidate: any) => reportSession(candidate) === targetSession,
-    );
+    const targets = reports.filter((candidate: any) => reportSession(candidate) === targetSession);
     const lead = targets.length === 1 ? targets[0] : undefined;
     if (!lead) {
       if (activeRole() === "manager") {
@@ -5840,8 +4946,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         "Staff target role no longer matches the direct report. Rediscover with list_staff.",
       );
     if (
-      (selectedAssignment &&
-        !("relationship" in lead && lead.relationship === "assigned")) ||
+      (selectedAssignment && !("relationship" in lead && lead.relationship === "assigned")) ||
       (!selectedAssignment &&
         activeRole() === "manager" &&
         "relationship" in lead &&
@@ -5866,31 +4971,19 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     };
     if (!assignmentStillCurrent())
       throw new Error("Project assignment changed during target resolution");
-    const sameLeadIdentity = (
-      candidate: typeof lead,
-      expected: typeof lead,
-    ): boolean =>
+    const sameLeadIdentity = (candidate: typeof lead, expected: typeof lead): boolean =>
       reportSession(candidate) === reportSession(expected) &&
       candidate.paneId === expected.paneId &&
       candidate.workspaceId === expected.workspaceId &&
       candidate.tabId === expected.tabId &&
       candidate.instanceId === expected.instanceId;
-    const sameLeadTarget = (
-      candidate: typeof lead,
-      expected: typeof lead,
-    ): boolean => sameLeadIdentity(candidate, expected);
-    const sameRelationship = (
-      candidate: typeof lead,
-      expected: typeof lead,
-    ): boolean =>
+    const sameLeadTarget = (candidate: typeof lead, expected: typeof lead): boolean =>
+      sameLeadIdentity(candidate, expected);
+    const sameRelationship = (candidate: typeof lead, expected: typeof lead): boolean =>
       candidate.role === expected.role &&
       (candidate.role !== "lead" ||
-        (expected.role === "lead" &&
-          candidate.relationship === expected.relationship));
-    if (
-      params.action !== "transcript" &&
-      !lead.availableActions.includes(params.action)
-    )
+        (expected.role === "lead" && candidate.relationship === expected.relationship));
+    if (params.action !== "transcript" && !lead.availableActions.includes(params.action))
       throw new Error(`Lead does not currently allow ${params.action}`);
     if (params.action === "inspect") {
       const evidence = await inspectHerdrAgent(
@@ -5909,27 +5002,19 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             agent.pane_id === lead.paneId &&
             agent.tab_id === lead.tabId &&
             (() => {
-              const state = readLeadCoordinationState(
-                supervisionRuntime(),
-                reportSession(lead),
-              );
+              const state = readLeadCoordinationState(supervisionRuntime(), reportSession(lead));
               return (
-                state?.piSessionId === reportSession(lead) &&
-                state.instanceId === lead.instanceId
+                state?.piSessionId === reportSession(lead) && state.instanceId === lead.instanceId
               );
             })()
           );
         },
       );
       const currentAuthority =
-        activeRole() === "chief"
-          ? await currentChiefAuthority(ctx)
-          : await currentManager(ctx);
+        activeRole() === "chief" ? await currentChiefAuthority(ctx) : await currentManager(ctx);
       const currentLead = await revalidateTarget();
       const finalAuthority =
-        activeRole() === "chief"
-          ? await currentChiefAuthority(ctx)
-          : await currentManager(ctx);
+        activeRole() === "chief" ? await currentChiefAuthority(ctx) : await currentManager(ctx);
       if (
         !currentAuthority ||
         currentAuthority.leaseId !== authority.leaseId ||
@@ -5950,9 +5035,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         display_name: lead.displayName,
         captured_at: evidence.capturedAt,
         recent_output_truncated: evidence.recentOutputTruncated,
-        ...(evidence.recentOutput
-          ? { recent_output: evidence.recentOutput }
-          : {}),
+        ...(evidence.recentOutput ? { recent_output: evidence.recentOutput } : {}),
         ...(evidence.process ? { process: evidence.process } : {}),
         agents: lead.agents ?? [],
       });
@@ -5966,15 +5049,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         piSessionFile: sessionFile,
       });
       const currentChief =
-        activeRole() === "chief"
-          ? await currentChiefAuthority(ctx)
-          : await currentManager(ctx);
+        activeRole() === "chief" ? await currentChiefAuthority(ctx) : await currentManager(ctx);
       const currentLead = await revalidateTarget();
       const currentSessionFile = currentLead?.piSessionFile;
       const finalAuthority =
-        activeRole() === "chief"
-          ? await currentChiefAuthority(ctx)
-          : await currentManager(ctx);
+        activeRole() === "chief" ? await currentChiefAuthority(ctx) : await currentManager(ctx);
       if (
         !currentChief ||
         currentChief.leaseId !== authority.leaseId ||
@@ -6001,9 +5080,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     // Projection is only a discovery snapshot. Re-read every identity
     // and authority field immediately before creating a transport file.
     const currentChief =
-      activeRole() === "chief"
-        ? await currentChiefAuthority(ctx)
-        : await currentManager(ctx);
+      activeRole() === "chief" ? await currentChiefAuthority(ctx) : await currentManager(ctx);
     if (!currentChief || currentChief.leaseId !== authority.leaseId)
       throw new Error("Chief lease is no longer active");
     const currentLead = await revalidateTarget();
@@ -6017,9 +5094,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error("Lead target changed before the message was queued");
     // The supervision snapshot load is awaited and can observe a lease replacement.
     const finalChief =
-      activeRole() === "chief"
-        ? await currentChiefAuthority(ctx)
-        : await currentManager(ctx);
+      activeRole() === "chief" ? await currentChiefAuthority(ctx) : await currentManager(ctx);
     if (!finalChief || finalChief.leaseId !== authority.leaseId)
       throw new Error("Chief lease is no longer active");
     const recordId = randomUUID();
@@ -6066,9 +5141,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     }
     try {
       const senderEnvironment =
-        activeRole() === "manager"
-          ? await captureSenderEnvironment(host.pi, ctx)
-          : undefined;
+        activeRole() === "manager" ? await captureSenderEnvironment(host.pi, ctx) : undefined;
       const prepared = await prepareCoordinationInput(
         ctx,
         params.message,
@@ -6087,26 +5160,18 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           ...(initialAssignment ? { branch: initialAssignment.branch } : {}),
           text: candidate,
           ...(senderEnvironment ? { senderEnvironment } : {}),
-          ...(resultBindings.length
-            ? { resultBindings: [...resultBindings] }
-            : {}),
+          ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
           createdAt,
         }),
       );
       // Attachment preparation can reread Herdsman configuration and files. Recheck
       // every identity and authority field immediately before transport.
       const writeChief =
-        activeRole() === "chief"
-          ? await currentChiefAuthority(ctx)
-          : await currentManager(ctx);
+        activeRole() === "chief" ? await currentChiefAuthority(ctx) : await currentManager(ctx);
       const writeLead = await revalidateTarget();
       const finalAuthority =
-        activeRole() === "chief"
-          ? await currentChiefAuthority(ctx)
-          : await currentManager(ctx);
-      const writeAssignment = writeLead
-        ? assignmentMatches(writeLead)
-        : undefined;
+        activeRole() === "chief" ? await currentChiefAuthority(ctx) : await currentManager(ctx);
+      const writeAssignment = writeLead ? assignmentMatches(writeLead) : undefined;
       if (
         !writeChief ||
         writeChief.leaseId !== finalChief.leaseId ||
@@ -6125,13 +5190,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         writeAssignment?.branch !== initialAssignment?.branch ||
         writeAssignment?.id !== initialAssignment?.id
       )
-        throw new Error(
-          "Lead assignment changed before the message was queued",
-        );
-      const targetState = readLeadCoordinationState(
-        supervisionRuntime(),
-        reportSession(writeLead),
-      );
+        throw new Error("Lead assignment changed before the message was queued");
+      const targetState = readLeadCoordinationState(supervisionRuntime(), reportSession(writeLead));
       requireCompatibleBuild(
         HERDSMAN_BUILD,
         targetState?.build,
@@ -6150,9 +5210,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         ...(initialAssignment ? { branch: initialAssignment.branch } : {}),
         text: prepared.text,
         ...(senderEnvironment ? { senderEnvironment } : {}),
-        ...(prepared.resultBindings.length
-          ? { resultBindings: prepared.resultBindings }
-          : {}),
+        ...(prepared.resultBindings.length ? { resultBindings: prepared.resultBindings } : {}),
         createdAt,
       };
       const runtime = supervisionRuntime();
@@ -6201,9 +5259,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     onPersisted?: (files: RequiredEvidence[]) => void,
   ) => {
     if (host.activeRole() !== "manager")
-      throw new Error(
-        "Only the Manager can update assignment required evidence",
-      );
+      throw new Error("Only the Manager can update assignment required evidence");
     if (!params.branch?.trim())
       throw new Error("Manager must provide the exact assigned project branch");
     const manager = await host.currentManager(ctx);
@@ -6217,12 +5273,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error("Manager lease is no longer active");
     const managerAuthority = manager;
     const managerLeaseId = lease.descriptor.leaseId;
-    const scope = await host.worktreeGroupScope(
-      host.pi,
-      ctx,
-      manager.workspaceId,
-      ctx.signal,
-    );
+    const scope = await host.worktreeGroupScope(host.pi, ctx, manager.workspaceId, ctx.signal);
     if (scope.repoKey !== manager.repoKey)
       throw new Error("Manager workspace authority could not be verified");
     const assignment = host.readProjectAssignment(
@@ -6230,10 +5281,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       manager.repoKey,
       params.branch,
     );
-    if (!assignment)
-      throw new Error(
-        `No current project assignment exists on ${params.branch}`,
-      );
+    if (!assignment) throw new Error(`No current project assignment exists on ${params.branch}`);
 
     const operation = "required_evidence";
     const evidenceScope =
@@ -6267,9 +5315,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           currentManager.repoKey !== assignment.repoKey ||
           currentLease.descriptor.leaseId !== managerLeaseId
         )
-          throw new Error(
-            "Manager authority changed before required evidence was updated",
-          );
+          throw new Error("Manager authority changed before required evidence was updated");
         const currentScope = await host.worktreeGroupScope(
           host.pi,
           ctx,
@@ -6280,22 +5326,14 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           throw new Error(
             "Manager workspace authority changed before required evidence was updated",
           );
-        const current = host.readProjectAssignment(
-          runtime,
-          assignment.repoKey,
-          assignment.branch,
-        );
+        const current = host.readProjectAssignment(runtime, assignment.repoKey, assignment.branch);
         if (!current || current.id !== assignment.id)
-          throw new Error(
-            "Project assignment changed before required evidence was updated",
-          );
+          throw new Error("Project assignment changed before required evidence was updated");
         if (
           params.expectedAssignment &&
           JSON.stringify(current) !== JSON.stringify(params.expectedAssignment)
         )
-          throw new Error(
-            "Project assignment changed after required evidence was selected",
-          );
+          throw new Error("Project assignment changed after required evidence was selected");
         params.verifyAssignment?.(current);
         const additions = requiredFiles(
           assignment.id,
@@ -6306,26 +5344,16 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         );
         suppliedAdditions = [...additions];
         if (params.text !== undefined) {
-          if (!params.text.trim())
-            throw new Error("Evidence text must not be empty");
+          if (!params.text.trim()) throw new Error("Evidence text must not be empty");
           additions.push(
-            persistRequiredEvidenceSnapshot(
-              assignment.id,
-              "assignment-note.md",
-              params.text,
-            ),
+            persistRequiredEvidenceSnapshot(assignment.id, "assignment-note.md", params.text),
           );
         }
         const resultBindings = [...(current.resultBindings ?? [])];
         for (const evidence of additions)
           if ("result" in evidence) {
-            const existing = resultBindings.find(
-              (binding) => binding.ref === evidence.result.ref,
-            );
-            if (
-              existing &&
-              existing.canonicalRef !== evidence.result.canonicalRef
-            )
+            const existing = resultBindings.find((binding) => binding.ref === evidence.result.ref);
+            if (existing && existing.canonicalRef !== evidence.result.canonicalRef)
               throw new Error(
                 `Result ref ${evidence.result.ref} conflicts with the assignment's existing binding`,
               );
@@ -6333,13 +5361,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           }
         const evidence = [...(current.requiredEvidence ?? [])];
         const removals = new Set(params.remove ?? []);
-        const unknown = [...removals].filter(
-          (id) => !evidence.some((entry) => entry.id === id),
-        );
-        if (unknown.length)
-          throw new Error(
-            `Unknown required evidence ID: ${unknown.join(", ")}`,
-          );
+        const unknown = [...removals].filter((id) => !evidence.some((entry) => entry.id === id));
+        if (unknown.length) throw new Error(`Unknown required evidence ID: ${unknown.join(", ")}`);
         if (
           params.localOnly &&
           evidence.some(
@@ -6386,8 +5409,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 entry.sha256 === addition.sha256 &&
                 entry.sourceAssignmentId === addition.sourceAssignmentId,
           );
-          if (accepted && !selectedCurrent.includes(accepted.id))
-            selectedCurrent.push(accepted.id);
+          if (accepted && !selectedCurrent.includes(accepted.id)) selectedCurrent.push(accepted.id);
         }
         const currentEvidenceIds =
           params.text !== undefined || suppliedAdditions.length
@@ -6397,9 +5419,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               );
         const written = {
           ...current,
-          ...(next.length
-            ? { requiredEvidence: next }
-            : { requiredEvidence: undefined }),
+          ...(next.length ? { requiredEvidence: next } : { requiredEvidence: undefined }),
           ...(resultBindings.length ? { resultBindings } : {}),
           ...(currentEvidenceIds.length
             ? { currentEvidenceIds }
@@ -6417,27 +5437,19 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
               evidenceScope?.verify();
               evidenceScope?.verifyProvenance();
               const currentLease = host.managerLease();
-              const liveManager = readManagerDescriptor(
-                runtime,
-                managerAuthority.canonicalRepoKey,
-              );
+              const liveManager = readManagerDescriptor(runtime, managerAuthority.canonicalRepoKey);
               if (
                 host.activeRole() !== "manager" ||
                 host.leadRuntime.roleSuspended ||
                 !currentLease ||
-                !host.sameManagerDescriptor(
-                  currentLease.descriptor,
-                  managerAuthority,
-                ) ||
+                !host.sameManagerDescriptor(currentLease.descriptor, managerAuthority) ||
                 currentLease.descriptor.leaseId !== managerLeaseId ||
                 !liveManager ||
                 !host.sameManagerDescriptor(liveManager, managerAuthority) ||
                 liveManager.repoKey !== assignment.repoKey ||
                 liveManager.workspaceId !== managerAuthority.workspaceId
               )
-                throw new Error(
-                  "Manager authority changed before required evidence was updated",
-                );
+                throw new Error("Manager authority changed before required evidence was updated");
             },
             host.onProjectAssignmentAuthorityWaitOccupied,
           );
@@ -6493,11 +5505,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       );
     const currentAssignment =
       expectedAssignment ??
-      host.readProjectAssignment(
-        host.supervisionRuntime(),
-        assignment.repoKey,
-        assignment.branch,
-      );
+      host.readProjectAssignment(host.supervisionRuntime(), assignment.repoKey, assignment.branch);
     if (!currentAssignment || currentAssignment.id !== assignment.id)
       throw new Error("Project assignment changed before evidence retention");
     let retainedFiles: RequiredEvidence[] = [];
@@ -6575,16 +5583,13 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     );
   };
   const invalidatePendingRemovals = (ctx: ExtensionContext) => {
-    for (const request of pendingRemovals(ctx).values())
-      resolvePendingRemoval(request, ctx);
+    for (const request of pendingRemovals(ctx).values()) resolvePendingRemoval(request, ctx);
   };
   return {
     stopExecution,
     persistStopClosures: async (
       ctx: ExtensionContext,
-      closures: NonNullable<
-        import("../agent-controller.ts").StopOwnedAgentsResult["closures"]
-      >,
+      closures: NonNullable<import("../agent-controller.ts").StopOwnedAgentsResult["closures"]>,
     ) => {
       return (
         (await persistActiveStopClosures(ctx, closures)) +
@@ -6695,9 +5700,7 @@ export function parseGitWorktreeInventory(output: string):
       !isAbsolute(path) ||
       (bare
         ? !!branch || detached
-        : !head ||
-          !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(head) ||
-          (!branch && !detached)) ||
+        : !head || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(head) || (!branch && !detached)) ||
       (branch !== undefined && !branch)
     )
       return undefined;
@@ -6710,10 +5713,7 @@ export function parseGitWorktreeInventory(output: string):
       ...(prunable ? { prunable: true } : {}),
     });
   }
-  if (
-    new Set(worktrees.map((worktree) => worktree.path)).size !==
-    worktrees.length
-  )
+  if (new Set(worktrees.map((worktree) => worktree.path)).size !== worktrees.length)
     return undefined;
   return worktrees;
 }
@@ -6723,12 +5723,7 @@ export async function captureSenderEnvironment(
   ctx: ExtensionContext,
 ): Promise<SenderEnvironment | undefined> {
   const cwd = ctx.cwd;
-  if (
-    typeof cwd !== "string" ||
-    !isAbsolute(cwd) ||
-    !cwd ||
-    Buffer.byteLength(cwd) > 1024
-  )
+  if (typeof cwd !== "string" || !isAbsolute(cwd) || !cwd || Buffer.byteLength(cwd) > 1024)
     return undefined;
   try {
     const rootResult = await pi.exec("git", ["rev-parse", "--show-toplevel"], {
@@ -6745,16 +5740,12 @@ export async function captureSenderEnvironment(
       Buffer.byteLength(root) > 1024
     )
       return { cwd };
-    const inventoryResult = await pi.exec(
-      "git",
-      ["worktree", "list", "--porcelain", "-z"],
-      { cwd, signal: ctx.signal, timeout: 3_000 },
-    );
-    if (
-      inventoryResult.code !== 0 ||
-      inventoryResult.killed ||
-      inventoryResult.stderr?.trim()
-    )
+    const inventoryResult = await pi.exec("git", ["worktree", "list", "--porcelain", "-z"], {
+      cwd,
+      signal: ctx.signal,
+      timeout: 3_000,
+    });
+    if (inventoryResult.code !== 0 || inventoryResult.killed || inventoryResult.stderr?.trim())
       return { cwd };
     const matches =
       parseGitWorktreeInventory(String(inventoryResult.stdout ?? ""))?.filter(

@@ -41,7 +41,7 @@ remain required CI checks.
 `npm run validate` runs formatting verification, typechecking, warning-free
 linting, tests, build, and package audit. `npm run format` applies formatting;
 `npm run format:check` verifies it without changing files. Both use the locally
-installed Prettier version pinned by the lockfile. `npm run check` runs the
+installed Oxfmt version pinned by the lockfile. Repository formatting is configured in `.oxfmtrc.json`. Oxfmt uses a 100-character print width, sorts `package.json` fields without sorting scripts, and leaves import order unchanged. Generated changelogs, vendored upstream material (`vendor/github-cli/SKILL.md`, `vendor/gh-stack/SKILL.md`, and `vendor/gh-stack/references/`) and npm lockfiles remain outside formatter ownership. `npm run check` runs the
 bounded behavioral test suite, and `git diff --check` checks Git whitespace.
 
 When reviewing staged work, also run as appropriate:
@@ -230,7 +230,7 @@ simulated smoke, peer federation, and Windows bootstrap acceptance independently
 Contributor-only documentation avoids package and runtime checks. Published docs
 and skills still require the package audit, including its private-material
 screening; Docker runtime instructions remain container inputs. Non-formatable
-assets skip Prettier, and installer and release workflow edits select their
+assets skip formatting verification, and installer and release workflow edits select their
 existing tests. Federation acceptance exercises the actual containerized
 Pi/Herdr integration in separate Manager and ordinary Lead phases. Unknown
 changes select conservative checks. A skipped conditional job is valid only

@@ -1,7 +1,4 @@
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { COORDINATION_INBOX_SCAN_LIMIT } from "./supervision.ts";
 
 export type DeliveryPhase = "startup" | "turn" | "settle";
@@ -28,21 +25,14 @@ export function includeFanInMessage(
   return true;
 }
 
-export function releaseFanInMessage(
-  budget: DeliveryBudget,
-  content: string,
-): void {
+export function releaseFanInMessage(budget: DeliveryBudget, content: string): void {
   budget.count = Math.max(0, budget.count - 1);
   budget.bytes = Math.max(0, budget.bytes - Buffer.byteLength(content, "utf8"));
 }
 
 export function registerRecipientFanIn(
   pi: ExtensionAPI,
-  drain: (
-    ctx: ExtensionContext,
-    phase: DeliveryPhase,
-    budget: DeliveryBudget,
-  ) => Promise<number>,
+  drain: (ctx: ExtensionContext, phase: DeliveryPhase, budget: DeliveryBudget) => Promise<number>,
 ): void {
   pi.on("before_agent_start", async (event, ctx) => {
     await drain(ctx, "startup", recipientFanInBudget());

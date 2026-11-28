@@ -5,14 +5,7 @@ import { dirname, join, sep } from "node:path";
 import { mock, test } from "node:test";
 
 const realFs = await import("node:fs");
-const {
-  mkdirSync,
-  mkdtempSync,
-  realpathSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} = realFs;
+const { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } = realFs;
 let expectedCanonicalOpenPath: string | undefined;
 let openCallCount = 0;
 let messageReadCount = 0;
@@ -47,10 +40,7 @@ mock.module("node:fs", {
     fstatSync: (...args: any[]) => {
       if (candidateReadFd !== undefined && args[0] === candidateReadFd) {
         const stat = realFs.fstatSync(args[0], args[1]);
-        const value = (
-          override: number | undefined,
-          actual: number | bigint,
-        ) =>
+        const value = (override: number | undefined, actual: number | bigint) =>
           override === undefined
             ? actual
             : typeof actual === "bigint"
@@ -76,9 +66,7 @@ mock.module("node:fs", {
       if (candidateReadPath && args[0] === candidateReadPath) {
         candidateReadOpenCount++;
         if (candidateReadMissingOnSecondOpen && candidateReadOpenCount === 2) {
-          const error = new Error(
-            "simulated missing result",
-          ) as NodeJS.ErrnoException;
+          const error = new Error("simulated missing result") as NodeJS.ErrnoException;
           error.code = "ENOENT";
           throw error;
         }
@@ -89,12 +77,8 @@ mock.module("node:fs", {
               ([, canonical]) => canonical === args[0],
             )?.[0] ?? args[0])
           : args[0];
-      const fd = Reflect.apply(realFs.openSync, realFs, [
-        physicalPath,
-        ...args.slice(1),
-      ]);
-      if (messageReadFailurePath && args[0] === messageReadFailurePath)
-        messageReadFailureFd = fd;
+      const fd = Reflect.apply(realFs.openSync, realFs, [physicalPath, ...args.slice(1)]);
+      if (messageReadFailurePath && args[0] === messageReadFailurePath) messageReadFailureFd = fd;
       if (candidateReadPath && args[0] === candidateReadPath) {
         if (candidateReadOpenCount === 2) candidateReadFd = fd;
       }
@@ -117,17 +101,11 @@ mock.module("node:fs", {
       ) {
         const offset = args[2] as number;
         const position = args[4] as number;
-        const count = Math.min(
-          args[3] as number,
-          candidateReadContents.length - position,
-        );
+        const count = Math.min(args[3] as number, candidateReadContents.length - position);
         candidateReadContents.copy(args[1], offset, position, position + count);
         return count;
       }
-      if (
-        messageReadFailureFd !== undefined &&
-        args[0] === messageReadFailureFd
-      )
+      if (messageReadFailureFd !== undefined && args[0] === messageReadFailureFd)
         throw new Error("simulated read failure");
       return Reflect.apply(realFs.readSync, realFs, args);
     },
@@ -166,13 +144,8 @@ const {
   spawnPlacementFromMenuSelection,
 } = await import("./core.ts");
 
-const {
-  isCanonicalResultRef,
-  isResultBinding,
-  parseSemanticResultRef,
-  resultPath,
-  resultRef,
-} = await import("./storage.ts");
+const { isCanonicalResultRef, isResultBinding, parseSemanticResultRef, resultPath, resultRef } =
+  await import("./storage.ts");
 
 test("exposes placement modes and menu options", () => {
   assert.deepEqual(
@@ -239,14 +212,8 @@ test("projects lifecycle and assignment state into control states", () => {
     "settling",
     "assignment handoff remains settling",
   );
-  assert.equal(
-    agentControlState("idle", "request", false, false, true),
-    "blocked",
-  );
-  assert.equal(
-    agentControlState("unknown", "request", false, false, true),
-    "unknown",
-  );
+  assert.equal(agentControlState("idle", "request", false, false, true), "blocked");
+  assert.equal(agentControlState("unknown", "request", false, false, true), "unknown");
   assert.equal(
     agentControlState("idle", undefined, false, false, false, true),
     "settling",
@@ -257,11 +224,7 @@ test("projects lifecycle and assignment state into control states", () => {
 test("snapshots strict text once and deduplicates canonical paths", () => {
   const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-snapshot-"));
   writeFileSync(join(cwd, "source.txt"), "café");
-  const snapshots = snapshotTextFiles(
-    ["source.txt", "./nested/../source.txt"],
-    cwd,
-    "assign",
-  );
+  const snapshots = snapshotTextFiles(["source.txt", "./nested/../source.txt"], cwd, "assign");
   assert.equal(snapshots.length, 1);
   assert.equal(snapshots[0].input, "source.txt");
   assert.equal(snapshots[0].text, "café");
@@ -402,10 +365,7 @@ test("snapshots reject NUL, invalid UTF-8, and byte limits", () => {
     () => snapshotTextFiles(["over-limit.txt"], cwd, "assign", { maxBytes: 3 }),
     /Request exceeds the mailbox size limit/,
   );
-  assert.equal(
-    snapshotTextFiles(["at-limit.txt"], cwd, "assign", { maxBytes: 3 })[0].text,
-    "123",
-  );
+  assert.equal(snapshotTextFiles(["at-limit.txt"], cwd, "assign", { maxBytes: 3 })[0].text, "123");
 });
 
 test("caps snapshot reads when a file grows after its size check", () => {
@@ -486,13 +446,7 @@ test("renders retained evidence by semantic identity without exposing its path",
     sha256: createHash("sha256").update(content).digest("hex"),
   };
   try {
-    const prepared = prepareMessageInput(
-      "Use the plan",
-      [evidence, path],
-      cwd,
-      "assign",
-      "Task",
-    );
+    const prepared = prepareMessageInput("Use the plan", [evidence, path], cwd, "assign", "Task");
     assert.match(
       prepared.text,
       /<file name="evidence:accepted-plan#1" label="plan &lt;approved&gt;.md" bytes="13">\naccepted plan\n<\/file>/,
@@ -577,31 +531,16 @@ test("retained evidence uses text-first ordering for rendering and fit checks", 
   writeFileSync(path, "current");
   const observed: string[] = [];
   try {
-    const prepared = prepareMessageInput(
-      "Do this first",
-      [path],
-      cwd,
-      "assign",
-      "Task",
-      {
-        fileOrder: "textFirst",
-        fits: (value) => {
-          observed.push(value);
-          return true;
-        },
+    const prepared = prepareMessageInput("Do this first", [path], cwd, "assign", "Task", {
+      fileOrder: "textFirst",
+      fits: (value) => {
+        observed.push(value);
+        return true;
       },
-    );
+    });
     assert.ok(prepared.text.startsWith("Task:\nDo this first\n\n<file"));
-    assert.ok(
-      observed.every((value) => value.startsWith("Task:\nDo this first")),
-    );
-    const unchanged = prepareMessageInput(
-      "Do this first",
-      [path],
-      cwd,
-      "assign",
-      "Task",
-    );
+    assert.ok(observed.every((value) => value.startsWith("Task:\nDo this first")));
+    const unchanged = prepareMessageInput("Do this first", [path], cwd, "assign", "Task");
     assert.ok(unchanged.text.startsWith("<file"));
     assert.ok(unchanged.text.endsWith("Task:\nDo this first"));
   } finally {
@@ -700,10 +639,7 @@ test("preserves semantic result bindings while resolving and deduplicating files
         },
       },
     );
-    assert.match(
-      prepared.text,
-      /<file name="result:researcher#1" bytes="17" \/>/,
-    );
+    assert.match(prepared.text, /<file name="result:researcher#1" bytes="17" \/>/);
     assert.doesNotMatch(prepared.text, new RegExp(realpathSync(path)));
     assert.doesNotMatch(prepared.text, new RegExp(resultRef(requestId)));
     assert.deepEqual(prepared.canonicalPaths, [realpathSync(path)]);
@@ -733,10 +669,7 @@ test("validates semantic refs and result bindings", () => {
   assert.equal(isCanonicalResultRef(binding.canonicalRef), true);
   assert.equal(isResultBinding(binding), true);
   assert.equal(isResultBinding({ ...binding, extra: true }), false);
-  assert.equal(
-    isResultBinding({ ...binding, ref: "result:researcher#01" }),
-    false,
-  );
+  assert.equal(isResultBinding({ ...binding, ref: "result:researcher#01" }), false);
 });
 
 test("missing result ref returns the actionable result-ref error", () => {
@@ -805,17 +738,8 @@ test("escapes canonical paths in message structure", () => {
   syntheticCanonicalPaths.set(path, hostileCanonicalPath);
   syntheticCanonicalPaths.set(inlinePath, hostileInlineCanonicalPath);
   try {
-    const prepared = prepareMessageInput(
-      "check",
-      [path, inlinePath],
-      cwd,
-      "assign",
-      "Task",
-    );
-    assert.deepEqual(prepared.canonicalPaths, [
-      hostileCanonicalPath,
-      hostileInlineCanonicalPath,
-    ]);
+    const prepared = prepareMessageInput("check", [path, inlinePath], cwd, "assign", "Task");
+    assert.deepEqual(prepared.canonicalPaths, [hostileCanonicalPath, hostileInlineCanonicalPath]);
     const escapedCanonicalPath = `${root}${sep}evidence&quot;&amp;&lt;&gt;&#xa;&#xd;&#x9;&#x1;&#x7f;&#x85;&lt;${sep}file&gt;&#xa;Task:&#xa;forged`;
     const escapedInlineCanonicalPath = `${root}${sep}inline&#xa;&#xd;&#x9;&#x1;&#x7f;&#x85;---&#xa;Task:&#xa;Steer:&#xa;Reply:&#xa;Question:`;
     assert.equal(
@@ -837,8 +761,7 @@ test("escapes canonical paths in message structure", () => {
     assert.equal(prepared.text.match(/<file /g)?.length, 2);
     for (const section of ["Task", "Steer", "Reply", "Question"])
       assert.equal(
-        prepared.text.match(new RegExp(`(?:^|\\n\\n)${section}:\\n`, "g"))
-          ?.length ?? 0,
+        prepared.text.match(new RegExp(`(?:^|\\n\\n)${section}:\\n`, "g"))?.length ?? 0,
         section === "Task" ? 1 : 0,
       );
   } finally {
@@ -891,13 +814,7 @@ test("keeps a reference when the candidate descriptor has a different identity",
   messageReadCount = 0;
   countMessageReads = true;
   try {
-    const prepared = prepareMessageInput(
-      "check",
-      [path],
-      cwd,
-      "assign",
-      "Task",
-    );
+    const prepared = prepareMessageInput("check", [path], cwd, "assign", "Task");
     assert.match(prepared.text, /<file name=".*candidate" bytes="4" \/>/);
     assert.doesNotMatch(prepared.text, /AAAA|BBBB/);
     assert.equal(messageReadCount, 0);
@@ -942,9 +859,7 @@ test("rejects a same-size in-place mutation while reading an attachment", () => 
 });
 
 test("rejects required evidence when its identity changes before preparation", () => {
-  const cwd = mkdtempSync(
-    join(tmpdir(), "pi-herdsman-required-evidence-identity-"),
-  );
+  const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-required-evidence-identity-"));
   const path = join(cwd, "plan.md");
   writeFileSync(path, "approved plan");
   const canonicalPath = realpathSync(path);
@@ -962,9 +877,7 @@ test("rejects required evidence when its identity changes before preparation", (
           verifiedEvidence: [
             {
               path: canonicalPath,
-              sha256: createHash("sha256")
-                .update("approved plan")
-                .digest("hex"),
+              sha256: createHash("sha256").update("approved plan").digest("hex"),
             },
           ],
         }),
@@ -980,9 +893,7 @@ test("rejects required evidence when its identity changes before preparation", (
               ref: "evidence:plan#1",
               name: "plan.md",
               path,
-              sha256: createHash("sha256")
-                .update("approved plan")
-                .digest("hex"),
+              sha256: createHash("sha256").update("approved plan").digest("hex"),
             },
           ],
           cwd,
@@ -1013,13 +924,7 @@ test("keeps a candidate reference when its descriptor no longer fits", () => {
   messageReadCount = 0;
   countMessageReads = true;
   try {
-    const prepared = prepareMessageInput(
-      "check",
-      [path],
-      cwd,
-      "assign",
-      "Task",
-    );
+    const prepared = prepareMessageInput("check", [path], cwd, "assign", "Task");
     assert.match(prepared.text, /<file name=".*candidate" bytes="9" \/>/);
     assert.doesNotMatch(prepared.text, /candidate\\n/);
     assert.equal(messageReadCount, 0);
@@ -1034,9 +939,7 @@ test("keeps a candidate reference when its descriptor no longer fits", () => {
 });
 
 test("rejects required evidence changed after its initial integrity check", () => {
-  const cwd = mkdtempSync(
-    join(tmpdir(), "pi-herdsman-required-evidence-toctou-"),
-  );
+  const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-required-evidence-toctou-"));
   const path = join(cwd, "plan.md");
   writeFileSync(path, "approved plan");
   const expected = createHash("sha256").update("approved plan").digest("hex");
@@ -1059,13 +962,7 @@ test("message files keep invalid text and NUL content as references", () => {
   const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-message-"));
   writeFileSync(join(cwd, "invalid"), Buffer.from([0xff]));
   writeFileSync(join(cwd, "nul"), Buffer.from("a\0b"));
-  const prepared = prepareMessageInput(
-    "check",
-    ["invalid", "nul"],
-    cwd,
-    "assign",
-    "Task",
-  );
+  const prepared = prepareMessageInput("check", ["invalid", "nul"], cwd, "assign", "Task");
   assert.match(prepared.text, /<file name=".*invalid" bytes="1" \/>/);
   assert.match(prepared.text, /<file name=".*nul" bytes="3" \/>/);
   assert.doesNotMatch(prepared.text, /a\0b/);
@@ -1075,13 +972,7 @@ test("message preparation reserves references and never partially inlines", () =
   const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-message-pressure-"));
   writeFileSync(join(cwd, "early"), "e".repeat(525_000));
   writeFileSync(join(cwd, "late"), "l".repeat(525_000));
-  const prepared = prepareMessageInput(
-    "check",
-    ["early", "late"],
-    cwd,
-    "assign",
-    "Task",
-  );
+  const prepared = prepareMessageInput("check", ["early", "late"], cwd, "assign", "Task");
   assert.match(prepared.text, /<file name=".*early" bytes="525000">/);
   assert.match(prepared.text, /<file name=".*late" bytes="525000" \/>/);
   assert.doesNotMatch(prepared.text, /l{100}/);
@@ -1091,13 +982,7 @@ test("embedded message text is a submission-time snapshot", () => {
   const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-message-snapshot-"));
   const path = join(cwd, "note");
   writeFileSync(path, "before");
-  const prepared = prepareMessageInput(
-    "check",
-    ["note"],
-    cwd,
-    "assign",
-    "Task",
-  );
+  const prepared = prepareMessageInput("check", ["note"], cwd, "assign", "Task");
   realFs.unlinkSync(path);
   assert.match(prepared.text, /before/);
   assert.doesNotMatch(prepared.text, /after/);
@@ -1117,10 +1002,7 @@ test("message files reject missing, broken, and non-regular paths", () => {
 test("rejects non-regular message files before opening them", () => {
   const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-message-directory-"));
   openCallCount = 0;
-  assert.throws(
-    () => prepareMessageInput("q", ["."], cwd, "assign", "Task"),
-    /Cannot read file/,
-  );
+  assert.throws(() => prepareMessageInput("q", ["."], cwd, "assign", "Task"), /Cannot read file/);
   assert.equal(openCallCount, 0);
 });
 
@@ -1154,10 +1036,7 @@ test("prepared peer evidence sends attachment bytes once and preserves escaped U
     const attachment = prepared.attachments[0]!;
     assert.equal(attachment.text, source);
     assert.ok(attachment.marker);
-    assert.equal(
-      prepared.transportText!.replace(attachment.marker!, source),
-      prepared.text,
-    );
+    assert.equal(prepared.transportText!.replace(attachment.marker!, source), prepared.text);
     const compactFrame = Buffer.byteLength(
       JSON.stringify({
         text: prepared.transportText,
@@ -1199,13 +1078,7 @@ test("message preparation does not read candidates that cannot fit", () => {
   messageReadCount = 0;
   countMessageReads = true;
   try {
-    const prepared = prepareMessageInput(
-      "check",
-      ["early", "late"],
-      cwd,
-      "assign",
-      "Task",
-    );
+    const prepared = prepareMessageInput("check", ["early", "late"], cwd, "assign", "Task");
     assert.match(prepared.text, /<file name=".*early" bytes="600000">/);
     assert.match(prepared.text, /<file name=".*late" bytes="600000" \/>/);
     assert.equal(messageReadCount, 1);
@@ -1222,19 +1095,12 @@ test("message preparation uses the durable record fit predicate before reading",
   messageReadCount = 0;
   countMessageReads = true;
   try {
-    const prepared = prepareMessageInput(
-      "check",
-      [path],
-      cwd,
-      "reply",
-      "Reply",
-      {
-        fits: (value) => {
-          checks++;
-          return !value.includes('bytes="100">');
-        },
+    const prepared = prepareMessageInput("check", [path], cwd, "reply", "Reply", {
+      fits: (value) => {
+        checks++;
+        return !value.includes('bytes="100">');
       },
-    );
+    });
     assert.match(prepared.text, /<file name=".*candidate" bytes="100" \/>/);
     assert.ok(checks > 0);
     assert.equal(messageReadCount, 0);
@@ -1250,17 +1116,9 @@ test("message preparation embeds valid text when the lower-bound probe fits", ()
   messageReadCount = 0;
   countMessageReads = true;
   try {
-    const prepared = prepareMessageInput(
-      "check",
-      [path],
-      cwd,
-      "assign",
-      "Task",
-      {
-        fits: (value) =>
-          Buffer.byteLength(JSON.stringify(value), "utf8") < 1_000,
-      },
-    );
+    const prepared = prepareMessageInput("check", [path], cwd, "assign", "Task", {
+      fits: (value) => Buffer.byteLength(JSON.stringify(value), "utf8") < 1_000,
+    });
     assert.match(prepared.text, /<file name=".*candidate" bytes="200">/);
     assert.match(prepared.text, /é{100}/);
     assert.equal(messageReadCount, 1);
@@ -1274,10 +1132,7 @@ test("message preparation uses exact serialized envelope boundaries", () => {
   const path = join(cwd, "quotes");
   writeFileSync(path, '"\\\\é\n');
   const serialize = (text: string) =>
-    Buffer.byteLength(
-      JSON.stringify({ text, path: "/long/canonical/path" }),
-      "utf8",
-    );
+    Buffer.byteLength(JSON.stringify({ text, path: "/long/canonical/path" }), "utf8");
   const reference = `<file name="${realpathSync(path)}" bytes="6" />`;
   const heading = "Task:\ncheck";
   const referenceText = `${reference}\n\n${heading}`;
@@ -1306,8 +1161,7 @@ test("strict message preparation rejects reference-only attachments", () => {
     }
   }, /Attachment is 100 bytes; per-file inline limit is 10 bytes/);
   assert.equal(
-    (oversized as { detail: { details?: Record<string, unknown> } }).detail
-      .details?.capacity,
+    (oversized as { detail: { details?: Record<string, unknown> } }).detail.details?.capacity,
     true,
   );
   for (const bytes of [Buffer.from([0xff]), Buffer.from([0])]) {
@@ -1321,18 +1175,11 @@ test("strict message preparation rejects reference-only attachments", () => {
     );
   }
   writeFileSync(path, "x".repeat(100));
-  const prepared = prepareMessageInput(
-    "check",
-    [path],
-    cwd,
-    "message_staff",
-    "Message",
-    {
-      inlineLimitBytes: 200,
-      mailboxLimitBytes: 1_000,
-      requireInline: true,
-    },
-  );
+  const prepared = prepareMessageInput("check", [path], cwd, "message_staff", "Message", {
+    inlineLimitBytes: 200,
+    mailboxLimitBytes: 1_000,
+    requireInline: true,
+  });
   assert.match(prepared.text, /x{100}/);
 });
 
@@ -1371,10 +1218,7 @@ test("agent display identity uses the definition and fallback", () => {
     [false, undefined, false, false, false],
     [true, id, true, true, false],
   ] as const)
-    assert.equal(
-      steerAcceptanceAllowed(active, request, pending, completion),
-      expected,
-    );
+    assert.equal(steerAcceptanceAllowed(active, request, pending, completion), expected);
   const pendingId = "22222222-2222-4222-8222-222222222222";
   assert.equal(resultStillPending(pendingId, undefined, false), true);
   assert.equal(resultStillPending(undefined, pendingId, true), true);
