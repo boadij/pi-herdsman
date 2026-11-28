@@ -152,6 +152,7 @@ function classify(paths) {
 
     if (
       path === "scripts/check.mjs" ||
+      path === "scripts/check.d.mts" ||
       path === "scripts/check-progress.mjs" ||
       path === "scripts/check-hang.mjs" ||
       path === "scripts/test-env.mjs" ||
@@ -550,6 +551,7 @@ if (process.argv[2] === "--self-test") {
   expectOnly(".githooks/post-checkout", { tests: true });
   for (const path of [
     "scripts/check.mjs",
+    "scripts/check.d.mts",
     "scripts/check-progress.mjs",
     "scripts/worktree-hook.test.mjs",
     ".github/workflows/preview.yml",

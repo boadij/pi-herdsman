@@ -222,5 +222,5 @@ export function runTestRunner(
 ): Promise<RunnerResult>;
 
 export function runCheck(
-  mode?: string,
+  args?: readonly string[],
 ): Promise<RunnerResult | { ok: false; kind: "usage"; diagnostic: string }>;

@@ -57,6 +57,12 @@ process tree with a bounded suite deadline. Node's native TypeScript support
 strips types while loading the source, and the test runner discovers the
 `.test.ts` files automatically.
 
+CI can partition the suite with Node's native `--test-shard=index/total` option
+via `npm run check -- --test-shard=index/total`. Windows validation runs two
+shards on independent runners. Each shard has the same 360-second watchdog,
+progress reporting, and cleanup behavior as the full check. A single shard is
+partial verification; every required shard must pass the aggregate CI gate.
+
 The test runner uses:
 
 ```text
