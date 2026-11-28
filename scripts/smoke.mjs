@@ -23,9 +23,11 @@ import { parseArgs, promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import { matchesProjectMessageContent } from "./smoke-faux.mjs";
 import {
+  correlatedOwnedAgentQuestion,
   chiefManagerSuccessEvidence,
   matchesChiefManagerHandoff,
   ownedAgentReadinessEvidence,
+  readOwnedAgentSnapshots,
 } from "./chief-manager-smoke.mjs";
 
 export { matchesProjectMessageContent };
@@ -3682,6 +3684,56 @@ export function assertContinuationFauxEvidence(sessionStarts, provenance, sessio
   }
 }
 
+export async function continuationExecutionEvidence({
+  readJsonl,
+  inspectPane,
+  sessionId,
+  paneId,
+  expectedPiVersion,
+  baselineStarts = 0,
+  baselineProvenance = 0,
+}) {
+  // Pi writes its session start before provider execution. Observe in reverse
+  // causal order, then inspect the pane only for a resolved generation.
+  const scope = (records, baseline) =>
+    records.slice(baseline).filter((record) => record.sessionId === sessionId);
+  const rows = scope(await readJsonl("smoke-faux-provenance.jsonl"), baselineProvenance);
+  const starts = scope(await readJsonl("smoke-faux-session-start.jsonl"), baselineStarts);
+  const fail = (message) => {
+    throw Object.assign(new Error(message), { code: "SMOKE_EVIDENCE" });
+  };
+  if (starts.length > 1) fail("continuation session-start generation is ambiguous");
+  if (rows.length > 1) fail("continuation provider generation is ambiguous");
+  const [start] = starts;
+  const [provider] = rows;
+  const evidence = { startObserved: !!start, providerObserved: !!provider };
+  for (const record of [start, provider])
+    if (record && (!Number.isSafeInteger(record.pid) || record.pid < 1))
+      fail("continuation generation PID is invalid");
+  if (!start || !provider) return evidence;
+  if (start.pid !== provider.pid)
+    fail("continuation provider and session-start identities conflict");
+  const pane = await inspectPane();
+  const { candidates } = pane;
+  if (!candidates?.length) return { ...evidence, ...pane };
+  if (candidates.length > 1) fail("continuation pane contains conflicting Pi processes");
+  if (candidates[0].pid == null) return { ...evidence, ...pane };
+  if (candidates[0].pid !== start.pid) fail("continuation pane contains conflicting Pi processes");
+  return {
+    ...evidence,
+    candidates,
+    execution: matchPiProvenance(
+      rows,
+      sessionId,
+      paneId,
+      candidates,
+      "continuation",
+      true,
+      expectedPiVersion,
+    ),
+  };
+}
+
 export function rootFailureProvenance(contents, sessionId) {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(sessionId ?? ""))
     return null;
@@ -5562,9 +5614,46 @@ function commandLineHasPath(cmdline, path) {
   return new RegExp(`(?:^|[\\s"'])${escapedPattern(path)}(?:$|[\\s"'])`).test(cmdline);
 }
 
+function supportedPiInvocation(proc) {
+  if (typeof proc.name === "string" && ["herdr", "herdr.exe"].includes(proc.name.toLowerCase()))
+    return false;
+  const argv = proc.argv;
+  if (Array.isArray(argv)) {
+    if (typeof argv[0] !== "string") return false;
+    const executable = argv[0].replaceAll("\\", "/").split("/").at(-1);
+    if (executable === "pi") return true;
+    return (
+      ["node", "node.exe"].includes(executable) &&
+      argv[1] === worktreePi &&
+      argv[0] === process.execPath
+    );
+  }
+  if (typeof proc.cmdline !== "string") return false;
+  // Herdr reports a command representation, not a shell program. Tokenize only
+  // the simple quoted/unquoted form its process-info contract emits.
+  const tokens = proc.cmdline
+    .match(/"(?:[^"\\]|\\.)*"|'[^']*'|[^\s]+/gu)
+    ?.map((token) =>
+      token.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/u, (_match, double, single) => double ?? single),
+    );
+  if (!tokens?.length) return false;
+  if (typeof tokens[0] !== "string") return false;
+  const executable = tokens[0].replaceAll("\\", "/").split("/").at(-1);
+  if (executable === "pi") return true;
+  return (
+    ["node", "node.exe"].includes(executable) &&
+    tokens[0] === process.execPath &&
+    tokens[1] === worktreePi
+  );
+}
+
 function candidateProcessMatch(proc, extension, integration) {
   if (Array.isArray(proc.argv)) {
-    if (hasExtensionArg(proc.argv, extension) && hasExtensionArg(proc.argv, integration))
+    if (
+      supportedPiInvocation(proc) &&
+      hasExtensionArg(proc.argv, extension) &&
+      hasExtensionArg(proc.argv, integration)
+    )
       return "argv";
     // shortcut: accepts Pi's exact process title when Linux hides CLI args, later scenario evidence still proves loaded extensions; upgrade when Herdr exposes executable and extension provenance.
     if (
@@ -5580,7 +5669,8 @@ function candidateProcessMatch(proc, extension, integration) {
   }
   if (typeof proc.cmdline === "string")
     return commandLineHasPath(proc.cmdline, extension) &&
-      commandLineHasPath(proc.cmdline, integration)
+      commandLineHasPath(proc.cmdline, integration) &&
+      supportedPiInvocation(proc)
       ? "cmdline"
       : null;
   return null;
@@ -5751,10 +5841,33 @@ function smokeAgentLabel(agent) {
   return agent?.label ?? agent?.agent_label ?? agent?.agent;
 }
 
-async function smokeMailbox(ctx, agent, expectedLabel = smokeAgentLabel(agent)) {
+const SMOKE_MAILBOX_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+export function smokeMailboxMatchesIdentity(state, identity) {
+  return (
+    state?.ownerSessionId === identity.ownerSessionId &&
+    state?.piSessionId === identity.piSessionId &&
+    (state?.activeRequestId === identity.requestId ||
+      state?.completedRequestId === identity.requestId)
+  );
+}
+
+async function readSmokeMailboxStates(ctx) {
   const root = join(ctx.paths.piAgent, "pi-herdsman", "runtime", "mailboxes-v5");
-  for (const dir of await readdir(root, { withFileTypes: true })) {
-    if (!/^[0-9a-f]{32}$/.test(dir.name)) continue;
+  let dirs;
+  try {
+    dirs = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+  const states = [];
+  for (const dir of dirs) {
+    if (!/^[0-9a-f]{32}$/u.test(dir.name)) {
+      if (dir.isDirectory() || dir.isSymbolicLink() || !dir.isFile())
+        throw new Error("smoke mailbox inventory contains an unsafe entry");
+      continue;
+    }
     if (dir.isSymbolicLink() || !dir.isDirectory())
       throw new Error("smoke mailbox inventory contains an unsafe entry");
     const directory = join(root, dir.name);
@@ -5769,66 +5882,79 @@ async function smokeMailbox(ctx, agent, expectedLabel = smokeAgentLabel(agent)) 
     if (!stateStat.isFile() || stateStat.isSymbolicLink() || stateStat.size > 65536)
       throw new Error("smoke mailbox state is not a bounded regular file");
     const state = JSON.parse(await readFile(statePath, "utf8"));
-    if (state.agentLabel !== expectedLabel) continue;
-    const requestPath = state.activeRequestId
-      ? join(directory, `request-${state.activeRequestId}.json`)
-      : undefined;
-    let request;
-    if (requestPath) {
-      try {
-        const requestStat = await lstat(requestPath);
-        if (
-          !requestStat.isFile() ||
-          requestStat.isSymbolicLink() ||
-          requestStat.size > 4 * 1024 * 1024
-        )
-          throw new Error("smoke mailbox request is not a bounded regular file");
-        request = JSON.parse(await readFile(requestPath, "utf8"));
-      } catch (error) {
-        if (error.code !== "ENOENT") throw error;
-      }
-    }
-    return { directory, state, request };
+    states.push({ directory, state });
   }
-  throw new Error(`mailbox not found for ${smokeAgentLabel(agent)}`);
+  return states;
+}
+
+async function readSmokeMailboxRecord(directory, filename, maxBytes, description) {
+  const path = join(directory, filename);
+  try {
+    const details = await lstat(path);
+    if (!details.isFile() || details.isSymbolicLink() || details.size > maxBytes)
+      throw new Error(`smoke mailbox ${description} is not a bounded regular file`);
+    return JSON.parse(await readFile(path, "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+async function readSmokeMailboxRequest(directory, requestId) {
+  if (typeof requestId !== "string" || requestId.length !== 36 || !SMOKE_MAILBOX_ID.test(requestId))
+    throw new Error("smoke mailbox assignment request identity is invalid");
+  return readSmokeMailboxRecord(directory, `request-${requestId}.json`, 4 * 1024 * 1024, "request");
+}
+
+export async function verifyCrashRecoveryRequest({ directory, state }) {
+  const request = await readSmokeMailboxRequest(directory, state.activeRequestId);
+  if (request === undefined) return null;
+  assert.ok(
+    request?.requestId === state.activeRequestId &&
+      request.runId === state.runId &&
+      request.ownerSessionId === state.ownerSessionId,
+    "accepted target request identity mismatch",
+  );
+  return {
+    requestId: request.requestId,
+    runId: request.runId,
+    ownerSessionId: request.ownerSessionId,
+  };
+}
+
+async function smokeMailbox(ctx, identity) {
+  if (typeof identity.requestId !== "string" || !SMOKE_MAILBOX_ID.test(identity.requestId))
+    throw new Error("smoke mailbox assignment request identity is invalid");
+  const matches = (await readSmokeMailboxStates(ctx)).filter(({ state }) =>
+    smokeMailboxMatchesIdentity(state, identity),
+  );
+  if (matches.length > 1) throw new Error("smoke mailbox assignment identity is ambiguous");
+  if (!matches.length) return undefined;
+  const { directory, state } = matches[0];
+  const request = await readSmokeMailboxRequest(directory, identity.requestId);
+  const ask = state.pendingAskId
+    ? await readSmokeMailboxRecord(directory, "ask.json", 4 * 1024 * 1024, "ask")
+    : undefined;
+  return { directory, state, request, ask };
 }
 
 async function smokeManagedAgentRecords(ctx, agents) {
+  const mailboxes = await readSmokeMailboxStates(ctx);
+  const bySession = new Map();
+  for (const mailbox of mailboxes) {
+    const sessionId = mailbox.state.piSessionId;
+    if (typeof sessionId !== "string") continue;
+    const matches = bySession.get(sessionId) ?? [];
+    matches.push(mailbox);
+    bySession.set(sessionId, matches);
+  }
   return Promise.all(
     agents.map(async (agent) => {
       const session = await isolatedSessionDetails(ctx, agent);
       if (!session) return { agent, session, mailbox: undefined };
-      const root = join(ctx.paths.piAgent, "pi-herdsman", "runtime", "mailboxes-v5");
-      let mailboxDirs;
-      try {
-        mailboxDirs = await readdir(root, { withFileTypes: true });
-      } catch (error) {
-        if (error.code === "ENOENT") return { agent, session, mailbox: undefined };
-        throw error;
-      }
-      for (const dir of mailboxDirs) {
-        if (!/^[0-9a-f]{32}$/.test(dir.name)) continue;
-        if (dir.isSymbolicLink() || !dir.isDirectory())
-          throw new Error("smoke mailbox inventory contains an unsafe entry");
-        const statePath = join(root, dir.name, "state.json");
-        let stateStat;
-        try {
-          stateStat = await lstat(statePath);
-        } catch (error) {
-          if (error.code === "ENOENT") continue;
-          throw error;
-        }
-        if (!stateStat.isFile() || stateStat.isSymbolicLink() || stateStat.size > 65536)
-          throw new Error("smoke mailbox state is not a bounded regular file");
-        const state = JSON.parse(await readFile(statePath, "utf8"));
-        if (state.piSessionId !== session.id) continue;
-        return {
-          agent,
-          session,
-          mailbox: await smokeMailbox(ctx, agent, state.agentLabel),
-        };
-      }
-      return { agent, session, mailbox: undefined };
+      const matches = bySession.get(session.id) ?? [];
+      if (matches.length > 1) throw new Error("smoke mailbox session identity is ambiguous");
+      return { agent, session, mailbox: matches[0] };
     }),
   );
 }
@@ -5941,13 +6067,7 @@ async function runAgentCrashRecoverySmoke(ctx) {
           workspaceId: target.workspace_id,
           ownerSessionId: targetMailbox.state.ownerSessionId,
           mailboxDirectory: targetMailbox.directory,
-          request: targetMailbox.request
-            ? {
-                requestId: targetMailbox.request.requestId,
-                runId: targetMailbox.request.runId,
-                ownerSessionId: targetMailbox.request.ownerSessionId,
-              }
-            : null,
+          request: await verifyCrashRecoveryRequest(targetMailbox),
         },
         parent: {
           sessionId: parentSession.id,
@@ -5974,13 +6094,6 @@ async function runAgentCrashRecoverySmoke(ctx) {
     ctx.crashRecovery.ownerSessionId,
     "captured target mailbox owner identity mismatch",
   );
-  if (ctx.crashRecovery.target.request)
-    assert.ok(
-      ctx.crashRecovery.target.request.requestId === ctx.crashRecovery.target.requestId &&
-        ctx.crashRecovery.target.request.runId === ctx.crashRecovery.target.runId &&
-        ctx.crashRecovery.target.request.ownerSessionId === ctx.crashRecovery.ownerSessionId,
-      "accepted target request identity mismatch",
-    );
   await restartNestedHerdr(ctx);
   const created = await nestedCommand(ctx, [
     "tab",
@@ -7075,7 +7188,48 @@ async function runContinuationSmoke(ctx) {
   const expectedName = JSON.parse(await readFile(join(ctx.repoRoot, "package.json"), "utf8")).name;
   let firstSession;
   let firstGeneration;
-  const firstPids = new Set();
+  let secondGeneration;
+  const runtimeEvidence = join(ctx.paths.piAgent, "pi-herdsman", "runtime");
+  const readJsonl = async (name) => {
+    let contents;
+    try {
+      contents = await readFile(join(runtimeEvidence, name), "utf8");
+    } catch (error) {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    }
+    return contents
+      .split(/\r?\n/u)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  };
+  const observeGeneration = async (session, paneId, baselines) => {
+    const inspectPane = async () => {
+      const observed = await tryNestedCommand(ctx, ["pane", "process-info", "--pane", paneId]);
+      if (!observed.ok) return { observationError: observed.error };
+      return {
+        candidates: candidateProcess(
+          observed.value,
+          ctx.candidateExtension,
+          ctx.herdrStateExtension,
+        ),
+      };
+    };
+    if (ctx.simulated)
+      return continuationExecutionEvidence({
+        readJsonl,
+        inspectPane,
+        sessionId: session.id,
+        paneId,
+        expectedPiVersion: ctx.expectedPiVersion,
+        ...baselines,
+      });
+    const pane = await inspectPane();
+    if (pane.observationError) return pane;
+    const processes = pane.candidates.filter((process) => process.pid != null);
+    if (processes.length !== 1) return pane;
+    return { ...pane, execution: { sessionId: session.id, paneId, pid: processes[0].pid } };
+  };
 
   const childAgents = async () => {
     const listed = await tryNestedCommand(ctx, ["agent", "list"]);
@@ -7104,7 +7258,7 @@ async function runContinuationSmoke(ctx) {
         );
       let session;
       let sessionError;
-      let pids = [];
+      let observation = {};
       for (const agent of agents) {
         try {
           session = await isolatedSessionDetails(ctx, agent);
@@ -7113,27 +7267,15 @@ async function runContinuationSmoke(ctx) {
           sessionError = error.message;
         }
         if (session) {
-          const observed = await tryNestedCommand(ctx, [
-            "pane",
-            "process-info",
-            "--pane",
-            agent.pane_id,
-          ]);
-          if (!observed.ok)
-            return {
-              done: false,
-              observationError: observed.error,
-              evidence: { sessionId: session.id, paneId: agent.pane_id },
-            };
-          pids = candidateProcess(observed.value, ctx.candidateExtension, ctx.herdrStateExtension)
-            .map(({ pid }) => pid)
-            .filter((pid) => pid != null);
+          observation = await observeGeneration(session, agent.pane_id);
+          if (observation.observationError)
+            return { done: false, observationError: observation.observationError };
           firstSession = { ...session, paneId: agent.pane_id };
-          for (const pid of pids) firstPids.add(pid);
+          firstGeneration = observation.execution;
           break;
         }
       }
-      const done = !!firstSession && pids.length > 0;
+      const done = !!firstSession && !!firstGeneration;
       // Keep the simulated child alive until its required live evidence is captured.
       if (done && ctx.simulated)
         await writeFile(
@@ -7148,7 +7290,10 @@ async function runContinuationSmoke(ctx) {
           childCount: agents.length,
           sessionId: session?.id ?? null,
           sessionBytes: session ? Buffer.byteLength(session.contents) : 0,
-          candidatePids: pids.sort(),
+          executionObserved: !!firstGeneration,
+          sessionStartObserved: !!observation.startObserved,
+          providerRequestObserved: !!observation.providerObserved,
+          processCount: observation.candidates?.length ?? 0,
         },
         evidence: {
           sessionError,
@@ -7161,8 +7306,8 @@ async function runContinuationSmoke(ctx) {
     },
     { timeoutMs: 6 * 60_000, stallMs: MODEL_STALL_MS, pollMs: 200 },
   );
-  if (!firstPids.size)
-    throw new Error("continuation-first-generation: no candidate process identity was observed");
+  if (!firstGeneration)
+    throw new Error("continuation-first-generation: no exact execution identity was observed");
 
   await waitForEvidence(
     ctx,
@@ -7223,53 +7368,67 @@ async function runContinuationSmoke(ctx) {
       "continuation-session-identity: first cleanup changed the persisted Pi session ID",
     );
 
+  const baselineStarts = ctx.simulated
+    ? (await readJsonl("smoke-faux-session-start.jsonl")).length
+    : 0;
+  const baselineProvenance = ctx.simulated
+    ? (await readJsonl("smoke-faux-provenance.jsonl")).length
+    : 0;
   const followup = `Continue the exact saved Pi session at ${firstSession.path}. This is the same implementer you delegated previously. Without rereading package.json, return the package name you were asked to remember, followed by exactly ${secondMarker}. The final answer to me must include that marker.`;
   await promptRoot(followup);
-  firstGeneration = await waitForEvidence(
+  secondGeneration = await waitForEvidence(
     ctx,
     "continuation-second-generation",
     async () => {
       const agents = await childAgents();
-      let matchingSessionSeen = false;
-      let matchingPane;
+      let matchingSessions = [];
       for (const agent of agents) {
         const session = await isolatedSessionDetails(ctx, agent).catch((error) => {
           if (error.code === "ENOENT") return null;
           throw error;
         });
         if (session?.path !== firstSession.path || session.id !== firstSession.id) continue;
-        matchingSessionSeen = true;
-        matchingPane = agent.pane_id;
-        const observed = await tryNestedCommand(ctx, [
-          "pane",
-          "process-info",
-          "--pane",
-          agent.pane_id,
-        ]);
-        if (!observed.ok) return { done: false, observationError: observed.error };
-        const matches = candidateProcess(
-          observed.value,
-          ctx.candidateExtension,
-          ctx.herdrStateExtension,
-        );
-        for (const proc of matches) {
-          if (
-            proc.pid != null &&
-            !firstPids.has(proc.pid) &&
-            agent.pane_id !== firstSession.paneId
-          ) {
-            firstGeneration = proc.pid;
-            ctx.continuationSecondPaneId = agent.pane_id;
-          }
+        matchingSessions.push({ agent, session });
+      }
+      if (matchingSessions.length > 1)
+        throw Object.assign(new Error("continuation resumed session is ambiguous"), {
+          code: "SMOKE_EVIDENCE",
+        });
+      let observation = {};
+      const matching = matchingSessions[0];
+      if (matching) {
+        observation = await observeGeneration(matching.session, matching.agent.pane_id, {
+          baselineStarts,
+          baselineProvenance,
+        });
+        if (observation.observationError)
+          return { done: false, observationError: observation.observationError };
+        if (
+          observation.execution &&
+          (observation.execution.pid === firstGeneration.pid ||
+            observation.execution.paneId === firstGeneration.paneId)
+        )
+          throw Object.assign(new Error("continuation generations reused a pane or PID"), {
+            code: "SMOKE_EVIDENCE",
+          });
+        if (observation.execution) {
+          secondGeneration = observation.execution;
+          ctx.continuationSecondPaneId = matching.agent.pane_id;
         }
       }
+      if (secondGeneration && ctx.simulated)
+        await writeFile(join(runtimeEvidence, "continuation-second-observed"), "observed\n", {
+          flag: "wx",
+          mode: 0o600,
+        });
       return {
-        done: firstGeneration !== undefined,
-        value: firstGeneration,
+        done: !!secondGeneration,
+        value: secondGeneration,
         progress: {
-          matchingSessionSeen,
-          matchingPane: matchingPane ?? null,
-          newPid: firstGeneration ?? null,
+          matchingSessionSeen: !!matching,
+          sessionStartObserved: !!observation.startObserved,
+          providerRequestObserved: !!observation.providerObserved,
+          exactProcessObserved: !!secondGeneration,
         },
         evidence: { childCount: agents.length },
       };
@@ -7281,41 +7440,13 @@ async function runContinuationSmoke(ctx) {
     },
   );
 
-  const runtimeEvidence = join(ctx.paths.piAgent, "pi-herdsman", "runtime");
-  const readJsonl = async (name) =>
-    (await readFile(join(runtimeEvidence, name), "utf8"))
-      .split(/\r?\n/u)
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
-  await waitForEvidence(
-    ctx,
-    "continuation-second-provider-request",
-    async () => {
-      const provenance = await readJsonl("smoke-faux-provenance.jsonl");
-      const found = provenance.some(
-        (record) =>
-          record.sessionId === firstSession.id &&
-          record.pid === firstGeneration &&
-          record.model === "continuation",
-      );
-      return {
-        done: found,
-        progress: { secondGenerationProviderRequest: found },
-        evidence: { sessionId: firstSession.id, pid: firstGeneration },
-      };
-    },
-    {
-      timeoutMs: Math.max(1, deadline - Date.now()),
-      stallMs: CONTROL_STALL_MS,
-      pollMs: 200,
-    },
-  );
-  assertContinuationFauxEvidence(
-    await readJsonl("smoke-faux-session-start.jsonl"),
-    await readJsonl("smoke-faux-provenance.jsonl"),
-    firstSession.id,
-    [firstPids.values().next().value, firstGeneration],
-  );
+  if (ctx.simulated)
+    assertContinuationFauxEvidence(
+      await readJsonl("smoke-faux-session-start.jsonl"),
+      await readJsonl("smoke-faux-provenance.jsonl"),
+      firstSession.id,
+      [firstGeneration.pid, secondGeneration.pid],
+    );
 
   await waitForEvidence(
     ctx,
@@ -7383,10 +7514,10 @@ async function runContinuationSmoke(ctx) {
           );
         ctx.continuationSessionId = firstSession.id;
         ctx.versionChildSessionIds = [firstSession.id];
-        ctx.continuationFirstPids = [...firstPids];
+        ctx.continuationFirstPids = [firstGeneration.pid];
         ctx.continuationSessionPath = firstSession.path;
         ctx.continuationFirstPaneId = firstSession.paneId;
-        ctx.continuationGenerationPid = firstGeneration;
+        ctx.continuationGenerationPid = secondGeneration.pid;
         return {
           done: true,
           value: true,
@@ -10421,71 +10552,279 @@ async function runChiefManagerSmoke(ctx) {
   };
   const beforeStop = await verifyManager(first, "before-stop");
 
-  const observeOwnedAgent = (label, ownerId, leaf = true) =>
-    wait(label, async () => {
-      const records = await smokeManagedAgentRecords(ctx, await agents());
-      const matches = records.filter(({ mailbox }) => mailbox?.state.agentLabel === label);
-      assert.ok(matches.length <= 1, `duplicate Agent: ${label}`);
-      if (!matches.length) return { done: false };
-      const { agent, session, mailbox } = matches[0];
-      assert.equal(mailbox.state.ownerSessionId, ownerId);
-      assert.equal(mailbox.state.piSessionId, session.id);
-      assert.equal(mailbox.state.paneId, agent.pane_id);
-      const [process, ...extra] = await processIn(agent.pane_id);
-      assert.deepEqual(extra, []);
-      const waiting = sessionEntries(session.contents).some(
-        (entry) =>
-          entry.message?.role === "assistant" &&
-          entry.message.content.some(
-            (part) =>
-              part.type === "toolCall" &&
-              part.name === "await_owner" &&
-              part.arguments?.question === "CHIEF_MANAGER_SMOKE_AGENT_PENDING",
-          ),
+  const observeOwnedAgent = (assignment, mode = "leaf", nestedReady = false) =>
+    wait(assignment.label, async () => {
+      const evidence = {
+        assignmentAccepted: true,
+        childSessionObserved: false,
+        exactMailboxObserved: false,
+        activeRequestMatched: false,
+        herdrRegistrationObserved: false,
+        sessionStartObserved: false,
+        providerRequestObserved: false,
+        exactProcessObserved: false,
+        waitingToolResult: mode === "parent" ? "not_applicable" : "not_observed",
+        questionMismatch: "not_observed",
+        pendingQuestionMatched: false,
+        nestedAssignment:
+          mode === "parent" ? (nestedReady ? "accepted" : "pending") : "not_applicable",
+        terminalOutcome: "not_observed",
+      };
+      const projected = () => {
+        const result = ownedAgentReadinessEvidence(evidence);
+        ctx.ownedAgentReadiness = result;
+        return result;
+      };
+      const pending = (progress = {}) => ({
+        done: false,
+        progress: { ...projected(), ...progress },
+        evidence: projected(),
+      });
+      const fail = (message, outcome = "not_observed") => {
+        evidence.terminalOutcome = outcome;
+        projected();
+        const error = new Error(message);
+        error.code = "SMOKE_EVIDENCE";
+        throw error;
+      };
+      projected();
+      const ownerSession = await exactIsolatedSession(ctx, assignment.ownerSessionId);
+      const ownerReceipt =
+        ownerSession &&
+        sessionEntries(ownerSession.contents).find(
+          (entry) =>
+            entry.customType === "pi-herdsman-agent-result" &&
+            entry.details?.requestId === assignment.requestId &&
+            entry.details?.piSessionId === assignment.piSessionId,
+        );
+      if (ownerReceipt)
+        fail(
+          "owned Agent assignment settled before required readiness",
+          ownerReceipt.details.status === "failed" ? "failed" : "completed",
+        );
+      const { session, mailbox } = await readOwnedAgentSnapshots(
+        () => exactIsolatedSession(ctx, assignment.piSessionId),
+        () => smokeMailbox(ctx, assignment),
       );
-      const activeMailboxRequestPresent = !!mailbox.state.activeRequestId;
-      const positiveChildPidPresent = process?.pid > 0;
+      if (!session) return pending();
+      evidence.childSessionObserved = true;
+      const question =
+        mode === "parent"
+          ? { status: "not_applicable" }
+          : correlatedOwnedAgentQuestion(
+              sessionEntries(session.contents),
+              assignment,
+              mailbox?.state,
+              mailbox?.ask,
+            );
+      evidence.waitingToolResult = question.status;
+      evidence.questionMismatch = question.reason ?? "not_observed";
+      if (question.status === "rejected")
+        fail("owned Agent await_owner call was rejected", "failed");
+      if (!mailbox) return pending();
+      const { state, request } = mailbox;
+      evidence.exactMailboxObserved = true;
+      projected();
+      if (state.completedRequestId === assignment.requestId)
+        fail("owned Agent assignment settled before required readiness", "completed");
+      const stateIdentity =
+        state.version === 5 &&
+        state.ownerSessionId === assignment.ownerSessionId &&
+        state.piSessionId === assignment.piSessionId &&
+        state.agentLabel === assignment.label &&
+        typeof state.workspaceId === "string" &&
+        typeof state.paneId === "string" &&
+        SMOKE_MAILBOX_ID.test(state.runId) &&
+        state.activeRequestId === assignment.requestId &&
+        (assignment.runId === undefined || assignment.runId === state.runId) &&
+        typeof state.build?.version === "string" &&
+        state.build.version.length > 0 &&
+        /^[0-9a-f]{64}$/u.test(state.build.sha256);
+      const requestIdentity =
+        request === undefined
+          ? state.lastAck?.requestId === assignment.requestId && state.lastAck.accepted === true
+          : request.version === 5 &&
+            request.requestId === assignment.requestId &&
+            request.ownerSessionId === assignment.ownerSessionId &&
+            request.workspaceId === state.workspaceId &&
+            request.agentLabel === assignment.label &&
+            request.paneId === state.paneId &&
+            request.runId === state.runId &&
+            request.build?.version === state.build?.version &&
+            request.build?.sha256 === state.build?.sha256;
+      if (!stateIdentity) {
+        const checks = {
+          stateVersion: state.version === 5,
+          stateLabel: state.agentLabel === assignment.label,
+          stateActiveRequest: state.activeRequestId === assignment.requestId,
+          stateSession: state.piSessionId === assignment.piSessionId,
+          stateOwner: state.ownerSessionId === assignment.ownerSessionId,
+          stateWorkspace: typeof state.workspaceId === "string",
+          statePane: typeof state.paneId === "string",
+          stateRun: SMOKE_MAILBOX_ID.test(state.runId),
+          runtimeBuild: typeof state.build?.version === "string",
+        };
+        fail(
+          `owned Agent mailbox identity conflicts (${Object.entries(checks)
+            .filter(([, matches]) => !matches)
+            .map(([field]) => field)
+            .join(",")})`,
+        );
+      }
+      if (!requestIdentity) {
+        if (request === undefined) return pending();
+        fail("owned Agent request identity conflicts with mailbox state");
+      }
+      assignment.runId = state.runId;
+      evidence.activeRequestMatched = true;
+      projected();
+      if (question.status === "conflict" || question.status === "mismatch")
+        fail(`owned Agent pending question conflicts (${question.reason ?? question.status})`);
+      evidence.pendingQuestionMatched = question.status === "success";
+      const reports = await agents();
+      const registrations = [];
+      for (const report of reports)
+        if ((await agentSessionId(ctx, report)) === assignment.piSessionId)
+          registrations.push(report);
+      if (registrations.length > 1) fail("duplicate Herdr registrations for owned Agent");
+      if (!registrations.length) return pending();
+      const [agent] = registrations;
+      if (agent.pane_id !== state.paneId || agent.workspace_id !== state.workspaceId)
+        fail("owned Agent Herdr registration conflicts with exact mailbox identity");
+      evidence.herdrRegistrationObserved = true;
+      projected();
+      const candidates = await processIn(agent.pane_id);
+      if (candidates.length > 1) fail("duplicate Pi executions in owned Agent pane");
+      if (!candidates.length) return pending();
+      const [childProcess] = candidates;
+      if (!Number.isSafeInteger(childProcess.pid) || childProcess.pid < 1)
+        fail("owned Agent process has invalid PID");
+      projected();
+      if (ctx.simulated) {
+        const runtime = join(ctx.paths.piAgent, "pi-herdsman", "runtime");
+        const readJsonl = async (name) => {
+          let contents;
+          try {
+            contents = await readFile(join(runtime, name), "utf8");
+          } catch (error) {
+            if (error.code === "ENOENT") return [];
+            throw error;
+          }
+          return contents
+            .split(/\r?\n/u)
+            .filter(Boolean)
+            .map((line) => JSON.parse(line));
+        };
+        const starts = (await readJsonl("smoke-faux-session-start.jsonl")).filter(
+          (record) =>
+            record.sessionId === assignment.piSessionId && record.pid === childProcess.pid,
+        );
+        if (starts.length > 1) fail("owned Agent session-start evidence is ambiguous");
+        evidence.sessionStartObserved = starts.length === 1;
+        const provenance = (await readJsonl("smoke-faux-provenance.jsonl")).filter(
+          (record) =>
+            record.sessionId === assignment.piSessionId && record.pid === childProcess.pid,
+        );
+        if (provenance.length > 1) fail("owned Agent provider provenance is ambiguous");
+        evidence.providerRequestObserved = provenance.length === 1;
+        if (starts.length !== 1 || provenance.length !== 1) return pending();
+        try {
+          matchPiProvenance(
+            provenance,
+            assignment.piSessionId,
+            agent.pane_id,
+            candidates,
+            "chief-manager",
+            assignment.definition === "implementer",
+            ctx.expectedPiVersion,
+          );
+        } catch {
+          fail("owned Agent provenance conflicts with exact execution identity");
+        }
+      }
+      evidence.exactProcessObserved = true;
+      const done =
+        evidence.exactProcessObserved && (mode === "parent" || question.status === "success");
       return {
-        done: activeMailboxRequestPresent && positiveChildPidPresent && (!leaf || waiting),
-        value: { paneId: agent.pane_id, session, pid: process?.pid },
-        ...(label === "smoke-chief-agent" || label === "smoke-first-agent"
-          ? {
-              evidence: ownedAgentReadinessEvidence({
-                activeMailboxRequestPresent,
-                positiveChildPidPresent,
-                ...(label === "smoke-chief-agent" ? { expectedAwaitOwnerPresent: waiting } : {}),
-              }),
-            }
-          : {}),
+        done,
+        value: {
+          paneId: agent.pane_id,
+          session,
+          pid: childProcess.pid,
+          assignment,
+        },
+        progress: projected(),
+        evidence: projected(),
       };
     });
   const delegate = async (paneId, ownerId, owner) => {
     const request = `CHIEF_MANAGER_SMOKE delegate ${owner}`;
     await prompt(paneId, request);
-    await wait(`delegate-${owner}`, async () => {
+    const identity = await wait(`delegate-${owner}`, async () => {
       const session = await exactIsolatedSession(ctx, ownerId);
       if (!session) return { done: false };
       assertNoFailedAgentDelegation(session.contents, `smoke-${owner}-agent`);
-      const { delegation } = coreDelegationEdge(session.contents, `smoke-${owner}-agent`, ownerId);
+      const { delegation, identity } = coreDelegationEdge(
+        session.contents,
+        `smoke-${owner}-agent`,
+        ownerId,
+      );
+      if (delegation === "ambiguous" || (delegation === "accepted" && !identity)) {
+        const error = new Error("accepted delegation has ambiguous or missing assignment identity");
+        error.code = "SMOKE_EVIDENCE";
+        throw error;
+      }
       return {
-        done: delegation === "accepted",
-        progress: rootDelegationDiagnostics(session.contents),
+        done: delegation === "accepted" && !!identity,
+        value: identity,
+        progress: { delegation, identityObserved: !!identity },
       };
     });
+    return {
+      ownerSessionId: ownerId,
+      label: `smoke-${owner}-agent`,
+      definition: owner === "first" ? "implementer" : "scout",
+      ...identity,
+    };
   };
   const chiefId = await agentSessionId(
     ctx,
     (await agents()).find((agent) => agent.pane_id === ctx.rootPaneId),
   );
   assert.ok(chiefId);
-  await delegate(ctx.rootPaneId, chiefId, "chief");
-  const chiefAgent = await observeOwnedAgent("smoke-chief-agent", chiefId);
+  const chiefAssignment = await delegate(ctx.rootPaneId, chiefId, "chief");
+  const chiefAgent = await observeOwnedAgent(chiefAssignment);
   markStage(ctx, "chief-manager-delegate-first");
-  await delegate(first.pane.pane_id, first.session.id, "first");
-  const firstAgent = await observeOwnedAgent("smoke-first-agent", first.session.id, false);
-  const nestedAgent = await observeOwnedAgent("smoke-nested-agent", firstAgent.session.id);
-  await delegate(second.pane.pane_id, second.session.id, "second");
-  const secondAgent = await observeOwnedAgent("smoke-second-agent", second.session.id);
+  const firstAssignment = await delegate(first.pane.pane_id, first.session.id, "first");
+  const firstAgent = await observeOwnedAgent(firstAssignment, "parent");
+  const nestedAssignment = await wait("nested-delegation", async () => {
+    const parent = await exactIsolatedSession(ctx, firstAssignment.piSessionId);
+    if (!parent) return { done: false, progress: { parentSessionObserved: false } };
+    const edge = coreDelegationEdge(
+      parent.contents,
+      "smoke-nested-agent",
+      firstAssignment.piSessionId,
+    );
+    if (edge.delegation === "ambiguous" || (edge.delegation === "accepted" && !edge.identity)) {
+      const error = new Error("nested delegation has ambiguous or missing identity");
+      error.code = "SMOKE_EVIDENCE";
+      throw error;
+    }
+    return {
+      done: edge.delegation === "accepted" && !!edge.identity,
+      value: {
+        ownerSessionId: firstAssignment.piSessionId,
+        label: "smoke-nested-agent",
+        definition: "scout",
+        ...edge.identity,
+      },
+      progress: { parentSessionObserved: true, nestedAssignment: edge.delegation },
+    };
+  });
+  const nestedAgent = await observeOwnedAgent(nestedAssignment);
+  await observeOwnedAgent(firstAssignment, "parent", true);
+  const secondAssignment = await delegate(second.pane.pane_id, second.session.id, "second");
+  const secondAgent = await observeOwnedAgent(secondAssignment);
 
   const staff = await lifecycle("list_staff", null, "staff-target", {});
   const managers = staff.reports.filter((report) => report.role === "manager");
@@ -10528,11 +10867,11 @@ async function runChiefManagerSmoke(ctx) {
     done: [lead, first, firstAgent, nestedAgent].every(({ pid }) => pidExited(pid)),
   }));
   const assertUnselectedAgentsSurvive = async () => {
-    for (const [label, ownerId, original] of [
-      ["smoke-chief-agent", chiefId, chiefAgent],
-      ["smoke-second-agent", second.session.id, secondAgent],
+    for (const [identity, original] of [
+      [chiefAssignment, chiefAgent],
+      [secondAssignment, secondAgent],
     ]) {
-      const observed = await observeOwnedAgent(label, ownerId);
+      const observed = await observeOwnedAgent(identity);
       assert.equal(observed.pid, original.pid);
       assert.equal(observed.paneId, original.paneId);
       assert.equal(observed.session.id, original.session.id);
@@ -12461,6 +12800,7 @@ function sanitizedProcessRecords(records) {
 export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup, diagnostics) {
   const parent = ctx.owned?.parent;
   const smoke = failure?.error?.smoke;
+  const smokeStage = smoke?.stage ?? ctx.stage;
   const pane = (value) => (typeof value === "string" && /^w\d+:p\d+$/u.test(value) ? value : null);
   const pid = (value) => (Number.isSafeInteger(value) && value > 0 ? value : null);
   const observationError = (value) =>
@@ -12681,9 +13021,32 @@ export function sanitizedFailureEvidence(ctx, failure, outcome, cleanup, diagnos
     ...(ctx.scenario === "chief-manager"
       ? { chiefManagerDelegationProgress: chiefManagerProgress }
       : {}),
-    ...(ctx.scenario === "chief-manager" && smoke?.stage === "chief-manager-smoke-first-agent"
+    ...(ctx.scenario === "chief-manager" &&
+    [
+      "chief-manager-smoke-chief-agent",
+      "chief-manager-smoke-first-agent",
+      "chief-manager-smoke-nested-agent",
+      "chief-manager-smoke-second-agent",
+    ].includes(smokeStage)
       ? {
-          ownedAgentReadiness: ownedAgentReadinessEvidence(smoke.lastEvidence),
+          ownedAgentReadiness: ownedAgentReadinessEvidence(
+            ctx.ownedAgentReadiness ?? smoke?.lastEvidence,
+          ),
+        }
+      : {}),
+    ...(ctx.scenario === "continuation" &&
+    ["continuation-first-generation", "continuation-second-generation"].includes(smokeStage)
+      ? {
+          continuationGenerationReadiness: {
+            sessionObserved:
+              smoke?.lastProgress?.matchingSessionSeen === true ||
+              smoke?.lastProgress?.executionObserved === true,
+            sessionStartObserved: smoke?.lastProgress?.sessionStartObserved === true,
+            providerRequestObserved: smoke?.lastProgress?.providerRequestObserved === true,
+            exactProcessObserved:
+              smoke?.lastProgress?.exactProcessObserved === true ||
+              smoke?.lastProgress?.executionObserved === true,
+          },
         }
       : {}),
     ...(coreObservation ? { coreObservation } : {}),

@@ -684,6 +684,29 @@ export function assertContinuationFauxEvidence(
   sessionId: string,
   pids: readonly number[],
 ): void;
+export function continuationExecutionEvidence(options: {
+  readJsonl(name: string): Promise<readonly OpenRecord[]>;
+  inspectPane(): Promise<{ candidates?: readonly OpenRecord[]; observationError?: unknown }>;
+  sessionId: string;
+  paneId: string;
+  expectedPiVersion: string;
+  baselineStarts?: number;
+  baselineProvenance?: number;
+}): Promise<{
+  startObserved: boolean;
+  providerObserved: boolean;
+  candidates?: readonly OpenRecord[];
+  observationError?: unknown;
+  execution?: { paneId: string; pid: number; sessionId: string; piVersion: string };
+}>;
+export function verifyCrashRecoveryRequest(mailbox: {
+  directory: string;
+  state: OpenRecord;
+}): Promise<OpenRecord | null>;
+export function smokeMailboxMatchesIdentity(
+  state: OpenRecord,
+  identity: { ownerSessionId: string; piSessionId: string; requestId: string },
+): boolean;
 export function rootFailureProvenance(
   contents: string,
   sessionId: string,
@@ -894,6 +917,8 @@ export function sanitizedFailureEvidence(
   outcome: string;
   stage: unknown;
   errorCode: string | undefined;
+  ownedAgentReadiness?: OpenRecord;
+  continuationGenerationReadiness?: OpenRecord;
   lastVerified: unknown;
   processesVerified: boolean;
   sessionStartObserved: boolean;
