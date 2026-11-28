@@ -1,5 +1,60 @@
 # Changelog
 
+## [0.56.0](https://github.com/boadij/pi-herdsman/compare/v0.55.0...v0.56.0) (2026-11-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* **definitions:** unify Coordinator profiles and support named Leads ([#1145](https://github.com/boadij/pi-herdsman/issues/1145))
+* **api:** rename `continue_agent` to `resume_agent`; no callable alias.
+
+### Features
+
+* **chief:** discover projects and provision workspaces ([#1147](https://github.com/boadij/pi-herdsman/issues/1147)) ([18e2de1](https://github.com/boadij/pi-herdsman/commit/18e2de1641a9fda3e1fb39cd1988338ac11a5d75)), closes [#1141](https://github.com/boadij/pi-herdsman/issues/1141) [#1143](https://github.com/boadij/pi-herdsman/issues/1143)
+* **chief:** provision projects and recover Manager sessions ([#1126](https://github.com/boadij/pi-herdsman/issues/1126)) ([5b5f246](https://github.com/boadij/pi-herdsman/commit/5b5f2464da76686aa5d098ea1b35086c5852fa51))
+* **chief:** unify Coordinator startup and recovery ([#1149](https://github.com/boadij/pi-herdsman/issues/1149)) ([daa14c2](https://github.com/boadij/pi-herdsman/commit/daa14c25bb3c1a54fbf774218bca10ce1fc37822))
+* **chief:** unify targeted and global hierarchy shutdown ([#1151](https://github.com/boadij/pi-herdsman/issues/1151)) ([169d1d6](https://github.com/boadij/pi-herdsman/commit/169d1d6a2702df89e5098dcf9610bbc40d7b1f94))
+* **definitions:** unify Coordinator profiles and support named Leads ([#1145](https://github.com/boadij/pi-herdsman/issues/1145)) ([6528c4d](https://github.com/boadij/pi-herdsman/commit/6528c4de6d8f7ba5e3b96ad34b84f639810a6407))
+
+
+### Fixes
+
+* **chief:** resolve known repository sources and restore Manager transcripts ([#1153](https://github.com/boadij/pi-herdsman/issues/1153)) ([30ef687](https://github.com/boadij/pi-herdsman/commit/30ef687d15373bac9ab23fad9d50d2faab59d995))
+* **coordination:** isolate Coordinator target bindings by session ([#1171](https://github.com/boadij/pi-herdsman/issues/1171)) ([33c716c](https://github.com/boadij/pi-herdsman/commit/33c716cfdc36e98ce4655213fb9f4b15ef281afa)), closes [#1170](https://github.com/boadij/pi-herdsman/issues/1170)
+* **instructions:** distinguish internal waiting from external monitoring ([#1179](https://github.com/boadij/pi-herdsman/issues/1179)) ([d68f382](https://github.com/boadij/pi-herdsman/commit/d68f3820ac4fba06a88d84bf0e44738b7840bce4)), closes [#1177](https://github.com/boadij/pi-herdsman/issues/1177)
+* **lead:** preserve Flexible Lead on definition failures ([#1163](https://github.com/boadij/pi-herdsman/issues/1163)) ([4ff8914](https://github.com/boadij/pi-herdsman/commit/4ff891415522ef937d14513b6e5df2635e655a02))
+* **smoke:** poll for observation acknowledgments ([#1161](https://github.com/boadij/pi-herdsman/issues/1161)) ([bb3639c](https://github.com/boadij/pi-herdsman/commit/bb3639c584a16ea6264c5c50d58ca1c41e18b4b2))
+* **smoke:** verify exact runtime identity and lifecycle evidence ([#1181](https://github.com/boadij/pi-herdsman/issues/1181)) ([6d5bb79](https://github.com/boadij/pi-herdsman/commit/6d5bb791022741cd7a325da7e1bbe026aa5b6a31))
+* **trust:** restore Manager trust inheritance for assigned Leads ([#1167](https://github.com/boadij/pi-herdsman/issues/1167)) ([239de6c](https://github.com/boadij/pi-herdsman/commit/239de6c50057e9bc014b99fcf16de69ff8cad99e))
+* **ui:** resolve comparison targets for pinned delegation bases ([#1156](https://github.com/boadij/pi-herdsman/issues/1156)) ([95be881](https://github.com/boadij/pi-herdsman/commit/95be8816418ce621a224a808408b1231f47b1298))
+* **ui:** respect branch-specific Git comparison targets ([#1148](https://github.com/boadij/pi-herdsman/issues/1148)) ([268a49d](https://github.com/boadij/pi-herdsman/commit/268a49db4f0585918fd04267f288b4fac7db0684))
+
+
+### Performance
+
+* **ci:** shard Windows native test validation ([#1182](https://github.com/boadij/pi-herdsman/issues/1182)) ([6f7bbf0](https://github.com/boadij/pi-herdsman/commit/6f7bbf0dc0c4f290b20e028ccfcfc3e946916da3))
+* **ci:** streamline native test execution ([#1172](https://github.com/boadij/pi-herdsman/issues/1172)) ([b483dbb](https://github.com/boadij/pi-herdsman/commit/b483dbb69be50fcbd17db14432b4fa15f3fca240))
+* **test:** reduce native suite critical path ([#1183](https://github.com/boadij/pi-herdsman/issues/1183)) ([3ca0f9c](https://github.com/boadij/pi-herdsman/commit/3ca0f9c44697f675532202d5e89a7c69a4b59d33))
+
+
+### Refactoring
+
+* **api:** rename continue_agent to resume_agent ([#1144](https://github.com/boadij/pi-herdsman/issues/1144)) ([97fde00](https://github.com/boadij/pi-herdsman/commit/97fde00960db2447eec46b1d2ad2e3e9ed3ba5b8))
+
+
+### Tests
+
+* **ci:** make lifecycle tests deterministic ([#1169](https://github.com/boadij/pi-herdsman/issues/1169)) ([20833f3](https://github.com/boadij/pi-herdsman/commit/20833f3bb947fe5639645d4f8948e11216f2be80))
+
+
+### Other Changes
+
+* **deps:** automate vendored GitHub skill updates ([#1157](https://github.com/boadij/pi-herdsman/issues/1157)) ([b9dd8d5](https://github.com/boadij/pi-herdsman/commit/b9dd8d5da4a7206836b66b41f0f00c2c8c5bd5de))
+* **dev:** replace Prettier with Oxfmt ([#1173](https://github.com/boadij/pi-herdsman/issues/1173)) ([d04f57d](https://github.com/boadij/pi-herdsman/commit/d04f57dd9083b705438f67a13357f56bcd610520))
+* **pi:** expose GitHub Stacks skill to project leads ([#1158](https://github.com/boadij/pi-herdsman/issues/1158)) ([532f704](https://github.com/boadij/pi-herdsman/commit/532f704d565438fa4edfc3cd2029e03894841512))
+* **runtime:** adopt Pi 1.7.0 ([#1176](https://github.com/boadij/pi-herdsman/issues/1176)) ([645570a](https://github.com/boadij/pi-herdsman/commit/645570aabb08913bc8ac2c9eacc5725fb480a375)), closes [#1165](https://github.com/boadij/pi-herdsman/issues/1165)
+* **ship:** add official GitHub Stacks skill ([#1155](https://github.com/boadij/pi-herdsman/issues/1155)) ([1cffb44](https://github.com/boadij/pi-herdsman/commit/1cffb44153bdd7e8db397d19af73ca8460aced4a))
+
 ## [0.55.0](https://github.com/boadij/pi-herdsman/compare/v0.54.0...v0.55.0) (2026-11-25)
 
 
